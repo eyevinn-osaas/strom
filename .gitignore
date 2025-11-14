@@ -32,3 +32,6 @@ playwright-report
 backups
 tests
 test-results
+backup.sh
+package.json
+playwright.config.ts

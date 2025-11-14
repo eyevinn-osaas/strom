@@ -10,7 +10,7 @@ Strom allows you to:
 - **Configure element properties** with a user-friendly interface
 - **Manage multiple flows** simultaneously, each running as an independent GStreamer pipeline
 - **Persist configurations** so flows can be automatically restored on server restart
-- **Monitor pipeline state** in real-time through WebSocket connections
+- **Monitor pipeline state** in real-time through Server-Sent Events (SSE)
 - **Start/stop flows** on-demand or automatically at startup
 
 ## Architecture
@@ -29,14 +29,14 @@ Strom is built as a full-stack Rust application with three main components:
 └──────────────┬──────────────────────────────┘
                │
                │ REST API (CRUD operations)
-               │ WebSocket (Real-time updates)
+               │ SSE (Real-time state updates)
                │
 ┌──────────────▼──────────────────────────────┐
 │         Backend Server (Rust)               │
 │  ┌───────────────────────────────────────┐  │
 │  │  axum Web Framework                   │  │
 │  │  - REST endpoints                     │  │
-│  │  - WebSocket handler                  │  │
+│  │  - SSE handler                        │  │
 │  └───────────────────────────────────────┘  │
 │  ┌───────────────────────────────────────┐  │
 │  │  Flow Manager                         │  │
@@ -100,16 +100,16 @@ Strom is built as a full-stack Rust application with three main components:
 - **tokio**: Async runtime for handling concurrent operations
 - **serde_json**: JSON serialization for persistence
 - **tower-http**: CORS, static file serving for frontend
-- **tokio-tungstenite**: WebSocket support
+- **utoipa**: OpenAPI documentation generation
 - **strom-types**: Shared type definitions
 
 #### Frontend (`strom-frontend`)
 - **egui**: Immediate mode GUI framework compiled to WebAssembly
 - **eframe**: Framework wrapper for egui with web support
-- **egui_node_graph**: Node-based graph editor (or custom implementation)
+- **Custom graph editor**: Node-based graph editor implementation
 - **trunk**: Build tool for Rust WebAssembly applications
 - **reqwest**: HTTP client for REST API (with WASM support)
-- **gloo-net**: WebSocket client for WASM
+- **gloo-net**: SSE client for real-time updates (WASM)
 - **strom-types**: Shared type definitions
 
 #### API Design
@@ -118,19 +118,19 @@ Strom is built as a full-stack Rust application with three main components:
 - `GET /api/flows` - List all flows
 - `GET /api/flows/:id` - Get flow details
 - `POST /api/flows` - Create new flow
-- `PUT /api/flows/:id` - Update flow configuration
+- `POST /api/flows/:id` - Update flow configuration
 - `DELETE /api/flows/:id` - Delete flow
 - `POST /api/flows/:id/start` - Start a flow
 - `POST /api/flows/:id/stop` - Stop a flow
-- `GET /api/flows/:id/debug-graph` - Generate SVG visualization of pipeline (NEW)
+- `GET /api/flows/:id/debug-graph` - Generate SVG visualization of pipeline
 - `GET /api/elements` - List available GStreamer elements
 - `GET /api/elements/:name` - Get element properties and capabilities
 
-**WebSocket API** (bidirectional JSON messages):
-- Pipeline state changes (PLAYING, PAUSED, STOPPED, etc.)
-- Element property updates
-- Error notifications
-- Performance metrics/statistics
+**Server-Sent Events (SSE)**:
+- `GET /api/events` - Real-time event stream
+  - Pipeline state changes (PLAYING, PAUSED, STOPPED, etc.)
+  - Flow updates
+  - System notifications
 
 ## Key Features
 
@@ -220,7 +220,11 @@ On startup, the server:
 strom/
 ├── Cargo.toml                 # Workspace definition
 ├── README.md
-├── TODO.md
+├── docs/                      # Documentation
+│   ├── TODO.md                # Development roadmap
+│   ├── PROGRESS.md            # Current status
+│   ├── CONTRIBUTING.md        # Contribution guidelines
+│   └── INTEGRATION.md         # Integration options
 ├── types/                     # Shared types library
 │   ├── Cargo.toml
 │   └── src/
@@ -228,15 +232,27 @@ strom/
 │       ├── flow.rs            # Flow domain models
 │       ├── element.rs         # Element and property types
 │       ├── api.rs             # API request/response types
-│       └── state.rs           # Pipeline state enums
+│       ├── state.rs           # Pipeline state enums
+│       └── events.rs          # SSE event types
 ├── backend/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs            # Server entry point
-│       ├── api/               # REST and WebSocket handlers
-│       ├── flow/              # Flow and pipeline management
+│       ├── lib.rs             # Library entry point
+│       ├── api/               # REST and SSE handlers
+│       │   ├── flows.rs       # Flow CRUD operations
+│       │   ├── elements.rs    # Element discovery
+│       │   └── sse.rs         # Server-Sent Events
 │       ├── gst/               # GStreamer integration
-│       └── storage/           # Persistence layer
+│       │   ├── pipeline.rs    # Pipeline management
+│       │   └── discovery.rs   # Element discovery
+│       ├── storage/           # Persistence layer
+│       │   └── json_storage.rs
+│       ├── state.rs           # Application state
+│       ├── config.rs          # Configuration
+│       ├── events.rs          # Event broadcasting
+│       ├── openapi.rs         # OpenAPI documentation
+│       └── assets.rs          # Static asset serving
 └── frontend/
     ├── Cargo.toml
     ├── Trunk.toml             # Build configuration
@@ -244,8 +260,11 @@ strom/
     └── src/
         ├── main.rs            # Frontend entry point
         ├── app.rs             # Main egui application
-        ├── ui/                # UI components
-        └── api/               # API client
+        ├── graph.rs           # Node graph editor
+        ├── palette.rs         # Element palette
+        ├── properties.rs      # Property inspector
+        ├── api.rs             # API client
+        └── sse.rs             # SSE client
 
 ```
 
@@ -307,7 +326,7 @@ debug_level = 2
 
 ## Development Roadmap
 
-See [TODO.md](TODO.md) for detailed development tasks.
+See [docs/TODO.md](docs/TODO.md) for detailed development tasks.
 
 **Phase 1**: Core infrastructure (backend framework, basic frontend, persistence)
 **Phase 2**: GStreamer integration (element discovery, pipeline management)
@@ -359,12 +378,12 @@ All checks run automatically on pull requests and must pass before merging.
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+We welcome contributions! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines.
 
 ### Quick Start for Contributors
 
 1. Fork and clone the repository
-2. Install development dependencies (see CONTRIBUTING.md)
+2. Install development dependencies (see docs/CONTRIBUTING.md)
 3. Install Git hooks: `./scripts/install-hooks.sh`
 4. Make your changes
 5. Ensure all checks pass:
@@ -383,4 +402,4 @@ MIT OR Apache-2.0 (standard Rust dual license)
 
 ## Name Origin
 
-**Strom** is Swedish for "stream" - fitting for a GStreamer-based application with Scandinavian roots.
+**Strom** is Swedish, translated as "ström" meaning "stream" - fitting for a GStreamer-based application with Scandinavian roots.
