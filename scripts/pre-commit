@@ -1,0 +1,42 @@
+#!/bin/bash
+# Pre-commit hook for Strom project
+# This script runs formatting and linting checks before allowing a commit
+# Install by running: ./scripts/install-hooks.sh
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "→ Checking code formatting with cargo fmt..."
+if ! cargo fmt --all -- --check; then
+    echo ""
+    echo "❌ Formatting check failed!"
+    echo "   Please run 'cargo fmt --all' to fix formatting issues."
+    exit 1
+fi
+echo "✓ Formatting check passed"
+
+# Run clippy
+echo "→ Running clippy linter..."
+if ! cargo clippy --workspace --all-targets --all-features -- -D warnings; then
+    echo ""
+    echo "❌ Clippy check failed!"
+    echo "   Please fix the issues reported above."
+    exit 1
+fi
+echo "✓ Clippy check passed"
+
+# Run tests (optional - can be slow, comment out if needed)
+# echo "→ Running tests..."
+# if ! cargo test --workspace; then
+#     echo ""
+#     echo "❌ Tests failed!"
+#     echo "   Please fix failing tests before committing."
+#     exit 1
+# fi
+# echo "✓ Tests passed"
+
+echo ""
+echo "✅ All pre-commit checks passed!"
+exit 0

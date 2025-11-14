@@ -1,0 +1,36 @@
+[package]
+name = "strom-frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Internal
+strom-types = { path = "../types" }
+
+# GUI
+egui.workspace = true
+eframe.workspace = true
+
+# HTTP client
+reqwest = { workspace = true, default-features = false, features = ["json"] }
+
+# WebSocket
+gloo-net.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Async
+wasm-bindgen-futures = "0.4"
+
+# Logging for WASM
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
+tracing.workspace = true
+
+# Web APIs for WASM
+web-sys = { version = "0.3", features = ["Window", "EventSource", "MessageEvent", "Event", "Storage"] }
+wasm-bindgen = "0.2"

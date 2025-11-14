@@ -1,0 +1,53 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Frontend build output
+frontend/dist/
+backend/dist/
+
+# Cargo lock files (will be copied separately)
+# Cargo.lock
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+.github/
+
+# Documentation
+*.md
+docs/
+
+# Test results
+test-results/
+
+# Node modules (if any)
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# CI/CD files
+.github/workflows/
+
+# Development scripts
+scripts/
+
+# Test data
+test-data/

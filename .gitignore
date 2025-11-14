@@ -1,0 +1,32 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Frontend build output
+frontend/dist/
+
+# Node
+node_modules/
+package-lock.json
+
+# Runtime files
+flows.json
+config.toml
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+node_modules
+playwright-report
+.playwright-mcp
+backups

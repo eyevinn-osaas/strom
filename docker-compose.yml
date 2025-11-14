@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  strom:
+    build: .
+    image: strom:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - RUST_LOG=info
+      - STROM_PORT=8080
+      - STROM_FLOWS_PATH=/data/flows.json
+    restart: unless-stopped
