@@ -9,6 +9,14 @@ use strom_types::{Element, Flow, FlowId, Link, PipelineState, PropertyValue, Str
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
+/// Result of processing links with automatic tee insertion.
+struct ProcessedLinks {
+    /// Final list of links (including links to/from tees)
+    links: Vec<Link>,
+    /// Map of tee element IDs to their source spec (element:pad they're connected to)
+    tees: HashMap<String, String>,
+}
+
 #[derive(Error, Debug)]
 pub enum PipelineError {
     #[error("GStreamer error: {0}")]
@@ -73,8 +81,16 @@ impl PipelineManager {
             manager.add_element(element)?;
         }
 
-        // Link elements according to flow definition
-        for link in &flow.links {
+        // Analyze links and auto-insert tee elements where needed
+        let processed_links = Self::insert_tees_if_needed(&flow.links);
+
+        // Create tee elements
+        for tee_id in processed_links.tees.keys() {
+            manager.add_tee_element(tee_id)?;
+        }
+
+        // Link elements according to processed links
+        for link in &processed_links.links {
             manager.link_elements(link)?;
         }
 
@@ -306,6 +322,103 @@ impl PipelineManager {
         }
     }
 
+    /// Analyze links and insert tee elements where multiple links share the same source.
+    fn insert_tees_if_needed(original_links: &[Link]) -> ProcessedLinks {
+        use std::collections::HashMap;
+
+        // Count how many times each source spec appears
+        let mut source_counts: HashMap<String, usize> = HashMap::new();
+        for link in original_links {
+            *source_counts.entry(link.from.clone()).or_insert(0) += 1;
+        }
+
+        // Find sources that need a tee (appear more than once)
+        let sources_needing_tee: Vec<String> = source_counts
+            .iter()
+            .filter(|(_, &count)| count > 1)
+            .map(|(src, _)| src.clone())
+            .collect();
+
+        if sources_needing_tee.is_empty() {
+            // No tees needed, return original links
+            info!("No tee elements needed");
+            return ProcessedLinks {
+                links: original_links.to_vec(),
+                tees: HashMap::new(),
+            };
+        }
+
+        info!(
+            "Auto-inserting {} tee element(s) for sources with multiple outputs",
+            sources_needing_tee.len()
+        );
+
+        let mut new_links = Vec::new();
+        let mut tees = HashMap::new();
+        let mut tee_src_counters: HashMap<String, usize> = HashMap::new();
+
+        for src_spec in &sources_needing_tee {
+            let tee_id = format!("auto_tee_{}", src_spec.replace(":", "_"));
+            tees.insert(tee_id.clone(), src_spec.clone());
+
+            // Add link from original source to tee
+            new_links.push(Link {
+                from: src_spec.clone(),
+                to: tee_id.clone(),
+            });
+
+            info!("Created tee element '{}' for source '{}'", tee_id, src_spec);
+        }
+
+        // Process original links
+        for link in original_links {
+            if sources_needing_tee.contains(&link.from) {
+                // This source needs a tee - link from tee to destination
+                let tee_id = format!("auto_tee_{}", link.from.replace(":", "_"));
+
+                // Get next src pad from tee (src_0, src_1, src_2, ...)
+                let counter = tee_src_counters.entry(tee_id.clone()).or_insert(0);
+                let tee_src_pad = format!("{}:src_{}", tee_id, counter);
+                *counter += 1;
+
+                new_links.push(Link {
+                    from: tee_src_pad,
+                    to: link.to.clone(),
+                });
+            } else {
+                // No tee needed, keep original link
+                new_links.push(link.clone());
+            }
+        }
+
+        ProcessedLinks {
+            links: new_links,
+            tees,
+        }
+    }
+
+    /// Add a tee element to the pipeline.
+    fn add_tee_element(&mut self, tee_id: &str) -> Result<(), PipelineError> {
+        debug!("Creating auto-inserted tee element: {}", tee_id);
+
+        let tee = gst::ElementFactory::make("tee")
+            .name(tee_id)
+            .build()
+            .map_err(|e| {
+                PipelineError::ElementCreation(format!("Failed to create tee {}: {}", tee_id, e))
+            })?;
+
+        self.pipeline.add(&tee).map_err(|e| {
+            PipelineError::ElementCreation(format!(
+                "Failed to add tee {} to pipeline: {}",
+                tee_id, e
+            ))
+        })?;
+
+        self.elements.insert(tee_id.to_string(), tee);
+        Ok(())
+    }
+
     /// Start the pipeline (set to PLAYING state).
     pub fn start(&mut self) -> Result<PipelineState, PipelineError> {
         info!("Starting pipeline: {}", self.flow_name);
@@ -459,5 +572,67 @@ mod tests {
         let events = EventBroadcaster::default();
         let manager = PipelineManager::new(&flow, events);
         assert!(manager.is_err());
+    }
+
+    #[test]
+    fn test_auto_tee_insertion() {
+        gst::init().unwrap();
+
+        // Create a flow with one source and two sinks (should auto-insert a tee)
+        let mut flow = Flow::new("Auto-Tee Test");
+        flow.elements = vec![
+            Element {
+                id: "src".to_string(),
+                element_type: "videotestsrc".to_string(),
+                properties: HashMap::new(),
+                position: None,
+            },
+            Element {
+                id: "sink1".to_string(),
+                element_type: "fakesink".to_string(),
+                properties: HashMap::new(),
+                position: None,
+            },
+            Element {
+                id: "sink2".to_string(),
+                element_type: "fakesink".to_string(),
+                properties: HashMap::new(),
+                position: None,
+            },
+        ];
+        flow.links = vec![
+            Link {
+                from: "src".to_string(),
+                to: "sink1".to_string(),
+            },
+            Link {
+                from: "src".to_string(),
+                to: "sink2".to_string(),
+            },
+        ];
+
+        let events = EventBroadcaster::default();
+        let manager = PipelineManager::new(&flow, events);
+        assert!(manager.is_ok());
+
+        let manager = manager.unwrap();
+        // Should have 3 original elements + 1 auto-inserted tee
+        assert_eq!(manager.elements.len(), 4);
+        // Check that tee element was created
+        assert!(manager.elements.contains_key("auto_tee_src"));
+    }
+
+    #[test]
+    fn test_no_tee_insertion_when_not_needed() {
+        gst::init().unwrap();
+
+        let flow = create_test_flow(); // Simple 1-to-1 connection
+
+        let events = EventBroadcaster::default();
+        let manager = PipelineManager::new(&flow, events).unwrap();
+
+        // Should have only 2 original elements, no tee
+        assert_eq!(manager.elements.len(), 2);
+        assert!(!manager.elements.contains_key("auto_tee_src"));
     }
 }

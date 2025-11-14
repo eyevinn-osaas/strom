@@ -723,16 +723,16 @@ impl StromApp {
         SidePanel::right("palette")
             .default_width(250.0)
             .show(ctx, |ui| {
-                self.palette.show(ui);
-
-                ui.separator();
-
-                // Property inspector
+                // Show either the palette or the property inspector, not both
                 if let Some(element) = self.graph.get_selected_element_mut() {
+                    // Element selected: show ONLY property inspector
+                    ui.heading("Properties");
+                    ui.separator();
                     let element_info = self.palette.get_element_info(&element.element_type);
                     PropertyInspector::show(ui, element, element_info);
                 } else {
-                    ui.label("Select an element to edit properties");
+                    // No element selected: show ONLY the palette
+                    self.palette.show(ui);
                 }
             });
     }

@@ -220,9 +220,14 @@ impl ElementPalette {
         let search = self.search.clone();
         let category_filter = self.category_filter.clone();
 
+        // Limit the palette height to leave space for property inspector below
+        let available_height = ui.available_height();
+        let palette_max_height = (available_height * 0.4).max(200.0); // Use at most 40% of available space, minimum 200px
+
         ScrollArea::both()
             .id_salt("palette_scroll")
-            .auto_shrink([false, false])
+            .max_height(palette_max_height)
+            .auto_shrink([false, true])
             .show(ui, |ui| {
                 let filtered: Vec<ElementInfo> = self
                     .elements
@@ -270,22 +275,26 @@ impl ElementPalette {
         ui.push_id(&name, |ui| {
             // Main horizontal layout for element item
             ui.horizontal(|ui| {
-                // Element name label with hover tooltip
-                ui.label(&name).on_hover_text(&description);
+                // Element name label with truncation
+                let available_width = ui.available_width() - 70.0; // Reserve space for button
+                ui.allocate_ui_with_layout(
+                    egui::vec2(available_width, ui.spacing().interact_size.y),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.add(egui::Label::new(&name).truncate())
+                            .on_hover_text(&description);
+                    },
+                );
 
                 // Add button on the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("+ Add").on_hover_text("Add to canvas").clicked() {
-                        self.dragging_element = Some(name.clone());
-                    }
-                });
+                if ui.button("+ Add").on_hover_text("Add to canvas").clicked() {
+                    self.dragging_element = Some(name.clone());
+                }
             });
 
-            // Show category, ID, and description below
-            ui.horizontal(|ui| {
+            // Show category and description below (wrapped)
+            ui.horizontal_wrapped(|ui| {
                 ui.small(&element.category);
-                ui.small("|");
-                ui.small(format!("ID: {}", &name));
                 ui.small("|");
                 ui.small(&element.description);
             });
