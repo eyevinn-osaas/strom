@@ -356,10 +356,13 @@ impl StromApp {
             match api.create_flow(&new_flow).await {
                 Ok(created_flow) => {
                     tracing::info!("Flow created successfully: {}", created_flow.name);
-                    // Trigger refresh by setting flag in localStorage
+                    // Trigger refresh and auto-select the new flow
                     if let Some(window) = web_sys::window() {
                         if let Some(storage) = window.local_storage().ok().flatten() {
                             let _ = storage.set_item("strom_needs_refresh", "true");
+                            // Store the new flow's ID to auto-select it after refresh
+                            let _ = storage
+                                .set_item("strom_selected_flow_id", &created_flow.id.to_string());
                         }
                     }
                 }
@@ -502,14 +505,14 @@ impl StromApp {
                 if let Some((flow_id, state)) = flow_info {
                     let state = state.unwrap_or(PipelineState::Null);
 
-                    let state_color = match state {
-                        PipelineState::Null => Color32::GRAY,
-                        PipelineState::Ready => Color32::YELLOW,
-                        PipelineState::Paused => Color32::from_rgb(255, 165, 0),
-                        PipelineState::Playing => Color32::GREEN,
+                    // Map internal states to user-friendly names
+                    let (state_text, state_color) = match state {
+                        PipelineState::Null | PipelineState::Ready => ("Stopped", Color32::GRAY),
+                        PipelineState::Paused => ("Paused", Color32::from_rgb(255, 165, 0)),
+                        PipelineState::Playing => ("Started", Color32::GREEN),
                     };
 
-                    ui.colored_label(state_color, format!("State: {:?}", state));
+                    ui.colored_label(state_color, format!("State: {}", state_text));
                     ui.separator();
 
                     if ui.button("▶ Start").clicked() {
@@ -604,7 +607,7 @@ impl StromApp {
                                 }
                             });
                         } else {
-                            // Create a full-width selectable area
+                            // Create full-width selectable area
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 20.0),
                                 egui::Sense::click(),
@@ -634,7 +637,7 @@ impl StromApp {
                                 }
                             }
 
-                            // Draw background for selected item
+                            // Draw background for selected/hovered item
                             if selected {
                                 ui.painter()
                                     .rect_filled(rect, 2.0, ui.visuals().selection.bg_fill);
@@ -835,6 +838,11 @@ impl StromApp {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut self.new_flow_name);
                 });
+
+                // Check for Enter key to create flow
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.new_flow_name.is_empty() {
+                    self.create_flow(ctx);
+                }
 
                 ui.horizontal(|ui| {
                     if ui.button("Create").clicked() {

@@ -14,9 +14,6 @@ impl PropertyInspector {
     pub fn show(ui: &mut Ui, element: &mut Element, element_info: Option<&ElementInfo>) {
         let element_id = element.id.clone();
         ui.push_id(&element_id, |ui| {
-            ui.heading("Properties");
-            ui.separator();
-
             // Element type (read-only)
             ui.horizontal(|ui| {
                 ui.label("Type:");
@@ -30,7 +27,6 @@ impl PropertyInspector {
             });
 
             ui.separator();
-            ui.heading("Element Properties");
 
             ui.label("💡 Only modified properties are saved");
 
@@ -38,22 +34,18 @@ impl PropertyInspector {
                 .id_salt("properties_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    // If we have element info, show properties from metadata
+                    // Show properties from metadata if available
                     if let Some(info) = element_info {
                         if !info.properties.is_empty() {
                             for prop_info in &info.properties {
                                 Self::show_property_from_info(ui, element, prop_info);
                             }
                         } else {
-                            // Fallback to common properties
-                            Self::show_common_properties(ui, element);
+                            ui.label("No properties available for this element");
                         }
                     } else {
-                        // Fallback to common properties if no metadata
-                        Self::show_common_properties(ui, element);
+                        ui.label("No element metadata available");
                     }
-
-                    ui.separator();
 
                     // Show any additional custom properties that aren't in the metadata
                     if let Some(info) = element_info {
@@ -68,7 +60,9 @@ impl PropertyInspector {
                             .collect();
 
                         if !custom_keys.is_empty() {
+                            ui.separator();
                             ui.heading("Custom Properties");
+                            ui.add_space(4.0);
                             for key in custom_keys {
                                 let should_remove = ui
                                     .horizontal(|ui| {
@@ -85,6 +79,7 @@ impl PropertyInspector {
                                 if should_remove {
                                     element.properties.remove(&key);
                                 }
+                                ui.add_space(8.0);
                             }
                         }
                     }
@@ -194,6 +189,9 @@ impl PropertyInspector {
                 ui.small(&prop_info.description);
             });
         }
+
+        // Add spacing after each property
+        ui.add_space(8.0);
     }
 
     fn values_equal(a: &PropertyValue, b: &PropertyValue) -> bool {
@@ -204,190 +202,6 @@ impl PropertyInspector {
             (PropertyValue::Float(a), PropertyValue::Float(b)) => (a - b).abs() < 0.0001,
             (PropertyValue::Bool(a), PropertyValue::Bool(b)) => a == b,
             _ => false,
-        }
-    }
-
-    fn show_common_properties(ui: &mut Ui, element: &mut Element) {
-        // Show common properties based on element type
-        match element.element_type.as_str() {
-            "filesrc" | "filesink" => {
-                ui.horizontal(|ui| {
-                    ui.label("location:");
-                    let mut location = element
-                        .properties
-                        .get("location")
-                        .and_then(|v| {
-                            if let PropertyValue::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default();
-
-                    if ui.text_edit_singleline(&mut location).changed() {
-                        element
-                            .properties
-                            .insert("location".to_string(), PropertyValue::String(location));
-                    }
-                });
-            }
-            "rtspsrc" => {
-                ui.horizontal(|ui| {
-                    ui.label("location:");
-                    let mut location = element
-                        .properties
-                        .get("location")
-                        .and_then(|v| {
-                            if let PropertyValue::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| "rtsp://".to_string());
-
-                    if ui.text_edit_singleline(&mut location).changed() {
-                        element
-                            .properties
-                            .insert("location".to_string(), PropertyValue::String(location));
-                    }
-                });
-            }
-            "videotestsrc" => {
-                ui.horizontal(|ui| {
-                    ui.label("pattern:");
-                    let mut pattern = element
-                        .properties
-                        .get("pattern")
-                        .and_then(|v| {
-                            if let PropertyValue::Int(i) = v {
-                                Some(*i)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-
-                    if ui.add(egui::Slider::new(&mut pattern, 0..=20)).changed() {
-                        element
-                            .properties
-                            .insert("pattern".to_string(), PropertyValue::Int(pattern));
-                    }
-                });
-            }
-            "audiotestsrc" => {
-                ui.horizontal(|ui| {
-                    ui.label("wave:");
-                    let mut wave = element
-                        .properties
-                        .get("wave")
-                        .and_then(|v| {
-                            if let PropertyValue::Int(i) = v {
-                                Some(*i)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-
-                    if ui.add(egui::Slider::new(&mut wave, 0..=12)).changed() {
-                        element
-                            .properties
-                            .insert("wave".to_string(), PropertyValue::Int(wave));
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.label("freq:");
-                    let mut freq = element
-                        .properties
-                        .get("freq")
-                        .and_then(|v| {
-                            if let PropertyValue::Float(f) = v {
-                                Some(*f)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(440.0);
-
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut freq)
-                                .speed(1.0)
-                                .range(20.0..=20000.0),
-                        )
-                        .changed()
-                    {
-                        element
-                            .properties
-                            .insert("freq".to_string(), PropertyValue::Float(freq));
-                    }
-                });
-            }
-            "x264enc" => {
-                ui.horizontal(|ui| {
-                    ui.label("bitrate:");
-                    let mut bitrate = element
-                        .properties
-                        .get("bitrate")
-                        .and_then(|v| {
-                            if let PropertyValue::UInt(u) = v {
-                                Some(*u)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(2048);
-
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut bitrate)
-                                .speed(10.0)
-                                .range(64..=100000),
-                        )
-                        .changed()
-                    {
-                        element
-                            .properties
-                            .insert("bitrate".to_string(), PropertyValue::UInt(bitrate));
-                    }
-                });
-            }
-            "queue" => {
-                ui.horizontal(|ui| {
-                    ui.label("max-size-buffers:");
-                    let mut max_size = element
-                        .properties
-                        .get("max-size-buffers")
-                        .and_then(|v| {
-                            if let PropertyValue::UInt(u) = v {
-                                Some(*u)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(200);
-
-                    if ui
-                        .add(
-                            egui::DragValue::new(&mut max_size)
-                                .speed(10.0)
-                                .range(0..=10000),
-                        )
-                        .changed()
-                    {
-                        element.properties.insert(
-                            "max-size-buffers".to_string(),
-                            PropertyValue::UInt(max_size),
-                        );
-                    }
-                });
-            }
-            _ => {
-                ui.label("No common properties for this element type");
-            }
         }
     }
 

@@ -169,14 +169,30 @@ impl PipelineManager {
                         events.broadcast(StromEvent::PipelineEos { flow_id });
                     }
                     MessageView::StateChanged(state_changed) => {
-                        // Only log state changes from the pipeline itself, not individual elements
+                        // Log state changes from all elements to debug pausing issues
                         if let Some(source) = msg.src() {
+                            let source_name = source.name();
+                            let old_state = state_changed.old();
+                            let new_state = state_changed.current();
+                            let pending_state = state_changed.pending();
+
                             if source.type_() == gst::Pipeline::static_type() {
-                                debug!(
-                                    "Pipeline '{}' state changed: {:?} -> {:?}",
+                                info!(
+                                    "Pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
                                     flow_name,
-                                    state_changed.old(),
-                                    state_changed.current()
+                                    old_state,
+                                    new_state,
+                                    pending_state
+                                );
+                            } else {
+                                // Log all element state changes for debugging
+                                info!(
+                                    "Element '{}' in pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
+                                    source_name,
+                                    flow_name,
+                                    old_state,
+                                    new_state,
+                                    pending_state
                                 );
                             }
                         }
@@ -291,13 +307,22 @@ impl PipelineManager {
             .ok_or_else(|| PipelineError::ElementNotFound(to_element.to_string()))?;
 
         // Link with or without specific pads
-        if let (Some(src_pad), Some(sink_pad)) = (from_pad, to_pad) {
-            let src_pad_obj = src
-                .static_pad(src_pad)
-                .ok_or_else(|| PipelineError::LinkError(link.from.clone(), link.to.clone()))?;
+        if let (Some(src_pad_name), Some(sink_pad_name)) = (from_pad, to_pad) {
+            // Try to get the pad - for tee elements with src_N pads, request if not found
+            let src_pad_obj = if let Some(pad) = src.static_pad(src_pad_name) {
+                pad
+            } else {
+                // Request pad from tee element (src_N format)
+                src.request_pad_simple(src_pad_name).ok_or_else(|| {
+                    PipelineError::LinkError(
+                        link.from.clone(),
+                        format!("Could not get/request pad {}", src_pad_name),
+                    )
+                })?
+            };
 
             let sink_pad_obj = sink
-                .static_pad(sink_pad)
+                .static_pad(sink_pad_name)
                 .ok_or_else(|| PipelineError::LinkError(link.from.clone(), link.to.clone()))?;
 
             src_pad_obj.link(&sink_pad_obj).map_err(|e| {
@@ -361,10 +386,10 @@ impl PipelineManager {
             let tee_id = format!("auto_tee_{}", src_spec.replace(":", "_"));
             tees.insert(tee_id.clone(), src_spec.clone());
 
-            // Add link from original source to tee
+            // Add link from original source to tee (without explicit sink pad, tee will auto-connect)
             new_links.push(Link {
                 from: src_spec.clone(),
-                to: tee_id.clone(),
+                to: format!("{}:sink", tee_id),
             });
 
             info!("Created tee element '{}' for source '{}'", tee_id, src_spec);
@@ -408,6 +433,10 @@ impl PipelineManager {
                 PipelineError::ElementCreation(format!("Failed to create tee {}: {}", tee_id, e))
             })?;
 
+        // Configure tee to allow branches to not be linked without affecting other branches
+        // This prevents one branch from blocking others when it goes to PAUSED
+        tee.set_property("allow-not-linked", true);
+
         self.pipeline.add(&tee).map_err(|e| {
             PipelineError::ElementCreation(format!(
                 "Failed to add tee {} to pipeline: {}",
@@ -426,9 +455,41 @@ impl PipelineManager {
         // Set up bus watch before starting
         self.setup_bus_watch();
 
-        self.pipeline
-            .set_state(gst::State::Playing)
+        info!("Setting pipeline '{}' to PLAYING state", self.flow_name);
+        let state_change_result = self.pipeline.set_state(gst::State::Playing);
+
+        match &state_change_result {
+            Ok(gst::StateChangeSuccess::Success) => {
+                info!("Pipeline '{}' set to PLAYING: Success", self.flow_name);
+            }
+            Ok(gst::StateChangeSuccess::Async) => {
+                info!(
+                    "Pipeline '{}' set to PLAYING: Async (state change in progress)",
+                    self.flow_name
+                );
+            }
+            Ok(gst::StateChangeSuccess::NoPreroll) => {
+                info!(
+                    "Pipeline '{}' set to PLAYING: NoPreroll (live source)",
+                    self.flow_name
+                );
+            }
+            Err(e) => {
+                error!("Pipeline '{}' failed to start: {}", self.flow_name, e);
+            }
+        }
+
+        state_change_result
             .map_err(|e| PipelineError::StateChange(format!("Failed to start: {}", e)))?;
+
+        // Wait a moment to get the actual state
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let (result, current_state, pending_state) =
+            self.pipeline.state(gst::ClockTime::from_mseconds(100));
+        info!(
+            "Pipeline '{}' state after start: result={:?}, current={:?}, pending={:?}",
+            self.flow_name, result, current_state, pending_state
+        );
 
         Ok(PipelineState::Playing)
     }

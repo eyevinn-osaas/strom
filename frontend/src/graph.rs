@@ -74,7 +74,6 @@ impl GraphEditor {
             position: Some((pos.x, pos.y)),
         };
         self.elements.push(element);
-        self.selected = Some(id);
     }
 
     /// Remove the currently selected element.
