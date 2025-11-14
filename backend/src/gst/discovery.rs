@@ -1,6 +1,7 @@
 //! GStreamer element discovery and introspection.
 
 use gstreamer as gst;
+use gstreamer::glib;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
 use strom_types::element::{ElementInfo, PadInfo};
@@ -119,9 +120,8 @@ impl ElementDiscovery {
             }
         }
 
-        // For now, skip detailed property introspection as it's complex
-        // We'll add a simplified version
-        let properties = Vec::new();
+        // Introspect element properties
+        let properties = self.introspect_properties(factory)?;
 
         Ok(ElementInfo {
             name,
@@ -160,6 +160,217 @@ impl ElementDiscovery {
     /// Clear the cache (useful for testing or forcing refresh).
     pub fn clear_cache(&mut self) {
         self.cache.clear();
+    }
+
+    /// Introspect element properties from a factory.
+    fn introspect_properties(
+        &self,
+        factory: &gst::ElementFactory,
+    ) -> anyhow::Result<Vec<strom_types::element::PropertyInfo>> {
+        use strom_types::element::{PropertyInfo, PropertyType, PropertyValue};
+
+        // Create a temporary element instance to introspect properties
+        let element = factory
+            .create()
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create element: {}", e))?;
+
+        let mut properties = Vec::new();
+
+        // Get all properties from the element
+        for pspec in element.list_properties() {
+            let name = pspec.name().to_string();
+            let description = pspec.blurb().map(|s| s.to_string()).unwrap_or_default();
+
+            // Skip internal/private properties
+            if name.starts_with("_") {
+                continue;
+            }
+
+            // Determine property type and get default value
+            let type_name = pspec.value_type().name();
+            let (property_type, default_value) = match type_name {
+                "gchararray" => {
+                    // String property - use catch_unwind to handle potential panics
+                    let default = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        element.property::<Option<String>>(&name)
+                    }))
+                    .ok()
+                    .flatten()
+                    .map(PropertyValue::String);
+                    (PropertyType::String, default)
+                }
+                "gboolean" => {
+                    // Boolean property
+                    let default = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        element.property::<bool>(&name)
+                    }))
+                    .ok()
+                    .map(PropertyValue::Bool);
+                    (PropertyType::Bool, default)
+                }
+                "gint" | "glong" => {
+                    // Signed integer property
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt>() {
+                        let min = param_spec.minimum() as i64;
+                        let max = param_spec.maximum() as i64;
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<i32>(&name)
+                            }))
+                            .ok()
+                            .map(|v| PropertyValue::Int(v as i64));
+                        (PropertyType::Int { min, max }, default)
+                    } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>() {
+                        let min = param_spec.minimum();
+                        let max = param_spec.maximum();
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<i64>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::Int);
+                        (PropertyType::Int { min, max }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                "guint" | "gulong" => {
+                    // Unsigned integer property
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt>() {
+                        let min = param_spec.minimum() as u64;
+                        let max = param_spec.maximum() as u64;
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<u32>(&name)
+                            }))
+                            .ok()
+                            .map(|v| PropertyValue::UInt(v as u64));
+                        (PropertyType::UInt { min, max }, default)
+                    } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecULong>() {
+                        let min = param_spec.minimum();
+                        let max = param_spec.maximum();
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<u64>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::UInt);
+                        (PropertyType::UInt { min, max }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                "gint64" => {
+                    // 64-bit signed integer
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt64>() {
+                        let min = param_spec.minimum();
+                        let max = param_spec.maximum();
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<i64>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::Int);
+                        (PropertyType::Int { min, max }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                "guint64" => {
+                    // 64-bit unsigned integer
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt64>() {
+                        let min = param_spec.minimum();
+                        let max = param_spec.maximum();
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<u64>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::UInt);
+                        (PropertyType::UInt { min, max }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                "gfloat" => {
+                    // Float property
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecFloat>() {
+                        let min = param_spec.minimum() as f64;
+                        let max = param_spec.maximum() as f64;
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<f32>(&name)
+                            }))
+                            .ok()
+                            .map(|v| PropertyValue::Float(v as f64));
+                        (PropertyType::Float { min, max }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                "gdouble" => {
+                    // Double property
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecDouble>() {
+                        let min = param_spec.minimum();
+                        let max = param_spec.maximum();
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<f64>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::Float);
+                        (PropertyType::Float { min, max }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                "GEnum" => {
+                    // Enum property
+                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecEnum>() {
+                        let enum_class = param_spec.enum_class();
+                        let values: Vec<String> = enum_class
+                            .values()
+                            .iter()
+                            .map(|v| v.name().to_string())
+                            .collect();
+
+                        // Try to get default value as enum index
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<i32>(&name)
+                            }))
+                            .ok()
+                            .and_then(|idx| {
+                                enum_class
+                                    .value(idx)
+                                    .map(|v| PropertyValue::String(v.name().to_string()))
+                            });
+
+                        (PropertyType::Enum { values }, default)
+                    } else {
+                        continue;
+                    }
+                }
+                _ => {
+                    // Skip unsupported property types
+                    debug!(
+                        "Skipping unsupported property type: {} ({})",
+                        name, type_name
+                    );
+                    continue;
+                }
+            };
+
+            properties.push(PropertyInfo {
+                name,
+                description,
+                property_type,
+                default_value,
+            });
+        }
+
+        Ok(properties)
     }
 }
 

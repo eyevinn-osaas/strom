@@ -270,7 +270,12 @@ impl ApiClient {
 
     /// Get details about a specific element type.
     pub async fn get_element_info(&self, name: &str) -> ApiResult<ElementInfo> {
+        use strom_types::api::ElementInfoResponse;
+        use tracing::info;
+
         let url = format!("{}/elements/{}", self.base_url, name);
+        info!("Fetching element info from: {}", url);
+
         let response = Request::get(&url)
             .send()
             .await
@@ -282,10 +287,13 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        response
+        let element_response: ElementInfoResponse = response
             .json()
             .await
-            .map_err(|e| ApiError::Decode(e.to_string()))
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+
+        info!("Successfully loaded element info for: {}", name);
+        Ok(element_response.element)
     }
 
     /// Get the debug graph URL for a flow.

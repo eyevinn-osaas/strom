@@ -1,14 +1,14 @@
 # Dockerfile for Strom - Multi-stage build with cargo-chef for optimal caching
 
 # Stage 1: Planner - Analyze dependencies and create recipe
-FROM rust:1.83-trixie as planner
+FROM rust:1.82-bookworm as planner
 WORKDIR /app
 RUN cargo install cargo-chef
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # Stage 2: Builder - Build dependencies using cargo-chef
-FROM rust:1.83-trixie as builder
+FROM rust:1.82-bookworm as builder
 WORKDIR /app
 
 # Install cargo-chef
