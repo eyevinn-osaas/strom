@@ -925,7 +925,8 @@ impl eframe::App for StromApp {
                                 "Updating elements from localStorage: {} elements",
                                 count
                             );
-                            self.palette.load_elements(elements);
+                            self.palette.load_elements(elements.clone());
+                            self.graph.set_all_element_info(elements);
                             self.status = format!("Loaded {} elements", count);
                             let _ = storage.remove_item("strom_elements_data");
                         }

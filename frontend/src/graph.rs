@@ -2,7 +2,7 @@
 
 use egui::{pos2, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
-use strom_types::{Element, ElementId, Link};
+use strom_types::{element::ElementInfo, Element, ElementId, Link};
 
 /// Represents the state of the graph editor.
 pub struct GraphEditor {
@@ -10,6 +10,8 @@ pub struct GraphEditor {
     pub elements: Vec<Element>,
     /// Links (edges) between elements
     pub links: Vec<Link>,
+    /// Element metadata (type -> info) for rendering ports
+    element_info_map: HashMap<String, ElementInfo>,
     /// Currently selected element ID
     pub selected: Option<ElementId>,
     /// Element being dragged
@@ -35,6 +37,7 @@ impl Default for GraphEditor {
         Self {
             elements: Vec::new(),
             links: Vec::new(),
+            element_info_map: HashMap::new(),
             selected: None,
             dragging: None,
             pan_offset: Vec2::ZERO,
@@ -107,6 +110,19 @@ impl GraphEditor {
         }
     }
 
+    /// Set element metadata for rendering ports.
+    pub fn set_element_info(&mut self, element_type: String, info: ElementInfo) {
+        self.element_info_map.insert(element_type, info);
+    }
+
+    /// Set all element metadata at once.
+    pub fn set_all_element_info(&mut self, infos: Vec<ElementInfo>) {
+        self.element_info_map.clear();
+        for info in infos {
+            self.element_info_map.insert(info.name.clone(), info);
+        }
+    }
+
     /// Render the graph editor.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         ui.push_id("graph_editor", |ui| {
@@ -152,8 +168,16 @@ impl GraphEditor {
 
                 let is_selected = self.selected.as_ref() == Some(&element.id);
                 let is_hovered = self.hovered_element.as_ref() == Some(&element.id);
-                let node_response =
-                    self.draw_node(ui, &painter, element, node_rect, is_selected, is_hovered);
+                let element_info = self.element_info_map.get(&element.element_type);
+                let node_response = self.draw_node(
+                    ui,
+                    &painter,
+                    element,
+                    element_info,
+                    node_rect,
+                    is_selected,
+                    is_hovered,
+                );
 
                 // Track hover state
                 if node_response.hovered() {
@@ -189,13 +213,18 @@ impl GraphEditor {
                 }
 
                 // Collect pad interactions for later processing
-                pad_interactions.push((element.id.clone(), node_rect));
+                pad_interactions.push((
+                    element.id.clone(),
+                    element.element_type.clone(),
+                    node_rect,
+                ));
             }
 
             // Handle pad interactions
-            for (element_id, rect) in pad_interactions {
+            for (element_id, element_type, rect) in pad_interactions {
+                let element_info = self.element_info_map.get(&element_type).cloned();
                 if let Some(element) = self.elements.iter().find(|e| e.id == element_id).cloned() {
-                    self.handle_pad_interaction(ui, &element, rect);
+                    self.handle_pad_interaction(ui, &element, element_info.as_ref(), rect);
                 }
             }
 
@@ -308,11 +337,13 @@ impl GraphEditor {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_node(
         &self,
         ui: &Ui,
         painter: &egui::Painter,
         element: &Element,
+        element_info: Option<&ElementInfo>,
         rect: Rect,
         is_selected: bool,
         is_hovered: bool,
@@ -370,92 +401,205 @@ impl GraphEditor {
             Color32::from_gray(180),
         );
 
-        // Check if ports are hovered
-        let input_hovered = self
-            .hovered_pad
-            .as_ref()
-            .map(|(id, pad)| id == &element.id && pad == "sink")
-            .unwrap_or(false);
-        let output_hovered = self
-            .hovered_pad
-            .as_ref()
-            .map(|(id, pad)| id == &element.id && pad == "src")
-            .unwrap_or(false);
-
-        // Determine which ports to show based on element type
-        let is_source = element.element_type.ends_with("src");
-        let is_sink = element.element_type.ends_with("sink");
-        let show_input = !is_source; // Show input for sinks and filters
-        let show_output = !is_sink; // Show output for sources and filters
-
+        // Draw ports based on element metadata
         let port_size = 12.0 * self.zoom;
 
-        // Draw input pad (sink) as box - only for sinks and filters
-        if show_input {
-            let input_center = pos2(rect.min.x, rect.center().y);
-            let input_rect = Rect::from_center_size(input_center, vec2(port_size, port_size));
+        if let Some(info) = element_info {
+            use strom_types::element::MediaType;
 
-            if input_hovered {
-                // Draw glow effect
-                let glow_rect = Rect::from_center_size(
-                    input_center,
-                    vec2(port_size + 10.0 * self.zoom, port_size + 10.0 * self.zoom),
-                );
-                painter.rect(
-                    glow_rect,
-                    3.0,
-                    Color32::from_rgba_premultiplied(100, 200, 100, 77), // ~30% opacity
-                    Stroke::NONE,
-                    egui::epaint::StrokeKind::Inside,
-                );
+            // Draw sink pads (inputs) on the left
+            let sink_count = info.sink_pads.len();
+            for (idx, pad_info) in info.sink_pads.iter().enumerate() {
+                // Calculate vertical position (evenly spaced)
+                let y_offset = if sink_count > 1 {
+                    let spacing = rect.height() / (sink_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
+                let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
+
+                let is_hovered = self
+                    .hovered_pad
+                    .as_ref()
+                    .map(|(id, pad)| id == &element.id && pad == &pad_info.name)
+                    .unwrap_or(false);
+
+                // Choose color based on media type
+                let (base_color, hover_color, glow_color, label) = match pad_info.media_type {
+                    MediaType::Audio => (
+                        Color32::from_rgb(100, 200, 100), // Green
+                        Color32::from_rgb(126, 232, 126),
+                        Color32::from_rgba_premultiplied(100, 200, 100, 77),
+                        "A",
+                    ),
+                    MediaType::Video => (
+                        Color32::from_rgb(255, 150, 100), // Orange
+                        Color32::from_rgb(255, 176, 128),
+                        Color32::from_rgba_premultiplied(255, 150, 100, 77),
+                        "V",
+                    ),
+                    MediaType::Generic => (
+                        Color32::from_rgb(100, 150, 255), // Blue
+                        Color32::from_rgb(126, 176, 255),
+                        Color32::from_rgba_premultiplied(100, 150, 255, 77),
+                        "",
+                    ),
+                };
+
+                if is_hovered {
+                    // Draw glow effect
+                    let glow_rect = Rect::from_center_size(
+                        pad_center,
+                        vec2(port_size + 10.0 * self.zoom, port_size + 10.0 * self.zoom),
+                    );
+                    painter.rect(
+                        glow_rect,
+                        3.0,
+                        glow_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    painter.rect(
+                        pad_rect,
+                        2.0,
+                        hover_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect(
+                        pad_rect,
+                        2.0,
+                        base_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                }
+
+                // Draw label inside port
+                if !label.is_empty() {
+                    painter.text(
+                        pad_center,
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(8.0 * self.zoom),
+                        Color32::WHITE,
+                    );
+                }
+            }
+
+            // Draw src pads (outputs) on the right
+            let src_count = info.src_pads.len();
+            for (idx, pad_info) in info.src_pads.iter().enumerate() {
+                // Calculate vertical position (evenly spaced)
+                let y_offset = if src_count > 1 {
+                    let spacing = rect.height() / (src_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
+                let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
+
+                let is_hovered = self
+                    .hovered_pad
+                    .as_ref()
+                    .map(|(id, pad)| id == &element.id && pad == &pad_info.name)
+                    .unwrap_or(false);
+
+                // Choose color based on media type
+                let (base_color, hover_color, glow_color, label) = match pad_info.media_type {
+                    MediaType::Audio => (
+                        Color32::from_rgb(100, 200, 100), // Green
+                        Color32::from_rgb(126, 232, 126),
+                        Color32::from_rgba_premultiplied(100, 200, 100, 77),
+                        "A",
+                    ),
+                    MediaType::Video => (
+                        Color32::from_rgb(255, 150, 100), // Orange
+                        Color32::from_rgb(255, 176, 128),
+                        Color32::from_rgba_premultiplied(255, 150, 100, 77),
+                        "V",
+                    ),
+                    MediaType::Generic => (
+                        Color32::from_rgb(100, 150, 255), // Blue
+                        Color32::from_rgb(126, 176, 255),
+                        Color32::from_rgba_premultiplied(100, 150, 255, 77),
+                        "",
+                    ),
+                };
+
+                if is_hovered {
+                    // Draw glow effect
+                    let glow_rect = Rect::from_center_size(
+                        pad_center,
+                        vec2(port_size + 10.0 * self.zoom, port_size + 10.0 * self.zoom),
+                    );
+                    painter.rect(
+                        glow_rect,
+                        3.0,
+                        glow_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    painter.rect(
+                        pad_rect,
+                        2.0,
+                        hover_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect(
+                        pad_rect,
+                        2.0,
+                        base_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                }
+
+                // Draw label inside port
+                if !label.is_empty() {
+                    painter.text(
+                        pad_center,
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(8.0 * self.zoom),
+                        Color32::WHITE,
+                    );
+                }
+            }
+        } else {
+            // Fallback: draw generic ports if no metadata available
+            let is_source = element.element_type.ends_with("src");
+            let is_sink = element.element_type.ends_with("sink");
+
+            // Draw input (generic blue)
+            if !is_source {
+                let input_center = pos2(rect.min.x, rect.center().y);
+                let input_rect = Rect::from_center_size(input_center, vec2(port_size, port_size));
                 painter.rect(
                     input_rect,
                     2.0,
-                    Color32::from_rgb(126, 232, 126), // Brighter on hover
-                    Stroke::NONE,
-                    egui::epaint::StrokeKind::Inside,
-                );
-            } else {
-                painter.rect(
-                    input_rect,
-                    2.0,
-                    Color32::from_rgb(100, 200, 100),
+                    Color32::from_rgb(100, 150, 255),
                     Stroke::NONE,
                     egui::epaint::StrokeKind::Inside,
                 );
             }
-        }
 
-        // Draw output pad (src) as box - only for sources and filters
-        if show_output {
-            let output_center = pos2(rect.max.x, rect.center().y);
-            let output_rect = Rect::from_center_size(output_center, vec2(port_size, port_size));
-
-            if output_hovered {
-                // Draw glow effect
-                let glow_rect = Rect::from_center_size(
-                    output_center,
-                    vec2(port_size + 10.0 * self.zoom, port_size + 10.0 * self.zoom),
-                );
-                painter.rect(
-                    glow_rect,
-                    3.0,
-                    Color32::from_rgba_premultiplied(255, 150, 100, 77), // ~30% opacity
-                    Stroke::NONE,
-                    egui::epaint::StrokeKind::Inside,
-                );
+            // Draw output (generic blue)
+            if !is_sink {
+                let output_center = pos2(rect.max.x, rect.center().y);
+                let output_rect = Rect::from_center_size(output_center, vec2(port_size, port_size));
                 painter.rect(
                     output_rect,
                     2.0,
-                    Color32::from_rgb(255, 176, 128), // Brighter on hover
-                    Stroke::NONE,
-                    egui::epaint::StrokeKind::Inside,
-                );
-            } else {
-                painter.rect(
-                    output_rect,
-                    2.0,
-                    Color32::from_rgb(255, 150, 100),
+                    Color32::from_rgb(100, 150, 255),
                     Stroke::NONE,
                     egui::epaint::StrokeKind::Inside,
                 );
@@ -570,62 +714,127 @@ impl GraphEditor {
         )
     }
 
-    fn handle_pad_interaction(&mut self, ui: &Ui, element: &Element, rect: Rect) {
+    fn handle_pad_interaction(
+        &mut self,
+        ui: &Ui,
+        element: &Element,
+        element_info: Option<&ElementInfo>,
+        rect: Rect,
+    ) {
         let port_size = 12.0 * self.zoom;
         let interaction_size = port_size + 4.0 * self.zoom; // Slightly larger for easier interaction
 
-        // Determine which ports to show based on element type
-        let is_source = element.element_type.ends_with("src");
-        let is_sink = element.element_type.ends_with("sink");
-        let show_input = !is_source; // Show input for sinks and filters
-        let show_output = !is_sink; // Show output for sources and filters
+        let mut any_hovered = false;
 
-        let mut output_hovered = false;
-        let mut input_hovered = false;
+        if let Some(info) = element_info {
+            // Handle sink pad interactions (inputs)
+            let sink_count = info.sink_pads.len();
+            for (idx, pad_info) in info.sink_pads.iter().enumerate() {
+                // Calculate vertical position (matching draw_node)
+                let y_offset = if sink_count > 1 {
+                    let spacing = rect.height() / (sink_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
 
-        // Output pad (src) - only for sources and filters
-        if show_output {
-            let output_center = pos2(rect.max.x, rect.center().y);
-            let output_rect =
-                Rect::from_center_size(output_center, vec2(interaction_size, interaction_size));
-            let output_response = ui.interact(
-                output_rect,
-                ui.id().with((&element.id, "src")),
-                Sense::click_and_drag(),
-            );
+                let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
+                let pad_rect =
+                    Rect::from_center_size(pad_center, vec2(interaction_size, interaction_size));
 
-            // Start creating link when dragging from output port
-            if output_response.drag_started()
-                || (output_response.dragged() && self.creating_link.is_none())
-            {
-                self.creating_link = Some((element.id.clone(), "src".to_string()));
+                let pad_response = ui.interact(
+                    pad_rect,
+                    ui.id().with((&element.id, &pad_info.name)),
+                    Sense::hover(),
+                );
+
+                if pad_response.hovered() {
+                    self.hovered_pad = Some((element.id.clone(), pad_info.name.clone()));
+                    any_hovered = true;
+                }
             }
 
-            if output_response.hovered() {
-                self.hovered_pad = Some((element.id.clone(), "src".to_string()));
-                output_hovered = true;
+            // Handle src pad interactions (outputs)
+            let src_count = info.src_pads.len();
+            for (idx, pad_info) in info.src_pads.iter().enumerate() {
+                // Calculate vertical position (matching draw_node)
+                let y_offset = if src_count > 1 {
+                    let spacing = rect.height() / (src_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
+                let pad_rect =
+                    Rect::from_center_size(pad_center, vec2(interaction_size, interaction_size));
+
+                let pad_response = ui.interact(
+                    pad_rect,
+                    ui.id().with((&element.id, &pad_info.name)),
+                    Sense::click_and_drag(),
+                );
+
+                // Start creating link when dragging from output port
+                if pad_response.drag_started()
+                    || (pad_response.dragged() && self.creating_link.is_none())
+                {
+                    self.creating_link = Some((element.id.clone(), pad_info.name.clone()));
+                }
+
+                if pad_response.hovered() {
+                    self.hovered_pad = Some((element.id.clone(), pad_info.name.clone()));
+                    any_hovered = true;
+                }
+            }
+        } else {
+            // Fallback for elements without metadata
+            let is_source = element.element_type.ends_with("src");
+            let is_sink = element.element_type.ends_with("sink");
+
+            // Output pad (src)
+            if !is_sink {
+                let output_center = pos2(rect.max.x, rect.center().y);
+                let output_rect =
+                    Rect::from_center_size(output_center, vec2(interaction_size, interaction_size));
+                let output_response = ui.interact(
+                    output_rect,
+                    ui.id().with((&element.id, "src")),
+                    Sense::click_and_drag(),
+                );
+
+                if output_response.drag_started()
+                    || (output_response.dragged() && self.creating_link.is_none())
+                {
+                    self.creating_link = Some((element.id.clone(), "src".to_string()));
+                }
+
+                if output_response.hovered() {
+                    self.hovered_pad = Some((element.id.clone(), "src".to_string()));
+                    any_hovered = true;
+                }
+            }
+
+            // Input pad (sink)
+            if !is_source {
+                let input_center = pos2(rect.min.x, rect.center().y);
+                let input_rect =
+                    Rect::from_center_size(input_center, vec2(interaction_size, interaction_size));
+                let input_response = ui.interact(
+                    input_rect,
+                    ui.id().with((&element.id, "sink")),
+                    Sense::hover(),
+                );
+
+                if input_response.hovered() {
+                    self.hovered_pad = Some((element.id.clone(), "sink".to_string()));
+                    any_hovered = true;
+                }
             }
         }
 
-        // Input pad (sink) - only for sinks and filters
-        if show_input {
-            let input_center = pos2(rect.min.x, rect.center().y);
-            let input_rect =
-                Rect::from_center_size(input_center, vec2(interaction_size, interaction_size));
-            let input_response = ui.interact(
-                input_rect,
-                ui.id().with((&element.id, "sink")),
-                Sense::hover(),
-            );
-
-            if input_response.hovered() {
-                self.hovered_pad = Some((element.id.clone(), "sink".to_string()));
-                input_hovered = true;
-            }
-        }
-
-        // Clear hovered_pad if mouse is not over any pad
-        if !input_hovered && !output_hovered {
+        // Clear hovered_pad if mouse is not over any pad for this element
+        if !any_hovered {
             if let Some((id, _)) = &self.hovered_pad {
                 if id == &element.id {
                     self.hovered_pad = None;

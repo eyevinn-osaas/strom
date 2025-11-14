@@ -4,7 +4,7 @@ use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
-use strom_types::element::{ElementInfo, PadInfo};
+use strom_types::element::{ElementInfo, MediaType, PadInfo, PadPresence};
 use tracing::{debug, warn};
 
 /// GStreamer element discovery service.
@@ -108,9 +108,23 @@ impl ElementDiscovery {
         let mut sink_pads = Vec::new();
 
         for pad_template in factory.static_pad_templates() {
+            let caps_string = pad_template.caps().to_string();
+
+            // Determine pad presence
+            let presence = match pad_template.presence() {
+                gst::PadPresence::Always => PadPresence::Always,
+                gst::PadPresence::Sometimes => PadPresence::Sometimes,
+                gst::PadPresence::Request => PadPresence::Request,
+            };
+
+            // Determine media type from caps
+            let media_type = Self::classify_media_type(&caps_string);
+
             let pad_info = PadInfo {
                 name: pad_template.name_template().to_string(),
-                caps: pad_template.caps().to_string(),
+                caps: caps_string,
+                presence,
+                media_type,
             };
 
             match pad_template.direction() {
@@ -157,6 +171,27 @@ impl ElementDiscovery {
         }
     }
 
+    /// Classify media type from caps string.
+    fn classify_media_type(caps: &str) -> MediaType {
+        let caps_lower = caps.to_lowercase();
+
+        // Check for audio patterns
+        let is_audio = caps_lower.contains("audio/") || caps_lower.contains("audio,");
+
+        // Check for video patterns
+        let is_video = caps_lower.contains("video/")
+            || caps_lower.contains("video,")
+            || caps_lower.contains("image/");
+
+        // Classify based on what we found
+        match (is_audio, is_video) {
+            (true, true) => MediaType::Generic, // Both audio and video = generic/muxed
+            (true, false) => MediaType::Audio,  // Audio only
+            (false, true) => MediaType::Video,  // Video only
+            (false, false) => MediaType::Generic, // Unknown or ANY caps = generic
+        }
+    }
+
     /// Clear the cache (useful for testing or forcing refresh).
     pub fn clear_cache(&mut self) {
         self.cache.clear();
@@ -184,6 +219,12 @@ impl ElementDiscovery {
 
             // Skip internal/private properties
             if name.starts_with("_") {
+                continue;
+            }
+
+            // Skip write-only properties (not readable)
+            if !pspec.flags().contains(glib::ParamFlags::READABLE) {
+                debug!("Skipping write-only property: {}", name);
                 continue;
             }
 

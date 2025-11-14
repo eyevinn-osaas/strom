@@ -56,6 +56,8 @@ pub struct PipelineManager {
     elements: HashMap<String, gst::Element>,
     bus_watch: Option<gst::bus::BusWatchGuard>,
     events: EventBroadcaster,
+    /// Pending links that couldn't be made because source pads don't exist yet (dynamic pads)
+    pending_links: Vec<Link>,
 }
 
 impl PipelineManager {
@@ -74,6 +76,7 @@ impl PipelineManager {
             elements: HashMap::new(),
             bus_watch: None,
             events,
+            pending_links: Vec::new(),
         };
 
         // Create and add all elements
@@ -91,8 +94,18 @@ impl PipelineManager {
 
         // Link elements according to processed links
         for link in &processed_links.links {
-            manager.link_elements(link)?;
+            if let Err(e) = manager.try_link_elements(link) {
+                debug!(
+                    "Could not link immediately: {} - will try when pad becomes available",
+                    e
+                );
+                // Store as pending link
+                manager.pending_links.push(link.clone());
+            }
         }
+
+        // Set up dynamic pad handlers for all elements that might have dynamic pads
+        manager.setup_dynamic_pad_handlers();
 
         // Note: Bus watch is set up when pipeline starts, not here
         debug!("Pipeline created successfully for flow: {}", flow.name);
@@ -272,10 +285,58 @@ impl PipelineManager {
                 element.set_property_from_str(prop_name, v);
             }
             PropertyValue::Int(v) => {
-                element.set_property(prop_name, *v);
+                // Check property type to determine if we need i32 or i64
+                if let Some(pspec) = element.find_property(prop_name) {
+                    let type_name = pspec.value_type().name();
+                    if type_name == "gint" || type_name == "glong" {
+                        // Property expects i32
+                        if let Ok(v32) = i32::try_from(*v) {
+                            element.set_property(prop_name, v32);
+                        } else {
+                            return Err(PipelineError::InvalidProperty {
+                                element: element_id.to_string(),
+                                property: prop_name.to_string(),
+                                reason: format!("Value {} doesn't fit in i32", v),
+                            });
+                        }
+                    } else if type_name == "gint64" {
+                        // Property expects i64
+                        element.set_property(prop_name, *v);
+                    } else {
+                        // Try i64, might work
+                        element.set_property(prop_name, *v);
+                    }
+                } else {
+                    // Property not found, try anyway
+                    element.set_property(prop_name, *v);
+                }
             }
             PropertyValue::UInt(v) => {
-                element.set_property(prop_name, *v);
+                // Check property type to determine if we need u32 or u64
+                if let Some(pspec) = element.find_property(prop_name) {
+                    let type_name = pspec.value_type().name();
+                    if type_name == "guint" || type_name == "gulong" {
+                        // Property expects u32
+                        if let Ok(v32) = u32::try_from(*v) {
+                            element.set_property(prop_name, v32);
+                        } else {
+                            return Err(PipelineError::InvalidProperty {
+                                element: element_id.to_string(),
+                                property: prop_name.to_string(),
+                                reason: format!("Value {} doesn't fit in u32", v),
+                            });
+                        }
+                    } else if type_name == "guint64" {
+                        // Property expects u64
+                        element.set_property(prop_name, *v);
+                    } else {
+                        // Try u64, might work
+                        element.set_property(prop_name, *v);
+                    }
+                } else {
+                    // Property not found, try anyway
+                    element.set_property(prop_name, *v);
+                }
             }
             PropertyValue::Float(v) => {
                 element.set_property(prop_name, *v);
@@ -288,9 +349,10 @@ impl PipelineManager {
         Ok(())
     }
 
-    /// Link two elements according to a link definition.
-    fn link_elements(&self, link: &Link) -> Result<(), PipelineError> {
-        debug!("Linking: {} -> {}", link.from, link.to);
+    /// Try to link two elements according to a link definition.
+    /// Returns Ok if successful, Err if pads don't exist yet (dynamic pads).
+    fn try_link_elements(&self, link: &Link) -> Result<(), PipelineError> {
+        debug!("Trying to link: {} -> {}", link.from, link.to);
 
         // Parse element:pad format (e.g., "src" or "src:pad_name")
         let (from_element, from_pad) = Self::parse_element_pad(&link.from);
@@ -308,31 +370,49 @@ impl PipelineManager {
 
         // Link with or without specific pads
         if let (Some(src_pad_name), Some(sink_pad_name)) = (from_pad, to_pad) {
-            // Try to get the pad - for tee elements with src_N pads, request if not found
+            // Try to get the pad - try static first, then request if not found
             let src_pad_obj = if let Some(pad) = src.static_pad(src_pad_name) {
                 pad
+            } else if let Some(pad) = src.request_pad_simple(src_pad_name) {
+                // Request pad (for elements like tee with src_%u pads)
+                pad
             } else {
-                // Request pad from tee element (src_N format)
-                src.request_pad_simple(src_pad_name).ok_or_else(|| {
-                    PipelineError::LinkError(
-                        link.from.clone(),
-                        format!("Could not get/request pad {}", src_pad_name),
-                    )
-                })?
+                // Pad doesn't exist - might be a dynamic pad
+                return Err(PipelineError::LinkError(
+                    link.from.clone(),
+                    format!(
+                        "Source pad {} not available yet (dynamic pad)",
+                        src_pad_name
+                    ),
+                ));
             };
 
-            let sink_pad_obj = sink
-                .static_pad(sink_pad_name)
-                .ok_or_else(|| PipelineError::LinkError(link.from.clone(), link.to.clone()))?;
+            // Try to get sink pad - try static first, then request if not found
+            let sink_pad_obj = if let Some(pad) = sink.static_pad(sink_pad_name) {
+                pad
+            } else if let Some(pad) = sink.request_pad_simple(sink_pad_name) {
+                // Request pad (for elements with request sink pads)
+                pad
+            } else {
+                // Pad doesn't exist - might be a dynamic pad
+                return Err(PipelineError::LinkError(
+                    link.to.clone(),
+                    format!("Sink pad {} not available yet (dynamic pad)", sink_pad_name),
+                ));
+            };
 
             src_pad_obj.link(&sink_pad_obj).map_err(|e| {
                 PipelineError::LinkError(link.from.clone(), format!("{} - {}", link.to, e))
             })?;
+
+            debug!("Successfully linked: {} -> {}", link.from, link.to);
         } else {
             // Simple link without pad names
             src.link(sink).map_err(|e| {
                 PipelineError::LinkError(link.from.clone(), format!("{} - {}", link.to, e))
             })?;
+
+            debug!("Successfully linked: {} -> {}", link.from, link.to);
         }
 
         Ok(())
@@ -344,6 +424,87 @@ impl PipelineManager {
             (element, Some(pad))
         } else {
             (spec, None)
+        }
+    }
+
+    /// Set up pad-added signal handlers for elements with dynamic pads.
+    fn setup_dynamic_pad_handlers(&mut self) {
+        if self.pending_links.is_empty() {
+            return;
+        }
+
+        info!(
+            "Setting up dynamic pad handlers for {} pending link(s)",
+            self.pending_links.len()
+        );
+
+        // For each element that might have dynamic pads, connect to pad-added signal
+        let elements_map = self.elements.clone();
+        let pending_links = self.pending_links.clone();
+
+        for (element_id, element) in &self.elements {
+            let element_id = element_id.clone();
+            let elements_map = elements_map.clone();
+            let pending_links = pending_links.clone();
+
+            // Connect to pad-added signal
+            element.connect_pad_added(move |_elem, new_pad| {
+                let new_pad_name = new_pad.name();
+                debug!("Pad added on element {}: {}", element_id, new_pad_name);
+
+                // Check if any pending links match this pad
+                for link in &pending_links {
+                    let (from_elem, from_pad) = Self::parse_element_pad(&link.from);
+                    let (to_elem, to_pad) = Self::parse_element_pad(&link.to);
+
+                    // Check if this new pad matches a pending source pad
+                    if from_elem == element_id {
+                        if let Some(expected_pad_name) = from_pad {
+                            if new_pad_name == expected_pad_name {
+                                // This is the source pad we're waiting for
+                                if let (Some(_src_elem), Some(sink_elem)) =
+                                    (elements_map.get(from_elem), elements_map.get(to_elem))
+                                {
+                                    if let Some(sink_pad_name) = to_pad {
+                                        // Get the sink pad
+                                        let sink_pad = if let Some(pad) =
+                                            sink_elem.static_pad(sink_pad_name)
+                                        {
+                                            pad
+                                        } else if let Some(pad) =
+                                            sink_elem.request_pad_simple(sink_pad_name)
+                                        {
+                                            pad
+                                        } else {
+                                            warn!(
+                                                "Sink pad {} not found on {}",
+                                                sink_pad_name, to_elem
+                                            );
+                                            continue;
+                                        };
+
+                                        // Try to link
+                                        match new_pad.link(&sink_pad) {
+                                            Ok(_) => {
+                                                info!(
+                                                    "Successfully linked dynamic pad: {} -> {}",
+                                                    link.from, link.to
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to link dynamic pad {} -> {}: {}",
+                                                    link.from, link.to, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
         }
     }
 

@@ -103,6 +103,30 @@ pub struct ElementInfo {
     pub properties: Vec<PropertyInfo>,
 }
 
+/// Pad presence type (static, dynamic, or request).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub enum PadPresence {
+    /// Always present (static pad)
+    Always,
+    /// Created at runtime based on stream (dynamic/sometimes pad)
+    Sometimes,
+    /// Created on request
+    Request,
+}
+
+/// Media type classification for pads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub enum MediaType {
+    /// Generic/mixed or unknown media (blue)
+    Generic,
+    /// Audio media (green)
+    Audio,
+    /// Video media (orange)
+    Video,
+}
+
 /// Information about an element pad.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -111,6 +135,10 @@ pub struct PadInfo {
     pub name: String,
     /// Pad capabilities (simplified)
     pub caps: String,
+    /// Pad presence type
+    pub presence: PadPresence,
+    /// Media type classification
+    pub media_type: MediaType,
 }
 
 /// Information about an element property.
