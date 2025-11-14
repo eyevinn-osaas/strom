@@ -1,5 +1,6 @@
 //! GStreamer pipeline management.
 
+use crate::blocks::BlockRegistry;
 use crate::events::EventBroadcaster;
 use gstreamer as gst;
 use gstreamer::glib;
@@ -62,7 +63,11 @@ pub struct PipelineManager {
 
 impl PipelineManager {
     /// Create a new pipeline from a flow definition.
-    pub fn new(flow: &Flow, events: EventBroadcaster) -> Result<Self, PipelineError> {
+    pub fn new(
+        flow: &Flow,
+        events: EventBroadcaster,
+        block_registry: &BlockRegistry,
+    ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
 
         let pipeline = gst::Pipeline::builder()
@@ -79,13 +84,26 @@ impl PipelineManager {
             pending_links: Vec::new(),
         };
 
-        // Create and add all elements
-        for element in &flow.elements {
+        // Expand blocks into native elements and links
+        let expanded = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                super::block_expansion::expand_blocks(
+                    &flow.blocks,
+                    &flow.elements,
+                    &flow.links,
+                    block_registry,
+                )
+                .await
+            })
+        })?;
+
+        // Create and add all elements (from both flow and expanded blocks)
+        for element in &expanded.elements {
             manager.add_element(element)?;
         }
 
         // Analyze links and auto-insert tee elements where needed
-        let processed_links = Self::insert_tees_if_needed(&flow.links);
+        let processed_links = Self::insert_tees_if_needed(&expanded.links);
 
         // Create tee elements
         for tee_id in processed_links.tees.keys() {
@@ -419,8 +437,10 @@ impl PipelineManager {
     }
 
     /// Parse element:pad format into (element_id, optional pad_name).
+    /// Handles namespaced block elements like "block_0:rtpL24pay:sink".
+    /// Splits from the right to get the last colon-separated part as the pad name.
     fn parse_element_pad(spec: &str) -> (&str, Option<&str>) {
-        if let Some((element, pad)) = spec.split_once(':') {
+        if let Some((element, pad)) = spec.rsplit_once(':') {
             (element, Some(pad))
         } else {
             (spec, None)
@@ -759,7 +779,8 @@ mod tests {
         gst::init().unwrap();
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
-        let manager = PipelineManager::new(&flow, events);
+        let registry = BlockRegistry::new("test_blocks.json");
+        let manager = PipelineManager::new(&flow, events, &registry);
         assert!(manager.is_ok());
     }
 
@@ -768,7 +789,8 @@ mod tests {
         gst::init().unwrap();
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
-        let mut manager = PipelineManager::new(&flow, events).unwrap();
+        let registry = BlockRegistry::new("test_blocks.json");
+        let mut manager = PipelineManager::new(&flow, events, &registry).unwrap();
 
         // Start pipeline
         let state = manager.start();
@@ -792,7 +814,8 @@ mod tests {
         flow.elements[0].element_type = "nonexistentelement".to_string();
 
         let events = EventBroadcaster::default();
-        let manager = PipelineManager::new(&flow, events);
+        let registry = BlockRegistry::new("test_blocks.json");
+        let manager = PipelineManager::new(&flow, events, &registry);
         assert!(manager.is_err());
     }
 
@@ -834,7 +857,8 @@ mod tests {
         ];
 
         let events = EventBroadcaster::default();
-        let manager = PipelineManager::new(&flow, events);
+        let registry = BlockRegistry::new("test_blocks.json");
+        let manager = PipelineManager::new(&flow, events, &registry);
         assert!(manager.is_ok());
 
         let manager = manager.unwrap();
@@ -851,7 +875,8 @@ mod tests {
         let flow = create_test_flow(); // Simple 1-to-1 connection
 
         let events = EventBroadcaster::default();
-        let manager = PipelineManager::new(&flow, events).unwrap();
+        let registry = BlockRegistry::new("test_blocks.json");
+        let manager = PipelineManager::new(&flow, events, &registry).unwrap();
 
         // Should have only 2 original elements, no tee
         assert_eq!(manager.elements.len(), 2);

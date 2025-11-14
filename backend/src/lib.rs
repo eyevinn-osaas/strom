@@ -9,6 +9,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 pub mod api;
 pub mod assets;
+pub mod blocks;
 pub mod config;
 pub mod events;
 pub mod gst;
@@ -43,8 +44,24 @@ pub async fn create_app_with_state(state: AppState) -> Router {
         .route("/flows/{id}/start", post(api::flows::start_flow))
         .route("/flows/{id}/stop", post(api::flows::stop_flow))
         .route("/flows/{id}/debug-graph", get(api::flows::debug_graph))
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/sdp",
+            get(api::flows::get_block_sdp),
+        )
         .route("/elements", get(api::elements::list_elements))
         .route("/elements/{name}", get(api::elements::get_element_info))
+        .route("/blocks", get(api::blocks::list_blocks))
+        .route("/blocks", post(api::blocks::create_block))
+        .route("/blocks/categories", get(api::blocks::get_categories))
+        .route("/blocks/{id}", get(api::blocks::get_block))
+        .route(
+            "/blocks/{id}",
+            axum::routing::put(api::blocks::update_block),
+        )
+        .route(
+            "/blocks/{id}",
+            axum::routing::delete(api::blocks::delete_block),
+        )
         .route("/events", get(api::sse::events_stream));
 
     // Build main router with Swagger UI

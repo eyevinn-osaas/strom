@@ -5,12 +5,40 @@ All notable changes to the Strom GStreamer Flow Engine project.
 ## [Unreleased]
 
 ### Added
+- Multi-port support with media type classification
+  - Visual color coding for audio (green), video (orange), and generic (blue) ports
+  - A/V labels inside audio and video ports for better visual distinction
+  - Support for elements with multiple input/output pads
+  - PadPresence (Always/Sometimes/Request) and MediaType enums
+- Dynamic pad linking for runtime-created pads
+  - Automatic pad-added signal handlers
+  - Support for elements like decodebin, demuxers with dynamic outputs
+  - Pending link queue for pads not yet available
+- Automatic tee insertion for multiple outputs
+  - Detects when one source connects to multiple destinations
+  - Automatically inserts and configures tee elements
+  - No manual configuration needed
+- Server-Sent Events (SSE) for real-time updates
+  - Pipeline state changes, errors, warnings, and info messages
+  - Flow lifecycle events (created, updated, deleted, started, stopped)
+  - End-of-stream notifications
+  - Keep-alive pings
+  - Backend endpoint: `GET /api/events`
 - Pipeline debug visualization feature
   - DOT graph generation from running GStreamer pipelines
   - Automatic SVG conversion using Graphviz
   - "Debug Graph" button in UI toolbar
   - Opens interactive SVG in new browser tab
   - Backend endpoint: `GET /api/flows/:id/debug-graph`
+
+### Changed
+- Upgraded Rust version requirement to 1.82+
+- Improved property type handling for i32/i64 and u32/u64 conversions
+- Enhanced element introspection to skip write-only properties
+
+### Fixed
+- Property type mismatches causing runtime errors
+- Element introspection panics on write-only properties
 
 ## [0.1.0] - 2025-01-13
 

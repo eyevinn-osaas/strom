@@ -36,6 +36,8 @@ pub struct StromApp {
     show_new_flow_dialog: bool,
     /// Whether elements have been loaded
     elements_loaded: bool,
+    /// Whether blocks have been loaded
+    blocks_loaded: bool,
     /// Flow pending deletion (for confirmation dialog)
     flow_pending_deletion: Option<(strom_types::FlowId, String)>,
     /// SSE client for real-time updates
@@ -52,8 +54,25 @@ impl StromApp {
         // Set dark theme
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
+        // Detect if we're in development mode (trunk serve) by checking the window location
+        let api_base_url = if let Some(window) = web_sys::window() {
+            if let Ok(location) = window.location().host() {
+                // If we're on port 8080 (trunk serve), connect to backend on port 3000
+                if location.contains(":8080") {
+                    "http://localhost:3000/api"
+                } else {
+                    // Otherwise use relative URL (embedded in backend)
+                    "/api"
+                }
+            } else {
+                "/api"
+            }
+        } else {
+            "/api"
+        };
+
         let mut app = Self {
-            api: ApiClient::new("http://localhost:3000/api"),
+            api: ApiClient::new(api_base_url),
             flows: Vec::new(),
             selected_flow_idx: None,
             graph: GraphEditor::new(),
@@ -65,6 +84,7 @@ impl StromApp {
             new_flow_name: String::new(),
             show_new_flow_dialog: false,
             elements_loaded: false,
+            blocks_loaded: false,
             flow_pending_deletion: None,
             sse_client: None,
             renaming_flow_idx: None,
@@ -84,7 +104,7 @@ impl StromApp {
     fn setup_sse_connection(&mut self, ctx: egui::Context) {
         tracing::info!("Setting up SSE connection for real-time updates");
 
-        let mut sse_client = SseClient::new("http://localhost:3000/api/events");
+        let mut sse_client = SseClient::new("/api/events");
 
         // Connect with event handler
         sse_client.connect(move |event| {
@@ -234,6 +254,42 @@ impl StromApp {
         });
     }
 
+    /// Load blocks from the backend.
+    fn load_blocks(&mut self, ctx: &Context) {
+        tracing::info!("Starting to load blocks...");
+        self.status = "Loading blocks...".to_string();
+
+        let api = self.api.clone();
+        let ctx = ctx.clone();
+
+        spawn_local(async move {
+            match api.list_blocks().await {
+                Ok(blocks) => {
+                    tracing::info!(
+                        "Successfully fetched {} blocks, storing in localStorage",
+                        blocks.len()
+                    );
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            if let Ok(json) = serde_json::to_string(&blocks) {
+                                let _ = storage.set_item("strom_blocks_data", &json);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load blocks: {}", e);
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            let _ = storage.set_item("strom_blocks_error", &e.to_string());
+                        }
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Load flows from the backend.
     fn load_flows(&mut self, ctx: &Context) {
         if self.loading {
@@ -290,6 +346,7 @@ impl StromApp {
             // Update flow with current graph state
             if let Some(flow) = self.flows.get_mut(idx) {
                 flow.elements = self.graph.elements.clone();
+                flow.blocks = self.graph.blocks.clone();
                 flow.links = self.graph.links.clone();
 
                 tracing::info!(
@@ -623,6 +680,7 @@ impl StromApp {
                                     self.selected_flow_idx = Some(idx);
                                     // Load flow into graph editor
                                     self.graph.load(flow.elements.clone(), flow.links.clone());
+                                    self.graph.load_blocks(flow.blocks.clone());
 
                                     // Persist selected flow
                                     if let Some(window) = web_sys::window() {
@@ -733,8 +791,32 @@ impl StromApp {
                     ui.separator();
                     let element_info = self.palette.get_element_info(&element.element_type);
                     PropertyInspector::show(ui, element, element_info);
+                } else if let Some(block_def_id) = self
+                    .graph
+                    .get_selected_block()
+                    .map(|b| b.block_definition_id.clone())
+                {
+                    // Block selected: show block property inspector
+                    ui.heading("Block Properties");
+                    ui.separator();
+
+                    // Clone definition to avoid borrow checker issues
+                    let definition_opt = self
+                        .graph
+                        .get_block_definition_by_id(&block_def_id)
+                        .cloned();
+                    let flow_id = self.current_flow().map(|f| f.id);
+
+                    // Then get mutable reference to block
+                    if let (Some(block), Some(def)) =
+                        (self.graph.get_selected_block_mut(), definition_opt)
+                    {
+                        PropertyInspector::show_block(ui, block, &def, flow_id);
+                    } else {
+                        ui.label("Block definition not found");
+                    }
                 } else {
-                    // No element selected: show ONLY the palette
+                    // No element or block selected: show ONLY the palette
                     self.palette.show(ui);
                 }
             });
@@ -772,6 +854,16 @@ impl StromApp {
                         / self.graph.zoom)
                         .to_pos2();
                     self.graph.add_element(element_type, world_pos);
+                }
+
+                // Handle adding blocks from palette
+                if let Some(block_id) = self.palette.take_dragging_block() {
+                    // Add block at center of visible area
+                    let center = response.rect.center();
+                    let world_pos = ((center - response.rect.min - self.graph.pan_offset)
+                        / self.graph.zoom)
+                        .to_pos2();
+                    self.graph.add_block(block_id, world_pos);
                 }
 
                 // Handle delete key for elements and links
@@ -907,6 +999,12 @@ impl eframe::App for StromApp {
             self.elements_loaded = true;
         }
 
+        // Load blocks on first frame
+        if !self.blocks_loaded {
+            self.load_blocks(ctx);
+            self.blocks_loaded = true;
+        }
+
         // Load flows on first frame or when refresh is needed
         if self.needs_refresh {
             self.load_flows(ctx);
@@ -944,6 +1042,108 @@ impl eframe::App for StromApp {
                     self.error = Some(format!("Elements: {}", error));
                     let _ = storage.remove_item("strom_elements_error");
                 }
+
+                // Check for updated blocks
+                if let Ok(Some(json)) = storage.get_item("strom_blocks_data") {
+                    use strom_types::BlockDefinition;
+                    match serde_json::from_str::<Vec<BlockDefinition>>(&json) {
+                        Ok(blocks) => {
+                            let count = blocks.len();
+                            tracing::info!("Updating blocks from localStorage: {} blocks", count);
+                            self.palette.load_blocks(blocks.clone());
+                            self.graph.set_all_block_definitions(blocks);
+                            self.status = format!("Loaded {} blocks", count);
+                            let _ = storage.remove_item("strom_blocks_data");
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to parse blocks from localStorage: {}", e);
+                            self.error = Some(format!("Blocks: decode error: {}", e));
+                            // Clear bad data
+                            let _ = storage.remove_item("strom_blocks_data");
+                        }
+                    }
+                }
+
+                // Check for block load errors
+                if let Ok(Some(error)) = storage.get_item("strom_blocks_error") {
+                    self.error = Some(format!("Blocks: {}", error));
+                    let _ = storage.remove_item("strom_blocks_error");
+                }
+            }
+        }
+
+        // Check for SDP fetch requests
+        if let Some(window) = web_sys::window() {
+            if let Some(storage) = window.local_storage().ok().flatten() {
+                if let Ok(Some(sdp_key)) = storage.get_item("strom_fetch_sdp") {
+                    // Remove the flag immediately
+                    let _ = storage.remove_item("strom_fetch_sdp");
+
+                    // Parse the key: format is "strom_sdp_{flow_id}_{block_id}"
+                    if let Some(key_parts) = sdp_key.strip_prefix("strom_sdp_") {
+                        if let Some((flow_id_str, block_id)) = key_parts.split_once('_') {
+                            tracing::info!(
+                                "Fetching SDP for flow {} block {}",
+                                flow_id_str,
+                                block_id
+                            );
+
+                            let api = self.api.clone();
+                            let ctx = ctx.clone();
+                            let flow_id_str = flow_id_str.to_string();
+                            let block_id = block_id.to_string();
+                            let sdp_key_clone = sdp_key.clone();
+
+                            spawn_local(async move {
+                                // Construct the SDP URL
+                                let url = format!(
+                                    "{}/flows/{}/blocks/{}/sdp",
+                                    api.base_url(),
+                                    flow_id_str,
+                                    block_id
+                                );
+
+                                match reqwest::get(&url).await {
+                                    Ok(response) if response.status().is_success() => {
+                                        match response.text().await {
+                                            Ok(sdp_text) => {
+                                                tracing::info!(
+                                                    "Successfully fetched SDP for block {}",
+                                                    block_id
+                                                );
+                                                // Store in localStorage
+                                                if let Some(window) = web_sys::window() {
+                                                    if let Some(storage) =
+                                                        window.local_storage().ok().flatten()
+                                                    {
+                                                        let _ = storage
+                                                            .set_item(&sdp_key_clone, &sdp_text);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "Failed to read SDP response: {}",
+                                                    e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Ok(response) => {
+                                        tracing::error!(
+                                            "Failed to fetch SDP: HTTP {}",
+                                            response.status()
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to fetch SDP: {}", e);
+                                    }
+                                }
+                                ctx.request_repaint();
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -980,6 +1180,7 @@ impl eframe::App for StromApp {
                                     self.selected_flow_idx = Some(idx);
                                     if let Some(flow) = self.flows.get(idx) {
                                         self.graph.load(flow.elements.clone(), flow.links.clone());
+                                        self.graph.load_blocks(flow.blocks.clone());
 
                                         // Restore selected element from localStorage
                                         if let Ok(Some(selected_element_id)) =

@@ -1,20 +1,35 @@
-//! Element palette for browsing and adding GStreamer elements.
+//! Element palette for browsing and adding GStreamer elements and blocks.
 
 use egui::{ScrollArea, Ui};
 use strom_types::element::ElementInfo;
+use strom_types::BlockDefinition;
 
-/// Manages the element palette UI.
+/// Which tab is currently selected in the palette
+#[derive(Default, PartialEq)]
+enum PaletteTab {
+    #[default]
+    Elements,
+    Blocks,
+}
+
+/// Manages the element and block palette UI.
 #[derive(Default)]
 pub struct ElementPalette {
     /// Available GStreamer elements
     #[allow(dead_code)]
     elements: Vec<ElementInfo>,
+    /// Available blocks (built-in + user-defined)
+    blocks: Vec<BlockDefinition>,
     /// Search filter text
     search: String,
     /// Selected category filter (None = all categories)
     category_filter: Option<String>,
     /// Element being dragged from the palette
     pub dragging_element: Option<String>,
+    /// Block being dragged from the palette
+    pub dragging_block: Option<String>,
+    /// Currently selected tab
+    current_tab: PaletteTab,
 }
 
 impl ElementPalette {
@@ -27,6 +42,12 @@ impl ElementPalette {
     pub fn load_elements(&mut self, elements: Vec<ElementInfo>) {
         tracing::info!("Loading {} elements into palette", elements.len());
         self.elements = elements;
+    }
+
+    /// Load blocks into the palette.
+    pub fn load_blocks(&mut self, blocks: Vec<BlockDefinition>) {
+        tracing::info!("Loading {} blocks into palette", blocks.len());
+        self.blocks = blocks;
     }
 
     /// Add some common GStreamer elements as defaults for testing.
@@ -173,7 +194,11 @@ impl ElementPalette {
 
     /// Render the element palette.
     pub fn show(&mut self, ui: &mut Ui) {
-        ui.heading("Elements");
+        // Tabs for Elements and Blocks
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.current_tab, PaletteTab::Elements, "Elements");
+            ui.selectable_value(&mut self.current_tab, PaletteTab::Blocks, "Blocks");
+        });
         ui.separator();
 
         // Search box
@@ -184,14 +209,23 @@ impl ElementPalette {
 
         ui.add_space(5.0);
 
-        // Category filter
-        let mut categories: Vec<String> = self
-            .elements
-            .iter()
-            .map(|e| e.category.clone())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+        // Category filter based on current tab
+        let mut categories: Vec<String> = match self.current_tab {
+            PaletteTab::Elements => self
+                .elements
+                .iter()
+                .map(|e| e.category.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect(),
+            PaletteTab::Blocks => self
+                .blocks
+                .iter()
+                .map(|b| b.category.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect(),
+        };
         categories.sort();
 
         ui.horizontal(|ui| {
@@ -216,53 +250,84 @@ impl ElementPalette {
 
         ui.separator();
 
-        // Element list
+        // List rendering based on current tab
         let search = self.search.clone();
         let category_filter = self.category_filter.clone();
 
-        // Limit the palette height to leave space for property inspector below
-        let available_height = ui.available_height();
-        let palette_max_height = (available_height * 0.4).max(200.0); // Use at most 40% of available space, minimum 200px
-
+        // Use full available height
         ScrollArea::both()
             .id_salt("palette_scroll")
-            .max_height(palette_max_height)
-            .auto_shrink([false, true])
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                let filtered: Vec<ElementInfo> = self
-                    .elements
-                    .iter()
-                    .filter(|e| {
-                        // If search is empty, only show audiotestsrc and autoaudiosink
-                        if search.is_empty() {
-                            if e.name != "audiotestsrc" && e.name != "autoaudiosink" {
-                                return false;
-                            }
+                match self.current_tab {
+                    PaletteTab::Elements => {
+                        let filtered: Vec<ElementInfo> = self
+                            .elements
+                            .iter()
+                            .filter(|e| {
+                                // If search is empty, only show audiotestsrc and autoaudiosink
+                                if search.is_empty() {
+                                    if e.name != "audiotestsrc" && e.name != "autoaudiosink" {
+                                        return false;
+                                    }
+                                } else {
+                                    // Otherwise, filter by search text
+                                    let matches_search =
+                                        e.name.to_lowercase().contains(&search.to_lowercase())
+                                            || e.description
+                                                .to_lowercase()
+                                                .contains(&search.to_lowercase());
+                                    if !matches_search {
+                                        return false;
+                                    }
+                                }
+
+                                let matches_category = category_filter.is_none()
+                                    || category_filter.as_ref() == Some(&e.category);
+
+                                matches_category
+                            })
+                            .cloned()
+                            .collect();
+
+                        if filtered.is_empty() {
+                            ui.label("No elements found");
                         } else {
-                            // Otherwise, filter by search text
-                            let matches_search =
-                                e.name.to_lowercase().contains(&search.to_lowercase())
-                                    || e.description
-                                        .to_lowercase()
-                                        .contains(&search.to_lowercase());
-                            if !matches_search {
-                                return false;
+                            for element in filtered {
+                                self.draw_element_item(ui, &element);
                             }
                         }
+                    }
+                    PaletteTab::Blocks => {
+                        let filtered: Vec<BlockDefinition> = self
+                            .blocks
+                            .iter()
+                            .filter(|b| {
+                                // Filter by search text
+                                let matches_search = if search.is_empty() {
+                                    true
+                                } else {
+                                    b.name.to_lowercase().contains(&search.to_lowercase())
+                                        || b.description
+                                            .to_lowercase()
+                                            .contains(&search.to_lowercase())
+                                };
 
-                        let matches_category = category_filter.is_none()
-                            || category_filter.as_ref() == Some(&e.category);
+                                let matches_category = category_filter.is_none()
+                                    || category_filter.as_ref() == Some(&b.category);
 
-                        matches_category
-                    })
-                    .cloned()
-                    .collect();
+                                matches_search && matches_category
+                            })
+                            .cloned()
+                            .collect();
 
-                if filtered.is_empty() {
-                    ui.label("No elements found");
-                } else {
-                    for element in filtered {
-                        self.draw_element_item(ui, &element);
+                        if filtered.is_empty() {
+                            ui.label("No blocks found");
+                        } else {
+                            for block in filtered {
+                                self.draw_block_item(ui, &block);
+                            }
+                        }
                     }
                 }
             });
@@ -303,13 +368,69 @@ impl ElementPalette {
         });
     }
 
+    fn draw_block_item(&mut self, ui: &mut Ui, block: &BlockDefinition) {
+        let name = block.name.clone();
+        let id = block.id.clone();
+        let description = block.description.clone();
+        let built_in = block.built_in;
+
+        ui.push_id(&id, |ui| {
+            // Main horizontal layout for block item
+            ui.horizontal(|ui| {
+                // Block name label with truncation
+                let available_width = ui.available_width() - 70.0; // Reserve space for button
+                ui.allocate_ui_with_layout(
+                    egui::vec2(available_width, ui.spacing().interact_size.y),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let label_text = if built_in {
+                            format!("📦 {}", name)
+                        } else {
+                            format!("⚙️ {}", name)
+                        };
+                        ui.add(egui::Label::new(&label_text).truncate())
+                            .on_hover_text(&description);
+                    },
+                );
+
+                // Add button on the right
+                if ui.button("+ Add").on_hover_text("Add to canvas").clicked() {
+                    self.dragging_block = Some(id.clone());
+                }
+            });
+
+            // Show category and description below (wrapped)
+            ui.horizontal_wrapped(|ui| {
+                ui.small(&block.category);
+                ui.small("|");
+                ui.small(&description);
+                if built_in {
+                    ui.small("|");
+                    ui.small("Built-in");
+                }
+            });
+
+            ui.separator();
+        });
+    }
+
     /// Check if an element is being dragged and return it.
     pub fn take_dragging_element(&mut self) -> Option<String> {
         self.dragging_element.take()
     }
 
+    /// Check if a block is being dragged and return it.
+    pub fn take_dragging_block(&mut self) -> Option<String> {
+        self.dragging_block.take()
+    }
+
     /// Get element info for a specific element type.
     pub fn get_element_info(&self, element_type: &str) -> Option<&ElementInfo> {
         self.elements.iter().find(|e| e.name == element_type)
+    }
+
+    /// Get block definition for a specific block ID.
+    pub fn get_block_info(&self, block_id: &str) -> Option<&BlockDefinition> {
+        self.blocks.iter().find(|b| b.id == block_id)
     }
 }

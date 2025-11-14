@@ -6,7 +6,7 @@
 
 Make sure you have the following installed:
 
-1. **Rust** (1.75+)
+1. **Rust** (1.82+)
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
@@ -168,19 +168,21 @@ cargo update
 
 Currently implemented:
 - ✅ Workspace structure with 3 crates
-- ✅ Shared types library (Flow, Element, Link, API types)
-- ✅ Basic backend server with REST API
-- ✅ Flow CRUD endpoints
-- ✅ Basic egui frontend structure
+- ✅ Shared types library (Flow, Element, Link, API types, SSE events)
+- ✅ Complete backend server with REST API and SSE
+- ✅ Full Flow CRUD endpoints
+- ✅ GStreamer pipeline execution with dynamic pad linking
+- ✅ Element discovery/introspection with media type classification
+- ✅ Server-Sent Events for real-time updates
+- ✅ Visual flow editor with multi-port support
+- ✅ JSON file persistence with auto-save
+- ✅ Auto-start flows on server boot
+- ✅ Automatic tee insertion for multiple outputs
+- ✅ Pipeline debug graph visualization
+- ✅ egui frontend with color-coded ports
 - ✅ CORS enabled for local development
 
-TODO (see TODO.md for full roadmap):
-- [ ] GStreamer pipeline execution
-- [ ] Element discovery/introspection
-- [ ] WebSocket real-time updates
-- [ ] Visual flow editor
-- [ ] Persistence to JSON file
-- [ ] Auto-start flows on server boot
+See TODO.md for planned future enhancements.
 
 ## Troubleshooting
 

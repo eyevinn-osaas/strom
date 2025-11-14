@@ -1,17 +1,19 @@
 //! Strom backend server.
 
 use std::net::SocketAddr;
-use tracing::{error, info, Level};
-use tracing_subscriber::fmt;
+use tracing::{error, info};
+use tracing_subscriber::{fmt, EnvFilter};
 
 use strom_backend::{config::Config, create_app_with_state, state::AppState};
 use strom_types::PipelineState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize logging
+    // Initialize logging - use RUST_LOG env var or default to info
     fmt()
-        .with_max_level(Level::INFO)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .with_target(false)
         .compact()
         .init();
@@ -27,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Configuration loaded");
 
     // Create application with persistent storage
-    let state = AppState::with_json_storage(&config.flows_path);
+    let state = AppState::with_json_storage(&config.flows_path, &config.blocks_path);
     state.load_from_storage().await?;
 
     // Restart flows that were running before shutdown
@@ -45,8 +47,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = create_app_with_state(state).await;
 
-    // Start server
-    let addr = SocketAddr::from(([127, 0, 0, 1], config.port));
+    // Start server - bind to 0.0.0.0 to be accessible from all interfaces (Docker, network, etc.)
+    let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

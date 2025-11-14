@@ -1,18 +1,23 @@
 # Dockerfile for Strom - Multi-stage build with cargo-chef for optimal caching
 
-# Stage 1: Planner - Analyze dependencies and create recipe
-FROM rust:1.82-bookworm as planner
+# Stage 1: Chef base - Use lukemathwalker's cargo-chef image as base
+FROM lukemathwalker/cargo-chef:latest-rust-bookworm AS chef-base
 WORKDIR /app
-RUN cargo install cargo-chef
+
+# Upgrade to trixie for newer GStreamer packages
+RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list && \
+    apt-get update
+
+FROM chef-base AS chef
+
+# Stage 2: Planner - Analyze dependencies and create recipe
+FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 2: Builder - Build dependencies using cargo-chef
-FROM rust:1.82-bookworm as builder
+# Stage 3: Builder - Build dependencies using cargo-chef
+FROM chef AS builder
 WORKDIR /app
-
-# Install cargo-chef
-RUN cargo install cargo-chef
 
 # Install GStreamer development dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,8 +31,8 @@ RUN apt-get update && apt-get install -y \
     gstreamer1.0-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Install trunk for building the WASM frontend
-RUN cargo install trunk
+# Install trunk for building the WASM frontend from binary release
+RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.20.3/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
 
 # Add WASM target for frontend compilation
 RUN rustup target add wasm32-unknown-unknown
@@ -40,12 +45,12 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 
 # Build the frontend
-RUN cd frontend && trunk build --release
+RUN mkdir -p backend/dist && cd frontend && trunk build --release
 
 # Build the backend (with embedded frontend)
 RUN cargo build --release --package strom-backend
 
-# Stage 3: Runtime - Minimal runtime image
+# Stage 4: Runtime - Minimal runtime image with trixie for newer GStreamer
 FROM debian:trixie-slim as runtime
 WORKDIR /app
 

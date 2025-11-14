@@ -1,5 +1,6 @@
 //! GStreamer integration.
 
+mod block_expansion;
 pub mod discovery;
 pub mod pipeline;
 

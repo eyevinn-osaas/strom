@@ -4,6 +4,10 @@ use strom_types::api::{
     CreateFlowRequest, ElementInfoResponse, ElementListResponse, ErrorResponse, FlowListResponse,
     FlowResponse,
 };
+use strom_types::block::{
+    BlockCategoriesResponse, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
+    CreateBlockRequest, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
+};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -18,6 +22,12 @@ use utoipa::OpenApi;
         crate::api::flows::stop_flow,
         crate::api::elements::list_elements,
         crate::api::elements::get_element_info,
+        crate::api::blocks::list_blocks,
+        crate::api::blocks::get_block,
+        crate::api::blocks::create_block,
+        crate::api::blocks::update_block,
+        crate::api::blocks::delete_block,
+        crate::api::blocks::get_categories,
     ),
     components(
         schemas(
@@ -27,11 +37,23 @@ use utoipa::OpenApi;
             ElementListResponse,
             ElementInfoResponse,
             ErrorResponse,
+            BlockDefinition,
+            BlockInstance,
+            BlockResponse,
+            BlockListResponse,
+            CreateBlockRequest,
+            BlockCategoriesResponse,
+            ExposedProperty,
+            PropertyMapping,
+            PropertyType,
+            ExternalPads,
+            ExternalPad,
         )
     ),
     tags(
         (name = "flows", description = "GStreamer flow management endpoints"),
-        (name = "elements", description = "GStreamer element discovery endpoints")
+        (name = "elements", description = "GStreamer element discovery endpoints"),
+        (name = "blocks", description = "Reusable block management endpoints")
     ),
     info(
         title = "Strom GStreamer Flow Engine API",

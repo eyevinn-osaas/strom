@@ -2,8 +2,9 @@
 
 use egui::{Color32, ScrollArea, Ui};
 use strom_types::{
+    block::ExposedProperty,
     element::{ElementInfo, PropertyInfo, PropertyType},
-    Element, PropertyValue,
+    BlockDefinition, BlockInstance, Element, PropertyValue,
 };
 
 /// Property inspector panel.
@@ -125,6 +126,231 @@ impl PropertyInspector {
                     });
                 });
         });
+    }
+
+    /// Show the property inspector for the given block.
+    pub fn show_block(
+        ui: &mut Ui,
+        block: &mut BlockInstance,
+        definition: &BlockDefinition,
+        flow_id: Option<strom_types::FlowId>,
+    ) {
+        let block_id = block.id.clone();
+        ui.push_id(&block_id, |ui| {
+            // Block name (read-only)
+            ui.horizontal(|ui| {
+                ui.label("Block:");
+                ui.monospace(&definition.name);
+            });
+
+            // Block ID (read-only)
+            ui.horizontal(|ui| {
+                ui.label("ID:");
+                ui.monospace(&block.id);
+            });
+
+            ui.separator();
+
+            ui.label("💡 Only modified properties are saved");
+
+            ScrollArea::both()
+                .id_salt("block_properties_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if !definition.exposed_properties.is_empty() {
+                        for exposed_prop in &definition.exposed_properties {
+                            Self::show_exposed_property(ui, block, exposed_prop);
+                        }
+                    } else {
+                        ui.label("This block has no configurable properties");
+                    }
+
+                    // Show SDP for AES67 output blocks
+                    if definition.id == "builtin.aes67_output" && flow_id.is_some() {
+                        ui.separator();
+                        ui.heading("📡 SDP (Session Description)");
+                        ui.add_space(4.0);
+                        ui.label("Copy this SDP to configure receivers:");
+                        ui.add_space(4.0);
+
+                        // Store SDP in localStorage with flow+block specific key
+                        let sdp_key = format!("strom_sdp_{}_{}", flow_id.unwrap(), block_id);
+
+                        // Try to get SDP from localStorage
+                        let sdp: Option<String> = if let Some(window) = web_sys::window() {
+                            if let Some(storage) = window.local_storage().ok().flatten() {
+                                storage.get_item(&sdp_key).ok().flatten()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        if let Some(sdp_text) = &sdp {
+                            // Display SDP in a code-style text box
+                            ui.add(
+                                egui::TextEdit::multiline(&mut sdp_text.as_str())
+                                    .desired_rows(12)
+                                    .desired_width(f32::INFINITY)
+                                    .code_editor()
+                                    .interactive(false),
+                            );
+
+                            ui.add_space(4.0);
+
+                            // Copy button
+                            if ui.button("📋 Copy to Clipboard").clicked() {
+                                ui.ctx().copy_text(sdp_text.clone());
+                            }
+                        } else {
+                            ui.label("Fetching SDP...");
+                            // Signal that we need to fetch SDP
+                            if let Some(window) = web_sys::window() {
+                                if let Some(storage) = window.local_storage().ok().flatten() {
+                                    let _ = storage.set_item("strom_fetch_sdp", &sdp_key);
+                                }
+                            }
+                        }
+                    }
+                });
+        });
+    }
+
+    fn show_exposed_property(
+        ui: &mut Ui,
+        block: &mut BlockInstance,
+        exposed_prop: &ExposedProperty,
+    ) {
+        let prop_name = &exposed_prop.name;
+        let default_value = exposed_prop.default_value.as_ref();
+        let is_multiline = matches!(
+            exposed_prop.property_type,
+            strom_types::block::PropertyType::Multiline
+        );
+
+        // Get current value or use default
+        let mut current_value = block.properties.get(prop_name).cloned();
+        let has_custom_value = current_value.is_some();
+
+        if current_value.is_none() {
+            current_value = default_value.cloned();
+        }
+
+        // For multiline, use vertical layout
+        if is_multiline {
+            // Property name with indicator
+            ui.horizontal(|ui| {
+                if has_custom_value {
+                    ui.colored_label(
+                        Color32::from_rgb(150, 100, 255), // Purple for blocks
+                        format!("● {}:", prop_name),
+                    );
+                } else {
+                    ui.label(format!("{}:", prop_name));
+                }
+
+                // Reset button if modified
+                if has_custom_value
+                    && ui
+                        .small_button("↺")
+                        .on_hover_text("Reset to default")
+                        .clicked()
+                {
+                    block.properties.remove(prop_name);
+                }
+            });
+
+            // Multiline editor
+            let mut text = match current_value {
+                Some(PropertyValue::String(s)) => s,
+                _ => String::new(),
+            };
+
+            let response = ui.add(
+                egui::TextEdit::multiline(&mut text)
+                    .desired_rows(6)
+                    .desired_width(f32::INFINITY)
+                    .code_editor(),
+            );
+
+            if response.changed() {
+                // Only save if different from default
+                if let Some(PropertyValue::String(default)) = default_value {
+                    if text != *default {
+                        block
+                            .properties
+                            .insert(prop_name.clone(), PropertyValue::String(text));
+                    } else {
+                        block.properties.remove(prop_name);
+                    }
+                } else if !text.is_empty() {
+                    block
+                        .properties
+                        .insert(prop_name.clone(), PropertyValue::String(text));
+                } else {
+                    block.properties.remove(prop_name);
+                }
+            }
+        } else {
+            // For non-multiline, use horizontal layout
+            ui.horizontal(|ui| {
+                // Show property name with indicator if modified
+                if has_custom_value {
+                    ui.colored_label(
+                        Color32::from_rgb(150, 100, 255), // Purple for blocks
+                        format!("● {}:", prop_name),
+                    );
+                } else {
+                    ui.label(format!("{}:", prop_name));
+                }
+
+                if let Some(mut value) = current_value {
+                    // Note: Block properties use strom_types::PropertyType which is different from
+                    // element::PropertyType. For now, we pass None to show_property_editor which means
+                    // no constraints (no sliders/enums). We could add a conversion or separate editor later.
+                    let changed = Self::show_property_editor(
+                        ui,
+                        &mut value,
+                        None, // TODO: Convert block::PropertyType to element::PropertyType
+                        default_value,
+                    );
+
+                    if changed {
+                        // Only save if different from default
+                        if let Some(default) = default_value {
+                            if !Self::values_equal(&value, default) {
+                                block.properties.insert(prop_name.clone(), value);
+                            } else {
+                                block.properties.remove(prop_name);
+                            }
+                        } else {
+                            block.properties.insert(prop_name.clone(), value);
+                        }
+                    }
+                }
+
+                // Reset button if modified
+                if has_custom_value
+                    && ui
+                        .small_button("↺")
+                        .on_hover_text("Reset to default")
+                        .clicked()
+                {
+                    block.properties.remove(prop_name);
+                }
+            });
+        }
+
+        // Show description
+        if !exposed_prop.description.is_empty() {
+            ui.indent(prop_name, |ui| {
+                ui.small(&exposed_prop.description);
+            });
+        }
+
+        // Add spacing after each property
+        ui.add_space(8.0);
     }
 
     fn show_property_from_info(ui: &mut Ui, element: &mut Element, prop_info: &PropertyInfo) {

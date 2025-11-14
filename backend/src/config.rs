@@ -10,6 +10,9 @@ pub struct Config {
     /// Path to flows storage file
     #[allow(dead_code)]
     pub flows_path: String,
+    /// Path to blocks storage file
+    #[allow(dead_code)]
+    pub blocks_path: String,
 }
 
 impl Config {
@@ -21,6 +24,8 @@ impl Config {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
             flows_path: env::var("STROM_FLOWS_PATH").unwrap_or_else(|_| "flows.json".to_string()),
+            blocks_path: env::var("STROM_BLOCKS_PATH")
+                .unwrap_or_else(|_| "blocks.json".to_string()),
         }
     }
 }
@@ -30,6 +35,7 @@ impl Default for Config {
         Self {
             port: 3000,
             flows_path: "flows.json".to_string(),
+            blocks_path: "blocks.json".to_string(),
         }
     }
 }

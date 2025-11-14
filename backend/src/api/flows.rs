@@ -341,3 +341,71 @@ pub async fn debug_graph(
     )
         .into_response())
 }
+
+/// Generate SDP for a specific block in a flow.
+///
+/// Returns the SDP (Session Description Protocol) data for AES67 output blocks.
+/// This SDP can be used by receivers to connect to the audio stream.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/sdp",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID")
+    ),
+    responses(
+        (status = 200, description = "SDP generated successfully", content_type = "application/sdp"),
+        (status = 404, description = "Flow or block not found", body = ErrorResponse),
+        (status = 400, description = "Block type does not support SDP", body = ErrorResponse)
+    )
+)]
+pub async fn get_block_sdp(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    info!("Generating SDP for block {} in flow {}", block_id, flow_id);
+
+    // Get the flow
+    let flow = state.get_flow(&flow_id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Flow not found")),
+        )
+    })?;
+
+    // Find the block instance
+    let block = flow
+        .blocks
+        .iter()
+        .find(|b| b.id == block_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::new("Block not found in flow")),
+            )
+        })?;
+
+    // Check if this is an AES67 output block
+    if block.block_definition_id != "builtin.aes67_output" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "SDP generation is only supported for AES67 output blocks",
+            )),
+        ));
+    }
+
+    // Generate SDP
+    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(block, &flow.name);
+
+    info!("Successfully generated SDP for block {}", block_id);
+
+    // Return SDP as plain text response
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/sdp")],
+        sdp,
+    )
+        .into_response())
+}

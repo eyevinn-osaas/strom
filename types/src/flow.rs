@@ -1,5 +1,6 @@
 //! Flow (pipeline) definitions.
 
+use crate::block::BlockInstance;
 use crate::element::{Element, Link};
 use crate::state::PipelineState;
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,10 @@ pub struct Flow {
     /// Elements in this flow
     #[serde(default)]
     pub elements: Vec<Element>,
-    /// Links between element pads
+    /// Block instances in this flow
+    #[serde(default)]
+    pub blocks: Vec<BlockInstance>,
+    /// Links between element pads and/or block external pads
     #[serde(default)]
     pub links: Vec<Link>,
     /// Current runtime state (persisted to storage for automatic restart)
@@ -41,6 +45,7 @@ impl Flow {
             id: Uuid::new_v4(),
             name: name.into(),
             elements: Vec::new(),
+            blocks: Vec::new(),
             links: Vec::new(),
             state: Some(PipelineState::Null),
         }
@@ -52,6 +57,7 @@ impl Flow {
             id,
             name: name.into(),
             elements: Vec::new(),
+            blocks: Vec::new(),
             links: Vec::new(),
             state: Some(PipelineState::Null),
         }

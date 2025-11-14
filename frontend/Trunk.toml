@@ -8,9 +8,6 @@ target = "index.html"
 # Build output goes to backend/dist for embedding
 dist = "../backend/dist"
 
-[watch]
-ignore = ["dist"]
-
 [serve]
 address = "127.0.0.1"
 port = 8080

@@ -12,6 +12,9 @@ Strom allows you to:
 - **Persist configurations** so flows can be automatically restored on server restart
 - **Monitor pipeline state** in real-time through Server-Sent Events (SSE)
 - **Start/stop flows** on-demand or automatically at startup
+- **Multi-port support** with visual color coding for audio, video, and generic media types
+- **Automatic tee insertion** when connecting one output to multiple inputs
+- **Dynamic pad linking** for elements with runtime-created pads (e.g., decodebin, demuxers)
 
 ## Architecture
 
@@ -129,8 +132,10 @@ Strom is built as a full-stack Rust application with three main components:
 **Server-Sent Events (SSE)**:
 - `GET /api/events` - Real-time event stream
   - Pipeline state changes (PLAYING, PAUSED, STOPPED, etc.)
-  - Flow updates
-  - System notifications
+  - Flow creation, updates, and deletion
+  - Pipeline errors, warnings, and info messages
+  - End-of-stream notifications
+  - Keep-alive pings
 
 ## Key Features
 
@@ -148,15 +153,31 @@ Each **flow** represents a complete GStreamer pipeline with:
 
 The web UI provides:
 - **Drag-and-drop elements** from a palette
-- **Visual linking** between compatible pads
+- **Multi-port visual linking** between compatible pads with color coding:
+  - Blue ports for generic media
+  - Green ports with "A" label for audio
+  - Orange ports with "V" label for video
 - **Property inspector** with type-appropriate input widgets
 - **Live state indication** (pipeline and element states)
+- **Real-time updates** via Server-Sent Events (SSE)
 - **Error display** with helpful messages
 - **Debug graph visualization** - View running pipeline structure as interactive SVG
 
-### Pipeline Debugging
+### Advanced Pipeline Features
 
-Click the "🔍 Debug Graph" button in the UI to generate a visual representation of your running GStreamer pipeline. This feature:
+**Dynamic Pad Linking**: Strom automatically handles elements with dynamic pads that are created at runtime:
+- Automatically sets up pad-added signal handlers
+- Links pads as they become available (e.g., decodebin outputs, demuxer streams)
+- Supports elements with "Sometimes" pad presence
+- Compatible with complex elements like decodebin, uridecodebin, demuxers
+
+**Automatic Tee Insertion**: When you connect one output to multiple inputs:
+- Strom automatically inserts a `tee` element
+- No manual configuration needed
+- Properly handles multiple output branches
+- Each branch operates independently
+
+**Pipeline Debugging**: Click the "🔍 Debug Graph" button in the UI to generate a visual representation of your running GStreamer pipeline:
 - Generates a GraphViz DOT graph of the pipeline structure
 - Converts to SVG for interactive viewing in browser
 - Shows element connections, pad negotiations, and properties
@@ -272,7 +293,7 @@ strom/
 
 ### Prerequisites
 
-- Rust 1.75+ with `cargo`
+- Rust 1.82+ with `cargo`
 - GStreamer 1.20+ development libraries
 - Graphviz (for debug graph feature): `sudo apt install graphviz`
 - WebAssembly target: `rustup target add wasm32-unknown-unknown`

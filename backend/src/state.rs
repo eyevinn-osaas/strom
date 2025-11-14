@@ -1,9 +1,11 @@
 //! Application state management.
 
+use crate::blocks::BlockRegistry;
 use crate::events::EventBroadcaster;
 use crate::gst::{ElementDiscovery, PipelineError, PipelineManager};
 use crate::storage::{JsonFileStorage, Storage};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use strom_types::element::ElementInfo;
 use strom_types::{Flow, FlowId, PipelineState, StromEvent};
@@ -27,11 +29,13 @@ struct AppStateInner {
     pipelines: RwLock<HashMap<FlowId, PipelineManager>>,
     /// Event broadcaster for SSE
     events: EventBroadcaster,
+    /// Block registry
+    block_registry: BlockRegistry,
 }
 
 impl AppState {
     /// Create new application state with the given storage backend.
-    pub fn new(storage: impl Storage + 'static) -> Self {
+    pub fn new(storage: impl Storage + 'static, blocks_path: impl Into<PathBuf>) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
                 flows: RwLock::new(HashMap::new()),
@@ -39,6 +43,7 @@ impl AppState {
                 element_discovery: RwLock::new(ElementDiscovery::new()),
                 pipelines: RwLock::new(HashMap::new()),
                 events: EventBroadcaster::default(),
+                block_registry: BlockRegistry::new(blocks_path),
             }),
         }
     }
@@ -48,9 +53,17 @@ impl AppState {
         &self.inner.events
     }
 
+    /// Get the block registry.
+    pub fn blocks(&self) -> &BlockRegistry {
+        &self.inner.block_registry
+    }
+
     /// Create new application state with JSON file storage.
-    pub fn with_json_storage(path: impl AsRef<std::path::Path>) -> Self {
-        Self::new(JsonFileStorage::new(path))
+    pub fn with_json_storage(
+        flows_path: impl AsRef<std::path::Path>,
+        blocks_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self::new(JsonFileStorage::new(flows_path), blocks_path)
     }
 
     /// Load flows from storage into memory.
@@ -62,13 +75,21 @@ impl AppState {
                 let mut state_flows = self.inner.flows.write().await;
                 *state_flows = flows;
                 info!("Loaded {} flows from storage", count);
-                Ok(())
             }
             Err(e) => {
                 error!("Failed to load flows from storage: {}", e);
-                Err(e.into())
+                return Err(e.into());
             }
         }
+
+        // Load user-defined blocks
+        info!("Loading user-defined blocks...");
+        if let Err(e) = self.inner.block_registry.load_user_blocks().await {
+            error!("Failed to load user blocks: {}", e);
+            // Don't fail startup if blocks can't load
+        }
+
+        Ok(())
     }
 
     /// Get all flows.
@@ -186,8 +207,9 @@ impl AppState {
 
         info!("Starting flow: {} ({})", flow.name, id);
 
-        // Create pipeline with event broadcaster
-        let mut manager = PipelineManager::new(&flow, self.inner.events.clone())?;
+        // Create pipeline with event broadcaster and block registry
+        let mut manager =
+            PipelineManager::new(&flow, self.inner.events.clone(), &self.inner.block_registry)?;
 
         // Start pipeline
         let state = manager.start()?;
@@ -283,6 +305,6 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::with_json_storage("flows.json")
+        Self::with_json_storage("flows.json", "blocks.json")
     }
 }

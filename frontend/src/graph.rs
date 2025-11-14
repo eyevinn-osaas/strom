@@ -2,16 +2,20 @@
 
 use egui::{pos2, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
-use strom_types::{element::ElementInfo, Element, ElementId, Link};
+use strom_types::{element::ElementInfo, BlockDefinition, BlockInstance, Element, ElementId, Link};
 
 /// Represents the state of the graph editor.
 pub struct GraphEditor {
     /// Elements (nodes) in the graph
     pub elements: Vec<Element>,
+    /// Block instances in the graph
+    pub blocks: Vec<BlockInstance>,
     /// Links (edges) between elements
     pub links: Vec<Link>,
     /// Element metadata (type -> info) for rendering ports
     element_info_map: HashMap<String, ElementInfo>,
+    /// Block definitions (id -> definition) for rendering ports and properties
+    block_definition_map: HashMap<String, BlockDefinition>,
     /// Currently selected element ID
     pub selected: Option<ElementId>,
     /// Element being dragged
@@ -36,8 +40,10 @@ impl Default for GraphEditor {
     fn default() -> Self {
         Self {
             elements: Vec::new(),
+            blocks: Vec::new(),
             links: Vec::new(),
             element_info_map: HashMap::new(),
+            block_definition_map: HashMap::new(),
             selected: None,
             dragging: None,
             pan_offset: Vec2::ZERO,
@@ -57,7 +63,7 @@ impl GraphEditor {
         Self::default()
     }
 
-    /// Load elements and links into the editor.
+    /// Load elements, blocks, and links into the editor.
     pub fn load(&mut self, elements: Vec<Element>, links: Vec<Link>) {
         self.elements = elements;
         self.links = links;
@@ -65,6 +71,11 @@ impl GraphEditor {
         self.dragging = None;
         self.creating_link = None;
         self.hovered_element = None;
+    }
+
+    /// Load blocks into the editor (used when loading from backend).
+    pub fn load_blocks(&mut self, blocks: Vec<BlockInstance>) {
+        self.blocks = blocks;
     }
 
     /// Add a new element to the graph at the given position.
@@ -77,6 +88,19 @@ impl GraphEditor {
             position: Some((pos.x, pos.y)),
         };
         self.elements.push(element);
+    }
+
+    /// Add a new block instance to the graph at the given position.
+    pub fn add_block(&mut self, block_definition_id: String, pos: Pos2) {
+        let id = format!("block_{}", self.blocks.len());
+        let block = BlockInstance {
+            id: id.clone(),
+            block_definition_id,
+            name: None,
+            properties: HashMap::new(),
+            position: Some(strom_types::block::Position { x: pos.x, y: pos.y }),
+        };
+        self.blocks.push(block);
     }
 
     /// Remove the currently selected element.
@@ -123,6 +147,37 @@ impl GraphEditor {
         }
     }
 
+    /// Set all block definitions at once.
+    pub fn set_all_block_definitions(&mut self, definitions: Vec<BlockDefinition>) {
+        self.block_definition_map.clear();
+        for def in definitions {
+            self.block_definition_map.insert(def.id.clone(), def);
+        }
+    }
+
+    /// Get the currently selected block instance.
+    pub fn get_selected_block(&self) -> Option<&BlockInstance> {
+        self.selected
+            .as_ref()
+            .and_then(|id| self.blocks.iter().find(|b| &b.id == id))
+    }
+
+    /// Get a mutable reference to the currently selected block.
+    pub fn get_selected_block_mut(&mut self) -> Option<&mut BlockInstance> {
+        let selected_id = self.selected.clone()?;
+        self.blocks.iter_mut().find(|b| b.id == selected_id)
+    }
+
+    /// Get the block definition for a block instance.
+    pub fn get_block_definition(&self, block: &BlockInstance) -> Option<&BlockDefinition> {
+        self.block_definition_map.get(&block.block_definition_id)
+    }
+
+    /// Get a block definition by ID.
+    pub fn get_block_definition_by_id(&self, definition_id: &str) -> Option<&BlockDefinition> {
+        self.block_definition_map.get(definition_id)
+    }
+
     /// Render the graph editor.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         ui.push_id("graph_editor", |ui| {
@@ -163,12 +218,20 @@ impl GraphEditor {
                 let pos = element.position.unwrap_or((100.0, 100.0));
                 let screen_pos = to_screen(pos2(pos.0, pos.1));
 
-                let node_rect =
-                    Rect::from_min_size(screen_pos, vec2(200.0 * self.zoom, 80.0 * self.zoom));
+                // Calculate height based on number of pads (min 80, max 400)
+                let element_info = self.element_info_map.get(&element.element_type);
+                let pad_count = element_info
+                    .map(|info| info.sink_pads.len().max(info.src_pads.len()))
+                    .unwrap_or(1);
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+
+                let node_rect = Rect::from_min_size(
+                    screen_pos,
+                    vec2(200.0 * self.zoom, node_height * self.zoom),
+                );
 
                 let is_selected = self.selected.as_ref() == Some(&element.id);
                 let is_hovered = self.hovered_element.as_ref() == Some(&element.id);
-                let element_info = self.element_info_map.get(&element.element_type);
                 let node_response = self.draw_node(
                     ui,
                     &painter,
@@ -235,6 +298,105 @@ impl GraphEditor {
                 }
             }
 
+            // Draw block instances
+            let mut blocks_to_update = Vec::new();
+            let mut block_pad_interactions = Vec::new();
+
+            for block in &self.blocks {
+                if let Some(pos) = block.position {
+                    let screen_pos = to_screen(pos2(pos.x, pos.y));
+
+                    // Calculate height based on number of external pads (min 80, max 400)
+                    let block_definition =
+                        self.block_definition_map.get(&block.block_definition_id);
+                    let pad_count = block_definition
+                        .map(|def| {
+                            def.external_pads
+                                .inputs
+                                .len()
+                                .max(def.external_pads.outputs.len())
+                        })
+                        .unwrap_or(1);
+                    let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+
+                    let node_rect = Rect::from_min_size(
+                        screen_pos,
+                        vec2(200.0 * self.zoom, node_height * self.zoom),
+                    );
+
+                    let is_selected = self.selected.as_ref() == Some(&block.id);
+                    let is_hovered = self.hovered_element.as_ref() == Some(&block.id);
+
+                    let node_response = self.draw_block_node(
+                        ui,
+                        &painter,
+                        block,
+                        node_rect,
+                        is_selected,
+                        is_hovered,
+                    );
+
+                    // Track hover state
+                    if node_response.hovered() {
+                        self.hovered_element = Some(block.id.clone());
+                    } else if self.hovered_element.as_ref() == Some(&block.id) {
+                        self.hovered_element = None;
+                    }
+
+                    // Handle node selection
+                    if node_response.clicked()
+                        || (node_response.dragged() && self.dragging.is_none())
+                    {
+                        self.selected = Some(block.id.clone());
+                        self.selected_link = None;
+
+                        if let Some(window) = web_sys::window() {
+                            if let Some(storage) = window.local_storage().ok().flatten() {
+                                let _ = storage.set_item("strom_selected_element_id", &block.id);
+                            }
+                        }
+                    }
+
+                    // Handle node dragging
+                    if node_response.dragged() {
+                        if self.dragging.is_none() {
+                            self.dragging = Some(block.id.clone());
+                        }
+
+                        if self.dragging.as_ref() == Some(&block.id) {
+                            let delta = node_response.drag_delta() / self.zoom;
+                            let new_pos = (pos.x + delta.x, pos.y + delta.y);
+                            blocks_to_update.push((block.id.clone(), new_pos));
+                        }
+                    }
+
+                    // Collect pad interactions for later processing
+                    block_pad_interactions.push((
+                        block.id.clone(),
+                        block.block_definition_id.clone(),
+                        node_rect,
+                    ));
+                }
+            }
+
+            // Handle block pad interactions
+            for (block_id, block_def_id, rect) in block_pad_interactions {
+                let block_definition = self.block_definition_map.get(&block_def_id).cloned();
+                if let Some(block) = self.blocks.iter().find(|b| b.id == block_id).cloned() {
+                    self.handle_block_pad_interaction(ui, &block, block_definition.as_ref(), rect);
+                }
+            }
+
+            // Update block positions
+            for (id, new_pos) in blocks_to_update {
+                if let Some(block) = self.blocks.iter_mut().find(|b| b.id == id) {
+                    block.position = Some(strom_types::block::Position {
+                        x: new_pos.0,
+                        y: new_pos.1,
+                    });
+                }
+            }
+
             // Handle canvas panning (only if not dragging a node)
             if response.dragged() && self.dragging.is_none() && self.creating_link.is_none() {
                 self.pan_offset += response.drag_delta();
@@ -244,6 +406,13 @@ impl GraphEditor {
             if response.clicked() && self.hovered_link.is_none() && self.hovered_element.is_none() {
                 self.selected = None;
                 self.selected_link = None;
+
+                // Clear selected element from localStorage
+                if let Some(window) = web_sys::window() {
+                    if let Some(storage) = window.local_storage().ok().flatten() {
+                        let _ = storage.remove_item("strom_selected_element_id");
+                    }
+                }
             }
 
             // Reset dragging state when mouse is released
@@ -290,18 +459,29 @@ impl GraphEditor {
 
             // Draw link being created (on top of everything)
             if let Some((from_id, _)) = &self.creating_link {
-                if let Some(from_elem) = self.elements.iter().find(|e| &e.id == from_id) {
-                    let from_pos = from_elem.position.unwrap_or((100.0, 100.0));
-                    // Output port is at the right edge, centered vertically (200 width, 80 height)
-                    let from_screen_pos = to_screen(pos2(from_pos.0 + 200.0, from_pos.1 + 40.0));
+                // Check if it's an element or a block
+                let from_screen_pos =
+                    if let Some(from_elem) = self.elements.iter().find(|e| &e.id == from_id) {
+                        let from_pos = from_elem.position.unwrap_or((100.0, 100.0));
+                        // Output port is at the right edge, centered vertically
+                        to_screen(pos2(from_pos.0 + 200.0, from_pos.1 + 40.0))
+                    } else if let Some(from_block) = self.blocks.iter().find(|b| &b.id == from_id) {
+                        if let Some(pos) = from_block.position {
+                            // Output port is at the right edge, centered vertically
+                            to_screen(pos2(pos.x + 200.0, pos.y + 40.0))
+                        } else {
+                            to_screen(pos2(100.0, 100.0))
+                        }
+                    } else {
+                        to_screen(pos2(100.0, 100.0))
+                    };
 
-                    let to_pos = ui.input(|i| i.pointer.hover_pos().unwrap_or(from_screen_pos));
+                let to_pos = ui.input(|i| i.pointer.hover_pos().unwrap_or(from_screen_pos));
 
-                    painter.line_segment(
-                        [from_screen_pos, to_pos],
-                        Stroke::new(2.0, Color32::from_rgb(100, 150, 255)),
-                    );
-                }
+                painter.line_segment(
+                    [from_screen_pos, to_pos],
+                    Stroke::new(2.0, Color32::from_rgb(100, 150, 255)),
+                );
             }
 
             response
@@ -349,15 +529,15 @@ impl GraphEditor {
         is_hovered: bool,
     ) -> Response {
         let stroke_color = if is_selected {
-            Color32::from_rgb(100, 150, 255)
+            Color32::from_rgb(100, 220, 220) // Cyan
         } else if is_hovered {
-            Color32::from_gray(154) // Brighter border on hover
+            Color32::from_rgb(120, 180, 180) // Lighter cyan
         } else {
-            Color32::from_gray(120)
+            Color32::from_rgb(80, 160, 160) // Dark cyan
         };
 
         let stroke_width = if is_selected {
-            2.0
+            2.5
         } else if is_hovered {
             1.5
         } else {
@@ -365,11 +545,11 @@ impl GraphEditor {
         };
 
         let fill_color = if is_selected {
-            Color32::from_gray(60) // Brighter background when selected
+            Color32::from_rgb(40, 60, 60) // Dark cyan-tinted background
         } else if is_hovered {
-            Color32::from_gray(53) // Lighter background on hover
+            Color32::from_rgb(35, 50, 50) // Lighter cyan-tinted background on hover
         } else {
-            Color32::from_gray(30)
+            Color32::from_rgb(30, 40, 40) // Very dark cyan-tinted background
         };
 
         // Draw node background
@@ -402,7 +582,7 @@ impl GraphEditor {
         );
 
         // Draw ports based on element metadata
-        let port_size = 12.0 * self.zoom;
+        let port_size = 16.0 * self.zoom;
 
         if let Some(info) = element_info {
             use strom_types::element::MediaType;
@@ -464,17 +644,17 @@ impl GraphEditor {
                     );
                     painter.rect(
                         pad_rect,
-                        2.0,
+                        3.0,
                         hover_color,
-                        Stroke::NONE,
+                        Stroke::new(1.5 * self.zoom, Color32::from_gray(80)),
                         egui::epaint::StrokeKind::Inside,
                     );
                 } else {
                     painter.rect(
                         pad_rect,
-                        2.0,
+                        3.0,
                         base_color,
-                        Stroke::NONE,
+                        Stroke::new(1.0 * self.zoom, Color32::from_gray(60)),
                         egui::epaint::StrokeKind::Inside,
                     );
                 }
@@ -485,8 +665,8 @@ impl GraphEditor {
                         pad_center,
                         egui::Align2::CENTER_CENTER,
                         label,
-                        FontId::proportional(8.0 * self.zoom),
-                        Color32::WHITE,
+                        FontId::proportional(10.0 * self.zoom),
+                        Color32::BLACK,
                     );
                 }
             }
@@ -548,17 +728,17 @@ impl GraphEditor {
                     );
                     painter.rect(
                         pad_rect,
-                        2.0,
+                        3.0,
                         hover_color,
-                        Stroke::NONE,
+                        Stroke::new(1.5 * self.zoom, Color32::from_gray(80)),
                         egui::epaint::StrokeKind::Inside,
                     );
                 } else {
                     painter.rect(
                         pad_rect,
-                        2.0,
+                        3.0,
                         base_color,
-                        Stroke::NONE,
+                        Stroke::new(1.0 * self.zoom, Color32::from_gray(60)),
                         egui::epaint::StrokeKind::Inside,
                     );
                 }
@@ -569,8 +749,8 @@ impl GraphEditor {
                         pad_center,
                         egui::Align2::CENTER_CENTER,
                         label,
-                        FontId::proportional(8.0 * self.zoom),
-                        Color32::WHITE,
+                        FontId::proportional(10.0 * self.zoom),
+                        Color32::BLACK,
                     );
                 }
             }
@@ -609,6 +789,278 @@ impl GraphEditor {
         ui.interact(rect, ui.id().with(&element.id), Sense::click_and_drag())
     }
 
+    /// Draw a block instance node
+    fn draw_block_node(
+        &self,
+        ui: &Ui,
+        painter: &egui::Painter,
+        block: &BlockInstance,
+        rect: Rect,
+        is_selected: bool,
+        is_hovered: bool,
+    ) -> Response {
+        let stroke_color = if is_selected {
+            Color32::from_rgb(200, 100, 255) // Purple for blocks
+        } else if is_hovered {
+            Color32::from_gray(154)
+        } else {
+            Color32::from_rgb(150, 80, 200) // Darker purple
+        };
+
+        let stroke_width = if is_selected {
+            2.5
+        } else if is_hovered {
+            1.5
+        } else {
+            1.0
+        };
+
+        let fill_color = if is_selected {
+            Color32::from_rgb(60, 40, 80) // Dark purple background
+        } else if is_hovered {
+            Color32::from_rgb(50, 35, 65)
+        } else {
+            Color32::from_rgb(40, 30, 50)
+        };
+
+        // Draw node background with rounded corners
+        painter.rect(
+            rect,
+            5.0,
+            fill_color,
+            Stroke::new(stroke_width, stroke_color),
+            egui::epaint::StrokeKind::Inside,
+        );
+
+        // Get the block definition to show the human-readable name
+        let block_definition = self.block_definition_map.get(&block.block_definition_id);
+
+        // Draw block icon
+        let icon_pos = rect.min + vec2(10.0, 8.0);
+        painter.text(
+            icon_pos,
+            egui::Align2::LEFT_TOP,
+            "📦",
+            FontId::proportional(16.0 * self.zoom),
+            Color32::WHITE,
+        );
+
+        // Draw block name (use human-readable name from definition if available)
+        let block_name = block_definition
+            .map(|def| def.name.as_str())
+            .unwrap_or_else(|| {
+                block
+                    .block_definition_id
+                    .strip_prefix("builtin.")
+                    .unwrap_or(&block.block_definition_id)
+            });
+        let text_pos = rect.min + vec2(35.0, 10.0);
+        painter.text(
+            text_pos,
+            egui::Align2::LEFT_TOP,
+            block_name,
+            FontId::proportional(14.0 * self.zoom),
+            Color32::from_rgb(220, 180, 255),
+        );
+
+        // Draw block instance ID
+        let id_pos = rect.min + vec2(10.0, 30.0);
+        painter.text(
+            id_pos,
+            egui::Align2::LEFT_TOP,
+            &block.id,
+            FontId::proportional(12.0 * self.zoom),
+            Color32::from_gray(180),
+        );
+
+        // Draw "BLOCK" badge
+        let badge_pos = rect.min + vec2(10.0, 55.0);
+        painter.text(
+            badge_pos,
+            egui::Align2::LEFT_TOP,
+            "BLOCK",
+            FontId::proportional(10.0 * self.zoom),
+            Color32::from_rgb(150, 100, 200),
+        );
+
+        // Draw external pads (ports) based on block definition
+        let port_size = 16.0 * self.zoom;
+
+        if let Some(definition) = self.block_definition_map.get(&block.block_definition_id) {
+            use strom_types::element::MediaType;
+
+            // Draw input pads on the left
+            let input_count = definition.external_pads.inputs.len();
+            for (idx, external_pad) in definition.external_pads.inputs.iter().enumerate() {
+                // Calculate vertical position (evenly spaced)
+                let y_offset = if input_count > 1 {
+                    let spacing = rect.height() / (input_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
+                let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
+
+                let is_hovered = self
+                    .hovered_pad
+                    .as_ref()
+                    .map(|(id, pad)| id == &block.id && pad == &external_pad.name)
+                    .unwrap_or(false);
+
+                // Choose color based on media type
+                let (base_color, hover_color, glow_color, label) = match external_pad.media_type {
+                    MediaType::Audio => (
+                        Color32::from_rgb(100, 200, 100), // Green
+                        Color32::from_rgb(126, 232, 126),
+                        Color32::from_rgba_premultiplied(100, 200, 100, 77),
+                        "A",
+                    ),
+                    MediaType::Video => (
+                        Color32::from_rgb(255, 150, 100), // Orange
+                        Color32::from_rgb(255, 176, 128),
+                        Color32::from_rgba_premultiplied(255, 150, 100, 77),
+                        "V",
+                    ),
+                    MediaType::Generic => (
+                        Color32::from_rgb(100, 150, 255), // Blue
+                        Color32::from_rgb(126, 176, 255),
+                        Color32::from_rgba_premultiplied(100, 150, 255, 77),
+                        "",
+                    ),
+                };
+
+                if is_hovered {
+                    // Draw glow effect
+                    let glow_rect = Rect::from_center_size(
+                        pad_center,
+                        vec2(port_size + 10.0 * self.zoom, port_size + 10.0 * self.zoom),
+                    );
+                    painter.rect(
+                        glow_rect,
+                        3.0,
+                        glow_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    painter.rect(
+                        pad_rect,
+                        3.0,
+                        hover_color,
+                        Stroke::new(1.5 * self.zoom, Color32::from_gray(80)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect(
+                        pad_rect,
+                        3.0,
+                        base_color,
+                        Stroke::new(1.0 * self.zoom, Color32::from_gray(60)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                }
+
+                // Draw label inside port
+                if !label.is_empty() {
+                    painter.text(
+                        pad_center,
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(10.0 * self.zoom),
+                        Color32::BLACK,
+                    );
+                }
+            }
+
+            // Draw output pads on the right
+            let output_count = definition.external_pads.outputs.len();
+            for (idx, external_pad) in definition.external_pads.outputs.iter().enumerate() {
+                // Calculate vertical position (evenly spaced)
+                let y_offset = if output_count > 1 {
+                    let spacing = rect.height() / (output_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
+                let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
+
+                let is_hovered = self
+                    .hovered_pad
+                    .as_ref()
+                    .map(|(id, pad)| id == &block.id && pad == &external_pad.name)
+                    .unwrap_or(false);
+
+                // Choose color based on media type
+                let (base_color, hover_color, glow_color, label) = match external_pad.media_type {
+                    MediaType::Audio => (
+                        Color32::from_rgb(100, 200, 100), // Green
+                        Color32::from_rgb(126, 232, 126),
+                        Color32::from_rgba_premultiplied(100, 200, 100, 77),
+                        "A",
+                    ),
+                    MediaType::Video => (
+                        Color32::from_rgb(255, 150, 100), // Orange
+                        Color32::from_rgb(255, 176, 128),
+                        Color32::from_rgba_premultiplied(255, 150, 100, 77),
+                        "V",
+                    ),
+                    MediaType::Generic => (
+                        Color32::from_rgb(100, 150, 255), // Blue
+                        Color32::from_rgb(126, 176, 255),
+                        Color32::from_rgba_premultiplied(100, 150, 255, 77),
+                        "",
+                    ),
+                };
+
+                if is_hovered {
+                    // Draw glow effect
+                    let glow_rect = Rect::from_center_size(
+                        pad_center,
+                        vec2(port_size + 10.0 * self.zoom, port_size + 10.0 * self.zoom),
+                    );
+                    painter.rect(
+                        glow_rect,
+                        3.0,
+                        glow_color,
+                        Stroke::NONE,
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    painter.rect(
+                        pad_rect,
+                        3.0,
+                        hover_color,
+                        Stroke::new(1.5 * self.zoom, Color32::from_gray(80)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                } else {
+                    painter.rect(
+                        pad_rect,
+                        3.0,
+                        base_color,
+                        Stroke::new(1.0 * self.zoom, Color32::from_gray(60)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                }
+
+                // Draw label inside port
+                if !label.is_empty() {
+                    painter.text(
+                        pad_center,
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        FontId::proportional(10.0 * self.zoom),
+                        Color32::BLACK,
+                    );
+                }
+            }
+        }
+
+        ui.interact(rect, ui.id().with(&block.id), Sense::click_and_drag())
+    }
+
     fn draw_link(
         &self,
         painter: &egui::Painter,
@@ -617,25 +1069,36 @@ impl GraphEditor {
         is_selected: bool,
         is_hovered: bool,
     ) {
-        // Parse element IDs from link
+        // Parse IDs from link
         let from_id = link.from.split(':').next().unwrap_or("");
         let to_id = link.to.split(':').next().unwrap_or("");
 
-        // Find elements
-        let from_elem = self.elements.iter().find(|e| e.id == from_id);
-        let to_elem = self.elements.iter().find(|e| e.id == to_id);
+        // Find from position (element or block)
+        let from_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == from_id) {
+            elem.position.map(|p| pos2(p.0, p.1))
+        } else if let Some(block) = self.blocks.iter().find(|b| b.id == from_id) {
+            block.position.map(|p| pos2(p.x, p.y))
+        } else {
+            None
+        };
 
-        if let (Some(from), Some(to)) = (from_elem, to_elem) {
-            let from_pos = from.position.unwrap_or((100.0, 100.0));
-            let to_pos = to.position.unwrap_or((300.0, 100.0));
+        // Find to position (element or block)
+        let to_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == to_id) {
+            elem.position.map(|p| pos2(p.0, p.1))
+        } else if let Some(block) = self.blocks.iter().find(|b| b.id == to_id) {
+            block.position.map(|p| pos2(p.x, p.y))
+        } else {
+            None
+        };
 
-            let from_screen = to_screen(pos2(from_pos.0 + 200.0, from_pos.1 + 40.0));
-            let to_screen = to_screen(pos2(to_pos.0, to_pos.1 + 40.0));
+        if let (Some(from), Some(to)) = (from_pos, to_pos) {
+            let from_screen = to_screen(pos2(from.x + 200.0, from.y + 40.0));
+            let to_screen_pos = to_screen(pos2(to.x, to.y + 40.0));
 
             // Draw cubic bezier curve
             let control_offset = 50.0 * self.zoom;
             let control1 = from_screen + vec2(control_offset, 0.0);
-            let control2 = to_screen - vec2(control_offset, 0.0);
+            let control2 = to_screen_pos - vec2(control_offset, 0.0);
 
             // Determine color and width based on state
             let (color, width) = if is_selected {
@@ -647,7 +1110,7 @@ impl GraphEditor {
             };
 
             painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-                [from_screen, control1, control2, to_screen],
+                [from_screen, control1, control2, to_screen_pos],
                 false,
                 Color32::TRANSPARENT,
                 Stroke::new(width, color),
@@ -662,20 +1125,31 @@ impl GraphEditor {
         point: Pos2,
         to_screen: &impl Fn(Pos2) -> Pos2,
     ) -> bool {
-        // Parse element IDs from link
+        // Parse IDs from link
         let from_id = link.from.split(':').next().unwrap_or("");
         let to_id = link.to.split(':').next().unwrap_or("");
 
-        // Find elements
-        let from_elem = self.elements.iter().find(|e| e.id == from_id);
-        let to_elem = self.elements.iter().find(|e| e.id == to_id);
+        // Find from position (element or block)
+        let from_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == from_id) {
+            elem.position.map(|p| pos2(p.0, p.1))
+        } else if let Some(block) = self.blocks.iter().find(|b| b.id == from_id) {
+            block.position.map(|p| pos2(p.x, p.y))
+        } else {
+            None
+        };
 
-        if let (Some(from), Some(to)) = (from_elem, to_elem) {
-            let from_pos = from.position.unwrap_or((100.0, 100.0));
-            let to_pos = to.position.unwrap_or((300.0, 100.0));
+        // Find to position (element or block)
+        let to_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == to_id) {
+            elem.position.map(|p| pos2(p.0, p.1))
+        } else if let Some(block) = self.blocks.iter().find(|b| b.id == to_id) {
+            block.position.map(|p| pos2(p.x, p.y))
+        } else {
+            None
+        };
 
-            let from_screen = to_screen(pos2(from_pos.0 + 200.0, from_pos.1 + 40.0));
-            let to_screen_pos = to_screen(pos2(to_pos.0, to_pos.1 + 40.0));
+        if let (Some(from), Some(to)) = (from_pos, to_pos) {
+            let from_screen = to_screen(pos2(from.x + 200.0, from.y + 40.0));
+            let to_screen_pos = to_screen(pos2(to.x, to.y + 40.0));
 
             let control_offset = 50.0 * self.zoom;
             let control1 = from_screen + vec2(control_offset, 0.0);
@@ -721,7 +1195,7 @@ impl GraphEditor {
         element_info: Option<&ElementInfo>,
         rect: Rect,
     ) {
-        let port_size = 12.0 * self.zoom;
+        let port_size = 16.0 * self.zoom;
         let interaction_size = port_size + 4.0 * self.zoom; // Slightly larger for easier interaction
 
         let mut any_hovered = false;
@@ -854,5 +1328,89 @@ impl GraphEditor {
     pub fn get_selected_element_mut(&mut self) -> Option<&mut Element> {
         let selected_id = self.selected.clone()?;
         self.elements.iter_mut().find(|e| e.id == selected_id)
+    }
+
+    /// Handle pad interactions for blocks.
+    fn handle_block_pad_interaction(
+        &mut self,
+        ui: &Ui,
+        block: &BlockInstance,
+        definition: Option<&BlockDefinition>,
+        rect: Rect,
+    ) {
+        let port_size = 16.0 * self.zoom;
+        let interaction_size = port_size + 4.0 * self.zoom;
+
+        let mut any_hovered = false;
+
+        if let Some(def) = definition {
+            // Handle input pad interactions
+            let input_count = def.external_pads.inputs.len();
+            for (idx, external_pad) in def.external_pads.inputs.iter().enumerate() {
+                let y_offset = if input_count > 1 {
+                    let spacing = rect.height() / (input_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
+                let pad_rect =
+                    Rect::from_center_size(pad_center, vec2(interaction_size, interaction_size));
+
+                let pad_response = ui.interact(
+                    pad_rect,
+                    ui.id().with((&block.id, &external_pad.name)),
+                    Sense::hover(),
+                );
+
+                if pad_response.hovered() {
+                    self.hovered_pad = Some((block.id.clone(), external_pad.name.clone()));
+                    any_hovered = true;
+                }
+            }
+
+            // Handle output pad interactions
+            let output_count = def.external_pads.outputs.len();
+            for (idx, external_pad) in def.external_pads.outputs.iter().enumerate() {
+                let y_offset = if output_count > 1 {
+                    let spacing = rect.height() / (output_count + 1) as f32;
+                    spacing * (idx + 1) as f32
+                } else {
+                    rect.height() / 2.0
+                };
+
+                let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
+                let pad_rect =
+                    Rect::from_center_size(pad_center, vec2(interaction_size, interaction_size));
+
+                let pad_response = ui.interact(
+                    pad_rect,
+                    ui.id().with((&block.id, &external_pad.name)),
+                    Sense::click_and_drag(),
+                );
+
+                // Start creating link when dragging from output port
+                if pad_response.drag_started()
+                    || (pad_response.dragged() && self.creating_link.is_none())
+                {
+                    self.creating_link = Some((block.id.clone(), external_pad.name.clone()));
+                }
+
+                if pad_response.hovered() {
+                    self.hovered_pad = Some((block.id.clone(), external_pad.name.clone()));
+                    any_hovered = true;
+                }
+            }
+        }
+
+        // Clear hovered_pad if mouse is not over any pad for this block
+        if !any_hovered {
+            if let Some((id, _)) = &self.hovered_pad {
+                if id == &block.id {
+                    self.hovered_pad = None;
+                }
+            }
+        }
     }
 }
