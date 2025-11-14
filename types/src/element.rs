@@ -1,0 +1,141 @@
+//! GStreamer element and property definitions.
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[cfg(feature = "openapi")]
+use utoipa::ToSchema;
+
+/// Unique identifier for an element instance within a flow.
+pub type ElementId = String;
+
+/// Represents a GStreamer element instance in a flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct Element {
+    /// Unique identifier for this element instance
+    pub id: ElementId,
+    /// GStreamer element type (e.g., "videotestsrc", "x264enc", "filesink")
+    pub element_type: String,
+    /// Element properties as key-value pairs
+    #[serde(default)]
+    pub properties: HashMap<String, PropertyValue>,
+    /// Optional display position in the visual editor (x, y)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<(f32, f32)>,
+}
+
+/// A link between two element pads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct Link {
+    /// Source element and pad (format: "element_id" or "element_id:pad_name")
+    pub from: String,
+    /// Destination element and pad (format: "element_id" or "element_id:pad_name")
+    pub to: String,
+}
+
+/// Property value that can be various types.
+///
+/// GStreamer properties can be strings, numbers, booleans, enums, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(untagged)]
+pub enum PropertyValue {
+    String(String),
+    Int(i64),
+    UInt(u64),
+    Float(f64),
+    Bool(bool),
+}
+
+impl From<String> for PropertyValue {
+    fn from(s: String) -> Self {
+        PropertyValue::String(s)
+    }
+}
+
+impl From<&str> for PropertyValue {
+    fn from(s: &str) -> Self {
+        PropertyValue::String(s.to_string())
+    }
+}
+
+impl From<i64> for PropertyValue {
+    fn from(i: i64) -> Self {
+        PropertyValue::Int(i)
+    }
+}
+
+impl From<u64> for PropertyValue {
+    fn from(u: u64) -> Self {
+        PropertyValue::UInt(u)
+    }
+}
+
+impl From<f64> for PropertyValue {
+    fn from(f: f64) -> Self {
+        PropertyValue::Float(f)
+    }
+}
+
+impl From<bool> for PropertyValue {
+    fn from(b: bool) -> Self {
+        PropertyValue::Bool(b)
+    }
+}
+
+/// Information about a GStreamer element type (for discovery/palette).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ElementInfo {
+    /// Element type name
+    pub name: String,
+    /// Human-readable description
+    pub description: String,
+    /// Element category (e.g., "Source", "Filter", "Sink", "Codec")
+    pub category: String,
+    /// Available source pads
+    pub src_pads: Vec<PadInfo>,
+    /// Available sink pads
+    pub sink_pads: Vec<PadInfo>,
+    /// Available properties
+    pub properties: Vec<PropertyInfo>,
+}
+
+/// Information about an element pad.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PadInfo {
+    /// Pad name
+    pub name: String,
+    /// Pad capabilities (simplified)
+    pub caps: String,
+}
+
+/// Information about an element property.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PropertyInfo {
+    /// Property name
+    pub name: String,
+    /// Human-readable description
+    pub description: String,
+    /// Property type
+    pub property_type: PropertyType,
+    /// Default value
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<PropertyValue>,
+}
+
+/// Types of properties that elements can have.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub enum PropertyType {
+    String,
+    Int { min: i64, max: i64 },
+    UInt { min: u64, max: u64 },
+    Float { min: f64, max: f64 },
+    Bool,
+    Enum { values: Vec<String> },
+}

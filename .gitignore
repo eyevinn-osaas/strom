@@ -30,3 +30,5 @@ node_modules
 playwright-report
 .playwright-mcp
 backups
+tests
+test-results
