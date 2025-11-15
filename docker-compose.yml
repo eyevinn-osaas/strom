@@ -1,9 +1,11 @@
 version: '3.8'
 
 services:
-  strom:
+  # Strom backend server
+  strom-backend:
     build: .
     image: strom:latest
+    container_name: strom-backend
     ports:
       - "8080:8080"
     volumes:
@@ -13,3 +15,33 @@ services:
       - STROM_PORT=8080
       - STROM_FLOWS_PATH=/data/flows.json
     restart: unless-stopped
+    networks:
+      - strom-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Strom MCP server for AI integration
+  strom-mcp:
+    image: strom:latest
+    container_name: strom-mcp
+    depends_on:
+      - strom-backend
+    environment:
+      - RUST_LOG=info
+      - STROM_API_URL=http://strom-backend:8080
+    stdin_open: true
+    tty: true
+    command: ["strom-mcp-server"]
+    networks:
+      - strom-network
+    restart: unless-stopped
+
+networks:
+  strom-network:
+    driver: bridge
+
+volumes:
+  data:
