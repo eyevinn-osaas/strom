@@ -1,225 +1,341 @@
-use rmcp::{
-    model::ServerInfo,
-    schemars::{self, JsonSchema},
-    service::ServiceExt,
-    tool, ServerHandler,
-};
-use serde::Deserialize;
-use std::io::{stdin, stdout};
-use strom_types::api::CreateFlowRequest;
-use tracing::info;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::io::{self, BufRead, Write};
+use tracing::{debug, error, info};
 
 mod client;
 use client::StromClient;
 
-/// MCP Server for Strom GStreamer Flow Engine
-#[derive(Clone, Debug)]
-pub struct StromMcpServer {
-    /// HTTP client for Strom API
+/// JSON-RPC 2.0 Request
+#[derive(Debug, Deserialize)]
+struct JsonRpcRequest {
+    jsonrpc: String,
+    id: Option<Value>,
+    method: String,
+    params: Option<Value>,
+}
+
+/// JSON-RPC 2.0 Response
+#[derive(Debug, Serialize)]
+struct JsonRpcResponse {
+    jsonrpc: String,
+    id: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<JsonRpcError>,
+}
+
+/// JSON-RPC 2.0 Error
+#[derive(Debug, Serialize)]
+struct JsonRpcError {
+    code: i32,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<Value>,
+}
+
+/// Tool call parameters
+#[derive(Debug, Deserialize)]
+struct ToolCallParams {
+    name: String,
+    arguments: Option<Value>,
+}
+
+/// MCP Server
+struct McpServer {
     client: StromClient,
 }
 
-impl StromMcpServer {
-    pub fn new(api_url: String) -> Self {
+impl McpServer {
+    fn new(api_url: String) -> Self {
         Self {
             client: StromClient::new(api_url),
         }
     }
-}
 
-// Request types for tools
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct FlowIdRequest {
-    /// The UUID of the flow
-    pub flow_id: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct CreateFlowParams {
-    /// Name for the new flow
-    pub name: String,
-    /// Whether to auto-start this flow on server boot
-    #[serde(default)]
-    pub auto_start: bool,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct UpdateFlowParams {
-    /// The UUID of the flow to update
-    pub flow_id: String,
-    /// Complete flow data as JSON string
-    pub flow_data: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ListElementsParams {
-    /// Optional category filter (e.g., 'source', 'codec', 'sink')
-    #[serde(default)]
-    pub category: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ElementNameRequest {
-    /// Name of the GStreamer element (e.g., 'videotestsrc', 'x264enc')
-    pub element_name: String,
-}
-
-// Tool implementations
-#[tool(tool_box)]
-impl StromMcpServer {
-    /// List all GStreamer flows
-    #[tool(description = "List all GStreamer flows")]
-    async fn list_flows(&self) -> String {
-        info!("MCP: Listing all flows");
-        match self.client.list_flows().await {
-            Ok(flows) => serde_json::to_string_pretty(&flows).unwrap_or_else(|e| {
-                format!("Error serializing flows: {}", e)
-            }),
-            Err(e) => format!("Error listing flows: {}", e),
-        }
-    }
-
-    /// Get details of a specific flow by ID
-    #[tool(description = "Get details of a specific flow by ID")]
-    async fn get_flow(&self, #[tool(aggr)] req: FlowIdRequest) -> String {
-        info!("MCP: Getting flow {}", req.flow_id);
-        match self.client.get_flow(&req.flow_id).await {
-            Ok(flow) => serde_json::to_string_pretty(&flow).unwrap_or_else(|e| {
-                format!("Error serializing flow: {}", e)
-            }),
-            Err(e) => format!("Error getting flow: {}", e),
-        }
-    }
-
-    /// Create a new flow
-    #[tool(description = "Create a new flow")]
-    async fn create_flow(&self, #[tool(aggr)] params: CreateFlowParams) -> String {
-        info!("MCP: Creating flow '{}'", params.name);
-        let request = CreateFlowRequest {
-            name: params.name,
-            auto_start: params.auto_start,
-        };
-        match self.client.create_flow(request).await {
-            Ok(flow) => serde_json::to_string_pretty(&flow).unwrap_or_else(|e| {
-                format!("Error serializing flow: {}", e)
-            }),
-            Err(e) => format!("Error creating flow: {}", e),
-        }
-    }
-
-    /// Update an existing flow
-    #[tool(description = "Update an existing flow")]
-    async fn update_flow(&self, #[tool(aggr)] params: UpdateFlowParams) -> String {
-        info!("MCP: Updating flow {}", params.flow_id);
-        match serde_json::from_str(&params.flow_data) {
-            Ok(flow) => match self.client.update_flow(&params.flow_id, flow).await {
-                Ok(updated) => serde_json::to_string_pretty(&updated).unwrap_or_else(|e| {
-                    format!("Error serializing flow: {}", e)
-                }),
-                Err(e) => format!("Error updating flow: {}", e),
+    /// Handle initialize request
+    fn handle_initialize(&self) -> Value {
+        json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
             },
-            Err(e) => format!("Error parsing flow_data: {}", e),
-        }
+            "serverInfo": {
+                "name": "strom",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        })
     }
 
-    /// Delete a flow
-    #[tool(description = "Delete a flow")]
-    async fn delete_flow(&self, #[tool(aggr)] req: FlowIdRequest) -> String {
-        info!("MCP: Deleting flow {}", req.flow_id);
-        match self.client.delete_flow(&req.flow_id).await {
-            Ok(_) => format!("Flow {} deleted successfully", req.flow_id),
-            Err(e) => format!("Error deleting flow: {}", e),
-        }
+    /// Handle tools/list request
+    fn handle_list_tools(&self) -> Value {
+        json!({
+            "tools": [
+                {
+                    "name": "list_flows",
+                    "description": "List all GStreamer flows",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                },
+                {
+                    "name": "get_flow",
+                    "description": "Get details of a specific flow by ID",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "flow_id": {
+                                "type": "string",
+                                "description": "The UUID of the flow"
+                            }
+                        },
+                        "required": ["flow_id"]
+                    }
+                },
+                {
+                    "name": "create_flow",
+                    "description": "Create a new flow",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Name for the new flow"
+                            }
+                        },
+                        "required": ["name"]
+                    }
+                },
+                {
+                    "name": "delete_flow",
+                    "description": "Delete a flow",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "flow_id": {
+                                "type": "string",
+                                "description": "The UUID of the flow to delete"
+                            }
+                        },
+                        "required": ["flow_id"]
+                    }
+                },
+                {
+                    "name": "start_flow",
+                    "description": "Start a flow's GStreamer pipeline",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "flow_id": {
+                                "type": "string",
+                                "description": "The UUID of the flow to start"
+                            }
+                        },
+                        "required": ["flow_id"]
+                    }
+                },
+                {
+                    "name": "stop_flow",
+                    "description": "Stop a running flow",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "flow_id": {
+                                "type": "string",
+                                "description": "The UUID of the flow to stop"
+                            }
+                        },
+                        "required": ["flow_id"]
+                    }
+                },
+                {
+                    "name": "list_elements",
+                    "description": "List available GStreamer elements, optionally filtered by category",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "description": "Optional category filter (e.g., 'source', 'codec', 'sink')"
+                            }
+                        },
+                        "required": []
+                    }
+                },
+                {
+                    "name": "get_element_info",
+                    "description": "Get detailed information about a specific GStreamer element",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "element_name": {
+                                "type": "string",
+                                "description": "Name of the GStreamer element (e.g., 'videotestsrc', 'x264enc')"
+                            }
+                        },
+                        "required": ["element_name"]
+                    }
+                }
+            ]
+        })
     }
 
-    /// Start a flow's GStreamer pipeline
-    #[tool(description = "Start a flow's GStreamer pipeline")]
-    async fn start_flow(&self, #[tool(aggr)] req: FlowIdRequest) -> String {
-        info!("MCP: Starting flow {}", req.flow_id);
-        match self.client.start_flow(&req.flow_id).await {
-            Ok(_) => format!("Flow {} started successfully", req.flow_id),
-            Err(e) => format!("Error starting flow: {}", e),
-        }
-    }
+    /// Handle tools/call request
+    async fn handle_call_tool(&self, params: Value) -> Result<Value> {
+        let tool_params: ToolCallParams = serde_json::from_value(params)?;
+        let args = tool_params.arguments.unwrap_or(json!({}));
 
-    /// Stop a running flow
-    #[tool(description = "Stop a running flow")]
-    async fn stop_flow(&self, #[tool(aggr)] req: FlowIdRequest) -> String {
-        info!("MCP: Stopping flow {}", req.flow_id);
-        match self.client.stop_flow(&req.flow_id).await {
-            Ok(_) => format!("Flow {} stopped successfully", req.flow_id),
-            Err(e) => format!("Error stopping flow: {}", e),
-        }
-    }
-
-    /// List available GStreamer elements, optionally filtered by category
-    #[tool(description = "List available GStreamer elements, optionally filtered by category")]
-    async fn list_elements(&self, #[tool(aggr)] params: ListElementsParams) -> String {
-        info!("MCP: Listing elements (category: {:?})", params.category);
-        match self.client.list_elements().await {
-            Ok(elements) => {
-                let filtered = if let Some(cat) = params.category {
+        let result = match tool_params.name.as_str() {
+            "list_flows" => {
+                info!("MCP: Listing all flows");
+                let flows = self.client.list_flows().await?;
+                serde_json::to_value(&flows)?
+            }
+            "get_flow" => {
+                let flow_id = args["flow_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("flow_id is required"))?;
+                info!("MCP: Getting flow {}", flow_id);
+                let flow = self.client.get_flow(flow_id).await?;
+                serde_json::to_value(&flow)?
+            }
+            "create_flow" => {
+                let name = args["name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("name is required"))?
+                    .to_string();
+                info!("MCP: Creating flow '{}'", name);
+                let request = strom_types::api::CreateFlowRequest { name };
+                let flow = self.client.create_flow(request).await?;
+                serde_json::to_value(&flow)?
+            }
+            "delete_flow" => {
+                let flow_id = args["flow_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("flow_id is required"))?;
+                info!("MCP: Deleting flow {}", flow_id);
+                self.client.delete_flow(flow_id).await?;
+                json!({ "success": true, "message": format!("Flow {} deleted", flow_id) })
+            }
+            "start_flow" => {
+                let flow_id = args["flow_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("flow_id is required"))?;
+                info!("MCP: Starting flow {}", flow_id);
+                self.client.start_flow(flow_id).await?;
+                json!({ "success": true, "message": format!("Flow {} started", flow_id) })
+            }
+            "stop_flow" => {
+                let flow_id = args["flow_id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("flow_id is required"))?;
+                info!("MCP: Stopping flow {}", flow_id);
+                self.client.stop_flow(flow_id).await?;
+                json!({ "success": true, "message": format!("Flow {} stopped", flow_id) })
+            }
+            "list_elements" => {
+                let category = args["category"].as_str().map(|s| s.to_string());
+                info!("MCP: Listing elements (category: {:?})", category);
+                let elements = self.client.list_elements().await?;
+                let filtered: Vec<_> = if let Some(cat) = category {
                     elements
                         .into_iter()
-                        .filter(|e| {
-                            e.category
-                                .as_ref()
-                                .map(|c| c.to_lowercase().contains(&cat.to_lowercase()))
-                                .unwrap_or(false)
-                        })
-                        .collect::<Vec<_>>()
+                        .filter(|e| e.category.to_lowercase().contains(&cat.to_lowercase()))
+                        .collect()
                 } else {
                     elements
                 };
-
-                serde_json::to_string_pretty(&filtered).unwrap_or_else(|e| {
-                    format!("Error serializing elements: {}", e)
-                })
+                serde_json::to_value(&filtered)?
             }
-            Err(e) => format!("Error listing elements: {}", e),
-        }
+            "get_element_info" => {
+                let element_name = args["element_name"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("element_name is required"))?;
+                info!("MCP: Getting info for element '{}'", element_name);
+                let info = self.client.get_element_info(element_name).await?;
+                serde_json::to_value(&info)?
+            }
+            _ => {
+                return Err(anyhow::anyhow!("Unknown tool: {}", tool_params.name));
+            }
+        };
+
+        Ok(json!({
+            "content": [{
+                "type": "text",
+                "text": serde_json::to_string_pretty(&result)?
+            }]
+        }))
     }
 
-    /// Get detailed information about a specific GStreamer element
-    #[tool(description = "Get detailed information about a specific GStreamer element")]
-    async fn get_element_info(&self, #[tool(aggr)] req: ElementNameRequest) -> String {
-        info!("MCP: Getting info for element '{}'", req.element_name);
-        match self.client.get_element_info(&req.element_name).await {
-            Ok(info) => serde_json::to_string_pretty(&info).unwrap_or_else(|e| {
-                format!("Error serializing element info: {}", e)
+    /// Handle a JSON-RPC request
+    async fn handle_request(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let id = req.id.unwrap_or(Value::Null);
+
+        debug!("Handling method: {}", req.method);
+
+        let result = match req.method.as_str() {
+            "initialize" => Ok(self.handle_initialize()),
+            "initialized" => {
+                // Notification, no response needed
+                return JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id,
+                    result: None,
+                    error: None,
+                };
+            }
+            "tools/list" => Ok(self.handle_list_tools()),
+            "tools/call" => {
+                match self
+                    .handle_call_tool(req.params.unwrap_or(json!({})))
+                    .await
+                {
+                    Ok(result) => Ok(result),
+                    Err(e) => Err(JsonRpcError {
+                        code: -32603,
+                        message: format!("Tool call failed: {}", e),
+                        data: None,
+                    }),
+                }
+            }
+            _ => Err(JsonRpcError {
+                code: -32601,
+                message: format!("Method not found: {}", req.method),
+                data: None,
             }),
-            Err(e) => format!("Error getting element info: {}", e),
-        }
-    }
-}
+        };
 
-// Implement ServerHandler
-#[tool(tool_box)]
-impl ServerHandler for StromMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            name: "strom".to_string(),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            instructions: Some(
-                "MCP server for Strom GStreamer Flow Engine. \
-                Manage GStreamer pipelines through natural language. \
-                Create, update, start, and stop flows. \
-                Discover and inspect GStreamer elements."
-                    .to_string(),
-            ),
-            ..Default::default()
+        match result {
+            Ok(result) => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id,
+                result: None,
+                error: Some(error),
+            },
         }
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
+        .with_writer(std::io::stderr) // Log to stderr, not stdout (stdout is for JSON-RPC)
         .init();
 
     // Get Strom API URL from environment or use default
@@ -229,17 +345,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting Strom MCP Server");
     info!("Connecting to Strom API at: {}", api_url);
 
-    // Create the server
-    let service = StromMcpServer::new(api_url);
+    let server = McpServer::new(api_url);
 
-    // Create stdio transport
-    let transport = (stdin(), stdout());
+    // Read from stdin and write to stdout
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
 
-    // Serve the MCP server
-    let server = service.serve(transport).await?;
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
 
-    // Wait for the server to complete
-    server.waiting().await?;
+        debug!("Received: {}", line);
+
+        match serde_json::from_str::<JsonRpcRequest>(&line) {
+            Ok(req) => {
+                let response = server.handle_request(req).await;
+                let response_json = serde_json::to_string(&response)?;
+                debug!("Sending: {}", response_json);
+                writeln!(stdout, "{}", response_json)?;
+                stdout.flush()?;
+            }
+            Err(e) => {
+                error!("Failed to parse request: {}", e);
+                let error_response = JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: Value::Null,
+                    result: None,
+                    error: Some(JsonRpcError {
+                        code: -32700,
+                        message: "Parse error".to_string(),
+                        data: Some(json!({ "error": e.to_string() })),
+                    }),
+                };
+                let response_json = serde_json::to_string(&error_response)?;
+                writeln!(stdout, "{}", response_json)?;
+                stdout.flush()?;
+            }
+        }
+    }
 
     Ok(())
 }
