@@ -1,8 +1,10 @@
 # Strom MCP Server
 
-> **⚠️ Work in Progress**: This MCP server implementation is currently under development. The `rmcp` Rust SDK is evolving, and the code may require updates to compile successfully. Contributions and feedback are welcome!
+A **working** Model Context Protocol (MCP) server for the Strom GStreamer Flow Engine. This allows AI assistants like Claude to interact with Strom's API to manage GStreamer pipelines through natural language.
 
-A Model Context Protocol (MCP) server for the Strom GStreamer Flow Engine. This allows AI assistants like Claude to interact with Strom's API to manage GStreamer pipelines through natural language.
+## Implementation
+
+This server implements the MCP protocol directly using JSON-RPC 2.0 over stdio, without depending on unstable SDK crates. This provides a reliable, lightweight implementation that's easy to understand and maintain.
 
 ## What is MCP?
 

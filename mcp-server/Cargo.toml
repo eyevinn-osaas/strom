@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# MCP SDK
-rmcp = { version = "0.8.0", features = ["server"] }
-
 # Async runtime
 tokio = { workspace = true }
 
@@ -19,7 +16,6 @@ serde_json = { workspace = true }
 
 # Error handling
 anyhow = "1.0"
-async-trait = "0.1"
 
 # Logging
 tracing = { workspace = true }
