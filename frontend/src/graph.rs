@@ -735,7 +735,14 @@ impl GraphEditor {
             let sink_count = sink_pads_to_render.len();
             for (idx, pad_to_render) in sink_pads_to_render.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
-                let y_offset = self.calculate_pad_y_offset(idx, sink_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let pad_count = sink_pads_to_render
+                    .len()
+                    .max(src_pads_to_render.len())
+                    .max(1);
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+                let y_offset =
+                    self.calculate_pad_y_offset(idx, sink_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -846,7 +853,13 @@ impl GraphEditor {
             let src_count = src_pads_to_render.len();
             for (idx, pad_to_render) in src_pads_to_render.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
-                let y_offset = self.calculate_pad_y_offset(idx, src_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let pad_count = sink_pads_to_render
+                    .len()
+                    .max(src_pads_to_render.len())
+                    .max(1);
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+                let y_offset = self.calculate_pad_y_offset(idx, src_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1466,7 +1479,14 @@ impl GraphEditor {
             let sink_count = sink_pads_to_render.len();
             for (idx, pad_to_render) in sink_pads_to_render.iter().enumerate() {
                 // Calculate vertical position using tighter spacing (matching draw_node)
-                let y_offset = self.calculate_pad_y_offset(idx, sink_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let pad_count = sink_pads_to_render
+                    .len()
+                    .max(src_pads_to_render.len())
+                    .max(1);
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+                let y_offset =
+                    self.calculate_pad_y_offset(idx, sink_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1494,7 +1514,13 @@ impl GraphEditor {
             let src_count = src_pads_to_render.len();
             for (idx, pad_to_render) in src_pads_to_render.iter().enumerate() {
                 // Calculate vertical position using tighter spacing (matching draw_node)
-                let y_offset = self.calculate_pad_y_offset(idx, src_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let pad_count = sink_pads_to_render
+                    .len()
+                    .max(src_pads_to_render.len())
+                    .max(1);
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+                let y_offset = self.calculate_pad_y_offset(idx, src_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect =
