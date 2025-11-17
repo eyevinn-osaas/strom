@@ -2,7 +2,10 @@
 
 use egui::{pos2, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
-use strom_types::{element::ElementInfo, BlockDefinition, BlockInstance, Element, ElementId, Link};
+use strom_types::{
+    element::{ElementInfo, PadInfo},
+    BlockDefinition, BlockInstance, Element, ElementId, Link,
+};
 
 /// Represents the state of the graph editor.
 pub struct GraphEditor {
@@ -34,6 +37,31 @@ pub struct GraphEditor {
     selected_link: Option<usize>,
     /// Hovered link index
     hovered_link: Option<usize>,
+    /// Active property tab and focused pad
+    pub active_property_tab: PropertyTab,
+    /// Pad to focus/highlight in the active tab
+    pub focused_pad: Option<String>,
+}
+
+/// Property panel tab selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyTab {
+    Element,
+    InputPads,
+    OutputPads,
+}
+
+/// Represents a pad to render in the graph, either a static pad or a dynamic pad instance.
+#[derive(Debug, Clone)]
+struct PadToRender {
+    /// The actual pad name (e.g., "sink_0" for a request pad, or "sink" for a static pad)
+    name: String,
+    /// The template name (e.g., "sink_%u" for request pads, or "sink" for static pads)
+    template_name: String,
+    /// Media type for coloring
+    media_type: strom_types::element::MediaType,
+    /// Whether this is the "empty" pad (always unconnected, for creating new links)
+    is_empty: bool,
 }
 
 impl Default for GraphEditor {
@@ -53,6 +81,8 @@ impl Default for GraphEditor {
             hovered_element: None,
             selected_link: None,
             hovered_link: None,
+            active_property_tab: PropertyTab::Element,
+            focused_pad: None,
         }
     }
 }
@@ -61,6 +91,21 @@ impl GraphEditor {
     /// Create a new graph editor.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Calculate the vertical offset for a pad given its index and total count.
+    /// Uses tighter spacing (20 pixels between pads) instead of spreading across the full height.
+    fn calculate_pad_y_offset(&self, idx: usize, count: usize, node_height: f32) -> f32 {
+        if count == 1 {
+            // Single pad: center it
+            node_height / 2.0
+        } else {
+            // Multiple pads: use fixed spacing
+            const PAD_SPACING: f32 = 20.0;
+            const TOP_MARGIN: f32 = 60.0; // Start below the element label
+
+            TOP_MARGIN + (idx as f32 * PAD_SPACING)
+        }
     }
 
     /// Load elements, blocks, and links into the editor.
@@ -85,6 +130,7 @@ impl GraphEditor {
             id: id.clone(),
             element_type,
             properties: HashMap::new(),
+            pad_properties: HashMap::new(),
             position: Some((pos.x, pos.y)),
         };
         self.elements.push(element);
@@ -178,6 +224,101 @@ impl GraphEditor {
         self.block_definition_map.get(definition_id)
     }
 
+    /// Get the list of pads to render for an element, expanding request pads into actual instances.
+    /// For request pads, this returns all connected instances plus one empty pad.
+    fn get_pads_to_render(
+        &self,
+        element: &Element,
+        element_info: Option<&ElementInfo>,
+    ) -> (Vec<PadToRender>, Vec<PadToRender>) {
+        let Some(info) = element_info else {
+            return (Vec::new(), Vec::new());
+        };
+
+        let mut sink_pads_to_render = Vec::new();
+        let mut src_pads_to_render = Vec::new();
+
+        // Process sink pads
+        for pad_info in &info.sink_pads {
+            if is_request_pad(pad_info) {
+                // Get all connected instances
+                let connected =
+                    get_connected_request_pad_names(&element.id, &pad_info.name, &self.links, true);
+
+                // Add all connected instances
+                for actual_name in &connected {
+                    sink_pads_to_render.push(PadToRender {
+                        name: actual_name.clone(),
+                        template_name: pad_info.name.clone(),
+                        media_type: pad_info.media_type,
+                        is_empty: false,
+                    });
+                }
+
+                // Add one empty pad
+                let next_name =
+                    allocate_next_pad_name(&element.id, &pad_info.name, &self.links, true);
+                sink_pads_to_render.push(PadToRender {
+                    name: next_name,
+                    template_name: pad_info.name.clone(),
+                    media_type: pad_info.media_type,
+                    is_empty: true,
+                });
+            } else {
+                // Static pad - render as-is
+                sink_pads_to_render.push(PadToRender {
+                    name: pad_info.name.clone(),
+                    template_name: pad_info.name.clone(),
+                    media_type: pad_info.media_type,
+                    is_empty: false,
+                });
+            }
+        }
+
+        // Process src pads
+        for pad_info in &info.src_pads {
+            if is_request_pad(pad_info) {
+                // Get all connected instances
+                let connected = get_connected_request_pad_names(
+                    &element.id,
+                    &pad_info.name,
+                    &self.links,
+                    false,
+                );
+
+                // Add all connected instances
+                for actual_name in &connected {
+                    src_pads_to_render.push(PadToRender {
+                        name: actual_name.clone(),
+                        template_name: pad_info.name.clone(),
+                        media_type: pad_info.media_type,
+                        is_empty: false,
+                    });
+                }
+
+                // Add one empty pad
+                let next_name =
+                    allocate_next_pad_name(&element.id, &pad_info.name, &self.links, false);
+                src_pads_to_render.push(PadToRender {
+                    name: next_name,
+                    template_name: pad_info.name.clone(),
+                    media_type: pad_info.media_type,
+                    is_empty: true,
+                });
+            } else {
+                // Static pad - render as-is
+                src_pads_to_render.push(PadToRender {
+                    name: pad_info.name.clone(),
+                    template_name: pad_info.name.clone(),
+                    media_type: pad_info.media_type,
+                    is_empty: false,
+                });
+            }
+        }
+
+        (sink_pads_to_render, src_pads_to_render)
+    }
+
     /// Render the graph editor.
     pub fn show(&mut self, ui: &mut Ui) -> Response {
         ui.push_id("graph_editor", |ui| {
@@ -218,11 +359,14 @@ impl GraphEditor {
                 let pos = element.position.unwrap_or((100.0, 100.0));
                 let screen_pos = to_screen(pos2(pos.0, pos.1));
 
-                // Calculate height based on number of pads (min 80, max 400)
+                // Calculate height based on number of pads to render (includes dynamic pad expansion)
                 let element_info = self.element_info_map.get(&element.element_type);
-                let pad_count = element_info
-                    .map(|info| info.sink_pads.len().max(info.src_pads.len()))
-                    .unwrap_or(1);
+                let (sink_pads_to_render, src_pads_to_render) =
+                    self.get_pads_to_render(element, element_info);
+                let pad_count = sink_pads_to_render
+                    .len()
+                    .max(src_pads_to_render.len())
+                    .max(1);
                 let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
 
                 let node_rect = Rect::from_min_size(
@@ -458,30 +602,26 @@ impl GraphEditor {
             }
 
             // Draw link being created (on top of everything)
-            if let Some((from_id, _)) = &self.creating_link {
-                // Check if it's an element or a block
-                let from_screen_pos =
-                    if let Some(from_elem) = self.elements.iter().find(|e| &e.id == from_id) {
-                        let from_pos = from_elem.position.unwrap_or((100.0, 100.0));
-                        // Output port is at the right edge, centered vertically
-                        to_screen(pos2(from_pos.0 + 200.0, from_pos.1 + 40.0))
-                    } else if let Some(from_block) = self.blocks.iter().find(|b| &b.id == from_id) {
-                        if let Some(pos) = from_block.position {
-                            // Output port is at the right edge, centered vertically
-                            to_screen(pos2(pos.x + 200.0, pos.y + 40.0))
-                        } else {
-                            to_screen(pos2(100.0, 100.0))
-                        }
-                    } else {
-                        to_screen(pos2(100.0, 100.0))
-                    };
+            if let Some((from_id, from_pad)) = &self.creating_link {
+                // Get the actual position of the source pad
+                let from_world_pos = self
+                    .get_pad_position(from_id, from_pad, false)
+                    .unwrap_or_else(|| pos2(100.0, 100.0));
+                let from_screen_pos = to_screen(from_world_pos);
 
                 let to_pos = ui.input(|i| i.pointer.hover_pos().unwrap_or(from_screen_pos));
 
-                painter.line_segment(
-                    [from_screen_pos, to_pos],
+                // Draw cubic bezier curve for link being created
+                let control_offset = 50.0 * self.zoom;
+                let control1 = from_screen_pos + vec2(control_offset, 0.0);
+                let control2 = to_pos - vec2(control_offset, 0.0);
+
+                painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                    [from_screen_pos, control1, control2, to_pos],
+                    false,
+                    Color32::TRANSPARENT,
                     Stroke::new(2.0, Color32::from_rgb(100, 150, 255)),
-                );
+                ));
             }
 
             response
@@ -584,19 +724,18 @@ impl GraphEditor {
         // Draw ports based on element metadata
         let port_size = 16.0 * self.zoom;
 
-        if let Some(info) = element_info {
+        // Get pads to render (expands request pads into actual instances)
+        let (sink_pads_to_render, src_pads_to_render) =
+            self.get_pads_to_render(element, element_info);
+
+        if !sink_pads_to_render.is_empty() || !src_pads_to_render.is_empty() {
             use strom_types::element::MediaType;
 
             // Draw sink pads (inputs) on the left
-            let sink_count = info.sink_pads.len();
-            for (idx, pad_info) in info.sink_pads.iter().enumerate() {
-                // Calculate vertical position (evenly spaced)
-                let y_offset = if sink_count > 1 {
-                    let spacing = rect.height() / (sink_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+            let sink_count = sink_pads_to_render.len();
+            for (idx, pad_to_render) in sink_pads_to_render.iter().enumerate() {
+                // Calculate vertical position using tighter spacing
+                let y_offset = self.calculate_pad_y_offset(idx, sink_count, rect.height());
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -604,11 +743,11 @@ impl GraphEditor {
                 let is_hovered = self
                     .hovered_pad
                     .as_ref()
-                    .map(|(id, pad)| id == &element.id && pad == &pad_info.name)
+                    .map(|(id, pad)| id == &element.id && pad == &pad_to_render.name)
                     .unwrap_or(false);
 
                 // Choose color based on media type
-                let (base_color, hover_color, glow_color, label) = match pad_info.media_type {
+                let (base_color, hover_color, glow_color, label) = match pad_to_render.media_type {
                     MediaType::Audio => (
                         Color32::from_rgb(100, 200, 100), // Green
                         Color32::from_rgb(126, 232, 126),
@@ -627,6 +766,26 @@ impl GraphEditor {
                         Color32::from_rgba_premultiplied(100, 150, 255, 77),
                         "",
                     ),
+                };
+
+                // Use lighter/transparent color for empty pads
+                let (base_color, hover_color) = if pad_to_render.is_empty {
+                    (
+                        Color32::from_rgba_premultiplied(
+                            base_color.r() / 2,
+                            base_color.g() / 2,
+                            base_color.b() / 2,
+                            128,
+                        ),
+                        Color32::from_rgba_premultiplied(
+                            hover_color.r() / 2,
+                            hover_color.g() / 2,
+                            hover_color.b() / 2,
+                            180,
+                        ),
+                    )
+                } else {
+                    (base_color, hover_color)
                 };
 
                 if is_hovered {
@@ -659,28 +818,35 @@ impl GraphEditor {
                     );
                 }
 
-                // Draw label inside port
-                if !label.is_empty() {
+                // Draw label inside port (or "+" for empty pads)
+                let label_text = if pad_to_render.is_empty {
+                    "+"
+                } else if !label.is_empty() {
+                    label
+                } else {
+                    ""
+                };
+
+                if !label_text.is_empty() {
                     painter.text(
                         pad_center,
                         egui::Align2::CENTER_CENTER,
-                        label,
+                        label_text,
                         FontId::proportional(10.0 * self.zoom),
-                        Color32::BLACK,
+                        if pad_to_render.is_empty {
+                            Color32::from_gray(180)
+                        } else {
+                            Color32::BLACK
+                        },
                     );
                 }
             }
 
             // Draw src pads (outputs) on the right
-            let src_count = info.src_pads.len();
-            for (idx, pad_info) in info.src_pads.iter().enumerate() {
-                // Calculate vertical position (evenly spaced)
-                let y_offset = if src_count > 1 {
-                    let spacing = rect.height() / (src_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+            let src_count = src_pads_to_render.len();
+            for (idx, pad_to_render) in src_pads_to_render.iter().enumerate() {
+                // Calculate vertical position using tighter spacing
+                let y_offset = self.calculate_pad_y_offset(idx, src_count, rect.height());
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -688,11 +854,11 @@ impl GraphEditor {
                 let is_hovered = self
                     .hovered_pad
                     .as_ref()
-                    .map(|(id, pad)| id == &element.id && pad == &pad_info.name)
+                    .map(|(id, pad)| id == &element.id && pad == &pad_to_render.name)
                     .unwrap_or(false);
 
                 // Choose color based on media type
-                let (base_color, hover_color, glow_color, label) = match pad_info.media_type {
+                let (base_color, hover_color, glow_color, label) = match pad_to_render.media_type {
                     MediaType::Audio => (
                         Color32::from_rgb(100, 200, 100), // Green
                         Color32::from_rgb(126, 232, 126),
@@ -711,6 +877,26 @@ impl GraphEditor {
                         Color32::from_rgba_premultiplied(100, 150, 255, 77),
                         "",
                     ),
+                };
+
+                // Use lighter/transparent color for empty pads
+                let (base_color, hover_color) = if pad_to_render.is_empty {
+                    (
+                        Color32::from_rgba_premultiplied(
+                            base_color.r() / 2,
+                            base_color.g() / 2,
+                            base_color.b() / 2,
+                            128,
+                        ),
+                        Color32::from_rgba_premultiplied(
+                            hover_color.r() / 2,
+                            hover_color.g() / 2,
+                            hover_color.b() / 2,
+                            180,
+                        ),
+                    )
+                } else {
+                    (base_color, hover_color)
                 };
 
                 if is_hovered {
@@ -743,14 +929,26 @@ impl GraphEditor {
                     );
                 }
 
-                // Draw label inside port
-                if !label.is_empty() {
+                // Draw label inside port (or "+" for empty pads)
+                let label_text = if pad_to_render.is_empty {
+                    "+"
+                } else if !label.is_empty() {
+                    label
+                } else {
+                    ""
+                };
+
+                if !label_text.is_empty() {
                     painter.text(
                         pad_center,
                         egui::Align2::CENTER_CENTER,
-                        label,
+                        label_text,
                         FontId::proportional(10.0 * self.zoom),
-                        Color32::BLACK,
+                        if pad_to_render.is_empty {
+                            Color32::from_gray(180)
+                        } else {
+                            Color32::BLACK
+                        },
                     );
                 }
             }
@@ -892,13 +1090,8 @@ impl GraphEditor {
             // Draw input pads on the left
             let input_count = definition.external_pads.inputs.len();
             for (idx, external_pad) in definition.external_pads.inputs.iter().enumerate() {
-                // Calculate vertical position (evenly spaced)
-                let y_offset = if input_count > 1 {
-                    let spacing = rect.height() / (input_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+                // Calculate vertical position using tighter spacing
+                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height());
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -976,13 +1169,8 @@ impl GraphEditor {
             // Draw output pads on the right
             let output_count = definition.external_pads.outputs.len();
             for (idx, external_pad) in definition.external_pads.outputs.iter().enumerate() {
-                // Calculate vertical position (evenly spaced)
-                let y_offset = if output_count > 1 {
-                    let spacing = rect.height() / (output_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+                // Calculate vertical position using tighter spacing
+                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height());
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1069,31 +1257,19 @@ impl GraphEditor {
         is_selected: bool,
         is_hovered: bool,
     ) {
-        // Parse IDs from link
-        let from_id = link.from.split(':').next().unwrap_or("");
-        let to_id = link.to.split(':').next().unwrap_or("");
+        // Parse IDs and pad names from link
+        let (from_id, from_pad) = parse_pad_ref(&link.from).unwrap_or_default();
+        let (to_id, to_pad) = parse_pad_ref(&link.to).unwrap_or_default();
 
-        // Find from position (element or block)
-        let from_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == from_id) {
-            elem.position.map(|p| pos2(p.0, p.1))
-        } else if let Some(block) = self.blocks.iter().find(|b| b.id == from_id) {
-            block.position.map(|p| pos2(p.x, p.y))
-        } else {
-            None
-        };
+        // Get from pad position
+        let from_pos = self.get_pad_position(&from_id, &from_pad, false);
 
-        // Find to position (element or block)
-        let to_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == to_id) {
-            elem.position.map(|p| pos2(p.0, p.1))
-        } else if let Some(block) = self.blocks.iter().find(|b| b.id == to_id) {
-            block.position.map(|p| pos2(p.x, p.y))
-        } else {
-            None
-        };
+        // Get to pad position
+        let to_pos = self.get_pad_position(&to_id, &to_pad, true);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            let from_screen = to_screen(pos2(from.x + 200.0, from.y + 40.0));
-            let to_screen_pos = to_screen(pos2(to.x, to.y + 40.0));
+            let from_screen = to_screen(from);
+            let to_screen_pos = to_screen(to);
 
             // Draw cubic bezier curve
             let control_offset = 50.0 * self.zoom;
@@ -1118,6 +1294,99 @@ impl GraphEditor {
         }
     }
 
+    /// Get the world position of a specific pad on an element or block.
+    /// Returns position on the right edge for output pads, left edge for input pads.
+    fn get_pad_position(&self, element_id: &str, pad_name: &str, is_input: bool) -> Option<Pos2> {
+        // Try to find as element first
+        if let Some(element) = self.elements.iter().find(|e| e.id == element_id) {
+            let base_pos = element.position.map(|p| pos2(p.0, p.1))?;
+            let element_info = self.element_info_map.get(&element.element_type);
+
+            // Get pads to render (same as in draw_node)
+            let (sink_pads_to_render, src_pads_to_render) =
+                self.get_pads_to_render(element, element_info);
+
+            // Calculate node height (same as in show method)
+            let pad_count = sink_pads_to_render
+                .len()
+                .max(src_pads_to_render.len())
+                .max(1);
+            let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+
+            if is_input {
+                // Find the pad in sink_pads_to_render
+                if let Some(idx) = sink_pads_to_render.iter().position(|p| p.name == pad_name) {
+                    let sink_count = sink_pads_to_render.len();
+                    let y_offset = self.calculate_pad_y_offset(idx, sink_count, node_height);
+                    return Some(pos2(base_pos.x, base_pos.y + y_offset));
+                }
+            } else {
+                // Find the pad in src_pads_to_render
+                if let Some(idx) = src_pads_to_render.iter().position(|p| p.name == pad_name) {
+                    let src_count = src_pads_to_render.len();
+                    let y_offset = self.calculate_pad_y_offset(idx, src_count, node_height);
+                    return Some(pos2(base_pos.x + 200.0, base_pos.y + y_offset));
+                }
+            }
+
+            // Fallback to center if pad not found
+            return Some(pos2(
+                base_pos.x + if is_input { 0.0 } else { 200.0 },
+                base_pos.y + node_height / 2.0,
+            ));
+        }
+
+        // Try to find as block
+        if let Some(block) = self.blocks.iter().find(|b| b.id == element_id) {
+            let base_pos = block.position.map(|p| pos2(p.x, p.y))?;
+            let block_definition = self.block_definition_map.get(&block.block_definition_id);
+
+            if let Some(def) = block_definition {
+                // Calculate node height (same as in show method)
+                let pad_count = def
+                    .external_pads
+                    .inputs
+                    .len()
+                    .max(def.external_pads.outputs.len());
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+
+                if is_input {
+                    // Find the pad in inputs
+                    if let Some(idx) = def
+                        .external_pads
+                        .inputs
+                        .iter()
+                        .position(|p| p.name == pad_name)
+                    {
+                        let input_count = def.external_pads.inputs.len();
+                        let y_offset = self.calculate_pad_y_offset(idx, input_count, node_height);
+                        return Some(pos2(base_pos.x, base_pos.y + y_offset));
+                    }
+                } else {
+                    // Find the pad in outputs
+                    if let Some(idx) = def
+                        .external_pads
+                        .outputs
+                        .iter()
+                        .position(|p| p.name == pad_name)
+                    {
+                        let output_count = def.external_pads.outputs.len();
+                        let y_offset = self.calculate_pad_y_offset(idx, output_count, node_height);
+                        return Some(pos2(base_pos.x + 200.0, base_pos.y + y_offset));
+                    }
+                }
+
+                // Fallback to center if pad not found
+                return Some(pos2(
+                    base_pos.x + if is_input { 0.0 } else { 200.0 },
+                    base_pos.y + node_height / 2.0,
+                ));
+            }
+        }
+
+        None
+    }
+
     /// Check if a point is near a bezier curve (for click detection)
     fn is_point_near_link(
         &self,
@@ -1125,31 +1394,19 @@ impl GraphEditor {
         point: Pos2,
         to_screen: &impl Fn(Pos2) -> Pos2,
     ) -> bool {
-        // Parse IDs from link
-        let from_id = link.from.split(':').next().unwrap_or("");
-        let to_id = link.to.split(':').next().unwrap_or("");
+        // Parse IDs and pad names from link
+        let (from_id, from_pad) = parse_pad_ref(&link.from).unwrap_or_default();
+        let (to_id, to_pad) = parse_pad_ref(&link.to).unwrap_or_default();
 
-        // Find from position (element or block)
-        let from_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == from_id) {
-            elem.position.map(|p| pos2(p.0, p.1))
-        } else if let Some(block) = self.blocks.iter().find(|b| b.id == from_id) {
-            block.position.map(|p| pos2(p.x, p.y))
-        } else {
-            None
-        };
+        // Get from pad position
+        let from_pos = self.get_pad_position(&from_id, &from_pad, false);
 
-        // Find to position (element or block)
-        let to_pos = if let Some(elem) = self.elements.iter().find(|e| e.id == to_id) {
-            elem.position.map(|p| pos2(p.0, p.1))
-        } else if let Some(block) = self.blocks.iter().find(|b| b.id == to_id) {
-            block.position.map(|p| pos2(p.x, p.y))
-        } else {
-            None
-        };
+        // Get to pad position
+        let to_pos = self.get_pad_position(&to_id, &to_pad, true);
 
         if let (Some(from), Some(to)) = (from_pos, to_pos) {
-            let from_screen = to_screen(pos2(from.x + 200.0, from.y + 40.0));
-            let to_screen_pos = to_screen(pos2(to.x, to.y + 40.0));
+            let from_screen = to_screen(from);
+            let to_screen_pos = to_screen(to);
 
             let control_offset = 50.0 * self.zoom;
             let control1 = from_screen + vec2(control_offset, 0.0);
@@ -1200,17 +1457,16 @@ impl GraphEditor {
 
         let mut any_hovered = false;
 
-        if let Some(info) = element_info {
+        // Get pads to render (same as draw_node)
+        let (sink_pads_to_render, src_pads_to_render) =
+            self.get_pads_to_render(element, element_info);
+
+        if !sink_pads_to_render.is_empty() || !src_pads_to_render.is_empty() {
             // Handle sink pad interactions (inputs)
-            let sink_count = info.sink_pads.len();
-            for (idx, pad_info) in info.sink_pads.iter().enumerate() {
-                // Calculate vertical position (matching draw_node)
-                let y_offset = if sink_count > 1 {
-                    let spacing = rect.height() / (sink_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+            let sink_count = sink_pads_to_render.len();
+            for (idx, pad_to_render) in sink_pads_to_render.iter().enumerate() {
+                // Calculate vertical position using tighter spacing (matching draw_node)
+                let y_offset = self.calculate_pad_y_offset(idx, sink_count, rect.height());
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1218,26 +1474,27 @@ impl GraphEditor {
 
                 let pad_response = ui.interact(
                     pad_rect,
-                    ui.id().with((&element.id, &pad_info.name)),
-                    Sense::hover(),
+                    ui.id().with((&element.id, &pad_to_render.name)),
+                    Sense::click().union(Sense::hover()),
                 );
 
+                // Select element and switch to Input Pads tab when clicking input pad
+                // (skip empty pads for selection)
+                if pad_response.clicked() && !pad_to_render.is_empty {
+                    self.select_element_and_focus_pad(&element.id, &pad_to_render.name, true);
+                }
+
                 if pad_response.hovered() {
-                    self.hovered_pad = Some((element.id.clone(), pad_info.name.clone()));
+                    self.hovered_pad = Some((element.id.clone(), pad_to_render.name.clone()));
                     any_hovered = true;
                 }
             }
 
             // Handle src pad interactions (outputs)
-            let src_count = info.src_pads.len();
-            for (idx, pad_info) in info.src_pads.iter().enumerate() {
-                // Calculate vertical position (matching draw_node)
-                let y_offset = if src_count > 1 {
-                    let spacing = rect.height() / (src_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+            let src_count = src_pads_to_render.len();
+            for (idx, pad_to_render) in src_pads_to_render.iter().enumerate() {
+                // Calculate vertical position using tighter spacing (matching draw_node)
+                let y_offset = self.calculate_pad_y_offset(idx, src_count, rect.height());
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1245,19 +1502,25 @@ impl GraphEditor {
 
                 let pad_response = ui.interact(
                     pad_rect,
-                    ui.id().with((&element.id, &pad_info.name)),
+                    ui.id().with((&element.id, &pad_to_render.name)),
                     Sense::click_and_drag(),
                 );
+
+                // Select element and switch to Output Pads tab when clicking output pad
+                // (skip empty pads for selection)
+                if pad_response.clicked() && !pad_response.dragged() && !pad_to_render.is_empty {
+                    self.select_element_and_focus_pad(&element.id, &pad_to_render.name, false);
+                }
 
                 // Start creating link when dragging from output port
                 if pad_response.drag_started()
                     || (pad_response.dragged() && self.creating_link.is_none())
                 {
-                    self.creating_link = Some((element.id.clone(), pad_info.name.clone()));
+                    self.creating_link = Some((element.id.clone(), pad_to_render.name.clone()));
                 }
 
                 if pad_response.hovered() {
-                    self.hovered_pad = Some((element.id.clone(), pad_info.name.clone()));
+                    self.hovered_pad = Some((element.id.clone(), pad_to_render.name.clone()));
                     any_hovered = true;
                 }
             }
@@ -1276,6 +1539,10 @@ impl GraphEditor {
                     ui.id().with((&element.id, "src")),
                     Sense::click_and_drag(),
                 );
+
+                if output_response.clicked() && !output_response.dragged() {
+                    self.select_element_and_focus_pad(&element.id, "src", false);
+                }
 
                 if output_response.drag_started()
                     || (output_response.dragged() && self.creating_link.is_none())
@@ -1297,8 +1564,12 @@ impl GraphEditor {
                 let input_response = ui.interact(
                     input_rect,
                     ui.id().with((&element.id, "sink")),
-                    Sense::hover(),
+                    Sense::click().union(Sense::hover()),
                 );
+
+                if input_response.clicked() {
+                    self.select_element_and_focus_pad(&element.id, "sink", true);
+                }
 
                 if input_response.hovered() {
                     self.hovered_pad = Some((element.id.clone(), "sink".to_string()));
@@ -1330,6 +1601,64 @@ impl GraphEditor {
         self.elements.iter_mut().find(|e| e.id == selected_id)
     }
 
+    /// Collect actual input pad names for an element from links.
+    ///
+    /// This discovers dynamic/request pads (like sink_0, sink_1 on audiomixer)
+    /// by examining which pads are actually connected in the links.
+    pub fn get_actual_input_pads(&self, element_id: &str) -> Vec<String> {
+        let mut pads = std::collections::HashSet::new();
+
+        for link in &self.links {
+            // Extract element ID and pad name from link.to
+            if let Some((to_elem_id, pad_name)) = parse_pad_ref(&link.to) {
+                if to_elem_id == element_id {
+                    pads.insert(pad_name);
+                }
+            }
+        }
+
+        let mut result: Vec<String> = pads.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    /// Collect actual output pad names for an element from links.
+    pub fn get_actual_output_pads(&self, element_id: &str) -> Vec<String> {
+        let mut pads = std::collections::HashSet::new();
+
+        for link in &self.links {
+            // Extract element ID and pad name from link.from
+            if let Some((from_elem_id, pad_name)) = parse_pad_ref(&link.from) {
+                if from_elem_id == element_id {
+                    pads.insert(pad_name);
+                }
+            }
+        }
+
+        let mut result: Vec<String> = pads.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    /// Select element and switch to appropriate property tab when clicking a pad.
+    fn select_element_and_focus_pad(&mut self, element_id: &str, pad_name: &str, is_input: bool) {
+        self.selected = Some(element_id.to_string());
+        self.selected_link = None;
+        self.focused_pad = Some(pad_name.to_string());
+        self.active_property_tab = if is_input {
+            PropertyTab::InputPads
+        } else {
+            PropertyTab::OutputPads
+        };
+
+        // Persist selected element to localStorage
+        if let Some(window) = web_sys::window() {
+            if let Some(storage) = window.local_storage().ok().flatten() {
+                let _ = storage.set_item("strom_selected_element_id", element_id);
+            }
+        }
+    }
+
     /// Handle pad interactions for blocks.
     fn handle_block_pad_interaction(
         &mut self,
@@ -1347,12 +1676,7 @@ impl GraphEditor {
             // Handle input pad interactions
             let input_count = def.external_pads.inputs.len();
             for (idx, external_pad) in def.external_pads.inputs.iter().enumerate() {
-                let y_offset = if input_count > 1 {
-                    let spacing = rect.height() / (input_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height());
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1373,12 +1697,7 @@ impl GraphEditor {
             // Handle output pad interactions
             let output_count = def.external_pads.outputs.len();
             for (idx, external_pad) in def.external_pads.outputs.iter().enumerate() {
-                let y_offset = if output_count > 1 {
-                    let spacing = rect.height() / (output_count + 1) as f32;
-                    spacing * (idx + 1) as f32
-                } else {
-                    rect.height() / 2.0
-                };
+                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height());
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1411,6 +1730,95 @@ impl GraphEditor {
                     self.hovered_pad = None;
                 }
             }
+        }
+    }
+}
+
+/// Parse a pad reference like "element_id:pad_name" into (element_id, pad_name).
+fn parse_pad_ref(pad_ref: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = pad_ref.split(':').collect();
+    if parts.len() >= 2 {
+        Some((parts[0].to_string(), parts[1..].join(":")))
+    } else {
+        None
+    }
+}
+
+/// Check if a pad is a request pad (dynamic pad with template like "sink_%u").
+fn is_request_pad(pad_info: &PadInfo) -> bool {
+    use strom_types::element::PadPresence;
+
+    // Check presence type
+    if pad_info.presence == PadPresence::Request {
+        return true;
+    }
+
+    // Also check for template patterns in the name
+    pad_info.name.contains("%u") || pad_info.name.contains("%d") || pad_info.name.contains("%s")
+}
+
+/// Generate an actual pad name from a template by replacing %u with a number.
+/// For example: "sink_%u" with index 0 becomes "sink_0"
+fn generate_pad_name(template: &str, index: usize) -> String {
+    template
+        .replace("%u", &index.to_string())
+        .replace("%d", &index.to_string())
+}
+
+/// Get all connected pad names for a request pad template.
+/// For example, if template is "sink_%u" and there are links to "sink_0" and "sink_2",
+/// this returns vec!["sink_0", "sink_2"].
+fn get_connected_request_pad_names(
+    element_id: &str,
+    template: &str,
+    links: &[Link],
+    is_sink: bool,
+) -> Vec<String> {
+    let mut pad_names = std::collections::HashSet::new();
+
+    // Extract the pattern (e.g., "sink_" from "sink_%u")
+    let pattern = template
+        .replace("%u", "")
+        .replace("%d", "")
+        .replace("%s", "");
+
+    for link in links {
+        let pad_ref = if is_sink { &link.to } else { &link.from };
+
+        if let Some((elem_id, pad_name)) = parse_pad_ref(pad_ref) {
+            if elem_id == element_id && pad_name.starts_with(&pattern) {
+                pad_names.insert(pad_name);
+            }
+        }
+    }
+
+    let mut result: Vec<String> = pad_names.into_iter().collect();
+    result.sort();
+    result
+}
+
+/// Allocate the next available pad name for a request pad template.
+/// For example, if "sink_0" and "sink_2" are taken, this returns "sink_1".
+fn allocate_next_pad_name(
+    element_id: &str,
+    template: &str,
+    links: &[Link],
+    is_sink: bool,
+) -> String {
+    let connected = get_connected_request_pad_names(element_id, template, links, is_sink);
+
+    // Find the first available index
+    let mut index = 0;
+    loop {
+        let candidate = generate_pad_name(template, index);
+        if !connected.contains(&candidate) {
+            return candidate;
+        }
+        index += 1;
+
+        // Safety limit to prevent infinite loop
+        if index > 1000 {
+            return generate_pad_name(template, index);
         }
     }
 }

@@ -28,6 +28,9 @@ impl ElementDiscovery {
         let registry = gst::Registry::get();
         let mut elements = Vec::new();
 
+        // Known problematic elements that cause segfaults
+        let blacklist = Self::get_element_blacklist();
+
         let features = registry.features(gst::ElementFactory::static_type());
 
         for feature in features {
@@ -37,11 +40,19 @@ impl ElementDiscovery {
 
             let name = factory.name().to_string();
 
+            // Skip blacklisted elements
+            if blacklist.contains(&name.as_str()) {
+                debug!("Skipping blacklisted element: {}", name);
+                continue;
+            }
+
             // Skip elements we've already cached
             if self.cache.contains_key(&name) {
                 elements.push(self.cache[&name].clone());
                 continue;
             }
+
+            debug!("Introspecting element: {}", name);
 
             // Try to introspect the element
             match self.introspect_element_factory(factory) {
@@ -59,6 +70,39 @@ impl ElementDiscovery {
         elements
     }
 
+    /// Get list of elements known to cause crashes during introspection.
+    fn get_element_blacklist() -> Vec<&'static str> {
+        vec![
+            // Elements that cause segfaults during property introspection
+            "hlssink2", // Crashes in libc during property inspection
+            "hlssink3", // HLS sink variants
+            "hlssink",
+            "hlsdemux", // HLS related
+            "hlsdemux2",
+            "mssdemux", // Microsoft Smooth Streaming
+            "mssdemux2",
+            "dashdemux", // DASH streaming
+            "dashdemux2",
+            "dashsink",
+            "dvbbasebin", // DVB elements known to be problematic
+            "dvbsrc",
+            "dvbsubenc",
+            "dvbsuboverlay",
+            "gtksink", // GTK sinks can crash without display
+            "gtkglsink",
+            "gtkwaylandsink",
+            "gtk4waylandsink",
+            "gtk4paintablesink",
+            "dtlssrtpenc", // Crashes when requesting pads
+            "dtlssrtpdec",
+            "dtlsenc",
+            "dtlsdec",
+            "rtpbin", // RTP elements can be problematic
+            "rtpbin2",
+            "rtpdtmfdepay",
+        ]
+    }
+
     /// Get information about a specific element by name.
     pub fn get_element_info(&mut self, name: &str) -> Option<ElementInfo> {
         // Check cache first
@@ -69,9 +113,10 @@ impl ElementDiscovery {
         // Try to find and introspect the element
         let registry = gst::Registry::get();
         let factory = registry.find_feature(name, gst::ElementFactory::static_type())?;
-        let factory = factory
-            .downcast_ref::<gst::ElementFactory>()
-            .expect("Feature is not an ElementFactory");
+        let Some(factory) = factory.downcast_ref::<gst::ElementFactory>() else {
+            warn!("Feature '{}' is not an ElementFactory", name);
+            return None;
+        };
 
         match self.introspect_element_factory(factory) {
             Ok(info) => {
@@ -83,6 +128,382 @@ impl ElementDiscovery {
                 None
             }
         }
+    }
+
+    /// Load properties for a specific element (lazy loading).
+    /// Returns the element info with properties populated.
+    /// If properties are already cached, returns cached version.
+    /// If element has no cached properties, introspects and updates cache.
+    pub fn load_element_properties(&mut self, name: &str) -> Option<ElementInfo> {
+        // Check if we have this element cached
+        if let Some(cached_info) = self.cache.get(name) {
+            // If properties are already populated, return cached version
+            if !cached_info.properties.is_empty() {
+                debug!("Returning cached properties for {}", name);
+                return Some(cached_info.clone());
+            }
+        }
+
+        // Need to load properties
+        debug!("Loading properties for element: {}", name);
+
+        let registry = gst::Registry::get();
+        let factory = registry.find_feature(name, gst::ElementFactory::static_type())?;
+        let Some(factory) = factory.downcast_ref::<gst::ElementFactory>() else {
+            warn!("Feature '{}' is not an ElementFactory", name);
+            return None;
+        };
+
+        // Introspect properties
+        match self.introspect_element_properties_lazy(factory) {
+            Ok(properties) => {
+                // Update cache with properties
+                if let Some(cached_info) = self.cache.get_mut(name) {
+                    cached_info.properties = properties;
+                    Some(cached_info.clone())
+                } else {
+                    // Element not in cache yet, do full introspection
+                    match self.introspect_element_factory(factory) {
+                        Ok(mut info) => {
+                            // Override with lazy-loaded properties
+                            info.properties = properties;
+                            self.cache.insert(name.to_string(), info.clone());
+                            Some(info)
+                        }
+                        Err(e) => {
+                            warn!("Failed to introspect element {}: {}", name, e);
+                            None
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to introspect properties for {}: {}", name, e);
+                // Return element info without properties
+                self.cache.get(name).cloned()
+            }
+        }
+    }
+
+    /// Load pad properties for a specific element (on-demand introspection).
+    /// This introspects Request pad properties safely for a single element.
+    /// Unlike bulk discovery which skips Request pads to avoid crashes,
+    /// this can safely request pads for a specific element with error handling.
+    pub fn load_element_pad_properties(&mut self, name: &str) -> Option<ElementInfo> {
+        debug!("Loading pad properties for element: {}", name);
+
+        // Get basic element info from cache or discover it
+        let mut element_info = if let Some(info) = self.cache.get(name) {
+            info.clone()
+        } else {
+            // Discover element first
+            self.get_element_info(name)?
+        };
+
+        // Try to create element and introspect pad properties
+        let registry = gst::Registry::get();
+        let factory = registry.find_feature(name, gst::ElementFactory::static_type())?;
+        let Some(factory) = factory.downcast_ref::<gst::ElementFactory>() else {
+            warn!("Feature '{}' is not an ElementFactory", name);
+            return None;
+        };
+
+        // Create temporary element with error handling
+        let element = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.create().build()
+        })) {
+            Ok(Ok(elem)) => elem,
+            Ok(Err(e)) => {
+                warn!("Failed to create element {}: {}", name, e);
+                return Some(element_info); // Return info without pad properties
+            }
+            Err(_) => {
+                warn!("Element {} creation caused a panic", name);
+                return Some(element_info); // Return info without pad properties
+            }
+        };
+
+        // Introspect pad properties for each pad template
+        for pad_template in factory.static_pad_templates() {
+            let template_name = pad_template.name_template().to_string();
+
+            // Get pad to introspect (safely request pads if needed)
+            let pad = match pad_template.presence() {
+                gst::PadPresence::Always => element.static_pad(&template_name),
+                gst::PadPresence::Request => {
+                    // For Request pads, safely try to request one
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        element.request_pad_simple(&template_name)
+                    })) {
+                        Ok(Some(p)) => Some(p),
+                        Ok(None) => {
+                            debug!("Could not request pad {} for {}", template_name, name);
+                            None
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Requesting pad {} for {} caused a panic",
+                                template_name, name
+                            );
+                            None
+                        }
+                    }
+                }
+                gst::PadPresence::Sometimes => {
+                    // Try to find an existing Sometimes pad
+                    element.pads().iter().find_map(|p| {
+                        if p.name().starts_with(&template_name) {
+                            Some(p.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }
+            };
+
+            // Introspect pad properties if we got a pad
+            if let Some(pad) = pad {
+                let properties = self.introspect_pad_properties(&pad);
+
+                // Update the appropriate pad info with properties
+                match pad_template.direction() {
+                    gst::PadDirection::Src => {
+                        if let Some(pad_info) = element_info
+                            .src_pads
+                            .iter_mut()
+                            .find(|p| p.name == template_name)
+                        {
+                            pad_info.properties = properties;
+                        }
+                    }
+                    gst::PadDirection::Sink => {
+                        if let Some(pad_info) = element_info
+                            .sink_pads
+                            .iter_mut()
+                            .find(|p| p.name == template_name)
+                        {
+                            pad_info.properties = properties;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Some(element_info)
+    }
+
+    /// Introspect properties from a specific pad.
+    fn introspect_pad_properties(&self, pad: &gst::Pad) -> Vec<strom_types::element::PropertyInfo> {
+        use strom_types::element::{PropertyInfo, PropertyType, PropertyValue};
+
+        let mut properties = Vec::new();
+
+        // Get all properties from the pad
+        for pspec in pad.list_properties() {
+            let name = pspec.name().to_string();
+            let description = pspec.blurb().map(|s| s.to_string()).unwrap_or_default();
+
+            // Skip internal/private properties
+            if name.starts_with("_") {
+                continue;
+            }
+
+            // Skip write-only properties (not readable)
+            if !pspec.flags().contains(glib::ParamFlags::READABLE) {
+                continue;
+            }
+
+            // Extract property flags
+            let flags = pspec.flags();
+            let writable = flags.contains(glib::ParamFlags::WRITABLE);
+            let construct_only = flags.contains(glib::ParamFlags::CONSTRUCT_ONLY);
+
+            // GStreamer-specific flags
+            let flags_bits = flags.bits();
+            let mutable_in_ready = (flags_bits & 0x400) != 0;
+            let mutable_in_paused = (flags_bits & 0x800) != 0;
+            let mutable_in_playing = (flags_bits & 0x1000) != 0;
+            let controllable = (flags_bits & 0x200) != 0;
+            let mutable_in_null = !construct_only;
+
+            // Determine property type and get default value
+            let type_name = pspec.value_type().name();
+
+            // Check for enum first (before string matching) since enum types have specific names like "GstAudioTestSrcWave"
+            let (property_type, default_value) = if let Some(param_spec) =
+                pspec.downcast_ref::<glib::ParamSpecEnum>()
+            {
+                // Enum property - handle before string matching
+                let enum_class = param_spec.enum_class();
+                let values: Vec<String> = enum_class
+                    .values()
+                    .iter()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Skip default value for pad enums - some types like GstPadDirection can't be read as i32
+                // The values list is the important part for UI dropdowns anyway
+                let default = None;
+
+                (PropertyType::Enum { values }, default)
+            } else {
+                match type_name {
+                    "gchararray" => {
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                pad.property::<Option<String>>(&name)
+                            }))
+                            .ok()
+                            .flatten()
+                            .map(PropertyValue::String);
+                        (PropertyType::String, default)
+                    }
+                    "gboolean" => {
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                pad.property::<bool>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::Bool);
+                        (PropertyType::Bool, default)
+                    }
+                    "gint" | "glong" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt>() {
+                            let min = param_spec.minimum() as i64;
+                            let max = param_spec.maximum() as i64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<i32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::Int(v as i64));
+                            (PropertyType::Int { min, max }, default)
+                        } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>()
+                        {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<i64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Int);
+                            (PropertyType::Int { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "guint" | "gulong" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt>() {
+                            let min = param_spec.minimum() as u64;
+                            let max = param_spec.maximum() as u64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<u32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::UInt(v as u64));
+                            (PropertyType::UInt { min, max }, default)
+                        } else if let Some(param_spec) =
+                            pspec.downcast_ref::<glib::ParamSpecULong>()
+                        {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<u64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::UInt);
+                            (PropertyType::UInt { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gint64" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt64>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<i64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Int);
+                            (PropertyType::Int { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "guint64" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt64>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<u64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::UInt);
+                            (PropertyType::UInt { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gfloat" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecFloat>() {
+                            let min = param_spec.minimum() as f64;
+                            let max = param_spec.maximum() as f64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<f32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::Float(v as f64));
+                            (PropertyType::Float { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gdouble" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecDouble>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<f64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Float);
+                            (PropertyType::Float { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => {
+                        // Skip unsupported property types
+                        continue;
+                    }
+                }
+            };
+
+            properties.push(PropertyInfo {
+                name,
+                description,
+                property_type,
+                default_value,
+                writable,
+                construct_only,
+                mutable_in_null,
+                mutable_in_ready,
+                mutable_in_paused,
+                mutable_in_playing,
+                controllable,
+            });
+        }
+
+        properties
     }
 
     /// Introspect a GStreamer element factory.
@@ -107,11 +528,21 @@ impl ElementDiscovery {
         let mut src_pads = Vec::new();
         let mut sink_pads = Vec::new();
 
-        for pad_template in factory.static_pad_templates() {
-            let caps_string = pad_template.caps().to_string();
+        // Try to create a temporary element for introspection
+        // Wrap in catch_unwind to prevent crashes from problematic elements
+        // This is safe because discovery now happens only once at startup
+        let temp_element: Option<gst::Element> =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                factory.create().build().ok()
+            }))
+            .ok()
+            .flatten();
+
+        for static_pad_template in factory.static_pad_templates() {
+            let caps_string = static_pad_template.caps().to_string();
 
             // Determine pad presence
-            let presence = match pad_template.presence() {
+            let presence = match static_pad_template.presence() {
                 gst::PadPresence::Always => PadPresence::Always,
                 gst::PadPresence::Sometimes => PadPresence::Sometimes,
                 gst::PadPresence::Request => PadPresence::Request,
@@ -120,14 +551,29 @@ impl ElementDiscovery {
             // Determine media type from caps
             let media_type = Self::classify_media_type(&caps_string);
 
+            // Try to introspect pad properties
+            let properties = if let Some(ref element) = temp_element {
+                // Get the pad template from the element (not the static one)
+                if let Some(pad_template) =
+                    element.pad_template(static_pad_template.name_template())
+                {
+                    self.introspect_pad_template_properties(element, &pad_template)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+
             let pad_info = PadInfo {
-                name: pad_template.name_template().to_string(),
+                name: static_pad_template.name_template().to_string(),
                 caps: caps_string,
                 presence,
                 media_type,
+                properties,
             };
 
-            match pad_template.direction() {
+            match static_pad_template.direction() {
                 gst::PadDirection::Src => src_pads.push(pad_info),
                 gst::PadDirection::Sink => sink_pads.push(pad_info),
                 _ => {}
@@ -197,23 +643,53 @@ impl ElementDiscovery {
         self.cache.clear();
     }
 
-    /// Introspect element properties from a factory.
-    fn introspect_properties(
+    /// Introspect pad template properties by getting or creating a pad.
+    fn introspect_pad_template_properties(
         &self,
-        factory: &gst::ElementFactory,
-    ) -> anyhow::Result<Vec<strom_types::element::PropertyInfo>> {
+        element: &gst::Element,
+        pad_template: &gst::PadTemplate,
+    ) -> Vec<strom_types::element::PropertyInfo> {
         use strom_types::element::{PropertyInfo, PropertyType, PropertyValue};
 
-        // Create a temporary element instance to introspect properties
-        let element = factory
-            .create()
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create element: {}", e))?;
+        // Try to get an existing pad matching this template
+        // Wrap in catch_unwind to prevent crashes from problematic elements
+        let pad = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match pad_template.presence() {
+                gst::PadPresence::Always => {
+                    // For Always pads, get the static pad
+                    element.static_pad(pad_template.name_template())
+                }
+                gst::PadPresence::Request => {
+                    // For Request pads, we can't safely introspect properties during discovery
+                    // because many elements crash when requesting pads at this stage.
+                    // Request pad properties (like volume/mute on audiomixer pads) need to be
+                    // documented separately or introspected when the element is actually in use.
+                    None
+                }
+                gst::PadPresence::Sometimes => {
+                    // For Sometimes pads, they might not exist yet
+                    // Try to get one if it exists, otherwise skip
+                    element.pads().iter().find_map(|p| {
+                        if p.pad_template().as_ref() == Some(pad_template) {
+                            Some(p.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }
+            }
+        }))
+        .ok()
+        .flatten();
+
+        let Some(pad) = pad else {
+            return Vec::new();
+        };
 
         let mut properties = Vec::new();
 
-        // Get all properties from the element
-        for pspec in element.list_properties() {
+        // Get all properties from the pad
+        for pspec in pad.list_properties() {
             let name = pspec.name().to_string();
             let description = pspec.blurb().map(|s| s.to_string()).unwrap_or_default();
 
@@ -224,182 +700,180 @@ impl ElementDiscovery {
 
             // Skip write-only properties (not readable)
             if !pspec.flags().contains(glib::ParamFlags::READABLE) {
-                debug!("Skipping write-only property: {}", name);
                 continue;
             }
 
+            // Extract property flags
+            let flags = pspec.flags();
+            let writable = flags.contains(glib::ParamFlags::WRITABLE);
+            let construct_only = flags.contains(glib::ParamFlags::CONSTRUCT_ONLY);
+
+            // GStreamer-specific flags
+            let flags_bits = flags.bits();
+            let mutable_in_ready = (flags_bits & 0x400) != 0;
+            let mutable_in_paused = (flags_bits & 0x800) != 0;
+            let mutable_in_playing = (flags_bits & 0x1000) != 0;
+            let controllable = (flags_bits & 0x200) != 0;
+            let mutable_in_null = !construct_only;
+
             // Determine property type and get default value
             let type_name = pspec.value_type().name();
-            let (property_type, default_value) = match type_name {
-                "gchararray" => {
-                    // String property - use catch_unwind to handle potential panics
-                    let default = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        element.property::<Option<String>>(&name)
-                    }))
-                    .ok()
-                    .flatten()
-                    .map(PropertyValue::String);
-                    (PropertyType::String, default)
-                }
-                "gboolean" => {
-                    // Boolean property
-                    let default = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        element.property::<bool>(&name)
-                    }))
-                    .ok()
-                    .map(PropertyValue::Bool);
-                    (PropertyType::Bool, default)
-                }
-                "gint" | "glong" => {
-                    // Signed integer property
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt>() {
-                        let min = param_spec.minimum() as i64;
-                        let max = param_spec.maximum() as i64;
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<i32>(&name)
-                            }))
-                            .ok()
-                            .map(|v| PropertyValue::Int(v as i64));
-                        (PropertyType::Int { min, max }, default)
-                    } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>() {
-                        let min = param_spec.minimum();
-                        let max = param_spec.maximum();
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<i64>(&name)
-                            }))
-                            .ok()
-                            .map(PropertyValue::Int);
-                        (PropertyType::Int { min, max }, default)
-                    } else {
-                        continue;
-                    }
-                }
-                "guint" | "gulong" => {
-                    // Unsigned integer property
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt>() {
-                        let min = param_spec.minimum() as u64;
-                        let max = param_spec.maximum() as u64;
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<u32>(&name)
-                            }))
-                            .ok()
-                            .map(|v| PropertyValue::UInt(v as u64));
-                        (PropertyType::UInt { min, max }, default)
-                    } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecULong>() {
-                        let min = param_spec.minimum();
-                        let max = param_spec.maximum();
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<u64>(&name)
-                            }))
-                            .ok()
-                            .map(PropertyValue::UInt);
-                        (PropertyType::UInt { min, max }, default)
-                    } else {
-                        continue;
-                    }
-                }
-                "gint64" => {
-                    // 64-bit signed integer
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt64>() {
-                        let min = param_spec.minimum();
-                        let max = param_spec.maximum();
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<i64>(&name)
-                            }))
-                            .ok()
-                            .map(PropertyValue::Int);
-                        (PropertyType::Int { min, max }, default)
-                    } else {
-                        continue;
-                    }
-                }
-                "guint64" => {
-                    // 64-bit unsigned integer
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt64>() {
-                        let min = param_spec.minimum();
-                        let max = param_spec.maximum();
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<u64>(&name)
-                            }))
-                            .ok()
-                            .map(PropertyValue::UInt);
-                        (PropertyType::UInt { min, max }, default)
-                    } else {
-                        continue;
-                    }
-                }
-                "gfloat" => {
-                    // Float property
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecFloat>() {
-                        let min = param_spec.minimum() as f64;
-                        let max = param_spec.maximum() as f64;
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<f32>(&name)
-                            }))
-                            .ok()
-                            .map(|v| PropertyValue::Float(v as f64));
-                        (PropertyType::Float { min, max }, default)
-                    } else {
-                        continue;
-                    }
-                }
-                "gdouble" => {
-                    // Double property
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecDouble>() {
-                        let min = param_spec.minimum();
-                        let max = param_spec.maximum();
-                        let default =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<f64>(&name)
-                            }))
-                            .ok()
-                            .map(PropertyValue::Float);
-                        (PropertyType::Float { min, max }, default)
-                    } else {
-                        continue;
-                    }
-                }
-                "GEnum" => {
-                    // Enum property
-                    if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecEnum>() {
-                        let enum_class = param_spec.enum_class();
-                        let values: Vec<String> = enum_class
-                            .values()
-                            .iter()
-                            .map(|v| v.name().to_string())
-                            .collect();
 
-                        // Try to get default value as enum index
+            // Check for enum first (before string matching) since enum types have specific names like "GstAudioTestSrcWave"
+            let (property_type, default_value) = if let Some(param_spec) =
+                pspec.downcast_ref::<glib::ParamSpecEnum>()
+            {
+                // Enum property - handle before string matching
+                let enum_class = param_spec.enum_class();
+                let values: Vec<String> = enum_class
+                    .values()
+                    .iter()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Skip default value for pad enums - some types like GstPadDirection can't be read as i32
+                // The values list is the important part for UI dropdowns anyway
+                let default = None;
+
+                (PropertyType::Enum { values }, default)
+            } else {
+                match type_name {
+                    "gchararray" => {
                         let default =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                element.property::<i32>(&name)
+                                pad.property::<Option<String>>(&name)
                             }))
                             .ok()
-                            .and_then(|idx| {
-                                enum_class
-                                    .value(idx)
-                                    .map(|v| PropertyValue::String(v.name().to_string()))
-                            });
-
-                        (PropertyType::Enum { values }, default)
-                    } else {
+                            .flatten()
+                            .map(PropertyValue::String);
+                        (PropertyType::String, default)
+                    }
+                    "gboolean" => {
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                pad.property::<bool>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::Bool);
+                        (PropertyType::Bool, default)
+                    }
+                    "gint" | "glong" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt>() {
+                            let min = param_spec.minimum() as i64;
+                            let max = param_spec.maximum() as i64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<i32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::Int(v as i64));
+                            (PropertyType::Int { min, max }, default)
+                        } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>()
+                        {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<i64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Int);
+                            (PropertyType::Int { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "guint" | "gulong" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt>() {
+                            let min = param_spec.minimum() as u64;
+                            let max = param_spec.maximum() as u64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<u32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::UInt(v as u64));
+                            (PropertyType::UInt { min, max }, default)
+                        } else if let Some(param_spec) =
+                            pspec.downcast_ref::<glib::ParamSpecULong>()
+                        {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<u64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::UInt);
+                            (PropertyType::UInt { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gint64" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt64>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<i64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Int);
+                            (PropertyType::Int { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "guint64" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt64>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<u64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::UInt);
+                            (PropertyType::UInt { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gfloat" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecFloat>() {
+                            let min = param_spec.minimum() as f64;
+                            let max = param_spec.maximum() as f64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<f32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::Float(v as f64));
+                            (PropertyType::Float { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gdouble" => {
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecDouble>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    pad.property::<f64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Float);
+                            (PropertyType::Float { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => {
+                        // Skip unsupported property types
                         continue;
                     }
-                }
-                _ => {
-                    // Skip unsupported property types
-                    debug!(
-                        "Skipping unsupported property type: {} ({})",
-                        name, type_name
-                    );
-                    continue;
                 }
             };
 
@@ -408,6 +882,289 @@ impl ElementDiscovery {
                 description,
                 property_type,
                 default_value,
+                writable,
+                construct_only,
+                mutable_in_null,
+                mutable_in_ready,
+                mutable_in_paused,
+                mutable_in_playing,
+                controllable,
+            });
+        }
+
+        properties
+    }
+
+    /// Introspect element properties from a factory.
+    /// During startup discovery, this returns empty to avoid crashes.
+    /// Use introspect_element_properties_lazy() for on-demand property loading.
+    fn introspect_properties(
+        &self,
+        factory: &gst::ElementFactory,
+    ) -> anyhow::Result<Vec<strom_types::element::PropertyInfo>> {
+        debug!(
+            "Skipping property introspection for {} during startup discovery",
+            factory.name()
+        );
+        // Return empty properties - they will be loaded on-demand when needed
+        Ok(Vec::new())
+    }
+
+    /// Introspect element properties on-demand (lazy loading).
+    /// This is called when frontend requests properties for a specific element.
+    pub fn introspect_element_properties_lazy(
+        &self,
+        factory: &gst::ElementFactory,
+    ) -> anyhow::Result<Vec<strom_types::element::PropertyInfo>> {
+        use strom_types::element::{PropertyInfo, PropertyType, PropertyValue};
+
+        debug!("Lazy-loading properties for {}", factory.name());
+
+        // Create a temporary element instance to introspect properties
+        // Wrap in catch_unwind to prevent crashes from problematic elements
+        let element = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            factory.create().build()
+        })) {
+            Ok(Ok(elem)) => elem,
+            Ok(Err(e)) => {
+                debug!("Failed to create element {}: {}", factory.name(), e);
+                return Ok(Vec::new()); // Return empty properties instead of error
+            }
+            Err(_) => {
+                debug!("Element {} creation caused a panic", factory.name());
+                return Ok(Vec::new()); // Return empty properties instead of error
+            }
+        };
+
+        let mut properties = Vec::new();
+
+        // Get all properties from the element
+        for pspec in element.list_properties() {
+            let name = pspec.name().to_string();
+            let description = pspec.blurb().map(|s| s.to_string()).unwrap_or_default();
+
+            // Debug: log every property we see
+            let type_name = pspec.value_type().name();
+            debug!("Processing property '{}' (type: {})", name, type_name);
+
+            // Skip internal/private properties
+            if name.starts_with("_") {
+                debug!("Skipping internal property: {}", name);
+                continue;
+            }
+
+            // Skip write-only properties (not readable)
+            if !pspec.flags().contains(glib::ParamFlags::READABLE) {
+                debug!("Skipping write-only property: {}", name);
+                continue;
+            }
+
+            // Extract property flags for mutability information
+            let flags = pspec.flags();
+            let writable = flags.contains(glib::ParamFlags::WRITABLE);
+            let construct_only = flags.contains(glib::ParamFlags::CONSTRUCT_ONLY);
+
+            // GStreamer-specific flags (from gstreamer-sys)
+            // GST_PARAM_MUTABLE_READY = 1 << (G_PARAM_USER_SHIFT + 2) = 1 << 10 = 0x400
+            // GST_PARAM_MUTABLE_PAUSED = 1 << (G_PARAM_USER_SHIFT + 3) = 1 << 11 = 0x800
+            // GST_PARAM_MUTABLE_PLAYING = 1 << (G_PARAM_USER_SHIFT + 4) = 1 << 12 = 0x1000
+            // GST_PARAM_CONTROLLABLE = 1 << (G_PARAM_USER_SHIFT + 1) = 1 << 9 = 0x200
+            let flags_bits = flags.bits();
+            let mutable_in_ready = (flags_bits & 0x400) != 0;
+            let mutable_in_paused = (flags_bits & 0x800) != 0;
+            let mutable_in_playing = (flags_bits & 0x1000) != 0;
+            let controllable = (flags_bits & 0x200) != 0;
+
+            // All properties are mutable in NULL state (before construction)
+            // unless they're construct-only
+            let mutable_in_null = !construct_only;
+
+            // Determine property type and get default value
+            let type_name = pspec.value_type().name();
+
+            // Check for enum first (before string matching) since enum types have specific names like "GstAudioTestSrcWave"
+            let (property_type, default_value) = if let Some(param_spec) =
+                pspec.downcast_ref::<glib::ParamSpecEnum>()
+            {
+                // Enum property - handle before string matching
+                let enum_class = param_spec.enum_class();
+                let values: Vec<String> = enum_class
+                    .values()
+                    .iter()
+                    .map(|v| v.name().to_string())
+                    .collect();
+
+                // Skip default value for enums - some types like GstAggregatorStartTimeSelection
+                // can't be read as i32 in GStreamer 0.24.x without panicking.
+                // The values list is the important part for UI dropdowns anyway.
+                let default = None;
+
+                (PropertyType::Enum { values }, default)
+            } else {
+                match type_name {
+                    "gchararray" => {
+                        // String property - use catch_unwind to handle potential panics
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<Option<String>>(&name)
+                            }))
+                            .ok()
+                            .flatten()
+                            .map(PropertyValue::String);
+                        (PropertyType::String, default)
+                    }
+                    "gboolean" => {
+                        // Boolean property
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<bool>(&name)
+                            }))
+                            .ok()
+                            .map(PropertyValue::Bool);
+                        (PropertyType::Bool, default)
+                    }
+                    "gint" | "glong" => {
+                        // Signed integer property
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt>() {
+                            let min = param_spec.minimum() as i64;
+                            let max = param_spec.maximum() as i64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<i32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::Int(v as i64));
+                            (PropertyType::Int { min, max }, default)
+                        } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>()
+                        {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<i64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Int);
+                            (PropertyType::Int { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "guint" | "gulong" => {
+                        // Unsigned integer property
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt>() {
+                            let min = param_spec.minimum() as u64;
+                            let max = param_spec.maximum() as u64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<u32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::UInt(v as u64));
+                            (PropertyType::UInt { min, max }, default)
+                        } else if let Some(param_spec) =
+                            pspec.downcast_ref::<glib::ParamSpecULong>()
+                        {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<u64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::UInt);
+                            (PropertyType::UInt { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gint64" => {
+                        // 64-bit signed integer
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecInt64>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<i64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Int);
+                            (PropertyType::Int { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "guint64" => {
+                        // 64-bit unsigned integer
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecUInt64>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<u64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::UInt);
+                            (PropertyType::UInt { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gfloat" => {
+                        // Float property
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecFloat>() {
+                            let min = param_spec.minimum() as f64;
+                            let max = param_spec.maximum() as f64;
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<f32>(&name)
+                                }))
+                                .ok()
+                                .map(|v| PropertyValue::Float(v as f64));
+                            (PropertyType::Float { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    "gdouble" => {
+                        // Double property
+                        if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecDouble>() {
+                            let min = param_spec.minimum();
+                            let max = param_spec.maximum();
+                            let default =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    element.property::<f64>(&name)
+                                }))
+                                .ok()
+                                .map(PropertyValue::Float);
+                            (PropertyType::Float { min, max }, default)
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => {
+                        // Skip unsupported property types
+                        debug!(
+                            "Skipping unsupported property type: {} ({})",
+                            name, type_name
+                        );
+                        continue;
+                    }
+                }
+            };
+
+            properties.push(PropertyInfo {
+                name,
+                description,
+                property_type,
+                default_value,
+                writable,
+                construct_only,
+                mutable_in_null,
+                mutable_in_ready,
+                mutable_in_paused,
+                mutable_in_playing,
+                controllable,
             });
         }
 

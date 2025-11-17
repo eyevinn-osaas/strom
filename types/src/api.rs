@@ -1,9 +1,10 @@
 //! API request and response types.
 
-use crate::element::ElementInfo;
-use crate::flow::{Flow, FlowId};
+use crate::element::{ElementInfo, PropertyValue};
+use crate::flow::{Flow, FlowId, FlowProperties};
 use crate::state::PipelineState;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
@@ -49,6 +50,13 @@ pub struct FlowStateResponse {
     pub state: PipelineState,
 }
 
+/// Request to update flow properties.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct UpdateFlowPropertiesRequest {
+    pub properties: FlowProperties,
+}
+
 // ============================================================================
 // Element API Types
 // ============================================================================
@@ -65,6 +73,52 @@ pub struct ElementListResponse {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ElementInfoResponse {
     pub element: ElementInfo,
+}
+
+// ============================================================================
+// Property API Types (for live updates)
+// ============================================================================
+
+/// Request to update a property on a running pipeline element.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct UpdatePropertyRequest {
+    /// The name of the property to update
+    pub property_name: String,
+    /// The new value for the property
+    pub value: PropertyValue,
+}
+
+/// Response containing current property values from a running element.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ElementPropertiesResponse {
+    /// The element ID
+    pub element_id: String,
+    /// Current property values
+    pub properties: HashMap<String, PropertyValue>,
+}
+
+/// Request to update a property on a pad in a running pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct UpdatePadPropertyRequest {
+    /// The name of the property to update
+    pub property_name: String,
+    /// The new value for the property
+    pub value: PropertyValue,
+}
+
+/// Response containing current property values from a pad.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PadPropertiesResponse {
+    /// The element ID
+    pub element_id: String,
+    /// The pad name
+    pub pad_name: String,
+    /// Current property values
+    pub properties: HashMap<String, PropertyValue>,
 }
 
 // ============================================================================

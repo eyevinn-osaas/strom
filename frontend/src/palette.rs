@@ -1,6 +1,7 @@
 //! Element palette for browsing and adding GStreamer elements and blocks.
 
 use egui::{ScrollArea, Ui};
+use std::collections::HashMap;
 use strom_types::element::ElementInfo;
 use strom_types::BlockDefinition;
 
@@ -20,6 +21,10 @@ pub struct ElementPalette {
     elements: Vec<ElementInfo>,
     /// Available blocks (built-in + user-defined)
     blocks: Vec<BlockDefinition>,
+    /// Cached element info with properties (lazy loaded)
+    element_properties_cache: HashMap<String, ElementInfo>,
+    /// Cached element info with pad properties (lazy loaded separately)
+    element_pad_properties_cache: HashMap<String, ElementInfo>,
     /// Search filter text
     search: String,
     /// Selected category filter (None = all categories)
@@ -425,8 +430,69 @@ impl ElementPalette {
     }
 
     /// Get element info for a specific element type.
+    /// First checks the properties cache, then falls back to the lightweight elements list.
+    /// Note: This returns regular element properties. For pad properties, use get_element_info_with_pads.
     pub fn get_element_info(&self, element_type: &str) -> Option<&ElementInfo> {
+        // Check properties cache first (has full properties)
+        if let Some(cached) = self.element_properties_cache.get(element_type) {
+            return Some(cached);
+        }
+        // Fall back to lightweight elements list (no properties)
         self.elements.iter().find(|e| e.name == element_type)
+    }
+
+    /// Get element info with pad properties (for showing Input/Output Pads tabs).
+    /// First checks pad properties cache, then falls back to regular element info.
+    pub fn get_element_info_with_pads(&self, element_type: &str) -> Option<&ElementInfo> {
+        // Check pad properties cache first (has pad properties populated)
+        if let Some(cached) = self.element_pad_properties_cache.get(element_type) {
+            return Some(cached);
+        }
+        // Fall back to regular element info (might not have pad properties)
+        self.get_element_info(element_type)
+    }
+
+    /// Check if we have properties cached for this element type.
+    pub fn has_properties_cached(&self, element_type: &str) -> bool {
+        self.element_properties_cache.contains_key(element_type)
+    }
+
+    /// Check if we have pad properties cached for this element type.
+    pub fn has_pad_properties_cached(&self, element_type: &str) -> bool {
+        self.element_pad_properties_cache.contains_key(element_type)
+    }
+
+    /// Cache element info with properties.
+    pub fn cache_element_properties(&mut self, element_info: ElementInfo) {
+        tracing::info!(
+            "Caching properties for element '{}' ({} properties)",
+            element_info.name,
+            element_info.properties.len()
+        );
+        self.element_properties_cache
+            .insert(element_info.name.clone(), element_info);
+    }
+
+    /// Cache element info with pad properties.
+    pub fn cache_element_pad_properties(&mut self, element_info: ElementInfo) {
+        let sink_prop_count: usize = element_info
+            .sink_pads
+            .iter()
+            .map(|p| p.properties.len())
+            .sum();
+        let src_prop_count: usize = element_info
+            .src_pads
+            .iter()
+            .map(|p| p.properties.len())
+            .sum();
+        tracing::info!(
+            "Caching pad properties for element '{}' (sink_pads: {} props, src_pads: {} props)",
+            element_info.name,
+            sink_prop_count,
+            src_prop_count
+        );
+        self.element_pad_properties_cache
+            .insert(element_info.name.clone(), element_info);
     }
 
     /// Get block definition for a specific block ID.

@@ -1,5 +1,6 @@
 //! Server-Sent Events for real-time updates across clients.
 
+use crate::element::PropertyValue;
 use crate::FlowId;
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,21 @@ pub enum StromEvent {
     },
     /// Pipeline reached end of stream
     PipelineEos { flow_id: FlowId },
+    /// Element property was changed on a running pipeline
+    PropertyChanged {
+        flow_id: FlowId,
+        element_id: String,
+        property_name: String,
+        value: PropertyValue,
+    },
+    /// Pad property was changed on a running pipeline
+    PadPropertyChanged {
+        flow_id: FlowId,
+        element_id: String,
+        pad_name: String,
+        property_name: String,
+        value: PropertyValue,
+    },
     /// Ping event to keep connection alive
     Ping,
 }
@@ -108,6 +124,29 @@ impl StromEvent {
             }
             StromEvent::PipelineEos { flow_id } => {
                 format!("Pipeline {} reached end of stream", flow_id)
+            }
+            StromEvent::PropertyChanged {
+                flow_id,
+                element_id,
+                property_name,
+                value,
+            } => {
+                format!(
+                    "Property {}.{} changed to {:?} in flow {}",
+                    element_id, property_name, value, flow_id
+                )
+            }
+            StromEvent::PadPropertyChanged {
+                flow_id,
+                element_id,
+                pad_name,
+                property_name,
+                value,
+            } => {
+                format!(
+                    "Pad property {}:{}:{} changed to {:?} in flow {}",
+                    element_id, pad_name, property_name, value, flow_id
+                )
             }
             StromEvent::Ping => "Ping".to_string(),
         }

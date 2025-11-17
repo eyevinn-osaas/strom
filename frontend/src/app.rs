@@ -1,6 +1,7 @@
 //! Main application structure.
 
 use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
+use strom_types::element::ElementInfo;
 use strom_types::{Flow, PipelineState};
 use wasm_bindgen_futures::spawn_local;
 
@@ -42,17 +43,22 @@ pub struct StromApp {
     flow_pending_deletion: Option<(strom_types::FlowId, String)>,
     /// SSE client for real-time updates
     sse_client: Option<SseClient>,
-    /// Flow being renamed (flow index)
-    renaming_flow_idx: Option<usize>,
-    /// Temporary name for renaming
-    rename_buffer: String,
+    /// Flow properties being edited (flow index)
+    editing_properties_idx: Option<usize>,
+    /// Temporary name buffer for properties dialog
+    properties_name_buffer: String,
+    /// Temporary description buffer for properties dialog
+    properties_description_buffer: String,
+    /// Temporary clock type for properties dialog
+    properties_clock_type_buffer: strom_types::flow::GStreamerClockType,
+    /// Temporary PTP domain buffer for properties dialog
+    properties_ptp_domain_buffer: String,
 }
 
 impl StromApp {
     /// Create a new application instance.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Set dark theme
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        // Note: Dark theme is set in main.rs before creating the app
 
         // Detect if we're in development mode (trunk serve) by checking the window location
         let api_base_url = if let Some(window) = web_sys::window() {
@@ -87,8 +93,11 @@ impl StromApp {
             blocks_loaded: false,
             flow_pending_deletion: None,
             sse_client: None,
-            renaming_flow_idx: None,
-            rename_buffer: String::new(),
+            editing_properties_idx: None,
+            properties_name_buffer: String::new(),
+            properties_description_buffer: String::new(),
+            properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
+            properties_ptp_domain_buffer: String::new(),
         };
 
         // Load default elements temporarily (will be replaced by API data)
@@ -192,6 +201,38 @@ impl StromApp {
                             tracing::info!("Pipeline {} reached end of stream", flow_id);
                             let _ = storage.set_item("strom_needs_refresh", "true");
                         }
+                        StromEvent::PropertyChanged {
+                            flow_id,
+                            element_id,
+                            property_name,
+                            value,
+                        } => {
+                            tracing::info!(
+                                "Property {}.{} = {:?} changed in flow {}",
+                                element_id,
+                                property_name,
+                                value,
+                                flow_id
+                            );
+                            // Could potentially update UI to reflect property change
+                        }
+                        StromEvent::PadPropertyChanged {
+                            flow_id,
+                            element_id,
+                            pad_name,
+                            property_name,
+                            value,
+                        } => {
+                            tracing::info!(
+                                "Pad property {}:{}:{} = {:?} changed in flow {}",
+                                element_id,
+                                pad_name,
+                                property_name,
+                                value,
+                                flow_id
+                            );
+                            // Could potentially update UI to reflect pad property change
+                        }
                         StromEvent::Ping => {
                             // Just a keep-alive, no action needed
                         }
@@ -282,6 +323,101 @@ impl StromApp {
                     if let Some(window) = web_sys::window() {
                         if let Some(storage) = window.local_storage().ok().flatten() {
                             let _ = storage.set_item("strom_blocks_error", &e.to_string());
+                        }
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Load element properties from the backend (lazy loading).
+    /// Properties are cached after first load.
+    fn load_element_properties(&mut self, element_type: String, ctx: &Context) {
+        tracing::info!("Starting to load properties for element: {}", element_type);
+
+        let api = self.api.clone();
+        let ctx = ctx.clone();
+        let element_type_clone = element_type.clone();
+
+        spawn_local(async move {
+            match api.get_element_info(&element_type_clone).await {
+                Ok(element_info) => {
+                    tracing::info!(
+                        "Successfully fetched properties for '{}' ({} properties), storing in localStorage",
+                        element_info.name,
+                        element_info.properties.len()
+                    );
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            if let Ok(json) = serde_json::to_string(&element_info) {
+                                let _ = storage.set_item(
+                                    &format!("strom_element_properties_{}", element_info.name),
+                                    &json,
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load element properties: {}", e);
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            let _ = storage.set_item(
+                                &format!("strom_element_properties_error_{}", element_type_clone),
+                                &e.to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Load pad properties from the backend (on-demand lazy loading).
+    /// Pad properties are cached separately after first load.
+    fn load_element_pad_properties(&mut self, element_type: String, ctx: &Context) {
+        tracing::info!(
+            "Starting to load pad properties for element: {}",
+            element_type
+        );
+
+        let api = self.api.clone();
+        let ctx = ctx.clone();
+        let element_type_clone = element_type.clone();
+
+        spawn_local(async move {
+            match api.get_element_pad_properties(&element_type_clone).await {
+                Ok(element_info) => {
+                    tracing::info!(
+                        "Successfully fetched pad properties for '{}' (sink_pads: {}, src_pads: {}), storing in localStorage",
+                        element_info.name,
+                        element_info.sink_pads.iter().map(|p| p.properties.len()).sum::<usize>(),
+                        element_info.src_pads.iter().map(|p| p.properties.len()).sum::<usize>()
+                    );
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            if let Ok(json) = serde_json::to_string(&element_info) {
+                                let _ = storage.set_item(
+                                    &format!("strom_element_pad_properties_{}", element_info.name),
+                                    &json,
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load pad properties: {}", e);
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            let _ = storage.set_item(
+                                &format!(
+                                    "strom_element_pad_properties_error_{}",
+                                    element_type_clone
+                                ),
+                                &e.to_string(),
+                            );
                         }
                     }
                 }
@@ -616,6 +752,7 @@ impl StromApp {
     fn render_flow_list(&mut self, ctx: &Context) {
         SidePanel::left("flow_list")
             .default_width(200.0)
+            .resizable(true)
             .show(ctx, |ui| {
                 ui.heading("Flows");
                 ui.separator();
@@ -624,156 +761,205 @@ impl StromApp {
                     ui.label("No flows yet");
                     ui.label("Click 'New Flow' to get started");
                 } else {
-                    // Collect the rename action outside the iteration
-                    let mut rename_action: Option<(usize, String)> = None;
+                    // Create sorted list of (original_index, flow) tuples
+                    let mut sorted_flows: Vec<(usize, &Flow)> =
+                        self.flows.iter().enumerate().collect();
+                    sorted_flows
+                        .sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
 
-                    for (idx, flow) in self.flows.iter().enumerate() {
+                    for (idx, flow) in sorted_flows {
                         let selected = self.selected_flow_idx == Some(idx);
-                        let is_renaming = self.renaming_flow_idx == Some(idx);
 
-                        if is_renaming {
-                            // Show text edit field for renaming
-                            ui.horizontal(|ui| {
-                                ui.add_space(4.0);
-                                let text_edit_response =
-                                    ui.text_edit_singleline(&mut self.rename_buffer);
+                        // Create full-width selectable area
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 20.0),
+                            egui::Sense::click(),
+                        );
 
-                                // Auto-focus the text field when renaming starts
-                                if text_edit_response.gained_focus() {
-                                    text_edit_response.request_focus();
+                        if response.clicked() {
+                            // Select the flow
+                            self.selected_flow_idx = Some(idx);
+                            // Load flow into graph editor
+                            self.graph.load(flow.elements.clone(), flow.links.clone());
+                            self.graph.load_blocks(flow.blocks.clone());
+
+                            // Persist selected flow
+                            if let Some(window) = web_sys::window() {
+                                if let Some(storage) = window.local_storage().ok().flatten() {
+                                    let _ = storage
+                                        .set_item("strom_selected_flow_id", &flow.id.to_string());
                                 }
+                            }
+                        }
 
-                                // Save on Enter key
-                                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    if !self.rename_buffer.is_empty()
-                                        && self.rename_buffer != flow.name
-                                    {
-                                        // Schedule the rename action
-                                        rename_action = Some((idx, self.rename_buffer.clone()));
-                                    }
-                                    self.renaming_flow_idx = None;
-                                    self.rename_buffer.clear();
-                                }
+                        // Draw background for selected/hovered item
+                        if selected {
+                            ui.painter()
+                                .rect_filled(rect, 2.0, ui.visuals().selection.bg_fill);
+                        } else if response.hovered() {
+                            ui.painter().rect_filled(
+                                rect,
+                                2.0,
+                                ui.visuals().widgets.hovered.bg_fill,
+                            );
+                        }
 
-                                // Cancel on Escape or loss of focus (clicking elsewhere)
-                                if ui.input(|i| i.key_pressed(egui::Key::Escape))
-                                    || text_edit_response.lost_focus()
-                                {
-                                    self.renaming_flow_idx = None;
-                                    self.rename_buffer.clear();
-                                }
-                            });
+                        // Draw flow name and buttons
+                        let mut child_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(rect)
+                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                        );
+                        child_ui.add_space(4.0);
+
+                        let text_color = if selected {
+                            ui.visuals().selection.stroke.color
                         } else {
-                            // Create full-width selectable area
-                            let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 20.0),
-                                egui::Sense::click(),
-                            );
+                            ui.visuals().text_color()
+                        };
 
-                            if response.clicked() {
-                                if selected {
-                                    // Already selected - enter rename mode
-                                    self.renaming_flow_idx = Some(idx);
-                                    self.rename_buffer = flow.name.clone();
-                                } else {
-                                    // Not selected - select it
-                                    self.selected_flow_idx = Some(idx);
-                                    // Load flow into graph editor
-                                    self.graph.load(flow.elements.clone(), flow.links.clone());
-                                    self.graph.load_blocks(flow.blocks.clone());
+                        // Show running state icon
+                        let state_icon = match flow.state {
+                            Some(PipelineState::Playing) => "▶",
+                            Some(PipelineState::Paused) => "⏸",
+                            Some(PipelineState::Ready) | Some(PipelineState::Null) | None => "⏹",
+                        };
+                        let state_color = match flow.state {
+                            Some(PipelineState::Playing) => Color32::from_rgb(0, 200, 0),
+                            Some(PipelineState::Paused) => Color32::from_rgb(255, 165, 0),
+                            Some(PipelineState::Ready) | Some(PipelineState::Null) | None => {
+                                Color32::GRAY
+                            }
+                        };
+                        child_ui.colored_label(state_color, state_icon);
+                        child_ui.add_space(4.0);
 
-                                    // Persist selected flow
-                                    if let Some(window) = web_sys::window() {
-                                        if let Some(storage) = window.local_storage().ok().flatten()
-                                        {
-                                            let _ = storage.set_item(
-                                                "strom_selected_flow_id",
-                                                &flow.id.to_string(),
-                                            );
-                                        }
-                                    }
+                        // Show flow name with hover tooltip - make it clickable too
+                        let name_label = child_ui
+                            .colored_label(text_color, &flow.name)
+                            .interact(egui::Sense::click());
+
+                        // Handle click on the text itself (in addition to the background)
+                        if name_label.clicked() {
+                            self.selected_flow_idx = Some(idx);
+                            self.graph.load(flow.elements.clone(), flow.links.clone());
+                            self.graph.load_blocks(flow.blocks.clone());
+                            if let Some(window) = web_sys::window() {
+                                if let Some(storage) = window.local_storage().ok().flatten() {
+                                    let _ = storage
+                                        .set_item("strom_selected_flow_id", &flow.id.to_string());
+                                }
+                            }
+                        }
+
+                        // Add hover tooltip with flow details
+                        name_label.on_hover_ui(|ui| {
+                            ui.label(egui::RichText::new(&flow.name).strong());
+                            ui.separator();
+
+                            if let Some(ref desc) = flow.properties.description {
+                                if !desc.is_empty() {
+                                    ui.label("Description:");
+                                    ui.label(desc);
+                                    ui.add_space(5.0);
                                 }
                             }
 
-                            // Draw background for selected/hovered item
-                            if selected {
-                                ui.painter()
-                                    .rect_filled(rect, 2.0, ui.visuals().selection.bg_fill);
-                            } else if response.hovered() {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    2.0,
-                                    ui.visuals().widgets.hovered.bg_fill,
-                                );
+                            ui.label(format!("Clock: {:?}", flow.properties.clock_type));
+
+                            if let Some(domain) = flow.properties.ptp_domain {
+                                ui.label(format!("PTP Domain: {}", domain));
                             }
 
-                            // Draw flow name and delete button
-                            let mut child_ui = ui.new_child(
-                                egui::UiBuilder::new()
-                                    .max_rect(rect)
-                                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                            );
-                            child_ui.add_space(4.0);
+                            if let Some(sync_status) = flow.properties.clock_sync_status {
+                                use strom_types::flow::ClockSyncStatus;
+                                let status_text = match sync_status {
+                                    ClockSyncStatus::Synced => "Synced",
+                                    ClockSyncStatus::NotSynced => "Not Synced",
+                                    ClockSyncStatus::Unknown => "Unknown",
+                                };
+                                ui.label(format!("Sync Status: {}", status_text));
+                            }
 
-                            let text_color = if selected {
-                                ui.visuals().selection.stroke.color
-                            } else {
-                                ui.visuals().text_color()
+                            ui.add_space(5.0);
+                            let state_text = match flow.state {
+                                Some(PipelineState::Playing) => "Running",
+                                Some(PipelineState::Paused) => "Paused",
+                                Some(PipelineState::Ready) | Some(PipelineState::Null) | None => {
+                                    "Stopped"
+                                }
                             };
+                            ui.label(format!("State: {}", state_text));
+                        });
 
-                            child_ui.colored_label(text_color, &flow.name);
-
-                            // Delete button on the right
-                            child_ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.add_space(4.0);
-                                    if ui.small_button("🗑").on_hover_text("Delete flow").clicked()
-                                    {
-                                        self.flow_pending_deletion =
-                                            Some((flow.id, flow.name.clone()));
-                                    }
-                                },
-                            );
-                        }
-                    }
-
-                    // Process rename action after iteration
-                    if let Some((idx, new_name)) = rename_action {
-                        if let Some(flow_to_rename) = self.flows.get_mut(idx) {
-                            flow_to_rename.name = new_name;
-                            let flow_clone = flow_to_rename.clone();
-                            let api = self.api.clone();
-                            let ctx_clone = ctx.clone();
-
-                            spawn_local(async move {
-                                match api.update_flow(&flow_clone).await {
-                                    Ok(_) => {
-                                        tracing::info!("Flow renamed successfully");
-                                        if let Some(window) = web_sys::window() {
-                                            if let Some(storage) =
-                                                window.local_storage().ok().flatten()
-                                            {
-                                                let _ =
-                                                    storage.set_item("strom_needs_refresh", "true");
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to rename flow: {}", e);
-                                        if let Some(window) = web_sys::window() {
-                                            if let Some(storage) =
-                                                window.local_storage().ok().flatten()
-                                            {
-                                                let _ = storage
-                                                    .set_item("strom_flows_error", &e.to_string());
-                                            }
-                                        }
-                                    }
+                        // Buttons on the right
+                        child_ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.add_space(4.0);
+                                if ui.small_button("🗑").on_hover_text("Delete flow").clicked() {
+                                    self.flow_pending_deletion = Some((flow.id, flow.name.clone()));
                                 }
-                                ctx_clone.request_repaint();
-                            });
-                        }
+                                if ui
+                                    .small_button("⚙")
+                                    .on_hover_text("Flow properties")
+                                    .clicked()
+                                {
+                                    self.editing_properties_idx = Some(idx);
+                                    self.properties_name_buffer = flow.name.clone();
+                                    self.properties_description_buffer =
+                                        flow.properties.description.clone().unwrap_or_default();
+                                    self.properties_clock_type_buffer = flow.properties.clock_type;
+                                    self.properties_ptp_domain_buffer = flow
+                                        .properties
+                                        .ptp_domain
+                                        .map(|d| d.to_string())
+                                        .unwrap_or_else(|| "0".to_string());
+                                }
+
+                                // Show clock type indicator (before settings gear)
+                                use strom_types::flow::{ClockSyncStatus, GStreamerClockType};
+                                let clock_label = match flow.properties.clock_type {
+                                    GStreamerClockType::Ptp => Some("PTP"),
+                                    GStreamerClockType::Ntp => Some("NTP"),
+                                    GStreamerClockType::Realtime => Some("RT"),
+                                    GStreamerClockType::PipelineDefault => Some("SYS"),
+                                    GStreamerClockType::Monotonic => None,
+                                };
+
+                                if let Some(label) = clock_label {
+                                    // Determine color based on sync status for PTP/NTP
+                                    let text_color = match flow.properties.clock_type {
+                                        GStreamerClockType::Ptp | GStreamerClockType::Ntp => {
+                                            match flow.properties.clock_sync_status {
+                                                Some(ClockSyncStatus::Synced) => {
+                                                    Color32::from_rgb(0, 200, 0)
+                                                }
+                                                Some(ClockSyncStatus::NotSynced) => {
+                                                    Color32::from_rgb(200, 0, 0)
+                                                }
+                                                _ => Color32::GRAY,
+                                            }
+                                        }
+                                        _ => Color32::GRAY,
+                                    };
+
+                                    // Draw bordered text badge
+                                    ui.add_space(2.0);
+                                    egui::Frame::NONE
+                                        .stroke(egui::Stroke::new(1.0, text_color))
+                                        .inner_margin(egui::Margin::symmetric(2, 0))
+                                        .corner_radius(1.0)
+                                        .show(ui, |ui| {
+                                            ui.add(egui::Label::new(
+                                                egui::RichText::new(label)
+                                                    .size(9.0)
+                                                    .color(text_color),
+                                            ));
+                                        });
+                                }
+                            },
+                        );
                     }
                 }
             });
@@ -783,14 +969,75 @@ impl StromApp {
     fn render_palette(&mut self, ctx: &Context) {
         SidePanel::right("palette")
             .default_width(250.0)
+            .resizable(true)
             .show(ctx, |ui| {
+                // Check if an element is selected and trigger property loading if needed
+                // Do this BEFORE getting mutable reference to avoid borrow checker issues
+                if let Some((selected_element_type, active_tab)) = self
+                    .graph
+                    .get_selected_element()
+                    .map(|e| (e.element_type.clone(), self.graph.active_property_tab))
+                {
+                    // Trigger lazy loading if properties not cached
+                    if !self.palette.has_properties_cached(&selected_element_type) {
+                        tracing::info!(
+                            "Element '{}' selected but properties not cached, triggering lazy load",
+                            selected_element_type
+                        );
+                        self.load_element_properties(selected_element_type.clone(), ctx);
+                    }
+
+                    // Trigger pad properties loading if on Input/Output Pads tabs
+                    use crate::graph::PropertyTab;
+                    if matches!(active_tab, PropertyTab::InputPads | PropertyTab::OutputPads)
+                        && !self.palette.has_pad_properties_cached(&selected_element_type)
+                    {
+                        tracing::info!(
+                            "Element '{}' showing pad tab but pad properties not cached, triggering lazy load",
+                            selected_element_type
+                        );
+                        self.load_element_pad_properties(selected_element_type.clone(), ctx);
+                    }
+                }
+
                 // Show either the palette or the property inspector, not both
-                if let Some(element) = self.graph.get_selected_element_mut() {
+                // Collect data BEFORE getting mutable reference to avoid borrow checker issues
+                let selected_element_data = self.graph.get_selected_element().map(|element| {
+                    let active_tab = self.graph.active_property_tab;
+
+                    // Use pad properties if showing pad tabs, otherwise regular properties
+                    use crate::graph::PropertyTab;
+                    let element_info = if matches!(active_tab, PropertyTab::InputPads | PropertyTab::OutputPads) {
+                        self.palette.get_element_info_with_pads(&element.element_type)
+                    } else {
+                        self.palette.get_element_info(&element.element_type)
+                    };
+
+                    let element_id = element.id.clone();
+                    let focused_pad = self.graph.focused_pad.clone();
+                    let input_pads = self.graph.get_actual_input_pads(&element_id);
+                    let output_pads = self.graph.get_actual_output_pads(&element_id);
+                    (element_info, active_tab, focused_pad, input_pads, output_pads)
+                });
+
+                if let Some((element_info, active_tab, focused_pad, input_pads, output_pads)) = selected_element_data {
                     // Element selected: show ONLY property inspector
                     ui.heading("Properties");
                     ui.separator();
-                    let element_info = self.palette.get_element_info(&element.element_type);
-                    PropertyInspector::show(ui, element, element_info);
+
+                    // Split borrow: get mutable access to graph fields separately
+                    let graph = &mut self.graph;
+                    if let Some(element) = graph.get_selected_element_mut() {
+                        graph.active_property_tab = PropertyInspector::show(
+                            ui,
+                            element,
+                            element_info,
+                            active_tab,
+                            focused_pad,
+                            input_pads,
+                            output_pads,
+                        );
+                    }
                 } else if let Some(block_def_id) = self
                     .graph
                     .get_selected_block()
@@ -979,6 +1226,205 @@ impl StromApp {
                 });
             });
     }
+
+    /// Render the flow properties dialog.
+    fn render_flow_properties_dialog(&mut self, ctx: &Context) {
+        if self.editing_properties_idx.is_none() {
+            return;
+        }
+
+        let idx = self.editing_properties_idx.unwrap();
+        let flow = match self.flows.get(idx) {
+            Some(f) => f,
+            None => {
+                self.editing_properties_idx = None;
+                return;
+            }
+        };
+
+        let flow_name = flow.name.clone();
+
+        egui::Window::new(format!("⚙ {} - Properties", flow_name))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(400.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.heading("Flow Properties");
+                ui.add_space(5.0);
+
+                // Name
+                ui.label("Name:");
+                ui.text_edit_singleline(&mut self.properties_name_buffer);
+                ui.add_space(10.0);
+
+                // Description
+                ui.label("Description:");
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.properties_description_buffer)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(5)
+                        .hint_text("Optional description for this flow..."),
+                );
+
+                ui.add_space(10.0);
+
+                // Clock Type
+                ui.label("GStreamer Clock Type:");
+                ui.horizontal(|ui| {
+                    use strom_types::flow::GStreamerClockType;
+
+                    egui::ComboBox::from_id_salt("clock_type_selector")
+                        .selected_text(format!("{:?}", self.properties_clock_type_buffer))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.properties_clock_type_buffer,
+                                GStreamerClockType::Monotonic,
+                                "Monotonic (recommended)",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_clock_type_buffer,
+                                GStreamerClockType::Realtime,
+                                "Realtime",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_clock_type_buffer,
+                                GStreamerClockType::PipelineDefault,
+                                "Pipeline Default",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_clock_type_buffer,
+                                GStreamerClockType::Ptp,
+                                "PTP",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_clock_type_buffer,
+                                GStreamerClockType::Ntp,
+                                "NTP",
+                            );
+                        });
+                });
+
+                // Show description of selected clock type
+                ui.label(self.properties_clock_type_buffer.description());
+
+                // Show PTP domain field only when PTP is selected
+                if matches!(
+                    self.properties_clock_type_buffer,
+                    strom_types::flow::GStreamerClockType::Ptp
+                ) {
+                    ui.add_space(10.0);
+                    ui.label("PTP Domain (0-255):");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.properties_ptp_domain_buffer)
+                            .desired_width(100.0)
+                            .hint_text("0"),
+                    );
+                    ui.label("The PTP domain for clock synchronization");
+                }
+
+                // Show clock sync status for PTP/NTP clocks
+                if matches!(
+                    self.properties_clock_type_buffer,
+                    strom_types::flow::GStreamerClockType::Ptp
+                        | strom_types::flow::GStreamerClockType::Ntp
+                ) {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Clock Status:");
+                        if let Some(flow) = self.flows.get(idx) {
+                            if let Some(sync_status) = flow.properties.clock_sync_status {
+                                use strom_types::flow::ClockSyncStatus;
+                                match sync_status {
+                                    ClockSyncStatus::Synced => {
+                                        ui.colored_label(Color32::from_rgb(0, 200, 0), "● Synced");
+                                    }
+                                    ClockSyncStatus::NotSynced => {
+                                        ui.colored_label(
+                                            Color32::from_rgb(200, 0, 0),
+                                            "● Not Synced",
+                                        );
+                                    }
+                                    ClockSyncStatus::Unknown => {
+                                        ui.colored_label(Color32::GRAY, "● Unknown");
+                                    }
+                                }
+                            } else {
+                                ui.colored_label(Color32::GRAY, "● Unknown");
+                            }
+                        }
+                    });
+                }
+
+                ui.add_space(15.0);
+
+                // Buttons
+                ui.horizontal(|ui| {
+                    if ui.button("💾 Save").clicked() {
+                        // Update flow properties
+                        if let Some(flow) = self.flows.get_mut(idx) {
+                            // Update flow name
+                            flow.name = self.properties_name_buffer.clone();
+
+                            flow.properties.description =
+                                if self.properties_description_buffer.is_empty() {
+                                    None
+                                } else {
+                                    Some(self.properties_description_buffer.clone())
+                                };
+                            flow.properties.clock_type = self.properties_clock_type_buffer;
+
+                            // Parse and set PTP domain if PTP clock is selected
+                            flow.properties.ptp_domain = if matches!(
+                                self.properties_clock_type_buffer,
+                                strom_types::flow::GStreamerClockType::Ptp
+                            ) {
+                                self.properties_ptp_domain_buffer.parse::<u8>().ok()
+                            } else {
+                                None
+                            };
+
+                            let flow_clone = flow.clone();
+                            let api = self.api.clone();
+                            let ctx_clone = ctx.clone();
+
+                            spawn_local(async move {
+                                match api.update_flow(&flow_clone).await {
+                                    Ok(_) => {
+                                        tracing::info!("Flow properties updated successfully");
+                                        if let Some(window) = web_sys::window() {
+                                            if let Some(storage) =
+                                                window.local_storage().ok().flatten()
+                                            {
+                                                let _ =
+                                                    storage.set_item("strom_needs_refresh", "true");
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to update flow properties: {}", e);
+                                        if let Some(window) = web_sys::window() {
+                                            if let Some(storage) =
+                                                window.local_storage().ok().flatten()
+                                            {
+                                                let _ = storage
+                                                    .set_item("strom_flows_error", &e.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                                ctx_clone.request_repaint();
+                            });
+                        }
+                        self.editing_properties_idx = None;
+                    }
+
+                    if ui.button("Cancel").clicked() {
+                        self.editing_properties_idx = None;
+                    }
+                });
+            });
+    }
 }
 
 impl eframe::App for StromApp {
@@ -1068,6 +1514,80 @@ impl eframe::App for StromApp {
                 if let Ok(Some(error)) = storage.get_item("strom_blocks_error") {
                     self.error = Some(format!("Blocks: {}", error));
                     let _ = storage.remove_item("strom_blocks_error");
+                }
+
+                // Check for loaded element properties (lazy loading)
+                // We need to check all possible element types that might have been loaded
+                // Scan all localStorage keys for strom_element_properties_* pattern
+                if let Ok(length) = storage.length() {
+                    for i in 0..length {
+                        if let Ok(Some(key)) = storage.key(i) {
+                            if key.starts_with("strom_element_properties_") {
+                                if let Ok(Some(json)) = storage.get_item(&key) {
+                                    match serde_json::from_str::<ElementInfo>(&json) {
+                                        Ok(element_info) => {
+                                            tracing::info!(
+                                                "Caching element properties from localStorage: {} ({} properties)",
+                                                element_info.name,
+                                                element_info.properties.len()
+                                            );
+                                            self.palette.cache_element_properties(element_info);
+                                            let _ = storage.remove_item(&key);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Failed to parse element properties from localStorage: {}",
+                                                e
+                                            );
+                                            let _ = storage.remove_item(&key);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Check for loaded pad properties (lazy loading)
+                // Scan all localStorage keys for strom_element_pad_properties_* pattern
+                if let Ok(length) = storage.length() {
+                    for i in 0..length {
+                        if let Ok(Some(key)) = storage.key(i) {
+                            if key.starts_with("strom_element_pad_properties_") {
+                                if let Ok(Some(json)) = storage.get_item(&key) {
+                                    match serde_json::from_str::<ElementInfo>(&json) {
+                                        Ok(element_info) => {
+                                            let sink_prop_count: usize = element_info
+                                                .sink_pads
+                                                .iter()
+                                                .map(|p| p.properties.len())
+                                                .sum();
+                                            let src_prop_count: usize = element_info
+                                                .src_pads
+                                                .iter()
+                                                .map(|p| p.properties.len())
+                                                .sum();
+                                            tracing::info!(
+                                                "Caching pad properties from localStorage: {} (sink: {} props, src: {} props)",
+                                                element_info.name,
+                                                sink_prop_count,
+                                                src_prop_count
+                                            );
+                                            self.palette.cache_element_pad_properties(element_info);
+                                            let _ = storage.remove_item(&key);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Failed to parse pad properties from localStorage: {}",
+                                                e
+                                            );
+                                            let _ = storage.remove_item(&key);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1219,6 +1739,7 @@ impl eframe::App for StromApp {
             // Show simplified palette when no flow is selected
             SidePanel::right("palette")
                 .default_width(250.0)
+                .resizable(true)
                 .show(ctx, |ui| {
                     ui.heading("Elements");
                     ui.separator();
@@ -1230,5 +1751,6 @@ impl eframe::App for StromApp {
         self.render_status_bar(ctx);
         self.render_new_flow_dialog(ctx);
         self.render_delete_confirmation_dialog(ctx);
+        self.render_flow_properties_dialog(ctx);
     }
 }

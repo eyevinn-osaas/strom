@@ -29,16 +29,20 @@ fn main() {
             .document()
             .expect("No document");
         let canvas = document
-            .get_element_by_id("the_canvas_id")
-            .expect("Failed to find the_canvas_id")
+            .get_element_by_id("strom_app_canvas")
+            .expect("Failed to find strom_app_canvas")
             .dyn_into::<web_sys::HtmlCanvasElement>()
-            .expect("the_canvas_id is not a canvas");
+            .expect("strom_app_canvas is not a canvas");
 
         eframe::WebRunner::new()
             .start(
                 canvas,
                 web_options,
-                Box::new(|cc| Ok(Box::new(StromApp::new(cc)))),
+                Box::new(|cc| {
+                    // Set dark theme
+                    cc.egui_ctx.set_visuals(egui::Visuals::dark());
+                    Ok(Box::new(StromApp::new(cc)))
+                }),
             )
             .await
             .expect("Failed to start eframe");

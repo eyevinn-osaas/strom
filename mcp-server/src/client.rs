@@ -1,10 +1,26 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
+use serde::Deserialize;
+use std::collections::HashMap;
 use strom_types::{
-    api::{CreateFlowRequest, FlowListResponse, FlowResponse},
-    element::ElementInfo,
-    flow::Flow,
+    api::{
+        CreateFlowRequest, ElementPropertiesResponse, FlowListResponse, FlowResponse,
+        PadPropertiesResponse, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
+        UpdatePropertyRequest,
+    },
+    element::{ElementInfo, PropertyValue},
+    flow::{Flow, FlowProperties},
 };
+
+#[derive(Deserialize)]
+struct ElementListResponse {
+    elements: Vec<ElementInfo>,
+}
+
+#[derive(Deserialize)]
+struct ElementResponse {
+    element: ElementInfo,
+}
 
 /// HTTP client for Strom REST API
 #[derive(Clone, Debug)]
@@ -111,8 +127,95 @@ impl StromClient {
     /// List available GStreamer elements
     pub async fn list_elements(&self) -> Result<Vec<ElementInfo>> {
         let url = format!("{}/api/elements", self.base_url);
-        self.client
+        let response: ElementListResponse = self
+            .client
             .get(&url)
+            .send()
+            .await
+            .context("Failed to send request")?
+            .json()
+            .await
+            .context("Failed to parse response")?;
+        Ok(response.elements)
+    }
+
+    /// Get element information
+    pub async fn get_element_info(&self, element_name: &str) -> Result<ElementInfo> {
+        let url = format!("{}/api/elements/{}", self.base_url, element_name);
+        let response: ElementResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to send request")?
+            .json()
+            .await
+            .context("Failed to parse response")?;
+        Ok(response.element)
+    }
+
+    /// Get current property values from a running element
+    pub async fn get_element_properties(
+        &self,
+        flow_id: &str,
+        element_id: &str,
+    ) -> Result<HashMap<String, PropertyValue>> {
+        let url = format!(
+            "{}/api/flows/{}/elements/{}/properties",
+            self.base_url, flow_id, element_id
+        );
+        let response: ElementPropertiesResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("Failed to send request")?
+            .json()
+            .await
+            .context("Failed to parse response")?;
+        Ok(response.properties)
+    }
+
+    /// Update a property on a running element
+    pub async fn update_element_property(
+        &self,
+        flow_id: &str,
+        element_id: &str,
+        property_name: &str,
+        value: PropertyValue,
+    ) -> Result<HashMap<String, PropertyValue>> {
+        let url = format!(
+            "{}/api/flows/{}/elements/{}/properties",
+            self.base_url, flow_id, element_id
+        );
+        let request = UpdatePropertyRequest {
+            property_name: property_name.to_string(),
+            value,
+        };
+        let response: ElementPropertiesResponse = self
+            .client
+            .patch(&url)
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send request")?
+            .json()
+            .await
+            .context("Failed to parse response")?;
+        Ok(response.properties)
+    }
+
+    /// Update flow properties (description, clock type, etc.)
+    pub async fn update_flow_properties(
+        &self,
+        flow_id: &str,
+        properties: FlowProperties,
+    ) -> Result<FlowResponse> {
+        let url = format!("{}/api/flows/{}/properties", self.base_url, flow_id);
+        let request = UpdateFlowPropertiesRequest { properties };
+        self.client
+            .patch(&url)
+            .json(&request)
             .send()
             .await
             .context("Failed to send request")?
@@ -121,16 +224,58 @@ impl StromClient {
             .context("Failed to parse response")
     }
 
-    /// Get element information
-    pub async fn get_element_info(&self, element_name: &str) -> Result<ElementInfo> {
-        let url = format!("{}/api/elements/{}", self.base_url, element_name);
-        self.client
+    /// Get current property values from a pad
+    #[allow(dead_code)]
+    pub async fn get_pad_properties(
+        &self,
+        flow_id: &str,
+        element_id: &str,
+        pad_name: &str,
+    ) -> Result<HashMap<String, PropertyValue>> {
+        let url = format!(
+            "{}/api/flows/{}/elements/{}/pads/{}/properties",
+            self.base_url, flow_id, element_id, pad_name
+        );
+        let response: PadPropertiesResponse = self
+            .client
             .get(&url)
             .send()
             .await
             .context("Failed to send request")?
             .json()
             .await
-            .context("Failed to parse response")
+            .context("Failed to parse response")?;
+        Ok(response.properties)
+    }
+
+    /// Update a property on a pad
+    #[allow(dead_code)]
+    pub async fn update_pad_property(
+        &self,
+        flow_id: &str,
+        element_id: &str,
+        pad_name: &str,
+        property_name: &str,
+        value: PropertyValue,
+    ) -> Result<HashMap<String, PropertyValue>> {
+        let url = format!(
+            "{}/api/flows/{}/elements/{}/pads/{}/properties",
+            self.base_url, flow_id, element_id, pad_name
+        );
+        let request = UpdatePadPropertyRequest {
+            property_name: property_name.to_string(),
+            value,
+        };
+        let response: PadPropertiesResponse = self
+            .client
+            .patch(&url)
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send request")?
+            .json()
+            .await
+            .context("Failed to parse response")?;
+        Ok(response.properties)
     }
 }

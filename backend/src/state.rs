@@ -7,7 +7,7 @@ use crate::storage::{JsonFileStorage, Storage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use strom_types::element::ElementInfo;
+use strom_types::element::{ElementInfo, PropertyValue};
 use strom_types::{Flow, FlowId, PipelineState, StromEvent};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -25,6 +25,8 @@ struct AppStateInner {
     storage: Arc<dyn Storage>,
     /// GStreamer element discovery
     element_discovery: RwLock<ElementDiscovery>,
+    /// Cached discovered elements (populated once at startup)
+    cached_elements: RwLock<Vec<ElementInfo>>,
     /// Active pipelines
     pipelines: RwLock<HashMap<FlowId, PipelineManager>>,
     /// Event broadcaster for SSE
@@ -41,6 +43,7 @@ impl AppState {
                 flows: RwLock::new(HashMap::new()),
                 storage: Arc::new(storage),
                 element_discovery: RwLock::new(ElementDiscovery::new()),
+                cached_elements: RwLock::new(Vec::new()),
                 pipelines: RwLock::new(HashMap::new()),
                 events: EventBroadcaster::default(),
                 block_registry: BlockRegistry::new(blocks_path),
@@ -92,16 +95,60 @@ impl AppState {
         Ok(())
     }
 
+    /// Discover and cache all available GStreamer elements.
+    /// This should be called once during application startup.
+    /// Element discovery can crash for certain problematic elements,
+    /// so it's important to do this at startup where crashes are visible.
+    pub async fn discover_and_cache_elements(&self) -> anyhow::Result<()> {
+        info!("Discovering and caching GStreamer elements...");
+
+        let elements = {
+            let mut discovery = self.inner.element_discovery.write().await;
+            discovery.discover_all()
+        };
+
+        let count = elements.len();
+
+        {
+            let mut cached = self.inner.cached_elements.write().await;
+            *cached = elements;
+        }
+
+        info!("Discovered and cached {} GStreamer elements", count);
+        Ok(())
+    }
+
     /// Get all flows.
     pub async fn get_flows(&self) -> Vec<Flow> {
         let flows = self.inner.flows.read().await;
-        flows.values().cloned().collect()
+        let pipelines = self.inner.pipelines.read().await;
+
+        flows
+            .values()
+            .map(|flow| {
+                let mut flow = flow.clone();
+                // Update clock sync status for running pipelines
+                if let Some(pipeline) = pipelines.get(&flow.id) {
+                    flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
+                }
+                flow
+            })
+            .collect()
     }
 
     /// Get a specific flow by ID.
     pub async fn get_flow(&self, id: &FlowId) -> Option<Flow> {
         let flows = self.inner.flows.read().await;
-        flows.get(id).cloned()
+        let pipelines = self.inner.pipelines.read().await;
+
+        flows.get(id).map(|flow| {
+            let mut flow = flow.clone();
+            // Update clock sync status for running pipeline
+            if let Some(pipeline) = pipelines.get(id) {
+                flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
+            }
+            flow
+        })
     }
 
     /// Add or update a flow and persist to storage.
@@ -169,16 +216,58 @@ impl AppState {
         Ok(true)
     }
 
-    /// Discover all available GStreamer elements.
+    /// Get all discovered GStreamer elements from cache.
+    /// Elements are discovered once at startup via discover_and_cache_elements().
     pub async fn discover_elements(&self) -> Vec<ElementInfo> {
-        let mut discovery = self.inner.element_discovery.write().await;
-        discovery.discover_all()
+        let cached = self.inner.cached_elements.read().await;
+        cached.clone()
     }
 
-    /// Get information about a specific element.
+    /// Get information about a specific element from cache.
+    /// This returns the lightweight element info without properties.
+    /// Use get_element_info_with_properties() for full element info with properties.
     pub async fn get_element_info(&self, name: &str) -> Option<ElementInfo> {
+        let cached = self.inner.cached_elements.read().await;
+        cached.iter().find(|e| e.name == name).cloned()
+    }
+
+    /// Get element information with properties (lazy loading).
+    /// If properties are not yet cached, this will introspect them and update the cache.
+    /// Both the ElementDiscovery cache and the cached_elements list are updated.
+    pub async fn get_element_info_with_properties(&self, name: &str) -> Option<ElementInfo> {
+        // First check if we have full properties already
+        {
+            let cached = self.inner.cached_elements.read().await;
+            if let Some(elem) = cached.iter().find(|e| e.name == name) {
+                if !elem.properties.is_empty() {
+                    return Some(elem.clone());
+                }
+            }
+        }
+
+        // Properties not cached, need to load them
+        let info_with_props = {
+            let mut discovery = self.inner.element_discovery.write().await;
+            discovery.load_element_properties(name)?
+        };
+
+        // Update cached_elements with the properties
+        {
+            let mut cached = self.inner.cached_elements.write().await;
+            if let Some(elem) = cached.iter_mut().find(|e| e.name == name) {
+                *elem = info_with_props.clone();
+            }
+        }
+
+        Some(info_with_props)
+    }
+
+    /// Get element information with pad properties (on-demand introspection).
+    /// This introspects Request pad properties safely for a single element.
+    /// Unlike bulk discovery, this can safely request pads for a specific element.
+    pub async fn get_element_pad_properties(&self, name: &str) -> Option<ElementInfo> {
         let mut discovery = self.inner.element_discovery.write().await;
-        discovery.get_element_info(name)
+        discovery.load_element_pad_properties(name)
     }
 
     /// Start a flow (create and start its pipeline).
@@ -300,6 +389,136 @@ impl AppState {
     pub async fn generate_debug_graph(&self, id: &FlowId) -> Option<String> {
         let pipelines = self.inner.pipelines.read().await;
         pipelines.get(id).map(|p| p.generate_dot_graph())
+    }
+
+    /// Update a property on a running pipeline element.
+    pub async fn update_element_property(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+        property_name: &str,
+        value: PropertyValue,
+    ) -> Result<(), PipelineError> {
+        info!(
+            "Updating property {}.{} in flow {}",
+            element_id, property_name, flow_id
+        );
+
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.update_element_property(element_id, property_name, &value)?;
+
+        // Broadcast property change event
+        self.inner.events.broadcast(StromEvent::PropertyChanged {
+            flow_id: *flow_id,
+            element_id: element_id.to_string(),
+            property_name: property_name.to_string(),
+            value,
+        });
+
+        Ok(())
+    }
+
+    /// Get current property values from a running element.
+    pub async fn get_element_properties(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+    ) -> Result<HashMap<String, PropertyValue>, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.get_element_properties(element_id)
+    }
+
+    /// Get a single property value from a running element.
+    pub async fn get_element_property(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+        property_name: &str,
+    ) -> Result<PropertyValue, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.get_element_property(element_id, property_name)
+    }
+
+    /// Update a property on a pad in a running pipeline.
+    pub async fn update_pad_property(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+        pad_name: &str,
+        property_name: &str,
+        value: PropertyValue,
+    ) -> Result<(), PipelineError> {
+        info!(
+            "Updating pad property {}:{}:{} in flow {}",
+            element_id, pad_name, property_name, flow_id
+        );
+
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.update_pad_property(element_id, pad_name, property_name, &value)?;
+
+        // Broadcast pad property change event
+        self.inner.events.broadcast(StromEvent::PadPropertyChanged {
+            flow_id: *flow_id,
+            element_id: element_id.to_string(),
+            pad_name: pad_name.to_string(),
+            property_name: property_name.to_string(),
+            value,
+        });
+
+        Ok(())
+    }
+
+    /// Get current property values from a running pad.
+    pub async fn get_pad_properties(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+        pad_name: &str,
+    ) -> Result<HashMap<String, PropertyValue>, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.get_pad_properties(element_id, pad_name)
+    }
+
+    /// Get a single property value from a running pad.
+    pub async fn get_pad_property(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+        pad_name: &str,
+        property_name: &str,
+    ) -> Result<PropertyValue, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.get_pad_property(element_id, pad_name, property_name)
     }
 }
 
