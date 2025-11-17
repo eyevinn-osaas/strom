@@ -314,7 +314,13 @@ impl PropertyInspector {
                 .show(ui, |ui| {
                     if !definition.exposed_properties.is_empty() {
                         for exposed_prop in &definition.exposed_properties {
-                            Self::show_exposed_property(ui, block, exposed_prop);
+                            Self::show_exposed_property(
+                                ui,
+                                block,
+                                exposed_prop,
+                                definition,
+                                flow_id,
+                            );
                         }
                     } else {
                         ui.label("This block has no configurable properties");
@@ -376,6 +382,8 @@ impl PropertyInspector {
         ui: &mut Ui,
         block: &mut BlockInstance,
         exposed_prop: &ExposedProperty,
+        definition: &BlockDefinition,
+        flow_id: Option<strom_types::FlowId>,
     ) {
         let prop_name = &exposed_prop.name;
         let default_value = exposed_prop.default_value.as_ref();
@@ -391,6 +399,19 @@ impl PropertyInspector {
         if current_value.is_none() {
             current_value = default_value.cloned();
         }
+
+        // Helper function to invalidate SDP cache for AES67 output blocks
+        let invalidate_sdp_cache = || {
+            if definition.id == "builtin.aes67_output" && flow_id.is_some() {
+                if let Some(window) = web_sys::window() {
+                    if let Some(storage) = window.local_storage().ok().flatten() {
+                        let sdp_key = format!("strom_sdp_{}_{}", flow_id.unwrap(), block.id);
+                        let _ = storage.remove_item(&sdp_key);
+                        tracing::debug!("Invalidated SDP cache for block {}", block.id);
+                    }
+                }
+            }
+        };
 
         // For multiline, use vertical layout
         if is_multiline {
@@ -413,6 +434,8 @@ impl PropertyInspector {
                         .clicked()
                 {
                     block.properties.remove(prop_name);
+                    // Invalidate SDP cache if this is an AES67 output block
+                    invalidate_sdp_cache();
                 }
             });
 
@@ -446,6 +469,8 @@ impl PropertyInspector {
                 } else {
                     block.properties.remove(prop_name);
                 }
+                // Invalidate SDP cache if this is an AES67 output block
+                invalidate_sdp_cache();
             }
         } else {
             // For non-multiline, use horizontal layout
@@ -482,6 +507,8 @@ impl PropertyInspector {
                         } else {
                             block.properties.insert(prop_name.clone(), value);
                         }
+                        // Invalidate SDP cache if this is an AES67 output block
+                        invalidate_sdp_cache();
                     }
                 }
 
@@ -493,6 +520,8 @@ impl PropertyInspector {
                         .clicked()
                 {
                     block.properties.remove(prop_name);
+                    // Invalidate SDP cache if this is an AES67 output block
+                    invalidate_sdp_cache();
                 }
             });
         }
