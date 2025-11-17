@@ -702,7 +702,8 @@ impl GraphEditor {
         );
 
         // Draw element type
-        let text_pos = rect.min + vec2(10.0, 10.0);
+        // Note: multiply offsets by zoom since rect is in screen-space
+        let text_pos = rect.min + vec2(10.0 * self.zoom, 10.0 * self.zoom);
         painter.text(
             text_pos,
             egui::Align2::LEFT_TOP,
@@ -712,7 +713,7 @@ impl GraphEditor {
         );
 
         // Draw element ID
-        let id_pos = rect.min + vec2(10.0, 30.0);
+        let id_pos = rect.min + vec2(10.0 * self.zoom, 30.0 * self.zoom);
         painter.text(
             id_pos,
             egui::Align2::LEFT_TOP,
@@ -1047,7 +1048,8 @@ impl GraphEditor {
         let block_definition = self.block_definition_map.get(&block.block_definition_id);
 
         // Draw block icon
-        let icon_pos = rect.min + vec2(10.0, 8.0);
+        // Note: multiply offsets by zoom since rect is in screen-space
+        let icon_pos = rect.min + vec2(10.0 * self.zoom, 8.0 * self.zoom);
         painter.text(
             icon_pos,
             egui::Align2::LEFT_TOP,
@@ -1065,7 +1067,7 @@ impl GraphEditor {
                     .strip_prefix("builtin.")
                     .unwrap_or(&block.block_definition_id)
             });
-        let text_pos = rect.min + vec2(35.0, 10.0);
+        let text_pos = rect.min + vec2(35.0 * self.zoom, 10.0 * self.zoom);
         painter.text(
             text_pos,
             egui::Align2::LEFT_TOP,
@@ -1075,7 +1077,7 @@ impl GraphEditor {
         );
 
         // Draw block instance ID
-        let id_pos = rect.min + vec2(10.0, 30.0);
+        let id_pos = rect.min + vec2(10.0 * self.zoom, 30.0 * self.zoom);
         painter.text(
             id_pos,
             egui::Align2::LEFT_TOP,
@@ -1085,7 +1087,7 @@ impl GraphEditor {
         );
 
         // Draw "BLOCK" badge
-        let badge_pos = rect.min + vec2(10.0, 55.0);
+        let badge_pos = rect.min + vec2(10.0 * self.zoom, 55.0 * self.zoom);
         painter.text(
             badge_pos,
             egui::Align2::LEFT_TOP,
