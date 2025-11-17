@@ -145,6 +145,7 @@ impl GraphEditor {
             name: None,
             properties: HashMap::new(),
             position: Some(strom_types::block::Position { x: pos.x, y: pos.y }),
+            runtime_data: None,
         };
         self.blocks.push(block);
     }
@@ -397,6 +398,8 @@ impl GraphEditor {
                 if node_response.clicked() || (node_response.dragged() && self.dragging.is_none()) {
                     self.selected = Some(element.id.clone());
                     self.selected_link = None; // Deselect any link
+                    self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
+                    self.focused_pad = None; // Clear pad focus
 
                     // Persist selected element to localStorage
                     if let Some(window) = web_sys::window() {
@@ -493,6 +496,8 @@ impl GraphEditor {
                     {
                         self.selected = Some(block.id.clone());
                         self.selected_link = None;
+                        self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
+                        self.focused_pad = None; // Clear pad focus
 
                         if let Some(window) = web_sys::window() {
                             if let Some(storage) = window.local_storage().ok().flatten() {
