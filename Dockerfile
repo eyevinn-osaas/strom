@@ -47,8 +47,9 @@ COPY . .
 # Build the frontend
 RUN mkdir -p backend/dist && cd frontend && trunk build --release
 
-# Build the backend (with embedded frontend)
+# Build the backend (with embedded frontend) and MCP server
 RUN cargo build --release --package strom-backend
+RUN cargo build --release --package strom-mcp-server
 
 # Stage 4: Runtime - Minimal runtime image with trixie for newer GStreamer
 FROM debian:trixie-slim as runtime
@@ -67,8 +68,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the compiled binary from builder
+# Copy the compiled binaries from builder
 COPY --from=builder /app/target/release/strom-backend /usr/local/bin/strom-backend
+COPY --from=builder /app/target/release/strom-mcp-server /usr/local/bin/strom-mcp-server
 
 # Set environment variables
 ENV RUST_LOG=info

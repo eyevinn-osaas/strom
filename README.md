@@ -183,6 +183,16 @@ The web UI provides:
 - Shows element connections, pad negotiations, and properties
 - Requires Graphviz installed: `sudo apt install graphviz`
 
+### AI Integration (MCP)
+
+Strom includes a Model Context Protocol (MCP) server that enables AI assistants like Claude to manage your GStreamer pipelines through natural language:
+- **Create and configure flows** - "Create a flow that records RTSP video to a file"
+- **Start/stop pipelines** - "Start the recording flow"
+- **Discover elements** - "What video encoders are available?"
+- **Troubleshoot issues** - "Why isn't my pipeline working?"
+
+See [mcp-server/README.md](mcp-server/README.md) for setup instructions.
+
 ### Persistence
 
 Flows are persisted to `flows.json` with the following structure:
@@ -274,18 +284,24 @@ strom/
 │       ├── events.rs          # Event broadcasting
 │       ├── openapi.rs         # OpenAPI documentation
 │       └── assets.rs          # Static asset serving
-└── frontend/
+├── frontend/
+│   ├── Cargo.toml
+│   ├── Trunk.toml             # Build configuration
+│   ├── index.html
+│   └── src/
+│       ├── main.rs            # Frontend entry point
+│       ├── app.rs             # Main egui application
+│       ├── graph.rs           # Node graph editor
+│       ├── palette.rs         # Element palette
+│       ├── properties.rs      # Property inspector
+│       ├── api.rs             # API client
+│       └── sse.rs             # SSE client
+└── mcp-server/
     ├── Cargo.toml
-    ├── Trunk.toml             # Build configuration
-    ├── index.html
+    ├── README.md              # MCP integration guide
     └── src/
-        ├── main.rs            # Frontend entry point
-        ├── app.rs             # Main egui application
-        ├── graph.rs           # Node graph editor
-        ├── palette.rs         # Element palette
-        ├── properties.rs      # Property inspector
-        ├── api.rs             # API client
-        └── sse.rs             # SSE client
+        ├── main.rs            # MCP server entry point
+        └── client.rs          # Strom API client
 
 ```
 

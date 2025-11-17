@@ -3750,6 +3750,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "strom-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "strom-types",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "strom-types"
 version = "0.1.0"
 dependencies = [
