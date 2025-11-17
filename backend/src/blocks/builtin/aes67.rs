@@ -24,12 +24,14 @@ fn aes67_input() -> BlockDefinition {
                 id: "filesrc".to_string(),
                 element_type: "filesrc".to_string(),
                 properties: HashMap::new(),
+                pad_properties: HashMap::new(),
                 position: None,
             },
             Element {
                 id: "sdpdemux".to_string(),
                 element_type: "sdpdemux".to_string(),
                 properties: HashMap::new(),
+                pad_properties: HashMap::new(),
                 position: None,
             },
         ],
@@ -79,7 +81,11 @@ fn aes67_output() -> BlockDefinition {
             Element {
                 id: "rtpL24pay".to_string(),
                 element_type: "rtpL24pay".to_string(),
-                properties: HashMap::from([("offset".to_string(), PropertyValue::UInt(0))]),
+                properties: HashMap::from([(
+                    "timestamp-offset".to_string(),
+                    PropertyValue::UInt(0),
+                )]),
+                pad_properties: HashMap::new(),
                 position: None,
             },
             Element {
@@ -89,6 +95,7 @@ fn aes67_output() -> BlockDefinition {
                     ("async".to_string(), PropertyValue::Bool(false)),
                     ("sync".to_string(), PropertyValue::Bool(false)),
                 ]),
+                pad_properties: HashMap::new(),
                 position: None,
             },
         ],

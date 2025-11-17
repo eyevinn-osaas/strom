@@ -301,6 +301,34 @@ impl ApiClient {
         Ok(element_response.element)
     }
 
+    /// Get pad properties for a specific element type (on-demand introspection).
+    pub async fn get_element_pad_properties(&self, name: &str) -> ApiResult<ElementInfo> {
+        use strom_types::api::ElementInfoResponse;
+        use tracing::info;
+
+        let url = format!("{}/elements/{}/pads", self.base_url, name);
+        info!("Fetching element pad properties from: {}", url);
+
+        let response = Request::get(&url)
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.ok() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        let element_response: ElementInfoResponse = response
+            .json()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+
+        info!("Successfully loaded pad properties for: {}", name);
+        Ok(element_response.element)
+    }
+
     /// Get the debug graph URL for a flow.
     /// Returns the full URL that can be opened in a new tab.
     pub fn get_debug_graph_url(&self, id: FlowId) -> String {

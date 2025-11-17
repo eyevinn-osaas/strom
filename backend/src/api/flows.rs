@@ -8,13 +8,18 @@ use axum::{
 };
 use std::process::Command;
 use strom_types::{
-    api::{CreateFlowRequest, ErrorResponse, FlowListResponse, FlowResponse},
+    api::{
+        CreateFlowRequest, ElementPropertiesResponse, ErrorResponse, FlowListResponse,
+        FlowResponse, PadPropertiesResponse, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
+        UpdatePropertyRequest,
+    },
     Flow, FlowId,
 };
 use tempfile::NamedTempFile;
 use tracing::{error, info};
 use utoipa;
 
+use crate::layout;
 use crate::state::AppState;
 
 /// List all flows.
@@ -110,7 +115,7 @@ pub async fn create_flow(
 pub async fn update_flow(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
-    Json(flow): Json<Flow>,
+    Json(mut flow): Json<Flow>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Ensure the ID in the path matches the flow
     if id != flow.id {
@@ -120,15 +125,25 @@ pub async fn update_flow(
         ));
     }
 
-    // Check if flow exists
-    if state.get_flow(&id).await.is_none() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("Flow not found")),
-        ));
-    }
+    // Get old flow to compare for live updates
+    let old_flow = state.get_flow(&id).await.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse::new("Flow not found")),
+    ))?;
 
     info!("Updating flow: {} ({})", flow.name, flow.id);
+
+    // Apply auto-layout if needed
+    if layout::needs_auto_layout(&flow) {
+        info!(
+            "Flow '{}' needs auto-layout (elements stacked or missing positions)",
+            flow.name
+        );
+        layout::apply_auto_layout(&mut flow);
+    }
+
+    // Check if the flow is currently running
+    let is_running = old_flow.state == Some(strom_types::PipelineState::Playing);
 
     if let Err(e) = state.upsert_flow(flow.clone()).await {
         return Err((
@@ -138,6 +153,51 @@ pub async fn update_flow(
                 e.to_string(),
             )),
         ));
+    }
+
+    // If the flow is running, apply pad property changes live
+    if is_running {
+        for element in &flow.elements {
+            // Find the corresponding old element
+            if let Some(_old_element) = old_flow.elements.iter().find(|e| e.id == element.id) {
+                // Always apply pad properties if they exist (we can't easily compare HashMaps)
+                if !element.pad_properties.is_empty() {
+                    info!(
+                        "Pad properties changed for element {} in running flow",
+                        element.id
+                    );
+
+                    // Apply all pad properties for this element
+                    for (pad_name, properties) in &element.pad_properties {
+                        for (prop_name, prop_value) in properties {
+                            info!(
+                                "Applying live update: {}:{}:{} = {:?}",
+                                element.id, pad_name, prop_name, prop_value
+                            );
+
+                            // Try to update the pad property - ignore errors since some properties
+                            // may not be live-updatable
+                            if let Err(e) = state
+                                .update_pad_property(
+                                    &id,
+                                    &element.id,
+                                    pad_name,
+                                    prop_name,
+                                    prop_value.clone(),
+                                )
+                                .await
+                            {
+                                // Log but don't fail - property might not be mutable in current state
+                                info!(
+                                    "Could not live-update pad property {}:{}:{}: {}",
+                                    element.id, pad_name, prop_name, e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Ok(Json(FlowResponse { flow }))
@@ -408,4 +468,299 @@ pub async fn get_block_sdp(
         sdp,
     )
         .into_response())
+}
+
+/// Get current property values from a running element.
+///
+/// Returns all readable properties and their current values from an element
+/// in a running pipeline. The pipeline must be started for this endpoint to work.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/elements/{element_id}/properties",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("element_id" = String, Path, description = "Element instance ID")
+    ),
+    responses(
+        (status = 200, description = "Properties retrieved successfully", body = ElementPropertiesResponse),
+        (status = 404, description = "Flow not running or element not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn get_element_properties(
+    State(state): State<AppState>,
+    Path((flow_id, element_id)): Path<(FlowId, String)>,
+) -> Result<Json<ElementPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Getting properties for element {} in flow {}",
+        element_id, flow_id
+    );
+
+    let properties = state
+        .get_element_properties(&flow_id, &element_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to get element properties: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to get element properties",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(ElementPropertiesResponse {
+        element_id,
+        properties,
+    }))
+}
+
+/// Update a property on a running pipeline element.
+///
+/// Allows live modification of element properties while the pipeline is running.
+/// Only properties marked as mutable in the current pipeline state can be updated.
+/// The property mutability flags (mutable_in_playing, etc.) can be checked via
+/// the element info endpoint.
+#[utoipa::path(
+    patch,
+    path = "/api/flows/{flow_id}/elements/{element_id}/properties",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("element_id" = String, Path, description = "Element instance ID")
+    ),
+    request_body = UpdatePropertyRequest,
+    responses(
+        (status = 200, description = "Property updated successfully", body = ElementPropertiesResponse),
+        (status = 400, description = "Property cannot be changed in current state or invalid value", body = ErrorResponse),
+        (status = 404, description = "Flow not running or element not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn update_element_property(
+    State(state): State<AppState>,
+    Path((flow_id, element_id)): Path<(FlowId, String)>,
+    Json(req): Json<UpdatePropertyRequest>,
+) -> Result<Json<ElementPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Updating property {}.{} in flow {}",
+        element_id, req.property_name, flow_id
+    );
+
+    state
+        .update_element_property(&flow_id, &element_id, &req.property_name, req.value)
+        .await
+        .map_err(|e| {
+            error!("Failed to update property: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to update property",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    // Return updated properties
+    let properties = state
+        .get_element_properties(&flow_id, &element_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to get updated properties: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::with_details(
+                    "Property updated but failed to retrieve new values",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(ElementPropertiesResponse {
+        element_id,
+        properties,
+    }))
+}
+
+/// Get current property values from a pad in a running element.
+///
+/// Returns all readable properties and their current values from a specific pad
+/// on an element in a running pipeline. This is useful for elements like compositor
+/// where you need to control individual sink pad properties (alpha, xpos, ypos, zorder).
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/elements/{element_id}/pads/{pad_name}/properties",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("element_id" = String, Path, description = "Element instance ID"),
+        ("pad_name" = String, Path, description = "Pad name (e.g., sink_0, sink_1)")
+    ),
+    responses(
+        (status = 200, description = "Pad properties retrieved successfully", body = PadPropertiesResponse),
+        (status = 404, description = "Flow not running, element not found, or pad not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn get_pad_properties(
+    State(state): State<AppState>,
+    Path((flow_id, element_id, pad_name)): Path<(FlowId, String, String)>,
+) -> Result<Json<PadPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Getting properties for pad {}:{} in flow {}",
+        element_id, pad_name, flow_id
+    );
+
+    let properties = state
+        .get_pad_properties(&flow_id, &element_id, &pad_name)
+        .await
+        .map_err(|e| {
+            error!("Failed to get pad properties: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to get pad properties",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(PadPropertiesResponse {
+        element_id,
+        pad_name,
+        properties,
+    }))
+}
+
+/// Update a property on a pad in a running pipeline element.
+///
+/// Allows live modification of pad properties while the pipeline is running.
+/// This is essential for elements like compositor, glvideomixer, and audiomixer
+/// where you need to control individual input pad properties.
+/// Common pad properties include:
+/// - alpha: Opacity/transparency (0.0 to 1.0)
+/// - xpos, ypos: Position in pixels
+/// - width, height: Size in pixels
+/// - zorder: Layer order (higher values are on top)
+#[utoipa::path(
+    patch,
+    path = "/api/flows/{flow_id}/elements/{element_id}/pads/{pad_name}/properties",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("element_id" = String, Path, description = "Element instance ID"),
+        ("pad_name" = String, Path, description = "Pad name (e.g., sink_0, sink_1)")
+    ),
+    request_body = UpdatePadPropertyRequest,
+    responses(
+        (status = 200, description = "Pad property updated successfully", body = PadPropertiesResponse),
+        (status = 400, description = "Property cannot be changed in current state or invalid value", body = ErrorResponse),
+        (status = 404, description = "Flow not running, element not found, or pad not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn update_pad_property(
+    State(state): State<AppState>,
+    Path((flow_id, element_id, pad_name)): Path<(FlowId, String, String)>,
+    Json(req): Json<UpdatePadPropertyRequest>,
+) -> Result<Json<PadPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Updating pad property {}:{}:{} in flow {}",
+        element_id, pad_name, req.property_name, flow_id
+    );
+
+    state
+        .update_pad_property(
+            &flow_id,
+            &element_id,
+            &pad_name,
+            &req.property_name,
+            req.value,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to update pad property: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to update pad property",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    // Return updated properties
+    let properties = state
+        .get_pad_properties(&flow_id, &element_id, &pad_name)
+        .await
+        .map_err(|e| {
+            error!("Failed to get updated pad properties: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::with_details(
+                    "Property updated but failed to retrieve new values",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(PadPropertiesResponse {
+        element_id,
+        pad_name,
+        properties,
+    }))
+}
+
+/// Update flow properties (description, clock type, etc.).
+///
+/// Updates the configuration properties of a flow. The flow must be stopped
+/// to change certain properties like the clock type.
+#[utoipa::path(
+    patch,
+    path = "/api/flows/{id}/properties",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    request_body = UpdateFlowPropertiesRequest,
+    responses(
+        (status = 200, description = "Properties updated successfully", body = FlowResponse),
+        (status = 404, description = "Flow not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn update_flow_properties(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+    Json(req): Json<UpdateFlowPropertiesRequest>,
+) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!("Updating properties for flow {}", id);
+
+    // Get the flow
+    let mut flow = state.get_flow(&id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Flow not found")),
+        )
+    })?;
+
+    // Update properties
+    flow.properties = req.properties;
+
+    // Save the updated flow
+    if let Err(e) = state.upsert_flow(flow.clone()).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::with_details(
+                "Failed to save flow properties",
+                e.to_string(),
+            )),
+        ));
+    }
+
+    info!("Successfully updated properties for flow {}", id);
+
+    Ok(Json(FlowResponse { flow }))
 }

@@ -1,13 +1,15 @@
 //! OpenAPI documentation configuration.
 
 use strom_types::api::{
-    CreateFlowRequest, ElementInfoResponse, ElementListResponse, ErrorResponse, FlowListResponse,
-    FlowResponse,
+    CreateFlowRequest, ElementInfoResponse, ElementListResponse, ElementPropertiesResponse,
+    ErrorResponse, FlowListResponse, FlowResponse, UpdateFlowPropertiesRequest,
+    UpdatePropertyRequest,
 };
 use strom_types::block::{
     BlockCategoriesResponse, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
     CreateBlockRequest, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
 };
+use strom_types::flow::{FlowProperties, GStreamerClockType};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -20,8 +22,12 @@ use utoipa::OpenApi;
         crate::api::flows::delete_flow,
         crate::api::flows::start_flow,
         crate::api::flows::stop_flow,
+        crate::api::flows::update_flow_properties,
+        crate::api::flows::get_element_properties,
+        crate::api::flows::update_element_property,
         crate::api::elements::list_elements,
         crate::api::elements::get_element_info,
+        crate::api::elements::get_element_pad_properties,
         crate::api::blocks::list_blocks,
         crate::api::blocks::get_block,
         crate::api::blocks::create_block,
@@ -34,8 +40,13 @@ use utoipa::OpenApi;
             CreateFlowRequest,
             FlowResponse,
             FlowListResponse,
+            FlowProperties,
+            GStreamerClockType,
+            UpdateFlowPropertiesRequest,
             ElementListResponse,
             ElementInfoResponse,
+            ElementPropertiesResponse,
+            UpdatePropertyRequest,
             ErrorResponse,
             BlockDefinition,
             BlockInstance,

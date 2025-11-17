@@ -12,6 +12,70 @@ use utoipa::ToSchema;
 /// Unique identifier for a flow.
 pub type FlowId = Uuid;
 
+/// GStreamer clock type selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum GStreamerClockType {
+    /// System monotonic clock (default, recommended for most use cases)
+    #[default]
+    Monotonic,
+    /// System realtime clock (wall clock time)
+    Realtime,
+    /// Let GStreamer choose the default clock for the pipeline
+    PipelineDefault,
+    /// Precision Time Protocol clock (for synchronized multi-device scenarios)
+    Ptp,
+    /// Network Time Protocol clock
+    Ntp,
+}
+
+/// Clock synchronization status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ClockSyncStatus {
+    /// Clock is synchronized
+    Synced,
+    /// Clock is not synchronized
+    NotSynced,
+    /// Synchronization status unknown or not applicable
+    Unknown,
+}
+
+impl GStreamerClockType {
+    /// Get the human-readable description of this clock type.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Monotonic => {
+                "Monotonic (recommended) - stable system clock, not affected by time changes"
+            }
+            Self::Realtime => "Realtime - wall clock time, may jump if system time changes",
+            Self::PipelineDefault => "Pipeline Default - let GStreamer choose automatically",
+            Self::Ptp => "PTP - Precision Time Protocol for synchronized multi-device setups",
+            Self::Ntp => "NTP - Network Time Protocol",
+        }
+    }
+}
+
+/// Flow configuration properties.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FlowProperties {
+    /// Human-readable description (multiline text)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// GStreamer clock type to use for this flow
+    #[serde(default)]
+    pub clock_type: GStreamerClockType,
+    /// PTP domain (0-255, only used when clock_type is PTP)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ptp_domain: Option<u8>,
+    /// Clock synchronization status (updated by backend for running pipelines)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_sync_status: Option<ClockSyncStatus>,
+}
+
 /// A complete GStreamer pipeline definition.
 ///
 /// A flow represents a named, configured GStreamer pipeline that can be
@@ -36,6 +100,9 @@ pub struct Flow {
     /// Current runtime state (persisted to storage for automatic restart)
     #[serde(default)]
     pub state: Option<PipelineState>,
+    /// Flow configuration properties
+    #[serde(default)]
+    pub properties: FlowProperties,
 }
 
 impl Flow {
@@ -48,6 +115,7 @@ impl Flow {
             blocks: Vec::new(),
             links: Vec::new(),
             state: Some(PipelineState::Null),
+            properties: FlowProperties::default(),
         }
     }
 
@@ -60,6 +128,7 @@ impl Flow {
             blocks: Vec::new(),
             links: Vec::new(),
             state: Some(PipelineState::Null),
+            properties: FlowProperties::default(),
         }
     }
 }

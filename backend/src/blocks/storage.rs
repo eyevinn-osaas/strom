@@ -81,6 +81,7 @@ mod tests {
                 id: "test_elem".to_string(),
                 element_type: "fakesrc".to_string(),
                 properties: HashMap::new(),
+                pad_properties: HashMap::new(),
                 position: None,
             }],
             internal_links: vec![],

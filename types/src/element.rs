@@ -20,6 +20,9 @@ pub struct Element {
     /// Element properties as key-value pairs
     #[serde(default)]
     pub properties: HashMap<String, PropertyValue>,
+    /// Pad properties (pad_name -> property_name -> value)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub pad_properties: HashMap<String, HashMap<String, PropertyValue>>,
     /// Optional display position in the visual editor (x, y)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<(f32, f32)>,
@@ -139,6 +142,9 @@ pub struct PadInfo {
     pub presence: PadPresence,
     /// Media type classification
     pub media_type: MediaType,
+    /// Properties available on this pad template
+    #[serde(default)]
+    pub properties: Vec<PropertyInfo>,
 }
 
 /// Information about an element property.
@@ -154,6 +160,27 @@ pub struct PropertyInfo {
     /// Default value
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_value: Option<PropertyValue>,
+    /// Property is writable
+    #[serde(default)]
+    pub writable: bool,
+    /// Property can only be set during construction
+    #[serde(default)]
+    pub construct_only: bool,
+    /// Property can be changed in NULL state
+    #[serde(default)]
+    pub mutable_in_null: bool,
+    /// Property can be changed in READY state
+    #[serde(default)]
+    pub mutable_in_ready: bool,
+    /// Property can be changed in PAUSED state
+    #[serde(default)]
+    pub mutable_in_paused: bool,
+    /// Property can be changed in PLAYING state (live editing!)
+    #[serde(default)]
+    pub mutable_in_playing: bool,
+    /// Property can be controlled over time with GstController
+    #[serde(default)]
+    pub controllable: bool,
 }
 
 /// Types of properties that elements can have.

@@ -253,6 +253,7 @@ mod tests {
             id: "src".to_string(),
             element_type: "videotestsrc".to_string(),
             properties: HashMap::new(),
+            pad_properties: HashMap::new(),
             position: None,
         }];
 

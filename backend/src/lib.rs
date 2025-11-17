@@ -2,7 +2,7 @@
 //!
 //! This module exposes the application builder for use in tests.
 
-use axum::{routing::get, routing::post, Router};
+use axum::{routing::get, routing::patch, routing::post, Router};
 use tower_http::cors::{Any, CorsLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -13,6 +13,7 @@ pub mod blocks;
 pub mod config;
 pub mod events;
 pub mod gst;
+pub mod layout;
 pub mod openapi;
 pub mod state;
 pub mod storage;
@@ -28,8 +29,13 @@ pub async fn create_app() -> Router {
 
 /// Create the Axum application router with a given state.
 pub async fn create_app_with_state(state: AppState) -> Router {
-    // Initialize GStreamer (idempotent)
-    gstreamer::init().expect("Failed to initialize GStreamer");
+    // Initialize GStreamer (idempotent - OK if already initialized)
+    if let Err(e) = gstreamer::init() {
+        tracing::warn!(
+            "GStreamer initialization warning (may already be initialized): {}",
+            e
+        );
+    }
 
     // Build API router
     let api_router = Router::new()
@@ -45,11 +51,35 @@ pub async fn create_app_with_state(state: AppState) -> Router {
         .route("/flows/{id}/stop", post(api::flows::stop_flow))
         .route("/flows/{id}/debug-graph", get(api::flows::debug_graph))
         .route(
+            "/flows/{id}/properties",
+            patch(api::flows::update_flow_properties),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/sdp",
             get(api::flows::get_block_sdp),
         )
+        .route(
+            "/flows/{flow_id}/elements/{element_id}/properties",
+            get(api::flows::get_element_properties),
+        )
+        .route(
+            "/flows/{flow_id}/elements/{element_id}/properties",
+            patch(api::flows::update_element_property),
+        )
+        .route(
+            "/flows/{flow_id}/elements/{element_id}/pads/{pad_name}/properties",
+            get(api::flows::get_pad_properties),
+        )
+        .route(
+            "/flows/{flow_id}/elements/{element_id}/pads/{pad_name}/properties",
+            patch(api::flows::update_pad_property),
+        )
         .route("/elements", get(api::elements::list_elements))
         .route("/elements/{name}", get(api::elements::get_element_info))
+        .route(
+            "/elements/{name}/pads",
+            get(api::elements::get_element_pad_properties),
+        )
         .route("/blocks", get(api::blocks::list_blocks))
         .route("/blocks", post(api::blocks::create_block))
         .route("/blocks/categories", get(api::blocks::get_categories))

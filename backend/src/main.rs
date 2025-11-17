@@ -32,6 +32,9 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::with_json_storage(&config.flows_path, &config.blocks_path);
     state.load_from_storage().await?;
 
+    // Discover and cache GStreamer elements
+    state.discover_and_cache_elements().await?;
+
     // Restart flows that were running before shutdown
     info!("Restarting flows that were running...");
     let flows = state.get_flows().await;

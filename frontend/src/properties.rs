@@ -1,5 +1,6 @@
 //! Property inspector for editing element properties.
 
+use crate::graph::PropertyTab;
 use egui::{Color32, ScrollArea, Ui};
 use strom_types::{
     block::ExposedProperty,
@@ -11,9 +12,53 @@ use strom_types::{
 pub struct PropertyInspector;
 
 impl PropertyInspector {
-    /// Show the property inspector for the given element.
-    pub fn show(ui: &mut Ui, element: &mut Element, element_info: Option<&ElementInfo>) {
+    /// Match an actual pad name (e.g., "sink_0") to a pad template (e.g., "sink_%u").
+    /// Returns true if the actual pad name matches the template.
+    fn matches_pad_template(actual_pad: &str, template: &str) -> bool {
+        // First try exact match
+        if actual_pad == template {
+            return true;
+        }
+
+        // Check for request pad patterns like "sink_%u", "src_%u", "sink_%d", etc.
+        // Replace common patterns with regex-like matching
+        if template.contains("%u") || template.contains("%d") {
+            // Extract the prefix before the pattern
+            let prefix = if let Some(idx) = template.find("%u") {
+                &template[..idx]
+            } else if let Some(idx) = template.find("%d") {
+                &template[..idx]
+            } else {
+                return false;
+            };
+
+            // Check if actual pad starts with the prefix
+            if !actual_pad.starts_with(prefix) {
+                return false;
+            }
+
+            // Check if the suffix is numeric
+            let suffix = &actual_pad[prefix.len()..];
+            suffix.chars().all(|c| c.is_ascii_digit() || c == '_')
+        } else {
+            false
+        }
+    }
+
+    /// Show the property inspector for the given element with tabbed interface.
+    /// Returns the new active tab if it was changed.
+    pub fn show(
+        ui: &mut Ui,
+        element: &mut Element,
+        element_info: Option<&ElementInfo>,
+        active_tab: PropertyTab,
+        focused_pad: Option<String>,
+        input_pads: Vec<String>,
+        output_pads: Vec<String>,
+    ) -> PropertyTab {
         let element_id = element.id.clone();
+        let mut new_tab = active_tab;
+
         ui.push_id(&element_id, |ui| {
             // Element type (read-only)
             ui.horizontal(|ui| {
@@ -29,103 +74,213 @@ impl PropertyInspector {
 
             ui.separator();
 
-            ui.label("💡 Only modified properties are saved");
+            // Tab buttons
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(new_tab == PropertyTab::Element, "Element Properties")
+                    .clicked()
+                {
+                    new_tab = PropertyTab::Element;
+                }
+                if ui
+                    .selectable_label(new_tab == PropertyTab::InputPads, "Input Pads")
+                    .clicked()
+                {
+                    new_tab = PropertyTab::InputPads;
+                }
+                if ui
+                    .selectable_label(new_tab == PropertyTab::OutputPads, "Output Pads")
+                    .clicked()
+                {
+                    new_tab = PropertyTab::OutputPads;
+                }
+            });
 
-            ScrollArea::both()
-                .id_salt("properties_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    // Show properties from metadata if available
-                    if let Some(info) = element_info {
-                        if !info.properties.is_empty() {
-                            for prop_info in &info.properties {
-                                Self::show_property_from_info(ui, element, prop_info);
-                            }
-                        } else {
-                            ui.label("No properties available for this element");
+            ui.separator();
+
+            // Tab content
+            match new_tab {
+                PropertyTab::Element => {
+                    Self::show_element_properties_tab(ui, element, element_info);
+                }
+                PropertyTab::InputPads => {
+                    Self::show_input_pads_tab(
+                        ui,
+                        element,
+                        element_info,
+                        &input_pads,
+                        focused_pad.as_deref(),
+                    );
+                }
+                PropertyTab::OutputPads => {
+                    Self::show_output_pads_tab(
+                        ui,
+                        element,
+                        element_info,
+                        &output_pads,
+                        focused_pad.as_deref(),
+                    );
+                }
+            }
+        });
+
+        new_tab
+    }
+
+    /// Show the Element Properties tab content.
+    fn show_element_properties_tab(
+        ui: &mut Ui,
+        element: &mut Element,
+        element_info: Option<&ElementInfo>,
+    ) {
+        ui.label("💡 Only modified properties are saved");
+
+        ScrollArea::both()
+            .id_salt("element_properties_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if let Some(info) = element_info {
+                    if !info.properties.is_empty() {
+                        for prop_info in &info.properties {
+                            Self::show_property_from_info(ui, element, prop_info);
                         }
                     } else {
-                        ui.label("No element metadata available");
+                        ui.label("No element properties available");
+                    }
+                } else {
+                    ui.label("No element metadata available");
+                }
+            });
+    }
+
+    /// Show the Input Pads tab content.
+    fn show_input_pads_tab(
+        ui: &mut Ui,
+        element: &mut Element,
+        element_info: Option<&ElementInfo>,
+        actual_pads: &[String],
+        focused_pad: Option<&str>,
+    ) {
+        ui.label("💡 Only modified properties are saved");
+
+        ScrollArea::both()
+            .id_salt("input_pads_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if actual_pads.is_empty() {
+                    ui.label("No input pads connected");
+                    return;
+                }
+
+                for pad_name in actual_pads {
+                    // Highlight focused pad
+                    let is_focused = focused_pad == Some(pad_name.as_str());
+                    if is_focused {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 200, 100),
+                            format!("▶ Input Pad: {}", pad_name),
+                        );
+                    } else {
+                        ui.label(format!("Input Pad: {}", pad_name));
                     }
 
-                    // Show any additional custom properties that aren't in the metadata
-                    if let Some(info) = element_info {
-                        let known_props: std::collections::HashSet<String> =
-                            info.properties.iter().map(|p| p.name.clone()).collect();
+                    ui.indent(pad_name, |ui| {
+                        // Find properties for this pad from element_info
+                        if let Some(info) = element_info {
+                            // Check if there's a matching sink pad in metadata (try template matching)
+                            let pad_info = info
+                                .sink_pads
+                                .iter()
+                                .find(|p| Self::matches_pad_template(pad_name, &p.name));
 
-                        let custom_keys: Vec<String> = element
-                            .properties
-                            .keys()
-                            .filter(|k| !known_props.contains(*k))
-                            .cloned()
-                            .collect();
-
-                        if !custom_keys.is_empty() {
-                            ui.separator();
-                            ui.heading("Custom Properties");
-                            ui.add_space(4.0);
-                            for key in custom_keys {
-                                let should_remove = ui
-                                    .horizontal(|ui| {
-                                        ui.label(format!("{}:", key));
-                                        if let Some(value) = element.properties.get_mut(&key) {
-                                            Self::show_property_editor(ui, value, None, None);
-                                        }
-                                        ui.small_button("🗑")
-                                            .on_hover_text("Remove property")
-                                            .clicked()
-                                    })
-                                    .inner;
-
-                                if should_remove {
-                                    element.properties.remove(&key);
+                            if let Some(pad_info) = pad_info {
+                                if !pad_info.properties.is_empty() {
+                                    for prop_info in &pad_info.properties {
+                                        Self::show_pad_property_from_info(
+                                            ui, element, pad_name, prop_info,
+                                        );
+                                    }
+                                } else {
+                                    ui.small("No configurable properties");
                                 }
-                                ui.add_space(8.0);
+                            } else {
+                                ui.small(format!(
+                                    "No metadata for pad (tried matching: {})",
+                                    pad_name
+                                ));
                             }
+                        } else {
+                            ui.small("No element metadata available");
                         }
+                    });
+                    ui.add_space(8.0);
+                }
+            });
+    }
+
+    /// Show the Output Pads tab content.
+    fn show_output_pads_tab(
+        ui: &mut Ui,
+        element: &mut Element,
+        element_info: Option<&ElementInfo>,
+        actual_pads: &[String],
+        focused_pad: Option<&str>,
+    ) {
+        ui.label("💡 Only modified properties are saved");
+
+        ScrollArea::both()
+            .id_salt("output_pads_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if actual_pads.is_empty() {
+                    ui.label("No output pads connected");
+                    return;
+                }
+
+                for pad_name in actual_pads {
+                    // Highlight focused pad
+                    let is_focused = focused_pad == Some(pad_name.as_str());
+                    if is_focused {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 200, 100),
+                            format!("▶ Output Pad: {}", pad_name),
+                        );
+                    } else {
+                        ui.label(format!("Output Pad: {}", pad_name));
                     }
 
-                    ui.separator();
+                    ui.indent(pad_name, |ui| {
+                        // Find properties for this pad from element_info
+                        if let Some(info) = element_info {
+                            // Check if there's a matching source pad in metadata (try template matching)
+                            let pad_info = info
+                                .src_pads
+                                .iter()
+                                .find(|p| Self::matches_pad_template(pad_name, &p.name));
 
-                    // Add new property
-                    ui.collapsing("Add Custom Property", |ui| {
-                        ui.label("Add custom properties manually:");
-
-                        // Use egui's memory system for persistent state
-                        let id = ui.make_persistent_id("new_property_state");
-                        let mut state = ui.memory_mut(|mem| {
-                            mem.data
-                                .get_temp::<(String, String)>(id)
-                                .unwrap_or_else(|| (String::new(), String::new()))
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Key:");
-                            ui.text_edit_singleline(&mut state.0);
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Value:");
-                            ui.text_edit_singleline(&mut state.1);
-                        });
-
-                        let should_add = ui.button("Add Property").clicked();
-
-                        if should_add && !state.0.is_empty() {
-                            element
-                                .properties
-                                .insert(state.0.clone(), PropertyValue::String(state.1.clone()));
-                            state.0.clear();
-                            state.1.clear();
+                            if let Some(pad_info) = pad_info {
+                                if !pad_info.properties.is_empty() {
+                                    for prop_info in &pad_info.properties {
+                                        Self::show_pad_property_from_info(
+                                            ui, element, pad_name, prop_info,
+                                        );
+                                    }
+                                } else {
+                                    ui.small("No configurable properties");
+                                }
+                            } else {
+                                ui.small(format!(
+                                    "No metadata for pad (tried matching: {})",
+                                    pad_name
+                                ));
+                            }
+                        } else {
+                            ui.small("No element metadata available");
                         }
-
-                        // Save state back to memory
-                        ui.memory_mut(|mem| {
-                            mem.data.insert_temp(id, state);
-                        });
                     });
-                });
-        });
+                    ui.add_space(8.0);
+                }
+            });
     }
 
     /// Show the property inspector for the given block.
@@ -353,6 +508,118 @@ impl PropertyInspector {
         ui.add_space(8.0);
     }
 
+    fn show_pad_property_from_info(
+        ui: &mut Ui,
+        element: &mut Element,
+        pad_name: &str,
+        prop_info: &PropertyInfo,
+    ) {
+        let prop_name = &prop_info.name;
+        let default_value = prop_info.default_value.as_ref();
+
+        // Get current value from pad_properties or use default
+        let mut current_value = element
+            .pad_properties
+            .get(pad_name)
+            .and_then(|props| props.get(prop_name))
+            .cloned();
+        let has_custom_value = current_value.is_some();
+
+        if current_value.is_none() {
+            current_value = default_value.cloned();
+
+            // For enum properties without default value, initialize to first option
+            if current_value.is_none() {
+                if let PropertyType::Enum { values } = &prop_info.property_type {
+                    if let Some(first_value) = values.first() {
+                        current_value = Some(PropertyValue::String(first_value.clone()));
+                    }
+                }
+            }
+        }
+
+        ui.horizontal(|ui| {
+            // Show property name with indicator if modified
+            if has_custom_value {
+                ui.colored_label(
+                    Color32::from_rgb(255, 150, 100), // Orange for pad properties
+                    format!("● {}:", prop_name),
+                );
+            } else {
+                ui.label(format!("{}:", prop_name));
+            }
+
+            if let Some(mut value) = current_value {
+                let changed = Self::show_property_editor(
+                    ui,
+                    &mut value,
+                    Some(&prop_info.property_type),
+                    default_value,
+                );
+
+                if changed {
+                    // Ensure the pad_properties map exists
+                    element
+                        .pad_properties
+                        .entry(pad_name.to_string())
+                        .or_default();
+
+                    // Only save if different from default
+                    if let Some(default) = default_value {
+                        if !Self::values_equal(&value, default) {
+                            element
+                                .pad_properties
+                                .get_mut(pad_name)
+                                .unwrap()
+                                .insert(prop_name.clone(), value);
+                        } else {
+                            // Remove if same as default
+                            if let Some(props) = element.pad_properties.get_mut(pad_name) {
+                                props.remove(prop_name);
+                                // Clean up empty pad property maps
+                                if props.is_empty() {
+                                    element.pad_properties.remove(pad_name);
+                                }
+                            }
+                        }
+                    } else {
+                        element
+                            .pad_properties
+                            .get_mut(pad_name)
+                            .unwrap()
+                            .insert(prop_name.clone(), value);
+                    }
+                }
+            }
+
+            // Reset button if modified
+            if has_custom_value
+                && ui
+                    .small_button("↺")
+                    .on_hover_text("Reset to default")
+                    .clicked()
+            {
+                if let Some(props) = element.pad_properties.get_mut(pad_name) {
+                    props.remove(prop_name);
+                    // Clean up empty pad property maps
+                    if props.is_empty() {
+                        element.pad_properties.remove(pad_name);
+                    }
+                }
+            }
+        });
+
+        // Show description
+        if !prop_info.description.is_empty() {
+            ui.indent(prop_name, |ui| {
+                ui.small(&prop_info.description);
+            });
+        }
+
+        // Add spacing after each property
+        ui.add_space(8.0);
+    }
+
     fn show_property_from_info(ui: &mut Ui, element: &mut Element, prop_info: &PropertyInfo) {
         let prop_name = &prop_info.name;
         let default_value = prop_info.default_value.as_ref();
@@ -363,6 +630,15 @@ impl PropertyInspector {
 
         if current_value.is_none() {
             current_value = default_value.cloned();
+
+            // For enum properties without default value, initialize to first option
+            if current_value.is_none() {
+                if let PropertyType::Enum { values } = &prop_info.property_type {
+                    if let Some(first_value) = values.first() {
+                        current_value = Some(PropertyValue::String(first_value.clone()));
+                    }
+                }
+            }
         }
 
         ui.horizontal(|ui| {
