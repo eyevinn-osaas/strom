@@ -309,6 +309,11 @@ impl ElementDiscovery {
                 continue;
             }
 
+            // Skip pad name property (cannot be changed)
+            if name == "name" {
+                continue;
+            }
+
             // Skip write-only properties (not readable)
             if !pspec.flags().contains(glib::ParamFlags::READABLE) {
                 continue;
@@ -695,6 +700,11 @@ impl ElementDiscovery {
 
             // Skip internal/private properties
             if name.starts_with("_") {
+                continue;
+            }
+
+            // Skip pad name property (cannot be changed)
+            if name == "name" {
                 continue;
             }
 
