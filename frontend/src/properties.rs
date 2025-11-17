@@ -327,31 +327,25 @@ impl PropertyInspector {
                     }
 
                     // Show SDP for AES67 output blocks
-                    if definition.id == "builtin.aes67_output" && flow_id.is_some() {
+                    if definition.id == "builtin.aes67_output" {
                         ui.separator();
                         ui.heading("📡 SDP (Session Description)");
                         ui.add_space(4.0);
-                        ui.label("Copy this SDP to configure receivers:");
-                        ui.add_space(4.0);
 
-                        // Store SDP in localStorage with flow+block specific key
-                        let sdp_key = format!("strom_sdp_{}_{}", flow_id.unwrap(), block_id);
+                        // Get SDP from runtime_data (only available when flow is running)
+                        let sdp = block
+                            .runtime_data
+                            .as_ref()
+                            .and_then(|data| data.get("sdp"))
+                            .map(|s| s.as_str());
 
-                        // Try to get SDP from localStorage
-                        let sdp: Option<String> = if let Some(window) = web_sys::window() {
-                            if let Some(storage) = window.local_storage().ok().flatten() {
-                                storage.get_item(&sdp_key).ok().flatten()
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
+                        if let Some(mut sdp_text) = sdp {
+                            ui.label("Copy this SDP to configure receivers:");
+                            ui.add_space(4.0);
 
-                        if let Some(sdp_text) = &sdp {
                             // Display SDP in a code-style text box
                             ui.add(
-                                egui::TextEdit::multiline(&mut sdp_text.as_str())
+                                egui::TextEdit::multiline(&mut sdp_text)
                                     .desired_rows(12)
                                     .desired_width(f32::INFINITY)
                                     .code_editor()
@@ -362,16 +356,15 @@ impl PropertyInspector {
 
                             // Copy button
                             if ui.button("📋 Copy to Clipboard").clicked() {
-                                ui.ctx().copy_text(sdp_text.clone());
+                                ui.ctx().copy_text(sdp_text.to_string());
                             }
                         } else {
-                            ui.label("Fetching SDP...");
-                            // Signal that we need to fetch SDP
-                            if let Some(window) = web_sys::window() {
-                                if let Some(storage) = window.local_storage().ok().flatten() {
-                                    let _ = storage.set_item("strom_fetch_sdp", &sdp_key);
-                                }
-                            }
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "⚠ SDP is only available when the flow is running",
+                            );
+                            ui.add_space(4.0);
+                            ui.small("Start the flow to generate SDP based on the actual stream capabilities.");
                         }
                     }
                 });
@@ -382,8 +375,8 @@ impl PropertyInspector {
         ui: &mut Ui,
         block: &mut BlockInstance,
         exposed_prop: &ExposedProperty,
-        definition: &BlockDefinition,
-        flow_id: Option<strom_types::FlowId>,
+        _definition: &BlockDefinition,
+        _flow_id: Option<strom_types::FlowId>,
     ) {
         let prop_name = &exposed_prop.name;
         let default_value = exposed_prop.default_value.as_ref();
@@ -399,19 +392,6 @@ impl PropertyInspector {
         if current_value.is_none() {
             current_value = default_value.cloned();
         }
-
-        // Helper function to invalidate SDP cache for AES67 output blocks
-        let invalidate_sdp_cache = || {
-            if definition.id == "builtin.aes67_output" && flow_id.is_some() {
-                if let Some(window) = web_sys::window() {
-                    if let Some(storage) = window.local_storage().ok().flatten() {
-                        let sdp_key = format!("strom_sdp_{}_{}", flow_id.unwrap(), block.id);
-                        let _ = storage.remove_item(&sdp_key);
-                        tracing::debug!("Invalidated SDP cache for block {}", block.id);
-                    }
-                }
-            }
-        };
 
         // For multiline, use vertical layout
         if is_multiline {
@@ -434,8 +414,6 @@ impl PropertyInspector {
                         .clicked()
                 {
                     block.properties.remove(prop_name);
-                    // Invalidate SDP cache if this is an AES67 output block
-                    invalidate_sdp_cache();
                 }
             });
 
@@ -469,8 +447,6 @@ impl PropertyInspector {
                 } else {
                     block.properties.remove(prop_name);
                 }
-                // Invalidate SDP cache if this is an AES67 output block
-                invalidate_sdp_cache();
             }
         } else {
             // For non-multiline, use horizontal layout
@@ -507,8 +483,6 @@ impl PropertyInspector {
                         } else {
                             block.properties.insert(prop_name.clone(), value);
                         }
-                        // Invalidate SDP cache if this is an AES67 output block
-                        invalidate_sdp_cache();
                     }
                 }
 
@@ -520,8 +494,6 @@ impl PropertyInspector {
                         .clicked()
                 {
                     block.properties.remove(prop_name);
-                    // Invalidate SDP cache if this is an AES67 output block
-                    invalidate_sdp_cache();
                 }
             });
         }
