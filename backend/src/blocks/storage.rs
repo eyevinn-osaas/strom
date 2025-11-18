@@ -55,7 +55,6 @@ pub async fn save_user_blocks(path: &Path, blocks: &[BlockDefinition]) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use strom_types::*;
     use tempfile::NamedTempFile;
 
@@ -77,14 +76,6 @@ mod tests {
             name: "Test Block".to_string(),
             description: "A test block".to_string(),
             category: "Test".to_string(),
-            elements: vec![Element {
-                id: "test_elem".to_string(),
-                element_type: "fakesrc".to_string(),
-                properties: HashMap::new(),
-                pad_properties: HashMap::new(),
-                position: None,
-            }],
-            internal_links: vec![],
             exposed_properties: vec![],
             external_pads: ExternalPads {
                 inputs: vec![],

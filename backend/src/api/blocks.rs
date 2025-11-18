@@ -76,8 +76,6 @@ pub async fn create_block(
         name: req.name,
         description: req.description,
         category: req.category,
-        elements: req.elements,
-        internal_links: req.internal_links,
         exposed_properties: req.exposed_properties,
         external_pads: req.external_pads,
         built_in: false,

@@ -22,24 +22,14 @@ const START_Y: f32 = 50.0;
 /// Check if a flow needs auto-layout applied.
 ///
 /// Returns true if:
-/// - All elements have no positions (None), OR
-/// - All elements have identical positions (stacked)
+/// - All elements have identical positions (stacked at 0,0 or same location)
 pub fn needs_auto_layout(flow: &Flow) -> bool {
     if flow.elements.is_empty() {
         return false;
     }
 
-    // Check if all positions are None
-    let all_none = flow.elements.iter().all(|e| e.position.is_none());
-    if all_none {
-        return true;
-    }
-
     // Check if all positions are identical (stacked)
-    let positions: Vec<_> = flow.elements.iter().filter_map(|e| e.position).collect();
-    if positions.is_empty() {
-        return true;
-    }
+    let positions: Vec<_> = flow.elements.iter().map(|e| e.position).collect();
 
     let first_pos = positions[0];
     let all_same = positions.iter().all(|&pos| pos == first_pos);
@@ -150,7 +140,7 @@ pub fn apply_auto_layout(flow: &mut Flow) {
         let x = START_X + (layer as f32) * LAYER_SPACING;
         let y = START_Y + (index_in_layer as f32) * ELEMENT_SPACING;
 
-        element.position = Some((x, y));
+        element.position = (x, y);
         debug!(
             "Positioned element '{}' at layer {} -> ({}, {})",
             element.id, layer, x, y
@@ -175,7 +165,7 @@ mod tests {
     use std::collections::HashMap;
     use strom_types::Element;
 
-    fn create_element(id: &str, position: Option<(f32, f32)>) -> Element {
+    fn create_element(id: &str, position: (f32, f32)) -> Element {
         Element {
             id: id.to_string(),
             element_type: "test".to_string(),
@@ -186,21 +176,19 @@ mod tests {
     }
 
     #[test]
-    fn test_needs_auto_layout_all_none() {
+    fn test_needs_auto_layout_all_stacked_at_origin() {
         let mut flow = Flow::new("test");
-        flow.elements.push(create_element("elem1", None));
-        flow.elements.push(create_element("elem2", None));
+        flow.elements.push(create_element("elem1", (0.0, 0.0)));
+        flow.elements.push(create_element("elem2", (0.0, 0.0)));
 
         assert!(needs_auto_layout(&flow));
     }
 
     #[test]
-    fn test_needs_auto_layout_all_stacked() {
+    fn test_needs_auto_layout_all_stacked_same_location() {
         let mut flow = Flow::new("test");
-        flow.elements
-            .push(create_element("elem1", Some((0.0, 0.0))));
-        flow.elements
-            .push(create_element("elem2", Some((0.0, 0.0))));
+        flow.elements.push(create_element("elem1", (50.0, 50.0)));
+        flow.elements.push(create_element("elem2", (50.0, 50.0)));
 
         assert!(needs_auto_layout(&flow));
     }
@@ -208,10 +196,8 @@ mod tests {
     #[test]
     fn test_needs_auto_layout_spread_out() {
         let mut flow = Flow::new("test");
-        flow.elements
-            .push(create_element("elem1", Some((0.0, 0.0))));
-        flow.elements
-            .push(create_element("elem2", Some((100.0, 100.0))));
+        flow.elements.push(create_element("elem1", (0.0, 0.0)));
+        flow.elements.push(create_element("elem2", (100.0, 100.0)));
 
         assert!(!needs_auto_layout(&flow));
     }
@@ -219,9 +205,9 @@ mod tests {
     #[test]
     fn test_apply_auto_layout_simple_chain() {
         let mut flow = Flow::new("test");
-        flow.elements.push(create_element("elem1", None));
-        flow.elements.push(create_element("elem2", None));
-        flow.elements.push(create_element("elem3", None));
+        flow.elements.push(create_element("elem1", (0.0, 0.0)));
+        flow.elements.push(create_element("elem2", (0.0, 0.0)));
+        flow.elements.push(create_element("elem3", (0.0, 0.0)));
         flow.links.push(strom_types::Link {
             from: "elem1:src".to_string(),
             to: "elem2:sink".to_string(),
@@ -238,18 +224,14 @@ mod tests {
         let elem2 = &flow.elements[1];
         let elem3 = &flow.elements[2];
 
-        assert!(elem1.position.is_some());
-        assert!(elem2.position.is_some());
-        assert!(elem3.position.is_some());
-
         // elem1 should be leftmost (layer 0)
-        assert_eq!(elem1.position.unwrap().0, START_X);
+        assert_eq!(elem1.position.0, START_X);
 
         // elem2 should be in layer 1
-        assert_eq!(elem2.position.unwrap().0, START_X + LAYER_SPACING);
+        assert_eq!(elem2.position.0, START_X + LAYER_SPACING);
 
         // elem3 should be in layer 2
-        assert_eq!(elem3.position.unwrap().0, START_X + LAYER_SPACING * 2.0);
+        assert_eq!(elem3.position.0, START_X + LAYER_SPACING * 2.0);
     }
 
     #[test]
