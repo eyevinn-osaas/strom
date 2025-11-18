@@ -440,32 +440,192 @@ impl PipelineManager {
             // Try to get the pad - try static first, then request if not found
             let src_pad_obj = if let Some(pad) = src.static_pad(src_pad_name) {
                 pad
-            } else if let Some(pad) = src.request_pad_simple(src_pad_name) {
-                // Request pad (for elements like tee with src_%u pads)
-                pad
             } else {
-                // Pad doesn't exist - might be a dynamic pad
-                return Err(PipelineError::LinkError(
-                    link.from.clone(),
-                    format!(
-                        "Source pad {} not available yet (dynamic pad)",
-                        src_pad_name
-                    ),
-                ));
+                // Pad not static - try to request it
+                // First try request_pad_simple with the exact name
+                if let Some(pad) = src.request_pad_simple(src_pad_name) {
+                    pad
+                } else {
+                    // If that didn't work, try finding a compatible pad template
+                    // This handles cases like "src_0" needing the "src_%u" template (e.g., tee)
+                    // Get templates from the element factory (class templates)
+                    let factory = src.factory().ok_or_else(|| {
+                        PipelineError::LinkError(
+                            link.from.clone(),
+                            format!("Element {} has no factory", from_element),
+                        )
+                    })?;
+                    let pad_template_list = factory.static_pad_templates();
+                    let pad_template = pad_template_list
+                        .iter()
+                        .filter(|tmpl| {
+                            tmpl.presence() == gst::PadPresence::Request
+                                && tmpl.direction() == gst::PadDirection::Src
+                        })
+                        .find(|tmpl| {
+                            let name_template = tmpl.name_template();
+                            // Check if this template could produce the requested pad name
+                            if name_template.contains("%u") || name_template.contains("%d") {
+                                let prefix = name_template.split('%').next().unwrap_or("");
+                                src_pad_name.starts_with(prefix)
+                            } else {
+                                name_template == src_pad_name
+                            }
+                        });
+
+                    if let Some(static_tmpl) = pad_template {
+                        let tmpl_name = static_tmpl.name_template();
+                        debug!(
+                            "Found matching template '{}' for pad name '{}', getting PadTemplate from element",
+                            tmpl_name, src_pad_name
+                        );
+                        // Get the actual PadTemplate from the element (not the static one)
+                        if let Some(pad_tmpl) = src.pad_template(tmpl_name) {
+                            debug!(
+                                "Requesting pad from template '{}' for pad name '{}'",
+                                tmpl_name, src_pad_name
+                            );
+                            // Request a new pad from the template - let GStreamer auto-name it
+                            if let Some(pad) = src.request_pad(&pad_tmpl, None, None) {
+                                debug!(
+                                    "Successfully requested pad '{}' for requested name '{}'",
+                                    pad.name(),
+                                    src_pad_name
+                                );
+                                pad
+                            } else {
+                                // Couldn't get pad from template
+                                return Err(PipelineError::LinkError(
+                                    link.from.clone(),
+                                    format!(
+                                        "Source pad {} not available (tried template '{}')",
+                                        src_pad_name, tmpl_name
+                                    ),
+                                ));
+                            }
+                        } else {
+                            return Err(PipelineError::LinkError(
+                                link.from.clone(),
+                                format!("Could not get PadTemplate '{}' from element", tmpl_name),
+                            ));
+                        }
+                    } else {
+                        // No compatible template found - might be a dynamic pad
+                        return Err(PipelineError::LinkError(
+                            link.from.clone(),
+                            format!(
+                                "Source pad {} not available yet (dynamic pad)",
+                                src_pad_name
+                            ),
+                        ));
+                    }
+                }
             };
 
             // Try to get sink pad - try static first, then request if not found
             let sink_pad_obj = if let Some(pad) = sink.static_pad(sink_pad_name) {
                 pad
-            } else if let Some(pad) = sink.request_pad_simple(sink_pad_name) {
-                // Request pad (for elements with request sink pads)
-                pad
             } else {
-                // Pad doesn't exist - might be a dynamic pad
-                return Err(PipelineError::LinkError(
-                    link.to.clone(),
-                    format!("Sink pad {} not available yet (dynamic pad)", sink_pad_name),
-                ));
+                // Pad not static - try to request it
+                // First try request_pad_simple with the exact name
+                if let Some(pad) = sink.request_pad_simple(sink_pad_name) {
+                    pad
+                } else {
+                    // If that didn't work, try finding a compatible pad template
+                    // This handles cases like "sink_0" needing the "sink_%u" template
+                    // Get templates from the element factory (class templates)
+                    let factory = sink.factory().ok_or_else(|| {
+                        PipelineError::LinkError(
+                            link.to.clone(),
+                            format!("Element {} has no factory", to_element),
+                        )
+                    })?;
+                    let pad_template_list = factory.static_pad_templates();
+                    debug!(
+                        "Searching for pad template for sink pad '{}' on element '{}' (type: {})",
+                        sink_pad_name,
+                        to_element,
+                        factory.name()
+                    );
+                    debug!(
+                        "Available pad templates from factory: {:?}",
+                        pad_template_list
+                            .iter()
+                            .map(|t| format!(
+                                "{} (direction: {:?}, presence: {:?})",
+                                t.name_template(),
+                                t.direction(),
+                                t.presence()
+                            ))
+                            .collect::<Vec<_>>()
+                    );
+                    let pad_template = pad_template_list
+                        .iter()
+                        .filter(|tmpl| {
+                            tmpl.presence() == gst::PadPresence::Request
+                                && tmpl.direction() == gst::PadDirection::Sink
+                        })
+                        .find(|tmpl| {
+                            let name_template = tmpl.name_template();
+                            // Check if this template could produce the requested pad name
+                            // e.g., "sink_%u" can produce "sink_0", "sink_1", etc.
+                            if name_template.contains("%u") || name_template.contains("%d") {
+                                let prefix = name_template.split('%').next().unwrap_or("");
+                                let matches = sink_pad_name.starts_with(prefix);
+                                debug!(
+                                    "Checking template '{}': prefix='{}', pad_name='{}', matches={}",
+                                    name_template, prefix, sink_pad_name, matches
+                                );
+                                matches
+                            } else {
+                                name_template == sink_pad_name
+                            }
+                        });
+
+                    if let Some(static_tmpl) = pad_template {
+                        let tmpl_name = static_tmpl.name_template();
+                        debug!(
+                            "Found matching template '{}' for pad name '{}', getting PadTemplate from element",
+                            tmpl_name, sink_pad_name
+                        );
+                        // Get the actual PadTemplate from the element (not the static one)
+                        if let Some(pad_tmpl) = sink.pad_template(tmpl_name) {
+                            debug!(
+                                "Requesting pad from template '{}' for pad name '{}'",
+                                tmpl_name, sink_pad_name
+                            );
+                            // Request a new pad from the template - let GStreamer auto-name it
+                            if let Some(pad) = sink.request_pad(&pad_tmpl, None, None) {
+                                debug!(
+                                    "Successfully requested pad '{}' for requested name '{}'",
+                                    pad.name(),
+                                    sink_pad_name
+                                );
+                                pad
+                            } else {
+                                // Couldn't get pad from template
+                                return Err(PipelineError::LinkError(
+                                    link.to.clone(),
+                                    format!(
+                                        "Sink pad {} not available (tried template '{}')",
+                                        sink_pad_name, tmpl_name
+                                    ),
+                                ));
+                            }
+                        } else {
+                            return Err(PipelineError::LinkError(
+                                link.to.clone(),
+                                format!("Could not get PadTemplate '{}' from element", tmpl_name),
+                            ));
+                        }
+                    } else {
+                        // No compatible template found - might be a dynamic pad
+                        return Err(PipelineError::LinkError(
+                            link.to.clone(),
+                            format!("Sink pad {} not available yet (dynamic pad)", sink_pad_name),
+                        ));
+                    }
+                }
             };
 
             src_pad_obj.link(&sink_pad_obj).map_err(|e| {
@@ -870,16 +1030,28 @@ impl PipelineManager {
             self.flow_name, result, current_state, pending_state
         );
 
-        // Check if state change succeeded
-        if let Err(e) = result {
-            error!(
-                "Pipeline '{}' failed to reach PLAYING state: {:?} (current: {:?}, pending: {:?})",
-                self.flow_name, e, current_state, pending_state
+        // Check if we've reached the target state
+        // If current_state is Playing and pending is VoidPending, that's success!
+        let target_reached =
+            current_state == gst::State::Playing && pending_state == gst::State::VoidPending;
+
+        if !target_reached {
+            // Only fail if we haven't reached the target state
+            if let Err(e) = result {
+                error!(
+                    "Pipeline '{}' failed to reach PLAYING state: {:?} (current: {:?}, pending: {:?})",
+                    self.flow_name, e, current_state, pending_state
+                );
+                return Err(PipelineError::StateChange(format!(
+                    "State change failed: {:?} - current: {:?}, pending: {:?}",
+                    e, current_state, pending_state
+                )));
+            }
+        } else {
+            info!(
+                "Pipeline '{}' successfully reached PLAYING state",
+                self.flow_name
             );
-            return Err(PipelineError::StateChange(format!(
-                "State change failed: {:?} - current: {:?}, pending: {:?}",
-                e, current_state, pending_state
-            )));
         }
 
         // Return the actual current state

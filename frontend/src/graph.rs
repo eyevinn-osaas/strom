@@ -123,6 +123,18 @@ impl GraphEditor {
         self.blocks = blocks;
     }
 
+    /// Update runtime data for blocks without replacing the entire array.
+    /// This preserves UI state while updating runtime fields like SDP.
+    pub fn update_blocks_runtime_data(&mut self, updated_blocks: &[BlockInstance]) {
+        for updated_block in updated_blocks {
+            if let Some(existing_block) = self.blocks.iter_mut().find(|b| b.id == updated_block.id)
+            {
+                // Only update runtime_data, preserve other fields
+                existing_block.runtime_data = updated_block.runtime_data.clone();
+            }
+        }
+    }
+
     /// Add a new element to the graph at the given position.
     pub fn add_element(&mut self, element_type: String, pos: Pos2) {
         let id = format!("elem_{}", self.elements.len());

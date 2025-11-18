@@ -74,6 +74,10 @@ pub struct FlowProperties {
     /// Clock synchronization status (updated by backend for running pipelines)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_sync_status: Option<ClockSyncStatus>,
+    /// Whether this flow should be automatically restarted when the backend starts
+    /// (set to true when starting a flow, false when manually stopping it)
+    #[serde(default)]
+    pub auto_restart: bool,
 }
 
 /// A complete GStreamer pipeline definition.
