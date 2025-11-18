@@ -73,6 +73,9 @@ pub struct StromApp {
     properties_clock_type_buffer: strom_types::flow::GStreamerClockType,
     /// Temporary PTP domain buffer for properties dialog
     properties_ptp_domain_buffer: String,
+    /// Shutdown flag for Ctrl+C handling (native mode only)
+    #[cfg(not(target_arch = "wasm32"))]
+    shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl StromApp {
@@ -130,6 +133,57 @@ impl StromApp {
             properties_description_buffer: String::new(),
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            shutdown_flag: None,
+        };
+
+        // Load default elements temporarily (will be replaced by API data)
+        app.palette.load_default_elements();
+
+        // Set up WebSocket connection for real-time updates
+        app.setup_websocket_connection(cc.egui_ctx.clone());
+
+        app
+    }
+
+    /// Create a new application instance with shutdown handler (native mode only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_with_shutdown(
+        cc: &eframe::CreationContext<'_>,
+        shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        // Note: Dark theme is set in main.rs before creating the app
+
+        // Detect API base URL - different logic for WASM vs native
+        let api_base_url = "http://localhost:3000/api";
+
+        // Create channels for async communication
+        let channels = AppStateChannels::new();
+
+        let mut app = Self {
+            api: ApiClient::new(api_base_url),
+            flows: Vec::new(),
+            selected_flow_idx: None,
+            graph: GraphEditor::new(),
+            palette: ElementPalette::new(),
+            status: "Ready".to_string(),
+            error: None,
+            loading: false,
+            needs_refresh: true,
+            new_flow_name: String::new(),
+            show_new_flow_dialog: false,
+            elements_loaded: false,
+            blocks_loaded: false,
+            flow_pending_deletion: None,
+            ws_client: None,
+            connection_state: ConnectionState::Disconnected,
+            channels,
+            editing_properties_idx: None,
+            properties_name_buffer: String::new(),
+            properties_description_buffer: String::new(),
+            properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
+            properties_ptp_domain_buffer: String::new(),
+            shutdown_flag: Some(shutdown_flag),
         };
 
         // Load default elements temporarily (will be replaced by API data)
@@ -1303,6 +1357,17 @@ impl StromApp {
 
 impl eframe::App for StromApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        // Check shutdown flag (Ctrl+C handler for native mode)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(ref flag) = self.shutdown_flag {
+            use std::sync::atomic::Ordering;
+            if flag.load(Ordering::SeqCst) {
+                tracing::info!("Shutdown flag set, closing GUI...");
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                return;
+            }
+        }
+
         // Process all pending channel messages
         while let Ok(msg) = self.channels.rx.try_recv() {
             match msg {

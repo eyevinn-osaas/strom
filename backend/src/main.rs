@@ -59,8 +59,15 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(feature = "gui")]
 fn run_with_gui() -> anyhow::Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
     // Create tokio runtime for HTTP server
     let runtime = tokio::runtime::Runtime::new()?;
+
+    // Shared shutdown flag for coordination between threads
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_flag_gui = shutdown_flag.clone();
 
     // Initialize and start server in runtime
     let (server_started_tx, server_started_rx) = std::sync::mpsc::channel();
@@ -96,12 +103,28 @@ fn run_with_gui() -> anyhow::Result<()> {
             // Notify main thread that server is ready
             server_started_tx.send(()).ok();
 
-            // Run HTTP server
-            let shutdown_signal = async {
+            // Run HTTP server with graceful shutdown
+            let shutdown_signal = async move {
                 tokio::signal::ctrl_c()
                     .await
                     .expect("Failed to install Ctrl+C handler");
-                info!("Received Ctrl+C");
+
+                info!("Received Ctrl+C, shutting down gracefully...");
+
+                // Stop all running flows
+                let flows = state.get_flows().await;
+                for flow in flows {
+                    if let Some(PipelineState::Playing) = flow.state {
+                        info!("Stopping flow: {} ({})", flow.name, flow.id);
+                        match state.stop_flow(&flow.id).await {
+                            Ok(_) => info!("Successfully stopped flow: {}", flow.name),
+                            Err(e) => warn!("Failed to stop flow {}: {}", flow.name, e),
+                        }
+                    }
+                }
+
+                info!("All flows stopped, signaling GUI to close...");
+                shutdown_flag.store(true, Ordering::SeqCst);
             };
 
             axum::serve(listener, app)
@@ -118,7 +141,7 @@ fn run_with_gui() -> anyhow::Result<()> {
     info!("Launching native GUI on main thread...");
 
     // Run GUI on main thread (blocks until window closes)
-    if let Err(e) = strom_backend::gui::launch_gui() {
+    if let Err(e) = strom_backend::gui::launch_gui_with_shutdown(shutdown_flag_gui) {
         error!("GUI error: {:?}", e);
     }
 
