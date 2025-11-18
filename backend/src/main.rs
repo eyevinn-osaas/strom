@@ -2,11 +2,10 @@
 
 use clap::Parser;
 use std::net::SocketAddr;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use strom_backend::{config::Config, create_app_with_state, state::AppState};
-use strom_types::PipelineState;
 
 /// Strom - GStreamer Flow Engine Backend
 #[derive(Parser, Debug)]
@@ -111,19 +110,12 @@ fn run_with_gui() -> anyhow::Result<()> {
 
                 info!("Received Ctrl+C, shutting down gracefully...");
 
-                // Stop all running flows
-                let flows = state.get_flows().await;
-                for flow in flows {
-                    if let Some(PipelineState::Playing) = flow.state {
-                        info!("Stopping flow: {} ({})", flow.name, flow.id);
-                        match state.stop_flow(&flow.id).await {
-                            Ok(_) => info!("Successfully stopped flow: {}", flow.name),
-                            Err(e) => warn!("Failed to stop flow {}: {}", flow.name, e),
-                        }
-                    }
-                }
+                // Note: We don't need to explicitly stop flows here.
+                // GStreamer will clean up when the process exits, and
+                // we want to preserve the auto_restart flag for flows
+                // that were running, so they restart on next backend startup.
 
-                info!("All flows stopped, signaling GUI to close...");
+                info!("Signaling GUI to close...");
                 shutdown_flag.store(true, Ordering::SeqCst);
             };
 
@@ -179,19 +171,12 @@ async fn run_headless() -> anyhow::Result<()> {
 
         info!("Received Ctrl+C, shutting down gracefully...");
 
-        // Stop all running flows
-        let flows = state.get_flows().await;
-        for flow in flows {
-            if let Some(PipelineState::Playing) = flow.state {
-                info!("Stopping flow: {} ({})", flow.name, flow.id);
-                match state.stop_flow(&flow.id).await {
-                    Ok(_) => info!("Successfully stopped flow: {}", flow.name),
-                    Err(e) => warn!("Failed to stop flow {}: {}", flow.name, e),
-                }
-            }
-        }
+        // Note: We don't need to explicitly stop flows here.
+        // GStreamer will clean up when the process exits, and
+        // we want to preserve the auto_restart flag for flows
+        // that were running, so they restart on next backend startup.
 
-        info!("All flows stopped, server shutting down");
+        info!("Server shutting down");
     };
 
     axum::serve(listener, app)
@@ -202,10 +187,10 @@ async fn run_headless() -> anyhow::Result<()> {
 }
 
 async fn restart_flows(state: &AppState) {
-    info!("Restarting flows that were running...");
+    info!("Restarting flows that have auto_restart enabled...");
     let flows = state.get_flows().await;
     for flow in flows {
-        if let Some(PipelineState::Playing) = flow.state {
+        if flow.properties.auto_restart {
             info!("Auto-restarting flow: {} ({})", flow.name, flow.id);
             match state.start_flow(&flow.id).await {
                 Ok(_) => info!("Successfully restarted flow: {}", flow.name),

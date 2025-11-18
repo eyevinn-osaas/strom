@@ -1496,11 +1496,75 @@ impl eframe::App for StromApp {
                     self.connection_state = state;
                 }
                 AppMessage::FlowFetched(flow) => {
-                    tracing::info!("Received updated flow: {}", flow.name);
+                    tracing::info!("Received updated flow: {} (id={})", flow.name, flow.id);
+
+                    // Check if this is the currently selected flow BEFORE updating
+                    let current_flow_id = self.current_flow().map(|f| f.id);
+                    let is_selected_flow = current_flow_id == Some(flow.id);
+
+                    tracing::info!(
+                        "Current selected flow: {:?}, Fetched flow: {}, Is selected: {}",
+                        current_flow_id,
+                        flow.id,
+                        is_selected_flow
+                    );
+
+                    // Log runtime_data for AES67 blocks
+                    for block in &flow.blocks {
+                        if block.block_definition_id == "builtin.aes67_output" {
+                            let has_sdp = block
+                                .runtime_data
+                                .as_ref()
+                                .and_then(|data| data.get("sdp"))
+                                .is_some();
+                            tracing::info!("AES67 block {} has SDP: {}", block.id, has_sdp);
+                        }
+                    }
+
                     // Update the specific flow in-place
                     if let Some(existing_flow) = self.flows.iter_mut().find(|f| f.id == flow.id) {
-                        *existing_flow = flow;
-                        tracing::info!("Updated flow in-place");
+                        *existing_flow = flow.clone();
+                        tracing::info!("Updated flow in self.flows");
+
+                        // If this is the currently selected flow, update the graph editor in-place
+                        if is_selected_flow {
+                            tracing::info!("This is the selected flow - updating graph editor");
+
+                            // Log before update
+                            for block in &self.graph.blocks {
+                                if block.block_definition_id == "builtin.aes67_output" {
+                                    tracing::info!(
+                                        "BEFORE UPDATE: Graph block {} has runtime_data: {}",
+                                        block.id,
+                                        block.runtime_data.is_some()
+                                    );
+                                }
+                            }
+
+                            // Update the graph editor's data to match the updated flow
+                            // This ensures property inspector sees the latest runtime_data
+                            self.graph.elements = flow.elements.clone();
+                            self.graph.links = flow.links.clone();
+                            self.graph.blocks = flow.blocks.clone();
+
+                            // Log after update
+                            for block in &self.graph.blocks {
+                                if block.block_definition_id == "builtin.aes67_output" {
+                                    tracing::info!(
+                                        "AFTER UPDATE: Graph block {} has runtime_data: {}",
+                                        block.id,
+                                        block.runtime_data.is_some()
+                                    );
+                                }
+                            }
+
+                            tracing::info!(
+                                "Graph editor updated with {} blocks",
+                                flow.blocks.len()
+                            );
+                        } else {
+                            tracing::info!("Not the selected flow - skipping graph editor update");
+                        }
                     } else {
                         tracing::warn!("Flow not found in list, adding it");
                         self.flows.push(flow);

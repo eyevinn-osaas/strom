@@ -17,7 +17,7 @@ egui.workspace = true
 eframe.workspace = true
 
 # HTTP client - works on both WASM and native
-reqwest = { workspace = true, default-features = false, features = ["json"] }
+reqwest = { workspace = true, features = ["json"] }
 
 # Serialization
 serde.workspace = true

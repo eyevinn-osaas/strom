@@ -81,7 +81,12 @@ impl ApiClient {
 
     /// Get a specific flow by ID.
     pub async fn get_flow(&self, id: FlowId) -> ApiResult<Flow> {
+        use strom_types::api::FlowResponse;
+        use tracing::info;
+
         let url = format!("{}/flows/{}", self.base_url, id);
+        info!("Fetching flow from: {}", url);
+
         let response = self
             .client
             .get(&url)
@@ -89,16 +94,21 @@ impl ApiClient {
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
+        info!("Flow response status: {}", response.status());
+
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| ApiError::Decode(e.to_string()))
+        let flow_response: FlowResponse = response.json().await.map_err(|e| {
+            tracing::error!("Failed to parse flow response: {}", e);
+            ApiError::Decode(e.to_string())
+        })?;
+
+        info!("Successfully fetched flow: {}", flow_response.flow.name);
+        Ok(flow_response.flow)
     }
 
     /// Create a new flow.

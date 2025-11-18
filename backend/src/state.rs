@@ -383,6 +383,7 @@ impl AppState {
         // Note: runtime_data is marked with skip_serializing_if in BlockInstance,
         // so it won't be persisted to storage (which is correct - it's runtime-only data)
         flow.state = Some(state);
+        flow.properties.auto_restart = true; // Enable auto-restart when flow is started
         {
             let mut flows = self.inner.flows.write().await;
             flows.insert(*id, flow.clone());
@@ -441,6 +442,7 @@ impl AppState {
                     }
                 }
                 flow.state = Some(state);
+                flow.properties.auto_restart = false; // Disable auto-restart when manually stopped
                 Some(flow.clone())
             } else {
                 None
