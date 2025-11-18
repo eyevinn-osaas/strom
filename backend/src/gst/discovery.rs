@@ -73,33 +73,16 @@ impl ElementDiscovery {
     /// Get list of elements known to cause crashes during introspection.
     fn get_element_blacklist() -> Vec<&'static str> {
         vec![
-            // Elements that cause segfaults during property introspection
-            "hlssink2", // Crashes in libc during property inspection
-            "hlssink3", // HLS sink variants
+            // GES (GStreamer Editing Services) elements that trigger GES initialization
+            // GES init can crash with NULL pointer in gst_element_class_get_pad_template()
+            "gesdemux", // GES demuxer - triggers GES init which crashes in strcmp
+            "gessrc",   // GES source - triggers GES init
+            // HLS elements - crash with NULL pointer in gst_element_class_get_pad_template()
+            "hlssink2", // Crashes in strcmp during element creation
+            "hlssink3", // HLS sink variants - same crash pattern
             "hlssink",
-            "hlsdemux", // HLS related
+            "hlsdemux", // HLS demuxer - crashes in strcmp
             "hlsdemux2",
-            "mssdemux", // Microsoft Smooth Streaming
-            "mssdemux2",
-            "dashdemux", // DASH streaming
-            "dashdemux2",
-            "dashsink",
-            "dvbbasebin", // DVB elements known to be problematic
-            "dvbsrc",
-            "dvbsubenc",
-            "dvbsuboverlay",
-            "gtksink", // GTK sinks can crash without display
-            "gtkglsink",
-            "gtkwaylandsink",
-            "gtk4waylandsink",
-            "gtk4paintablesink",
-            "dtlssrtpenc", // Crashes when requesting pads
-            "dtlssrtpdec",
-            "dtlsenc",
-            "dtlsdec",
-            "rtpbin", // RTP elements can be problematic
-            "rtpbin2",
-            "rtpdtmfdepay",
         ]
     }
 
