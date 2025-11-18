@@ -462,14 +462,14 @@ impl PropertyInspector {
                 }
 
                 if let Some(mut value) = current_value {
-                    // Note: Block properties use strom_types::PropertyType which is different from
-                    // element::PropertyType. For now, we pass None to show_property_editor which means
-                    // no constraints (no sliders/enums). We could add a conversion or separate editor later.
+                    // Convert block::PropertyType to element::PropertyType
+                    let prop_type = Self::convert_block_prop_type(&exposed_prop.property_type);
                     let changed = Self::show_property_editor(
                         ui,
                         &mut value,
-                        None, // TODO: Convert block::PropertyType to element::PropertyType
+                        prop_type.as_ref(),
                         default_value,
+                        false, // Block properties are always writable
                     );
 
                     if changed {
@@ -556,6 +556,7 @@ impl PropertyInspector {
                     &mut value,
                     Some(&prop_info.property_type),
                     default_value,
+                    !prop_info.writable, // Read-only if not writable
                 );
 
                 if changed {
@@ -593,8 +594,9 @@ impl PropertyInspector {
                 }
             }
 
-            // Reset button if modified
+            // Reset button if modified (only show for writable properties)
             if has_custom_value
+                && prop_info.writable
                 && ui
                     .small_button("↺")
                     .on_hover_text("Reset to default")
@@ -659,6 +661,7 @@ impl PropertyInspector {
                     &mut value,
                     Some(&prop_info.property_type),
                     default_value,
+                    !prop_info.writable, // Read-only if not writable
                 );
 
                 if changed {
@@ -675,8 +678,9 @@ impl PropertyInspector {
                 }
             }
 
-            // Reset button if modified
+            // Reset button if modified (only show for writable properties)
             if has_custom_value
+                && prop_info.writable
                 && ui
                     .small_button("↺")
                     .on_hover_text("Reset to default")
@@ -708,42 +712,72 @@ impl PropertyInspector {
         }
     }
 
+    /// Convert block::PropertyType to element::PropertyType for the property editor.
+    fn convert_block_prop_type(
+        block_prop: &strom_types::block::PropertyType,
+    ) -> Option<PropertyType> {
+        match block_prop {
+            strom_types::block::PropertyType::Enum { values } => Some(PropertyType::Enum {
+                values: values.clone(),
+            }),
+            // Other types don't need conversion (no constraints)
+            _ => None,
+        }
+    }
+
     fn show_property_editor(
         ui: &mut Ui,
         value: &mut PropertyValue,
         prop_type: Option<&PropertyType>,
         _default_value: Option<&PropertyValue>,
+        read_only: bool,
     ) -> bool {
-        match (value, prop_type) {
-            (PropertyValue::String(s), Some(PropertyType::Enum { values })) => {
-                // Enum dropdown
-                let mut changed = false;
-                egui::ComboBox::from_id_salt(ui.next_auto_id())
-                    .selected_text(s.as_str())
-                    .show_ui(ui, |ui| {
-                        for val in values {
-                            if ui.selectable_label(s == val, val).clicked() {
-                                *s = val.clone();
-                                changed = true;
+        if read_only {
+            // Display as non-editable text with a subtle background
+            let text = match value {
+                PropertyValue::String(s) => s.clone(),
+                PropertyValue::Int(i) => i.to_string(),
+                PropertyValue::UInt(u) => u.to_string(),
+                PropertyValue::Float(f) => format!("{:.3}", f),
+                PropertyValue::Bool(b) => b.to_string(),
+            };
+            ui.label(egui::RichText::new(text).color(Color32::from_rgb(150, 150, 150)))
+                .on_hover_text("Read-only property");
+            false
+        } else {
+            match (value, prop_type) {
+                (PropertyValue::String(s), Some(PropertyType::Enum { values })) => {
+                    // Enum dropdown
+                    let mut changed = false;
+                    egui::ComboBox::from_id_salt(ui.next_auto_id())
+                        .selected_text(s.as_str())
+                        .show_ui(ui, |ui| {
+                            for val in values {
+                                if ui.selectable_label(s == val, val).clicked() {
+                                    *s = val.clone();
+                                    changed = true;
+                                }
                             }
-                        }
-                    });
-                changed
+                        });
+                    changed
+                }
+                (PropertyValue::String(s), _) => ui.text_edit_singleline(s).changed(),
+                (PropertyValue::Int(i), Some(PropertyType::Int { min, max })) => {
+                    ui.add(egui::Slider::new(i, *min..=*max)).changed()
+                }
+                (PropertyValue::Int(i), _) => ui.add(egui::DragValue::new(i)).changed(),
+                (PropertyValue::UInt(u), Some(PropertyType::UInt { min, max })) => {
+                    ui.add(egui::Slider::new(u, *min..=*max)).changed()
+                }
+                (PropertyValue::UInt(u), _) => ui.add(egui::DragValue::new(u)).changed(),
+                (PropertyValue::Float(f), Some(PropertyType::Float { min, max })) => {
+                    ui.add(egui::Slider::new(f, *min..=*max)).changed()
+                }
+                (PropertyValue::Float(f), _) => {
+                    ui.add(egui::DragValue::new(f).speed(0.1)).changed()
+                }
+                (PropertyValue::Bool(b), _) => ui.checkbox(b, "").changed(),
             }
-            (PropertyValue::String(s), _) => ui.text_edit_singleline(s).changed(),
-            (PropertyValue::Int(i), Some(PropertyType::Int { min, max })) => {
-                ui.add(egui::Slider::new(i, *min..=*max)).changed()
-            }
-            (PropertyValue::Int(i), _) => ui.add(egui::DragValue::new(i)).changed(),
-            (PropertyValue::UInt(u), Some(PropertyType::UInt { min, max })) => {
-                ui.add(egui::Slider::new(u, *min..=*max)).changed()
-            }
-            (PropertyValue::UInt(u), _) => ui.add(egui::DragValue::new(u)).changed(),
-            (PropertyValue::Float(f), Some(PropertyType::Float { min, max })) => {
-                ui.add(egui::Slider::new(f, *min..=*max)).changed()
-            }
-            (PropertyValue::Float(f), _) => ui.add(egui::DragValue::new(f).speed(0.1)).changed(),
-            (PropertyValue::Bool(b), _) => ui.checkbox(b, "").changed(),
         }
     }
 }

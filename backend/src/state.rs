@@ -303,13 +303,69 @@ impl AppState {
         // Start pipeline
         let state = manager.start()?;
 
-        // Store pipeline manager
-        {
+        // Store pipeline manager and keep a reference for SDP generation
+        let pipelines_guard = {
             let mut pipelines = self.inner.pipelines.write().await;
             pipelines.insert(*id, manager);
+            // Drop write lock and get read lock
+            drop(pipelines);
+            self.inner.pipelines.read().await
+        };
+
+        // Drop the pipelines guard - we don't need to query caps anymore
+        drop(pipelines_guard);
+
+        // Generate SDP for AES67 output blocks and store in runtime_data
+        for block in &mut flow.blocks {
+            if block.block_definition_id == "builtin.aes67_output" {
+                info!(
+                    "Generating SDP for AES67 output block: {} in flow {}",
+                    block.id, id
+                );
+
+                // Extract configured sample rate and channels from block properties
+                // (can be Int or String from enum)
+                let sample_rate = block.properties.get("sample_rate").and_then(|v| match v {
+                    PropertyValue::Int(i) => Some(*i as i32),
+                    PropertyValue::String(s) => s.parse::<i32>().ok(),
+                    _ => None,
+                });
+
+                let channels = block.properties.get("channels").and_then(|v| match v {
+                    PropertyValue::Int(i) => Some(*i as i32),
+                    PropertyValue::String(s) => s.parse::<i32>().ok(),
+                    _ => None,
+                });
+
+                info!(
+                    "Using configured format for SDP: {} Hz, {} channels",
+                    sample_rate.unwrap_or(48000),
+                    channels.unwrap_or(2)
+                );
+
+                let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
+                    block,
+                    &flow.name,
+                    sample_rate,
+                    channels,
+                );
+
+                // Initialize runtime_data if needed
+                if block.runtime_data.is_none() {
+                    block.runtime_data = Some(std::collections::HashMap::new());
+                }
+
+                // Store SDP
+                if let Some(runtime_data) = &mut block.runtime_data {
+                    runtime_data.insert("sdp".to_string(), sdp.clone());
+                    info!("Stored SDP for block {}: {} bytes", block.id, sdp.len());
+                }
+            }
         }
 
         // Update flow state and persist
+        // Note: runtime_data is marked with skip_serializing_if in BlockInstance,
+        // so it won't be persisted to storage (which is correct - it's runtime-only data)
         flow.state = Some(state);
         {
             let mut flows = self.inner.flows.write().await;
@@ -327,6 +383,10 @@ impl AppState {
             flow_id: *id,
             state: format!("{:?}", state),
         });
+        // Broadcast FlowUpdated so frontend sees the new runtime_data with SDP
+        self.inner
+            .events
+            .broadcast(StromEvent::FlowUpdated { flow_id: *id });
 
         Ok(state)
     }
@@ -349,10 +409,21 @@ impl AppState {
         // Stop the pipeline
         let state = manager.stop()?;
 
-        // Update flow state and persist
+        // Clear runtime_data from all blocks (SDP is only valid while running)
         let flow = {
             let mut flows = self.inner.flows.write().await;
             if let Some(flow) = flows.get_mut(id) {
+                info!("Clearing runtime_data from {} blocks", flow.blocks.len());
+                for block in &mut flow.blocks {
+                    if block.runtime_data.is_some() {
+                        info!(
+                            "Clearing runtime_data for block {} (was {} entries)",
+                            block.id,
+                            block.runtime_data.as_ref().unwrap().len()
+                        );
+                        block.runtime_data = None;
+                    }
+                }
                 flow.state = Some(state);
                 Some(flow.clone())
             } else {
@@ -374,6 +445,10 @@ impl AppState {
             flow_id: *id,
             state: format!("{:?}", state),
         });
+        // Broadcast FlowUpdated so frontend sees the cleared runtime_data
+        self.inner
+            .events
+            .broadcast(StromEvent::FlowUpdated { flow_id: *id });
 
         Ok(state)
     }

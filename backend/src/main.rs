@@ -1,7 +1,7 @@
 //! Strom backend server.
 
 use std::net::SocketAddr;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
 
 use strom_backend::{config::Config, create_app_with_state, state::AppState};
@@ -48,14 +48,40 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let app = create_app_with_state(state).await;
+    let app = create_app_with_state(state.clone()).await;
 
     // Start server - bind to 0.0.0.0 to be accessible from all interfaces (Docker, network, etc.)
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
     info!("Server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+
+    // Set up graceful shutdown handler
+    let shutdown_signal = async move {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+
+        info!("Received Ctrl+C, shutting down gracefully...");
+
+        // Stop all running flows
+        let flows = state.get_flows().await;
+        for flow in flows {
+            if let Some(PipelineState::Playing) = flow.state {
+                info!("Stopping flow: {} ({})", flow.name, flow.id);
+                match state.stop_flow(&flow.id).await {
+                    Ok(_) => info!("Successfully stopped flow: {}", flow.name),
+                    Err(e) => warn!("Failed to stop flow {}: {}", flow.name, e),
+                }
+            }
+        }
+
+        info!("All flows stopped, server shutting down");
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
 
     Ok(())
 }

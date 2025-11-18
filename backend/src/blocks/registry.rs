@@ -191,8 +191,6 @@ mod tests {
             name: "My Block".to_string(),
             description: "Test".to_string(),
             category: "Test".to_string(),
-            elements: vec![],
-            internal_links: vec![],
             exposed_properties: vec![],
             external_pads: ExternalPads {
                 inputs: vec![],

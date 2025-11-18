@@ -113,7 +113,25 @@ impl StromApp {
     fn setup_sse_connection(&mut self, ctx: egui::Context) {
         tracing::info!("Setting up SSE connection for real-time updates");
 
-        let mut sse_client = SseClient::new("/api/events");
+        // Use the same URL detection logic as the API client
+        let sse_url = if let Some(window) = web_sys::window() {
+            if let Ok(location) = window.location().host() {
+                // If we're on port 8080 (trunk serve), connect to backend on port 3000
+                if location.contains(":8080") {
+                    "http://localhost:3000/api/events"
+                } else {
+                    // Otherwise use relative URL (embedded in backend)
+                    "/api/events"
+                }
+            } else {
+                "/api/events"
+            }
+        } else {
+            "/api/events"
+        };
+
+        tracing::info!("Connecting SSE to: {}", sse_url);
+        let mut sse_client = SseClient::new(sse_url);
 
         // Connect with event handler
         sse_client.connect(move |event| {
@@ -708,8 +726,77 @@ impl StromApp {
                     ui.colored_label(state_color, format!("State: {}", state_text));
                     ui.separator();
 
-                    if ui.button("▶ Start").clicked() {
-                        self.start_flow(ctx);
+                    // Show Start or Restart button depending on state
+                    let is_running = matches!(state, PipelineState::Playing);
+                    let button_text = if is_running {
+                        "🔄 Restart"
+                    } else {
+                        "▶ Start"
+                    };
+
+                    if ui.button(button_text).clicked() {
+                        if is_running {
+                            // For restart: stop first, then start
+                            let api = self.api.clone();
+                            let ctx_clone = ctx.clone();
+
+                            self.status = "Restarting flow...".to_string();
+
+                            spawn_local(async move {
+                                // First stop the flow
+                                match api.stop_flow(flow_id).await {
+                                    Ok(_) => {
+                                        tracing::info!("Flow stopped, now starting...");
+                                        // Then start it again
+                                        match api.start_flow(flow_id).await {
+                                            Ok(_) => {
+                                                tracing::info!("Flow restarted successfully");
+                                                if let Some(window) = web_sys::window() {
+                                                    if let Some(storage) =
+                                                        window.local_storage().ok().flatten()
+                                                    {
+                                                        let _ = storage.set_item(
+                                                            "strom_needs_refresh",
+                                                            "true",
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "Failed to start flow after stop: {}",
+                                                    e
+                                                );
+                                                if let Some(window) = web_sys::window() {
+                                                    if let Some(storage) =
+                                                        window.local_storage().ok().flatten()
+                                                    {
+                                                        let _ = storage.set_item(
+                                                            "strom_flows_error",
+                                                            &e.to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to stop flow for restart: {}", e);
+                                        if let Some(window) = web_sys::window() {
+                                            if let Some(storage) =
+                                                window.local_storage().ok().flatten()
+                                            {
+                                                let _ = storage
+                                                    .set_item("strom_flows_error", &e.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                                ctx_clone.request_repaint();
+                            });
+                        } else {
+                            self.start_flow(ctx);
+                        }
                     }
 
                     if ui.button("⏸ Stop").clicked() {

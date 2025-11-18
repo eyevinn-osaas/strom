@@ -456,8 +456,8 @@ pub async fn get_block_sdp(
         ));
     }
 
-    // Generate SDP
-    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(block, &flow.name);
+    // Generate SDP (using default sample rate and channels since we can't query caps here)
+    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(block, &flow.name, None, None);
 
     info!("Successfully generated SDP for block {}", block_id);
 

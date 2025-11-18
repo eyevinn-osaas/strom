@@ -131,7 +131,7 @@ impl GraphEditor {
             element_type,
             properties: HashMap::new(),
             pad_properties: HashMap::new(),
-            position: Some((pos.x, pos.y)),
+            position: (pos.x, pos.y),
         };
         self.elements.push(element);
     }
@@ -144,7 +144,7 @@ impl GraphEditor {
             block_definition_id,
             name: None,
             properties: HashMap::new(),
-            position: Some(strom_types::block::Position { x: pos.x, y: pos.y }),
+            position: strom_types::block::Position { x: pos.x, y: pos.y },
             runtime_data: None,
         };
         self.blocks.push(block);
@@ -357,7 +357,7 @@ impl GraphEditor {
             let mut pad_interactions = Vec::new();
 
             for element in &self.elements {
-                let pos = element.position.unwrap_or((100.0, 100.0));
+                let pos = element.position;
                 let screen_pos = to_screen(pos2(pos.0, pos.1));
 
                 // Calculate height based on number of pads to render (includes dynamic pad expansion)
@@ -441,7 +441,7 @@ impl GraphEditor {
             // Update element positions
             for (id, new_pos) in elements_to_update {
                 if let Some(elem) = self.elements.iter_mut().find(|e| e.id == id) {
-                    elem.position = Some(new_pos);
+                    elem.position = new_pos;
                 }
             }
 
@@ -450,82 +450,72 @@ impl GraphEditor {
             let mut block_pad_interactions = Vec::new();
 
             for block in &self.blocks {
-                if let Some(pos) = block.position {
-                    let screen_pos = to_screen(pos2(pos.x, pos.y));
+                let pos = block.position;
+                let screen_pos = to_screen(pos2(pos.x, pos.y));
 
-                    // Calculate height based on number of external pads (min 80, max 400)
-                    let block_definition =
-                        self.block_definition_map.get(&block.block_definition_id);
-                    let pad_count = block_definition
-                        .map(|def| {
-                            def.external_pads
-                                .inputs
-                                .len()
-                                .max(def.external_pads.outputs.len())
-                        })
-                        .unwrap_or(1);
-                    let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+                // Calculate height based on number of external pads (min 80, max 400)
+                let block_definition = self.block_definition_map.get(&block.block_definition_id);
+                let pad_count = block_definition
+                    .map(|def| {
+                        def.external_pads
+                            .inputs
+                            .len()
+                            .max(def.external_pads.outputs.len())
+                    })
+                    .unwrap_or(1);
+                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
 
-                    let node_rect = Rect::from_min_size(
-                        screen_pos,
-                        vec2(200.0 * self.zoom, node_height * self.zoom),
-                    );
+                let node_rect = Rect::from_min_size(
+                    screen_pos,
+                    vec2(200.0 * self.zoom, node_height * self.zoom),
+                );
 
-                    let is_selected = self.selected.as_ref() == Some(&block.id);
-                    let is_hovered = self.hovered_element.as_ref() == Some(&block.id);
+                let is_selected = self.selected.as_ref() == Some(&block.id);
+                let is_hovered = self.hovered_element.as_ref() == Some(&block.id);
 
-                    let node_response = self.draw_block_node(
-                        ui,
-                        &painter,
-                        block,
-                        node_rect,
-                        is_selected,
-                        is_hovered,
-                    );
+                let node_response =
+                    self.draw_block_node(ui, &painter, block, node_rect, is_selected, is_hovered);
 
-                    // Track hover state
-                    if node_response.hovered() {
-                        self.hovered_element = Some(block.id.clone());
-                    } else if self.hovered_element.as_ref() == Some(&block.id) {
-                        self.hovered_element = None;
-                    }
-
-                    // Handle node selection
-                    if node_response.clicked()
-                        || (node_response.dragged() && self.dragging.is_none())
-                    {
-                        self.selected = Some(block.id.clone());
-                        self.selected_link = None;
-                        self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
-                        self.focused_pad = None; // Clear pad focus
-
-                        if let Some(window) = web_sys::window() {
-                            if let Some(storage) = window.local_storage().ok().flatten() {
-                                let _ = storage.set_item("strom_selected_element_id", &block.id);
-                            }
-                        }
-                    }
-
-                    // Handle node dragging
-                    if node_response.dragged() {
-                        if self.dragging.is_none() {
-                            self.dragging = Some(block.id.clone());
-                        }
-
-                        if self.dragging.as_ref() == Some(&block.id) {
-                            let delta = node_response.drag_delta() / self.zoom;
-                            let new_pos = (pos.x + delta.x, pos.y + delta.y);
-                            blocks_to_update.push((block.id.clone(), new_pos));
-                        }
-                    }
-
-                    // Collect pad interactions for later processing
-                    block_pad_interactions.push((
-                        block.id.clone(),
-                        block.block_definition_id.clone(),
-                        node_rect,
-                    ));
+                // Track hover state
+                if node_response.hovered() {
+                    self.hovered_element = Some(block.id.clone());
+                } else if self.hovered_element.as_ref() == Some(&block.id) {
+                    self.hovered_element = None;
                 }
+
+                // Handle node selection
+                if node_response.clicked() || (node_response.dragged() && self.dragging.is_none()) {
+                    self.selected = Some(block.id.clone());
+                    self.selected_link = None;
+                    self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
+                    self.focused_pad = None; // Clear pad focus
+
+                    if let Some(window) = web_sys::window() {
+                        if let Some(storage) = window.local_storage().ok().flatten() {
+                            let _ = storage.set_item("strom_selected_element_id", &block.id);
+                        }
+                    }
+                }
+
+                // Handle node dragging
+                if node_response.dragged() {
+                    if self.dragging.is_none() {
+                        self.dragging = Some(block.id.clone());
+                    }
+
+                    if self.dragging.as_ref() == Some(&block.id) {
+                        let delta = node_response.drag_delta() / self.zoom;
+                        let new_pos = (pos.x + delta.x, pos.y + delta.y);
+                        blocks_to_update.push((block.id.clone(), new_pos));
+                    }
+                }
+
+                // Collect pad interactions for later processing
+                block_pad_interactions.push((
+                    block.id.clone(),
+                    block.block_definition_id.clone(),
+                    node_rect,
+                ));
             }
 
             // Handle block pad interactions
@@ -539,10 +529,10 @@ impl GraphEditor {
             // Update block positions
             for (id, new_pos) in blocks_to_update {
                 if let Some(block) = self.blocks.iter_mut().find(|b| b.id == id) {
-                    block.position = Some(strom_types::block::Position {
+                    block.position = strom_types::block::Position {
                         x: new_pos.0,
                         y: new_pos.1,
-                    });
+                    };
                 }
             }
 
@@ -1319,7 +1309,7 @@ impl GraphEditor {
     fn get_pad_position(&self, element_id: &str, pad_name: &str, is_input: bool) -> Option<Pos2> {
         // Try to find as element first
         if let Some(element) = self.elements.iter().find(|e| e.id == element_id) {
-            let base_pos = element.position.map(|p| pos2(p.0, p.1))?;
+            let base_pos = pos2(element.position.0, element.position.1);
             let element_info = self.element_info_map.get(&element.element_type);
 
             // Get pads to render (same as in draw_node)
@@ -1358,7 +1348,7 @@ impl GraphEditor {
 
         // Try to find as block
         if let Some(block) = self.blocks.iter().find(|b| b.id == element_id) {
-            let base_pos = block.position.map(|p| pos2(p.x, p.y))?;
+            let base_pos = pos2(block.position.x, block.position.y);
             let block_definition = self.block_definition_map.get(&block.block_definition_id);
 
             if let Some(def) = block_definition {

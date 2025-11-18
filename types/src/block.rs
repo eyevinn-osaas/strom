@@ -1,6 +1,6 @@
 //! Block definitions and instances for reusable element groupings.
 
-use crate::{Element, Link, MediaType, PropertyValue};
+use crate::{MediaType, PropertyValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,9 +15,13 @@ pub enum PropertyType {
     UInt,
     Float,
     Bool,
+    Enum { values: Vec<String> },
 }
 
-/// Block definition - template for creating block instances
+/// Block definition - metadata for creating block instances.
+///
+/// Note: Built-in blocks use the BlockBuilder trait to create GStreamer elements directly.
+/// User-defined blocks are not yet supported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct BlockDefinition {
@@ -32,12 +36,6 @@ pub struct BlockDefinition {
 
     /// Category for organization (e.g., "Inputs", "Outputs", "Codecs")
     pub category: String,
-
-    /// Internal elements that make up this block
-    pub elements: Vec<Element>,
-
-    /// Internal links between elements within the block
-    pub internal_links: Vec<Link>,
 
     /// Exposed properties that users can configure
     pub exposed_properties: Vec<ExposedProperty>,
@@ -132,8 +130,12 @@ pub struct BlockInstance {
     pub properties: HashMap<String, PropertyValue>,
 
     /// Position in the visual editor
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<Position>,
+    pub position: Position,
+
+    /// Runtime data (not persisted to storage, only available when flow is running)
+    /// Used for things like generated SDP for AES67 blocks
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub runtime_data: Option<HashMap<String, String>>,
 }
 
 /// Position in the visual editor
@@ -165,15 +167,13 @@ pub struct BlockUIMetadata {
     pub height: Option<f32>,
 }
 
-/// Request to create a new block definition
+/// Request to create a new block definition (currently not supported for user-defined blocks)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CreateBlockRequest {
     pub name: String,
     pub description: String,
     pub category: String,
-    pub elements: Vec<Element>,
-    pub internal_links: Vec<Link>,
     pub exposed_properties: Vec<ExposedProperty>,
     pub external_pads: ExternalPads,
     #[serde(skip_serializing_if = "Option::is_none")]

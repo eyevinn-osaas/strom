@@ -81,7 +81,7 @@ impl PipelineManager {
     pub fn new(
         flow: &Flow,
         events: EventBroadcaster,
-        block_registry: &BlockRegistry,
+        _block_registry: &BlockRegistry,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
 
@@ -101,22 +101,28 @@ impl PipelineManager {
             pad_properties: HashMap::new(),
         };
 
-        // Expand blocks into native elements and links
+        // Expand blocks into GStreamer elements
         let expanded = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                super::block_expansion::expand_blocks(
-                    &flow.blocks,
-                    &flow.elements,
-                    &flow.links,
-                    block_registry,
-                )
-                .await
+                super::block_expansion::expand_blocks(&flow.blocks, &flow.links).await
             })
         })?;
 
-        // Create and add all elements (from both flow and expanded blocks)
-        for element in &expanded.elements {
+        // Add regular elements from flow
+        for element in &flow.elements {
             manager.add_element(element)?;
+        }
+
+        // Add GStreamer elements from expanded blocks
+        for (element_id, gst_element) in expanded.gst_elements {
+            debug!("Adding block element: {}", element_id);
+            manager.pipeline.add(&gst_element).map_err(|e| {
+                PipelineError::ElementCreation(format!(
+                    "Failed to add block element {} to pipeline: {}",
+                    element_id, e
+                ))
+            })?;
+            manager.elements.insert(element_id, gst_element);
         }
 
         // Analyze links and auto-insert tee elements where needed
@@ -1599,6 +1605,34 @@ impl PipelineManager {
 
         Ok(())
     }
+
+    /// Get the negotiated caps for a specific pad.
+    /// Returns the caps as a string, or None if caps haven't been negotiated yet.
+    pub fn get_pad_caps(
+        &self,
+        element_id: &str,
+        pad_name: &str,
+    ) -> Result<Option<gst::Caps>, PipelineError> {
+        let element = self
+            .elements
+            .get(element_id)
+            .ok_or_else(|| PipelineError::ElementNotFound(element_id.to_string()))?;
+
+        // Get pad reference
+        let pad = if let Some(p) = element.static_pad(pad_name) {
+            p
+        } else if let Some(p) = element.request_pad_simple(pad_name) {
+            p
+        } else {
+            return Err(PipelineError::PadNotFound {
+                element: element_id.to_string(),
+                pad: pad_name.to_string(),
+            });
+        };
+
+        // Get current negotiated caps (not template caps)
+        Ok(pad.current_caps())
+    }
 }
 
 impl Drop for PipelineManager {
@@ -1620,14 +1654,14 @@ mod tests {
                 element_type: "videotestsrc".to_string(),
                 properties: HashMap::from([("is-live".to_string(), PropertyValue::Bool(true))]),
                 pad_properties: HashMap::new(),
-                position: None,
+                position: (0.0, 0.0),
             },
             Element {
                 id: "sink".to_string(),
                 element_type: "fakesink".to_string(),
                 properties: HashMap::new(),
                 pad_properties: HashMap::new(),
-                position: None,
+                position: (100.0, 0.0),
             },
         ];
         flow.links = vec![Link {
@@ -1694,21 +1728,21 @@ mod tests {
                 element_type: "videotestsrc".to_string(),
                 properties: HashMap::new(),
                 pad_properties: HashMap::new(),
-                position: None,
+                position: (0.0, 0.0),
             },
             Element {
                 id: "sink1".to_string(),
                 element_type: "fakesink".to_string(),
                 properties: HashMap::new(),
                 pad_properties: HashMap::new(),
-                position: None,
+                position: (100.0, 0.0),
             },
             Element {
                 id: "sink2".to_string(),
                 element_type: "fakesink".to_string(),
                 properties: HashMap::new(),
                 pad_properties: HashMap::new(),
-                position: None,
+                position: (100.0, 100.0),
             },
         ];
         flow.links = vec![

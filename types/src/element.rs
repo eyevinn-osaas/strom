@@ -23,9 +23,8 @@ pub struct Element {
     /// Pad properties (pad_name -> property_name -> value)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub pad_properties: HashMap<String, HashMap<String, PropertyValue>>,
-    /// Optional display position in the visual editor (x, y)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub position: Option<(f32, f32)>,
+    /// Display position in the visual editor (x, y)
+    pub position: (f32, f32),
 }
 
 /// A link between two element pads.
