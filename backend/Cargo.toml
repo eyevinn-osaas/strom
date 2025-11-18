@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = ["gui"]
+gui = ["dep:strom-frontend", "dep:eframe"]
+
 [dependencies]
 # Internal
 strom-types = { path = "../types", features = ["openapi"] }
@@ -38,6 +42,9 @@ anyhow = "1.0"
 thiserror = "1.0"
 async-trait = "0.1"
 
+# CLI argument parsing
+clap = { version = "4.5", features = ["derive"] }
+
 # Temporary files for DOT/SVG conversion
 tempfile = "3.8"
 uuid.workspace = true
@@ -45,6 +52,10 @@ uuid.workspace = true
 # Embed static assets
 rust-embed = "8.0"
 mime_guess = "2.0"
+
+# Optional GUI (native frontend)
+strom-frontend = { path = "../frontend", optional = true }
+eframe = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3.8"

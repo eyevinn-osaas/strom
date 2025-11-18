@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["types", "backend", "frontend", "mcp-server"]
+default-members = ["backend"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,7 +16,7 @@ serde_json = "1.0"
 uuid = { version = "1.18", features = ["serde", "v4", "js"] }
 
 # Backend
-axum = "0.8.7"
+axum = { version = "0.8.7", features = ["ws"] }
 tokio = { version = "1.48", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"

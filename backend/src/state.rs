@@ -96,9 +96,9 @@ impl AppState {
     }
 
     /// Discover and cache all available GStreamer elements.
-    /// This should be called once during application startup.
+    /// This is called lazily on first request to /api/elements.
     /// Element discovery can crash for certain problematic elements,
-    /// so it's important to do this at startup where crashes are visible.
+    /// but lazy loading means the app starts quickly and crashes are isolated.
     pub async fn discover_and_cache_elements(&self) -> anyhow::Result<()> {
         info!("Discovering and caching GStreamer elements...");
 
@@ -217,8 +217,24 @@ impl AppState {
     }
 
     /// Get all discovered GStreamer elements from cache.
-    /// Elements are discovered once at startup via discover_and_cache_elements().
+    /// Elements are discovered lazily on first request.
     pub async fn discover_elements(&self) -> Vec<ElementInfo> {
+        // Check if cache is empty
+        {
+            let cached = self.inner.cached_elements.read().await;
+            if !cached.is_empty() {
+                return cached.clone();
+            }
+        }
+
+        // Cache is empty, perform discovery
+        info!("Element cache empty, performing lazy discovery...");
+        if let Err(e) = self.discover_and_cache_elements().await {
+            error!("Failed to discover elements: {}", e);
+            return Vec::new();
+        }
+
+        // Return the now-populated cache
         let cached = self.inner.cached_elements.read().await;
         cached.clone()
     }

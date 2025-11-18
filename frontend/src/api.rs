@@ -1,6 +1,5 @@
 //! API client for communicating with the Strom backend.
 
-use gloo_net::http::Request;
 use strom_types::element::ElementInfo;
 use strom_types::{Flow, FlowId};
 
@@ -32,6 +31,7 @@ impl std::fmt::Display for ApiError {
 #[derive(Clone)]
 pub struct ApiClient {
     base_url: String,
+    client: reqwest::Client,
 }
 
 impl ApiClient {
@@ -39,6 +39,7 @@ impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -55,15 +56,15 @@ impl ApiClient {
         let url = format!("{}/flows", self.base_url);
         info!("Fetching flows from: {}", url);
 
-        let response = Request::get(&url).send().await.map_err(|e| {
+        let response = self.client.get(&url).send().await.map_err(|e| {
             tracing::error!("Network error fetching flows: {}", e);
             ApiError::Network(e.to_string())
         })?;
 
         info!("Flows response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -81,13 +82,15 @@ impl ApiClient {
     /// Get a specific flow by ID.
     pub async fn get_flow(&self, id: FlowId) -> ApiResult<Flow> {
         let url = format!("{}/flows/{}", self.base_url, id);
-        let response = Request::get(&url)
+        let response = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -111,12 +114,10 @@ impl ApiClient {
             name: flow.name.clone(),
         };
 
-        let response = Request::post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(&request)
-            .map_err(|e| {
-                tracing::error!("Failed to serialize create request: {}", e);
-                ApiError::Network(e.to_string())
-            })?
             .send()
             .await
             .map_err(|e| {
@@ -126,8 +127,8 @@ impl ApiClient {
 
         info!("Response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -157,12 +158,10 @@ impl ApiClient {
             flow.links.len()
         );
 
-        let response = Request::post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(flow)
-            .map_err(|e| {
-                tracing::error!("Failed to serialize update request: {}", e);
-                ApiError::Network(e.to_string())
-            })?
             .send()
             .await
             .map_err(|e| {
@@ -172,8 +171,8 @@ impl ApiClient {
 
         info!("Response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -191,13 +190,15 @@ impl ApiClient {
     /// Delete a flow.
     pub async fn delete_flow(&self, id: FlowId) -> ApiResult<()> {
         let url = format!("{}/flows/{}", self.base_url, id);
-        let response = Request::delete(&url)
+        let response = self
+            .client
+            .delete(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -208,13 +209,15 @@ impl ApiClient {
     /// Start a flow.
     pub async fn start_flow(&self, id: FlowId) -> ApiResult<()> {
         let url = format!("{}/flows/{}/start", self.base_url, id);
-        let response = Request::post(&url)
+        let response = self
+            .client
+            .post(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -225,13 +228,15 @@ impl ApiClient {
     /// Stop a flow.
     pub async fn stop_flow(&self, id: FlowId) -> ApiResult<()> {
         let url = format!("{}/flows/{}/stop", self.base_url, id);
-        let response = Request::post(&url)
+        let response = self
+            .client
+            .post(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -247,15 +252,15 @@ impl ApiClient {
         let url = format!("{}/elements", self.base_url);
         info!("Fetching elements from: {}", url);
 
-        let response = Request::get(&url).send().await.map_err(|e| {
+        let response = self.client.get(&url).send().await.map_err(|e| {
             tracing::error!("Network error fetching elements: {}", e);
             ApiError::Network(e.to_string())
         })?;
 
         info!("Elements response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -281,13 +286,15 @@ impl ApiClient {
         let url = format!("{}/elements/{}", self.base_url, name);
         info!("Fetching element info from: {}", url);
 
-        let response = Request::get(&url)
+        let response = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -309,13 +316,15 @@ impl ApiClient {
         let url = format!("{}/elements/{}/pads", self.base_url, name);
         info!("Fetching element pad properties from: {}", url);
 
-        let response = Request::get(&url)
+        let response = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -343,15 +352,15 @@ impl ApiClient {
         let url = format!("{}/blocks", self.base_url);
         info!("Fetching blocks from: {}", url);
 
-        let response = Request::get(&url).send().await.map_err(|e| {
+        let response = self.client.get(&url).send().await.map_err(|e| {
             tracing::error!("Network error fetching blocks: {}", e);
             ApiError::Network(e.to_string())
         })?;
 
         info!("Blocks response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -374,13 +383,15 @@ impl ApiClient {
         let url = format!("{}/blocks/{}", self.base_url, id);
         info!("Fetching block from: {}", url);
 
-        let response = Request::get(&url)
+        let response = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -405,12 +416,10 @@ impl ApiClient {
         let url = format!("{}/blocks", self.base_url);
         info!("Creating block via API: POST {}", url);
 
-        let response = Request::post(&url)
+        let response = self
+            .client
+            .post(&url)
             .json(block)
-            .map_err(|e| {
-                tracing::error!("Failed to serialize create block request: {}", e);
-                ApiError::Network(e.to_string())
-            })?
             .send()
             .await
             .map_err(|e| {
@@ -420,8 +429,8 @@ impl ApiClient {
 
         info!("Response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -447,12 +456,10 @@ impl ApiClient {
         let url = format!("{}/blocks/{}", self.base_url, block.id);
         info!("Updating block via API: PUT {}", url);
 
-        let response = Request::put(&url)
+        let response = self
+            .client
+            .put(&url)
             .json(block)
-            .map_err(|e| {
-                tracing::error!("Failed to serialize update block request: {}", e);
-                ApiError::Network(e.to_string())
-            })?
             .send()
             .await
             .map_err(|e| {
@@ -462,8 +469,8 @@ impl ApiClient {
 
         info!("Response status: {}", response.status());
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             tracing::error!("HTTP error {}: {}", status, text);
             return Err(ApiError::Http(status, text));
@@ -481,13 +488,15 @@ impl ApiClient {
     /// Delete a user-defined block.
     pub async fn delete_block(&self, id: &str) -> ApiResult<()> {
         let url = format!("{}/blocks/{}", self.base_url, id);
-        let response = Request::delete(&url)
+        let response = self
+            .client
+            .delete(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }
@@ -503,13 +512,15 @@ impl ApiClient {
         let url = format!("{}/blocks/categories", self.base_url);
         info!("Fetching block categories from: {}", url);
 
-        let response = Request::get(&url)
+        let response = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
 
-        if !response.ok() {
-            let status = response.status();
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
             let text = response.text().await.unwrap_or_default();
             return Err(ApiError::Http(status, text));
         }

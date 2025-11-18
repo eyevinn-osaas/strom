@@ -1,15 +1,31 @@
 //! Main application structure.
 
 use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
-use strom_types::element::ElementInfo;
 use strom_types::{Flow, PipelineState};
-use wasm_bindgen_futures::spawn_local;
 
 use crate::api::ApiClient;
 use crate::graph::GraphEditor;
 use crate::palette::ElementPalette;
 use crate::properties::PropertyInspector;
-use crate::sse::SseClient;
+use crate::state::{AppMessage, AppStateChannels, ConnectionState};
+use crate::ws::WebSocketClient;
+
+// Cross-platform task spawning
+#[cfg(target_arch = "wasm32")]
+fn spawn_task<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + 'static,
+{
+    wasm_bindgen_futures::spawn_local(future);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_task<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    tokio::spawn(future);
+}
 
 /// The main Strom application.
 pub struct StromApp {
@@ -41,8 +57,12 @@ pub struct StromApp {
     blocks_loaded: bool,
     /// Flow pending deletion (for confirmation dialog)
     flow_pending_deletion: Option<(strom_types::FlowId, String)>,
-    /// SSE client for real-time updates
-    sse_client: Option<SseClient>,
+    /// WebSocket client for real-time updates
+    ws_client: Option<WebSocketClient>,
+    /// Connection state
+    connection_state: ConnectionState,
+    /// Channel-based state management
+    channels: AppStateChannels,
     /// Flow properties being edited (flow index)
     editing_properties_idx: Option<usize>,
     /// Temporary name buffer for properties dialog
@@ -60,22 +80,32 @@ impl StromApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Note: Dark theme is set in main.rs before creating the app
 
-        // Detect if we're in development mode (trunk serve) by checking the window location
-        let api_base_url = if let Some(window) = web_sys::window() {
-            if let Ok(location) = window.location().host() {
-                // If we're on port 8080 (trunk serve), connect to backend on port 3000
-                if location.contains(":8080") {
-                    "http://localhost:3000/api"
+        // Detect API base URL - different logic for WASM vs native
+        #[cfg(target_arch = "wasm32")]
+        let api_base_url = {
+            // WASM: Detect if we're in development mode (trunk serve) by checking the window location
+            if let Some(window) = web_sys::window() {
+                if let Ok(location) = window.location().host() {
+                    // If we're on port 8080 (trunk serve), connect to backend on port 3000
+                    if location.contains(":8080") {
+                        "http://localhost:3000/api"
+                    } else {
+                        // Otherwise use relative URL (embedded in backend)
+                        "/api"
+                    }
                 } else {
-                    // Otherwise use relative URL (embedded in backend)
                     "/api"
                 }
             } else {
                 "/api"
             }
-        } else {
-            "/api"
         };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let api_base_url = "http://localhost:3000/api";
+
+        // Create channels for async communication
+        let channels = AppStateChannels::new();
 
         let mut app = Self {
             api: ApiClient::new(api_base_url),
@@ -92,7 +122,9 @@ impl StromApp {
             elements_loaded: false,
             blocks_loaded: false,
             flow_pending_deletion: None,
-            sse_client: None,
+            ws_client: None,
+            connection_state: ConnectionState::Disconnected,
+            channels,
             editing_properties_idx: None,
             properties_name_buffer: String::new(),
             properties_description_buffer: String::new(),
@@ -103,167 +135,53 @@ impl StromApp {
         // Load default elements temporarily (will be replaced by API data)
         app.palette.load_default_elements();
 
-        // Set up SSE connection for real-time updates
-        app.setup_sse_connection(cc.egui_ctx.clone());
+        // Set up WebSocket connection for real-time updates
+        app.setup_websocket_connection(cc.egui_ctx.clone());
 
         app
     }
 
-    /// Set up Server-Sent Events connection for real-time updates.
-    fn setup_sse_connection(&mut self, ctx: egui::Context) {
-        tracing::info!("Setting up SSE connection for real-time updates");
+    /// Set up WebSocket connection for real-time updates.
+    fn setup_websocket_connection(&mut self, ctx: egui::Context) {
+        tracing::info!("Setting up WebSocket connection for real-time updates");
 
-        // Use the same URL detection logic as the API client
-        let sse_url = if let Some(window) = web_sys::window() {
-            if let Ok(location) = window.location().host() {
-                // If we're on port 8080 (trunk serve), connect to backend on port 3000
-                if location.contains(":8080") {
-                    "http://localhost:3000/api/events"
-                } else {
-                    // Otherwise use relative URL (embedded in backend)
-                    "/api/events"
-                }
-            } else {
-                "/api/events"
-            }
-        } else {
-            "/api/events"
-        };
-
-        tracing::info!("Connecting SSE to: {}", sse_url);
-        let mut sse_client = SseClient::new(sse_url);
-
-        // Connect with event handler
-        sse_client.connect(move |event| {
-            tracing::info!("Received SSE event: {}", event.description());
-
-            // Store event in localStorage to trigger UI update
+        // WebSocket URL - different logic for WASM vs native
+        #[cfg(target_arch = "wasm32")]
+        let ws_url = {
+            // WASM: Use the same URL detection logic as the API client
             if let Some(window) = web_sys::window() {
-                if let Some(storage) = window.local_storage().ok().flatten() {
-                    use strom_types::StromEvent;
-
-                    match event {
-                        StromEvent::FlowCreated { .. }
-                        | StromEvent::FlowUpdated { .. }
-                        | StromEvent::FlowDeleted { .. } => {
-                            // Trigger flow list refresh
-                            let _ = storage.set_item("strom_needs_refresh", "true");
-                            tracing::info!("SSE: Triggering flow list refresh");
-                        }
-                        StromEvent::FlowStarted { .. }
-                        | StromEvent::FlowStopped { .. }
-                        | StromEvent::FlowStateChanged { .. } => {
-                            // Trigger flow list refresh to update state
-                            let _ = storage.set_item("strom_needs_refresh", "true");
-                            tracing::info!("SSE: Triggering flow state refresh");
-                        }
-                        StromEvent::PipelineError {
-                            flow_id,
-                            error,
-                            source,
-                        } => {
-                            // Log error prominently and store for display
-                            if let Some(ref src) = source {
-                                tracing::error!(
-                                    "Pipeline error in flow {} from {}: {}",
-                                    flow_id,
-                                    src,
-                                    error
-                                );
-                            } else {
-                                tracing::error!("Pipeline error in flow {}: {}", flow_id, error);
-                            }
-                            // Store error for UI display
-                            let error_msg = if let Some(ref src) = source {
-                                format!("Pipeline error from {}: {}", src, error)
-                            } else {
-                                format!("Pipeline error: {}", error)
-                            };
-                            let _ = storage.set_item("strom_pipeline_error", &error_msg);
-                        }
-                        StromEvent::PipelineWarning {
-                            flow_id,
-                            warning,
-                            source,
-                        } => {
-                            // Log warning
-                            if let Some(src) = source {
-                                tracing::warn!(
-                                    "Pipeline warning in flow {} from {}: {}",
-                                    flow_id,
-                                    src,
-                                    warning
-                                );
-                            } else {
-                                tracing::warn!("Pipeline warning in flow {}: {}", flow_id, warning);
-                            }
-                        }
-                        StromEvent::PipelineInfo {
-                            flow_id,
-                            message,
-                            source,
-                        } => {
-                            // Log info message
-                            if let Some(src) = source {
-                                tracing::info!(
-                                    "Pipeline info in flow {} from {}: {}",
-                                    flow_id,
-                                    src,
-                                    message
-                                );
-                            } else {
-                                tracing::info!("Pipeline info in flow {}: {}", flow_id, message);
-                            }
-                        }
-                        StromEvent::PipelineEos { flow_id } => {
-                            tracing::info!("Pipeline {} reached end of stream", flow_id);
-                            let _ = storage.set_item("strom_needs_refresh", "true");
-                        }
-                        StromEvent::PropertyChanged {
-                            flow_id,
-                            element_id,
-                            property_name,
-                            value,
-                        } => {
-                            tracing::info!(
-                                "Property {}.{} = {:?} changed in flow {}",
-                                element_id,
-                                property_name,
-                                value,
-                                flow_id
-                            );
-                            // Could potentially update UI to reflect property change
-                        }
-                        StromEvent::PadPropertyChanged {
-                            flow_id,
-                            element_id,
-                            pad_name,
-                            property_name,
-                            value,
-                        } => {
-                            tracing::info!(
-                                "Pad property {}:{}:{} = {:?} changed in flow {}",
-                                element_id,
-                                pad_name,
-                                property_name,
-                                value,
-                                flow_id
-                            );
-                            // Could potentially update UI to reflect pad property change
-                        }
-                        StromEvent::Ping => {
-                            // Just a keep-alive, no action needed
+                if let Ok(location) = window.location().host() {
+                    // If we're on port 8080 (trunk serve), connect to backend on port 3000
+                    if location.contains(":8080") {
+                        "ws://localhost:3000/api/ws".to_string()
+                    } else {
+                        // Otherwise use relative URL (embedded in backend)
+                        // Determine ws:// or wss:// based on current protocol
+                        if window.location().protocol().ok().as_deref() == Some("https:") {
+                            format!("wss://{}/api/ws", location)
+                        } else {
+                            format!("ws://{}/api/ws", location)
                         }
                     }
-
-                    // Request repaint to process the event
-                    ctx.request_repaint();
+                } else {
+                    "/api/ws".to_string()
                 }
+            } else {
+                "/api/ws".to_string()
             }
-        });
+        };
 
-        // Store the SSE client to keep the connection alive
-        self.sse_client = Some(sse_client);
+        #[cfg(not(target_arch = "wasm32"))]
+        let ws_url = "ws://localhost:3000/api/ws".to_string();
+
+        tracing::info!("Connecting WebSocket to: {}", ws_url);
+        let mut ws_client = WebSocketClient::new(ws_url);
+
+        // Connect the WebSocket with the channel sender
+        ws_client.connect(self.channels.sender(), ctx);
+
+        // Store the WebSocket client to keep the connection alive
+        self.ws_client = Some(ws_client);
     }
 
     /// Get the currently selected flow.
@@ -283,30 +201,18 @@ impl StromApp {
         self.status = "Loading elements...".to_string();
 
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
 
-        spawn_local(async move {
+        spawn_task(async move {
             match api.list_elements().await {
                 Ok(elements) => {
-                    tracing::info!(
-                        "Successfully fetched {} elements, storing in localStorage",
-                        elements.len()
-                    );
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            if let Ok(json) = serde_json::to_string(&elements) {
-                                let _ = storage.set_item("strom_elements_data", &json);
-                            }
-                        }
-                    }
+                    tracing::info!("Successfully fetched {} elements", elements.len());
+                    let _ = tx.send(AppMessage::ElementsLoaded(elements));
                 }
                 Err(e) => {
                     tracing::error!("Failed to load elements: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_elements_error", &e.to_string());
-                        }
-                    }
+                    let _ = tx.send(AppMessage::ElementsError(e.to_string()));
                 }
             }
             ctx.request_repaint();
@@ -319,30 +225,18 @@ impl StromApp {
         self.status = "Loading blocks...".to_string();
 
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
 
-        spawn_local(async move {
+        spawn_task(async move {
             match api.list_blocks().await {
                 Ok(blocks) => {
-                    tracing::info!(
-                        "Successfully fetched {} blocks, storing in localStorage",
-                        blocks.len()
-                    );
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            if let Ok(json) = serde_json::to_string(&blocks) {
-                                let _ = storage.set_item("strom_blocks_data", &json);
-                            }
-                        }
-                    }
+                    tracing::info!("Successfully fetched {} blocks", blocks.len());
+                    let _ = tx.send(AppMessage::BlocksLoaded(blocks));
                 }
                 Err(e) => {
                     tracing::error!("Failed to load blocks: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_blocks_error", &e.to_string());
-                        }
-                    }
+                    let _ = tx.send(AppMessage::BlocksError(e.to_string()));
                 }
             }
             ctx.request_repaint();
@@ -355,38 +249,22 @@ impl StromApp {
         tracing::info!("Starting to load properties for element: {}", element_type);
 
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
-        let element_type_clone = element_type.clone();
 
-        spawn_local(async move {
-            match api.get_element_info(&element_type_clone).await {
+        spawn_task(async move {
+            match api.get_element_info(&element_type).await {
                 Ok(element_info) => {
                     tracing::info!(
-                        "Successfully fetched properties for '{}' ({} properties), storing in localStorage",
+                        "Successfully fetched properties for '{}' ({} properties)",
                         element_info.name,
                         element_info.properties.len()
                     );
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            if let Ok(json) = serde_json::to_string(&element_info) {
-                                let _ = storage.set_item(
-                                    &format!("strom_element_properties_{}", element_info.name),
-                                    &json,
-                                );
-                            }
-                        }
-                    }
+                    let _ = tx.send(AppMessage::ElementPropertiesLoaded(element_info));
                 }
                 Err(e) => {
                     tracing::error!("Failed to load element properties: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item(
-                                &format!("strom_element_properties_error_{}", element_type_clone),
-                                &e.to_string(),
-                            );
-                        }
-                    }
+                    let _ = tx.send(AppMessage::ElementPropertiesError(e.to_string()));
                 }
             }
             ctx.request_repaint();
@@ -402,42 +280,23 @@ impl StromApp {
         );
 
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
-        let element_type_clone = element_type.clone();
 
-        spawn_local(async move {
-            match api.get_element_pad_properties(&element_type_clone).await {
+        spawn_task(async move {
+            match api.get_element_pad_properties(&element_type).await {
                 Ok(element_info) => {
                     tracing::info!(
-                        "Successfully fetched pad properties for '{}' (sink_pads: {}, src_pads: {}), storing in localStorage",
+                        "Successfully fetched pad properties for '{}' (sink_pads: {}, src_pads: {})",
                         element_info.name,
                         element_info.sink_pads.iter().map(|p| p.properties.len()).sum::<usize>(),
                         element_info.src_pads.iter().map(|p| p.properties.len()).sum::<usize>()
                     );
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            if let Ok(json) = serde_json::to_string(&element_info) {
-                                let _ = storage.set_item(
-                                    &format!("strom_element_pad_properties_{}", element_info.name),
-                                    &json,
-                                );
-                            }
-                        }
-                    }
+                    let _ = tx.send(AppMessage::ElementPadPropertiesLoaded(element_info));
                 }
                 Err(e) => {
                     tracing::error!("Failed to load pad properties: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item(
-                                &format!(
-                                    "strom_element_pad_properties_error_{}",
-                                    element_type_clone
-                                ),
-                                &e.to_string(),
-                            );
-                        }
-                    }
+                    let _ = tx.send(AppMessage::ElementPadPropertiesError(e.to_string()));
                 }
             }
             ctx.request_repaint();
@@ -456,33 +315,18 @@ impl StromApp {
         self.error = None;
 
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
 
-        // Store flows in localStorage as workaround for async closure limitation
-        spawn_local(async move {
+        spawn_task(async move {
             match api.list_flows().await {
                 Ok(flows) => {
-                    tracing::info!(
-                        "Successfully fetched {} flows, storing in localStorage",
-                        flows.len()
-                    );
-                    // Store in localStorage so main app can pick it up
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            if let Ok(json) = serde_json::to_string(&flows) {
-                                let _ = storage.set_item("strom_flows_data", &json);
-                                tracing::info!("Stored {} flows in localStorage", flows.len());
-                            }
-                        }
-                    }
+                    tracing::info!("Successfully fetched {} flows", flows.len());
+                    let _ = tx.send(AppMessage::FlowsLoaded(flows));
                 }
                 Err(e) => {
                     tracing::error!("Failed to load flows: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_flows_error", &e.to_string());
-                        }
-                    }
+                    let _ = tx.send(AppMessage::FlowsError(e.to_string()));
                 }
             }
             ctx.request_repaint();
@@ -517,25 +361,16 @@ impl StromApp {
 
                 self.status = "Saving flow...".to_string();
 
-                spawn_local(async move {
+                spawn_task(async move {
                     tracing::info!("Starting async save operation for flow {}", flow_clone.id);
                     match api.update_flow(&flow_clone).await {
                         Ok(_) => {
-                            tracing::info!("Flow saved successfully");
-                            // Trigger refresh to update state
-                            if let Some(window) = web_sys::window() {
-                                if let Some(storage) = window.local_storage().ok().flatten() {
-                                    let _ = storage.set_item("strom_needs_refresh", "true");
-                                }
-                            }
+                            tracing::info!(
+                                "Flow saved successfully - WebSocket event will trigger refresh"
+                            );
                         }
                         Err(e) => {
                             tracing::error!("Failed to save flow: {}", e);
-                            if let Some(window) = web_sys::window() {
-                                if let Some(storage) = window.local_storage().ok().flatten() {
-                                    let _ = storage.set_item("strom_flows_error", &e.to_string());
-                                }
-                            }
                         }
                     }
                     ctx.request_repaint();
@@ -563,27 +398,16 @@ impl StromApp {
         self.show_new_flow_dialog = false;
         self.new_flow_name.clear();
 
-        spawn_local(async move {
+        spawn_task(async move {
             match api.create_flow(&new_flow).await {
                 Ok(created_flow) => {
-                    tracing::info!("Flow created successfully: {}", created_flow.name);
-                    // Trigger refresh and auto-select the new flow
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_needs_refresh", "true");
-                            // Store the new flow's ID to auto-select it after refresh
-                            let _ = storage
-                                .set_item("strom_selected_flow_id", &created_flow.id.to_string());
-                        }
-                    }
+                    tracing::info!(
+                        "Flow created successfully: {} - WebSocket event will trigger refresh",
+                        created_flow.name
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to create flow: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_flows_error", &e.to_string());
-                        }
-                    }
                 }
             }
             ctx.request_repaint();
@@ -599,24 +423,15 @@ impl StromApp {
 
             self.status = "Starting flow...".to_string();
 
-            spawn_local(async move {
+            spawn_task(async move {
                 match api.start_flow(flow_id).await {
                     Ok(_) => {
-                        tracing::info!("Flow started successfully");
-                        // Trigger refresh to update state
-                        if let Some(window) = web_sys::window() {
-                            if let Some(storage) = window.local_storage().ok().flatten() {
-                                let _ = storage.set_item("strom_needs_refresh", "true");
-                            }
-                        }
+                        tracing::info!(
+                            "Flow started successfully - WebSocket event will trigger refresh"
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Failed to start flow: {}", e);
-                        if let Some(window) = web_sys::window() {
-                            if let Some(storage) = window.local_storage().ok().flatten() {
-                                let _ = storage.set_item("strom_flows_error", &e.to_string());
-                            }
-                        }
                     }
                 }
                 ctx.request_repaint();
@@ -633,24 +448,15 @@ impl StromApp {
 
             self.status = "Stopping flow...".to_string();
 
-            spawn_local(async move {
+            spawn_task(async move {
                 match api.stop_flow(flow_id).await {
                     Ok(_) => {
-                        tracing::info!("Flow stopped successfully");
-                        // Trigger refresh to update state
-                        if let Some(window) = web_sys::window() {
-                            if let Some(storage) = window.local_storage().ok().flatten() {
-                                let _ = storage.set_item("strom_needs_refresh", "true");
-                            }
-                        }
+                        tracing::info!(
+                            "Flow stopped successfully - WebSocket event will trigger refresh"
+                        );
                     }
                     Err(e) => {
                         tracing::error!("Failed to stop flow: {}", e);
-                        if let Some(window) = web_sys::window() {
-                            if let Some(storage) = window.local_storage().ok().flatten() {
-                                let _ = storage.set_item("strom_flows_error", &e.to_string());
-                            }
-                        }
                     }
                 }
                 ctx.request_repaint();
@@ -665,24 +471,15 @@ impl StromApp {
 
         self.status = "Deleting flow...".to_string();
 
-        spawn_local(async move {
+        spawn_task(async move {
             match api.delete_flow(flow_id).await {
                 Ok(_) => {
-                    tracing::info!("Flow deleted successfully");
-                    // Trigger refresh to reload the flow list
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_needs_refresh", "true");
-                        }
-                    }
+                    tracing::info!(
+                        "Flow deleted successfully - WebSocket event will trigger refresh"
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to delete flow: {}", e);
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_flows_error", &e.to_string());
-                        }
-                    }
                 }
             }
             ctx.request_repaint();
@@ -742,7 +539,7 @@ impl StromApp {
 
                             self.status = "Restarting flow...".to_string();
 
-                            spawn_local(async move {
+                            spawn_task(async move {
                                 // First stop the flow
                                 match api.stop_flow(flow_id).await {
                                     Ok(_) => {
@@ -750,46 +547,18 @@ impl StromApp {
                                         // Then start it again
                                         match api.start_flow(flow_id).await {
                                             Ok(_) => {
-                                                tracing::info!("Flow restarted successfully");
-                                                if let Some(window) = web_sys::window() {
-                                                    if let Some(storage) =
-                                                        window.local_storage().ok().flatten()
-                                                    {
-                                                        let _ = storage.set_item(
-                                                            "strom_needs_refresh",
-                                                            "true",
-                                                        );
-                                                    }
-                                                }
+                                                tracing::info!("Flow restarted successfully - WebSocket events will trigger refresh");
                                             }
                                             Err(e) => {
                                                 tracing::error!(
                                                     "Failed to start flow after stop: {}",
                                                     e
                                                 );
-                                                if let Some(window) = web_sys::window() {
-                                                    if let Some(storage) =
-                                                        window.local_storage().ok().flatten()
-                                                    {
-                                                        let _ = storage.set_item(
-                                                            "strom_flows_error",
-                                                            &e.to_string(),
-                                                        );
-                                                    }
-                                                }
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to stop flow for restart: {}", e);
-                                        if let Some(window) = web_sys::window() {
-                                            if let Some(storage) =
-                                                window.local_storage().ok().flatten()
-                                            {
-                                                let _ = storage
-                                                    .set_item("strom_flows_error", &e.to_string());
-                                            }
-                                        }
                                     }
                                 }
                                 ctx_clone.request_repaint();
@@ -806,15 +575,9 @@ impl StromApp {
                     ui.separator();
 
                     if ui.button("🔍 Debug Graph").clicked() {
-                        // Open debug graph in new tab
+                        // Open debug graph in new tab (works on both WASM and native)
                         let url = self.api.get_debug_graph_url(flow_id);
-                        if let Some(window) = web_sys::window() {
-                            if let Err(e) = window.open_with_url_and_target(&url, "_blank") {
-                                self.error = Some(format!("Failed to open debug graph: {:?}", e));
-                            }
-                        } else {
-                            self.error = Some("Failed to access window object".to_string());
-                        }
+                        ctx.open_url(egui::OpenUrl::new_tab(&url));
                     }
 
                     ui.separator();
@@ -869,14 +632,6 @@ impl StromApp {
                             // Load flow into graph editor
                             self.graph.load(flow.elements.clone(), flow.links.clone());
                             self.graph.load_blocks(flow.blocks.clone());
-
-                            // Persist selected flow
-                            if let Some(window) = web_sys::window() {
-                                if let Some(storage) = window.local_storage().ok().flatten() {
-                                    let _ = storage
-                                        .set_item("strom_selected_flow_id", &flow.id.to_string());
-                                }
-                            }
                         }
 
                         // Draw background for selected/hovered item
@@ -931,12 +686,6 @@ impl StromApp {
                             self.selected_flow_idx = Some(idx);
                             self.graph.load(flow.elements.clone(), flow.links.clone());
                             self.graph.load_blocks(flow.blocks.clone());
-                            if let Some(window) = web_sys::window() {
-                                if let Some(storage) = window.local_storage().ok().flatten() {
-                                    let _ = storage
-                                        .set_item("strom_selected_flow_id", &flow.id.to_string());
-                                }
-                            }
                         }
 
                         // Add hover tooltip with flow details
@@ -1228,24 +977,7 @@ impl StromApp {
                     ui.colored_label(Color32::RED, format!("Error: {}", error));
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.loading {
-                        ui.spinner();
-                    } else {
-                        // Check if SSE is connected
-                        let is_connected = self
-                            .sse_client
-                            .as_ref()
-                            .map(|client| client.is_connected())
-                            .unwrap_or(false);
-
-                        if is_connected {
-                            ui.colored_label(Color32::from_rgb(100, 200, 100), "● Connected");
-                        } else {
-                            ui.colored_label(Color32::from_rgb(200, 100, 100), "● Disconnected");
-                        }
-                    }
-                });
+                // Connection state is now shown via full-screen overlay when disconnected
             });
         });
     }
@@ -1475,29 +1207,13 @@ impl StromApp {
                             let api = self.api.clone();
                             let ctx_clone = ctx.clone();
 
-                            spawn_local(async move {
+                            spawn_task(async move {
                                 match api.update_flow(&flow_clone).await {
                                     Ok(_) => {
-                                        tracing::info!("Flow properties updated successfully");
-                                        if let Some(window) = web_sys::window() {
-                                            if let Some(storage) =
-                                                window.local_storage().ok().flatten()
-                                            {
-                                                let _ =
-                                                    storage.set_item("strom_needs_refresh", "true");
-                                            }
-                                        }
+                                        tracing::info!("Flow properties updated successfully - WebSocket event will trigger refresh");
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to update flow properties: {}", e);
-                                        if let Some(window) = web_sys::window() {
-                                            if let Some(storage) =
-                                                window.local_storage().ok().flatten()
-                                            {
-                                                let _ = storage
-                                                    .set_item("strom_flows_error", &e.to_string());
-                                            }
-                                        }
                                     }
                                 }
                                 ctx_clone.request_repaint();
@@ -1512,18 +1228,233 @@ impl StromApp {
                 });
             });
     }
+
+    /// Render the full-screen disconnect overlay when WebSocket is not connected.
+    fn render_disconnect_overlay(&mut self, ctx: &Context) {
+        CentralPanel::default().show(ctx, |ui| {
+            // Center everything vertically and horizontally
+            ui.vertical_centered(|ui| {
+                // Add vertical spacing to center content
+                let available_height = ui.available_height();
+                ui.add_space(available_height * 0.35);
+
+                // Show large icon and status based on connection state
+                match self.connection_state {
+                    ConnectionState::Disconnected => {
+                        ui.heading(
+                            egui::RichText::new("⚠")
+                                .size(80.0)
+                                .color(Color32::from_rgb(255, 165, 0))
+                        );
+                        ui.add_space(20.0);
+                        ui.heading(
+                            egui::RichText::new("Disconnected from Backend")
+                                .size(32.0)
+                                .color(Color32::from_rgb(200, 200, 200))
+                        );
+                    }
+                    ConnectionState::Reconnecting { attempt } => {
+                        // Animated spinner
+                        ui.add(egui::Spinner::new().size(80.0));
+                        ui.add_space(20.0);
+                        ui.heading(
+                            egui::RichText::new(format!("Reconnecting (Attempt {})", attempt))
+                                .size(32.0)
+                                .color(Color32::from_rgb(200, 200, 200))
+                        );
+                    }
+                    ConnectionState::Connected => {
+                        // Should not reach here, but just in case
+                        ui.heading(
+                            egui::RichText::new("✓")
+                                .size(80.0)
+                                .color(Color32::from_rgb(0, 200, 0))
+                        );
+                        ui.add_space(20.0);
+                        ui.heading(
+                            egui::RichText::new("Connected")
+                                .size(32.0)
+                                .color(Color32::from_rgb(200, 200, 200))
+                        );
+                    }
+                }
+
+                ui.add_space(15.0);
+                ui.label(
+                    egui::RichText::new("Please wait while we attempt to reconnect to the Strom backend...")
+                        .size(16.0)
+                        .color(Color32::from_rgb(150, 150, 150))
+                );
+
+                ui.add_space(30.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                // Show connection details
+                ui.label(
+                    egui::RichText::new("The application will automatically reconnect when the backend is available.")
+                        .size(14.0)
+                        .color(Color32::from_rgb(120, 120, 120))
+                );
+            });
+        });
+    }
 }
 
 impl eframe::App for StromApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
-        // Check if we need to refresh
-        if let Some(window) = web_sys::window() {
-            if let Some(storage) = window.local_storage().ok().flatten() {
-                if let Ok(Some(_)) = storage.get_item("strom_needs_refresh") {
+        // Process all pending channel messages
+        while let Ok(msg) = self.channels.rx.try_recv() {
+            match msg {
+                AppMessage::FlowsLoaded(flows) => {
+                    tracing::info!("Received FlowsLoaded: {} flows", flows.len());
+                    self.flows = flows;
+                    self.status = format!("Loaded {} flows", self.flows.len());
+                    self.loading = false;
+                }
+                AppMessage::FlowsError(error) => {
+                    tracing::error!("Received FlowsError: {}", error);
+                    self.error = Some(format!("Flows: {}", error));
+                    self.loading = false;
+                    self.status = "Error loading flows".to_string();
+                }
+                AppMessage::ElementsLoaded(elements) => {
+                    let count = elements.len();
+                    tracing::info!("Received ElementsLoaded: {} elements", count);
+                    self.palette.load_elements(elements.clone());
+                    self.graph.set_all_element_info(elements);
+                    self.status = format!("Loaded {} elements", count);
+                }
+                AppMessage::ElementsError(error) => {
+                    tracing::error!("Received ElementsError: {}", error);
+                    self.error = Some(format!("Elements: {}", error));
+                }
+                AppMessage::BlocksLoaded(blocks) => {
+                    let count = blocks.len();
+                    tracing::info!("Received BlocksLoaded: {} blocks", count);
+                    self.palette.load_blocks(blocks.clone());
+                    self.graph.set_all_block_definitions(blocks);
+                    self.status = format!("Loaded {} blocks", count);
+                }
+                AppMessage::BlocksError(error) => {
+                    tracing::error!("Received BlocksError: {}", error);
+                    self.error = Some(format!("Blocks: {}", error));
+                }
+                AppMessage::ElementPropertiesLoaded(info) => {
+                    tracing::info!(
+                        "Received ElementPropertiesLoaded: {} ({} properties)",
+                        info.name,
+                        info.properties.len()
+                    );
+                    self.palette.cache_element_properties(info);
+                }
+                AppMessage::ElementPropertiesError(error) => {
+                    tracing::error!("Received ElementPropertiesError: {}", error);
+                    self.error = Some(format!("Element properties: {}", error));
+                }
+                AppMessage::ElementPadPropertiesLoaded(info) => {
+                    let sink_prop_count: usize =
+                        info.sink_pads.iter().map(|p| p.properties.len()).sum();
+                    let src_prop_count: usize =
+                        info.src_pads.iter().map(|p| p.properties.len()).sum();
+                    tracing::info!(
+                        "Received ElementPadPropertiesLoaded: {} (sink: {} props, src: {} props)",
+                        info.name,
+                        sink_prop_count,
+                        src_prop_count
+                    );
+                    self.palette.cache_element_pad_properties(info);
+                }
+                AppMessage::ElementPadPropertiesError(error) => {
+                    tracing::error!("Received ElementPadPropertiesError: {}", error);
+                    self.error = Some(format!("Pad properties: {}", error));
+                }
+                AppMessage::Event(event) => {
+                    tracing::info!("Received WebSocket event: {}", event.description());
+                    // Handle flow state changes
+                    use strom_types::StromEvent;
+                    match event {
+                        StromEvent::FlowCreated { .. } | StromEvent::FlowDeleted { .. } => {
+                            // Only refresh flow list for create/delete events
+                            tracing::info!("Flow created or deleted, triggering full refresh");
+                            self.needs_refresh = true;
+                        }
+                        StromEvent::FlowUpdated { flow_id }
+                        | StromEvent::FlowStarted { flow_id }
+                        | StromEvent::FlowStopped { flow_id } => {
+                            // For updates/start/stop, fetch the specific flow to update it in-place
+                            tracing::info!(
+                                "Flow {} updated/started/stopped, fetching updated flow",
+                                flow_id
+                            );
+                            let api = self.api.clone();
+                            let tx = self.channels.sender();
+                            let ctx = ctx.clone();
+
+                            spawn_task(async move {
+                                match api.get_flow(flow_id).await {
+                                    Ok(flow) => {
+                                        tracing::info!("Fetched updated flow: {}", flow.name);
+                                        let _ = tx.send(AppMessage::FlowFetched(flow));
+                                        ctx.request_repaint();
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to fetch updated flow: {}", e);
+                                        // Fall back to full refresh
+                                        let _ = tx.send(AppMessage::RefreshNeeded);
+                                        ctx.request_repaint();
+                                    }
+                                }
+                            });
+                        }
+                        StromEvent::PipelineError { error, .. } => {
+                            self.error = Some(format!("Pipeline error: {}", error));
+                        }
+                        _ => {}
+                    }
+                }
+                AppMessage::ConnectionStateChanged(state) => {
+                    tracing::info!("Connection state changed: {:?}", state);
+
+                    // If we're transitioning to Connected state, invalidate all cached data
+                    let was_disconnected = !self.connection_state.is_connected();
+                    let now_connected = state.is_connected();
+
+                    if was_disconnected && now_connected {
+                        tracing::info!("Reconnected to backend - invalidating all cached state");
+                        // Trigger reload of all data from backend
+                        self.needs_refresh = true;
+                        self.elements_loaded = false;
+                        self.blocks_loaded = false;
+                    }
+
+                    self.connection_state = state;
+                }
+                AppMessage::FlowFetched(flow) => {
+                    tracing::info!("Received updated flow: {}", flow.name);
+                    // Update the specific flow in-place
+                    if let Some(existing_flow) = self.flows.iter_mut().find(|f| f.id == flow.id) {
+                        *existing_flow = flow;
+                        tracing::info!("Updated flow in-place");
+                    } else {
+                        tracing::warn!("Flow not found in list, adding it");
+                        self.flows.push(flow);
+                    }
+                }
+                AppMessage::RefreshNeeded => {
+                    tracing::info!("Refresh requested due to flow fetch failure");
                     self.needs_refresh = true;
-                    let _ = storage.remove_item("strom_needs_refresh");
+                }
+                _ => {
+                    tracing::debug!("Received unhandled AppMessage variant");
                 }
             }
+        }
+
+        // Check if we're disconnected - if so, show blocking overlay and don't render normal UI
+        if !self.connection_state.is_connected() {
+            self.render_disconnect_overlay(ctx);
+            return;
         }
 
         // Load elements on first frame
@@ -1542,278 +1473,6 @@ impl eframe::App for StromApp {
         if self.needs_refresh {
             self.load_flows(ctx);
             self.needs_refresh = false;
-        }
-
-        // Check localStorage for updated elements
-        if let Some(window) = web_sys::window() {
-            if let Some(storage) = window.local_storage().ok().flatten() {
-                if let Ok(Some(json)) = storage.get_item("strom_elements_data") {
-                    use strom_types::element::ElementInfo;
-                    match serde_json::from_str::<Vec<ElementInfo>>(&json) {
-                        Ok(elements) => {
-                            let count = elements.len();
-                            tracing::info!(
-                                "Updating elements from localStorage: {} elements",
-                                count
-                            );
-                            self.palette.load_elements(elements.clone());
-                            self.graph.set_all_element_info(elements);
-                            self.status = format!("Loaded {} elements", count);
-                            let _ = storage.remove_item("strom_elements_data");
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse elements from localStorage: {}", e);
-                            self.error = Some(format!("Elements: decode error: {}", e));
-                            // Clear bad data
-                            let _ = storage.remove_item("strom_elements_data");
-                        }
-                    }
-                }
-
-                // Check for element load errors
-                if let Ok(Some(error)) = storage.get_item("strom_elements_error") {
-                    self.error = Some(format!("Elements: {}", error));
-                    let _ = storage.remove_item("strom_elements_error");
-                }
-
-                // Check for updated blocks
-                if let Ok(Some(json)) = storage.get_item("strom_blocks_data") {
-                    use strom_types::BlockDefinition;
-                    match serde_json::from_str::<Vec<BlockDefinition>>(&json) {
-                        Ok(blocks) => {
-                            let count = blocks.len();
-                            tracing::info!("Updating blocks from localStorage: {} blocks", count);
-                            self.palette.load_blocks(blocks.clone());
-                            self.graph.set_all_block_definitions(blocks);
-                            self.status = format!("Loaded {} blocks", count);
-                            let _ = storage.remove_item("strom_blocks_data");
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to parse blocks from localStorage: {}", e);
-                            self.error = Some(format!("Blocks: decode error: {}", e));
-                            // Clear bad data
-                            let _ = storage.remove_item("strom_blocks_data");
-                        }
-                    }
-                }
-
-                // Check for block load errors
-                if let Ok(Some(error)) = storage.get_item("strom_blocks_error") {
-                    self.error = Some(format!("Blocks: {}", error));
-                    let _ = storage.remove_item("strom_blocks_error");
-                }
-
-                // Check for loaded element properties (lazy loading)
-                // We need to check all possible element types that might have been loaded
-                // Scan all localStorage keys for strom_element_properties_* pattern
-                if let Ok(length) = storage.length() {
-                    for i in 0..length {
-                        if let Ok(Some(key)) = storage.key(i) {
-                            if key.starts_with("strom_element_properties_") {
-                                if let Ok(Some(json)) = storage.get_item(&key) {
-                                    match serde_json::from_str::<ElementInfo>(&json) {
-                                        Ok(element_info) => {
-                                            tracing::info!(
-                                                "Caching element properties from localStorage: {} ({} properties)",
-                                                element_info.name,
-                                                element_info.properties.len()
-                                            );
-                                            self.palette.cache_element_properties(element_info);
-                                            let _ = storage.remove_item(&key);
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "Failed to parse element properties from localStorage: {}",
-                                                e
-                                            );
-                                            let _ = storage.remove_item(&key);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Check for loaded pad properties (lazy loading)
-                // Scan all localStorage keys for strom_element_pad_properties_* pattern
-                if let Ok(length) = storage.length() {
-                    for i in 0..length {
-                        if let Ok(Some(key)) = storage.key(i) {
-                            if key.starts_with("strom_element_pad_properties_") {
-                                if let Ok(Some(json)) = storage.get_item(&key) {
-                                    match serde_json::from_str::<ElementInfo>(&json) {
-                                        Ok(element_info) => {
-                                            let sink_prop_count: usize = element_info
-                                                .sink_pads
-                                                .iter()
-                                                .map(|p| p.properties.len())
-                                                .sum();
-                                            let src_prop_count: usize = element_info
-                                                .src_pads
-                                                .iter()
-                                                .map(|p| p.properties.len())
-                                                .sum();
-                                            tracing::info!(
-                                                "Caching pad properties from localStorage: {} (sink: {} props, src: {} props)",
-                                                element_info.name,
-                                                sink_prop_count,
-                                                src_prop_count
-                                            );
-                                            self.palette.cache_element_pad_properties(element_info);
-                                            let _ = storage.remove_item(&key);
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "Failed to parse pad properties from localStorage: {}",
-                                                e
-                                            );
-                                            let _ = storage.remove_item(&key);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check for SDP fetch requests
-        if let Some(window) = web_sys::window() {
-            if let Some(storage) = window.local_storage().ok().flatten() {
-                if let Ok(Some(sdp_key)) = storage.get_item("strom_fetch_sdp") {
-                    // Remove the flag immediately
-                    let _ = storage.remove_item("strom_fetch_sdp");
-
-                    // Parse the key: format is "strom_sdp_{flow_id}_{block_id}"
-                    if let Some(key_parts) = sdp_key.strip_prefix("strom_sdp_") {
-                        if let Some((flow_id_str, block_id)) = key_parts.split_once('_') {
-                            tracing::info!(
-                                "Fetching SDP for flow {} block {}",
-                                flow_id_str,
-                                block_id
-                            );
-
-                            let api = self.api.clone();
-                            let ctx = ctx.clone();
-                            let flow_id_str = flow_id_str.to_string();
-                            let block_id = block_id.to_string();
-                            let sdp_key_clone = sdp_key.clone();
-
-                            spawn_local(async move {
-                                // Construct the SDP URL
-                                let url = format!(
-                                    "{}/flows/{}/blocks/{}/sdp",
-                                    api.base_url(),
-                                    flow_id_str,
-                                    block_id
-                                );
-
-                                match reqwest::get(&url).await {
-                                    Ok(response) if response.status().is_success() => {
-                                        match response.text().await {
-                                            Ok(sdp_text) => {
-                                                tracing::info!(
-                                                    "Successfully fetched SDP for block {}",
-                                                    block_id
-                                                );
-                                                // Store in localStorage
-                                                if let Some(window) = web_sys::window() {
-                                                    if let Some(storage) =
-                                                        window.local_storage().ok().flatten()
-                                                    {
-                                                        let _ = storage
-                                                            .set_item(&sdp_key_clone, &sdp_text);
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::error!(
-                                                    "Failed to read SDP response: {}",
-                                                    e
-                                                );
-                                            }
-                                        }
-                                    }
-                                    Ok(response) => {
-                                        tracing::error!(
-                                            "Failed to fetch SDP: HTTP {}",
-                                            response.status()
-                                        );
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to fetch SDP: {}", e);
-                                    }
-                                }
-                                ctx.request_repaint();
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
-        // Check localStorage for updated flows
-        if let Some(window) = web_sys::window() {
-            if let Some(storage) = window.local_storage().ok().flatten() {
-                // Check if there's new flow data
-                if let Ok(Some(json)) = storage.get_item("strom_flows_data") {
-                    if let Ok(flows) = serde_json::from_str::<Vec<Flow>>(&json) {
-                        // Check if flows have changed (count, IDs, or states)
-                        let flows_changed = flows.len() != self.flows.len()
-                            || flows
-                                .iter()
-                                .zip(self.flows.iter())
-                                .any(|(a, b)| a.id != b.id || a.state != b.state);
-
-                        if flows_changed {
-                            tracing::info!(
-                                "Updating flows from localStorage: {} flows",
-                                flows.len()
-                            );
-                            self.flows = flows;
-                            self.status = format!("Loaded {} flows", self.flows.len());
-
-                            // Restore selected flow from localStorage
-                            if let Ok(Some(selected_flow_id)) =
-                                storage.get_item("strom_selected_flow_id")
-                            {
-                                if let Some(idx) = self
-                                    .flows
-                                    .iter()
-                                    .position(|f| f.id.to_string() == selected_flow_id)
-                                {
-                                    self.selected_flow_idx = Some(idx);
-                                    if let Some(flow) = self.flows.get(idx) {
-                                        self.graph.load(flow.elements.clone(), flow.links.clone());
-                                        self.graph.load_blocks(flow.blocks.clone());
-
-                                        // Restore selected element from localStorage
-                                        if let Ok(Some(selected_element_id)) =
-                                            storage.get_item("strom_selected_element_id")
-                                        {
-                                            self.graph.selected = Some(selected_element_id);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Always reset loading state and clear data when we get a response
-                        self.loading = false;
-                        let _ = storage.remove_item("strom_flows_data");
-                    }
-                }
-
-                // Check for errors
-                if let Ok(Some(error)) = storage.get_item("strom_flows_error") {
-                    self.error = Some(error.clone());
-                    self.loading = false;
-                    self.status = "Error loading flows".to_string();
-                    let _ = storage.remove_item("strom_flows_error");
-                }
-            }
         }
 
         self.render_toolbar(ctx);

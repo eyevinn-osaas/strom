@@ -161,13 +161,6 @@ impl GraphEditor {
                 !link.from.starts_with(&id_clone) && !link.to.starts_with(&id_clone)
             });
             self.selected = None;
-
-            // Clear selected element from localStorage
-            if let Some(window) = web_sys::window() {
-                if let Some(storage) = window.local_storage().ok().flatten() {
-                    let _ = storage.remove_item("strom_selected_element_id");
-                }
-            }
         }
     }
 
@@ -400,13 +393,6 @@ impl GraphEditor {
                     self.selected_link = None; // Deselect any link
                     self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
                     self.focused_pad = None; // Clear pad focus
-
-                    // Persist selected element to localStorage
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_selected_element_id", &element.id);
-                        }
-                    }
                 }
 
                 // Handle node dragging
@@ -489,12 +475,6 @@ impl GraphEditor {
                     self.selected_link = None;
                     self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
                     self.focused_pad = None; // Clear pad focus
-
-                    if let Some(window) = web_sys::window() {
-                        if let Some(storage) = window.local_storage().ok().flatten() {
-                            let _ = storage.set_item("strom_selected_element_id", &block.id);
-                        }
-                    }
                 }
 
                 // Handle node dragging
@@ -545,13 +525,6 @@ impl GraphEditor {
             if response.clicked() && self.hovered_link.is_none() && self.hovered_element.is_none() {
                 self.selected = None;
                 self.selected_link = None;
-
-                // Clear selected element from localStorage
-                if let Some(window) = web_sys::window() {
-                    if let Some(storage) = window.local_storage().ok().flatten() {
-                        let _ = storage.remove_item("strom_selected_element_id");
-                    }
-                }
             }
 
             // Reset dragging state when mouse is released
@@ -1673,13 +1646,6 @@ impl GraphEditor {
         } else {
             PropertyTab::OutputPads
         };
-
-        // Persist selected element to localStorage
-        if let Some(window) = web_sys::window() {
-            if let Some(storage) = window.local_storage().ok().flatten() {
-                let _ = storage.set_item("strom_selected_element_id", element_id);
-            }
-        }
     }
 
     /// Handle pad interactions for blocks.
