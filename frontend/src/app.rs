@@ -91,16 +91,21 @@ impl StromApp {
                 if let Ok(location) = window.location().host() {
                     // If we're on port 8080 (trunk serve), connect to backend on port 3000
                     if location.contains(":8080") {
-                        "http://localhost:3000/api"
+                        "http://localhost:3000/api".to_string()
                     } else {
-                        // Otherwise use relative URL (embedded in backend)
-                        "/api"
+                        // Otherwise construct absolute URL from current location
+                        // reqwest in WASM requires absolute URLs
+                        let protocol = window
+                            .location()
+                            .protocol()
+                            .unwrap_or_else(|_| "http:".to_string());
+                        format!("{}//{}/api", protocol, location)
                     }
                 } else {
-                    "/api"
+                    "http://localhost:3000/api".to_string()
                 }
             } else {
-                "/api"
+                "http://localhost:3000/api".to_string()
             }
         };
 

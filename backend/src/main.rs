@@ -61,7 +61,7 @@ fn run_with_gui() -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    // Create tokio runtime for HTTP server
+    // Create tokio runtime on main thread
     let runtime = tokio::runtime::Runtime::new()?;
 
     // Shared shutdown flag for coordination between threads
@@ -71,59 +71,57 @@ fn run_with_gui() -> anyhow::Result<()> {
     // Initialize and start server in runtime
     let (server_started_tx, server_started_rx) = std::sync::mpsc::channel();
 
-    std::thread::spawn(move || {
-        runtime.block_on(async {
-            // Load configuration
-            let config = Config::from_env();
-            info!("Configuration loaded");
+    runtime.spawn(async move {
+        // Load configuration
+        let config = Config::from_env();
+        info!("Configuration loaded");
 
-            // Create application with persistent storage
-            let state = AppState::with_json_storage(&config.flows_path, &config.blocks_path);
-            state
-                .load_from_storage()
+        // Create application with persistent storage
+        let state = AppState::with_json_storage(&config.flows_path, &config.blocks_path);
+        state
+            .load_from_storage()
+            .await
+            .expect("Failed to load storage");
+
+        // GStreamer elements are discovered lazily on first /api/elements request
+
+        // Restart flows that were running before shutdown
+        restart_flows(&state).await;
+
+        let app = create_app_with_state(state.clone()).await;
+
+        // Start server - bind to 0.0.0.0 to be accessible from all interfaces
+        let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
+        info!("Server listening on {}", addr);
+
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("Failed to bind");
+
+        // Notify main thread that server is ready
+        server_started_tx.send(()).ok();
+
+        // Run HTTP server with graceful shutdown
+        let shutdown_signal = async move {
+            tokio::signal::ctrl_c()
                 .await
-                .expect("Failed to load storage");
+                .expect("Failed to install Ctrl+C handler");
 
-            // GStreamer elements are discovered lazily on first /api/elements request
+            info!("Received Ctrl+C, shutting down gracefully...");
 
-            // Restart flows that were running before shutdown
-            restart_flows(&state).await;
+            // Note: We don't need to explicitly stop flows here.
+            // GStreamer will clean up when the process exits, and
+            // we want to preserve the auto_restart flag for flows
+            // that were running, so they restart on next backend startup.
 
-            let app = create_app_with_state(state.clone()).await;
+            info!("Signaling GUI to close...");
+            shutdown_flag.store(true, Ordering::SeqCst);
+        };
 
-            // Start server - bind to 0.0.0.0 to be accessible from all interfaces
-            let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-            info!("Server listening on {}", addr);
-
-            let listener = tokio::net::TcpListener::bind(addr)
-                .await
-                .expect("Failed to bind");
-
-            // Notify main thread that server is ready
-            server_started_tx.send(()).ok();
-
-            // Run HTTP server with graceful shutdown
-            let shutdown_signal = async move {
-                tokio::signal::ctrl_c()
-                    .await
-                    .expect("Failed to install Ctrl+C handler");
-
-                info!("Received Ctrl+C, shutting down gracefully...");
-
-                // Note: We don't need to explicitly stop flows here.
-                // GStreamer will clean up when the process exits, and
-                // we want to preserve the auto_restart flag for flows
-                // that were running, so they restart on next backend startup.
-
-                info!("Signaling GUI to close...");
-                shutdown_flag.store(true, Ordering::SeqCst);
-            };
-
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal)
-                .await
-                .expect("Server error");
-        });
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal)
+            .await
+            .expect("Server error");
     });
 
     // Wait for server to start
@@ -131,6 +129,9 @@ fn run_with_gui() -> anyhow::Result<()> {
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     info!("Launching native GUI on main thread...");
+
+    // Enter runtime context so tokio::spawn() works from GUI
+    let _guard = runtime.enter();
 
     // Run GUI on main thread (blocks until window closes)
     if let Err(e) = strom_backend::gui::launch_gui_with_shutdown(shutdown_flag_gui) {
