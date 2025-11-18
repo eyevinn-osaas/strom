@@ -24,6 +24,23 @@ pub fn parse_audio_caps(caps: &gst::Caps) -> Option<(i32, i32)> {
     Some((sample_rate, channels))
 }
 
+/// Check if an IP address is multicast (224.0.0.0 to 239.255.255.255).
+fn is_multicast_address(addr: &str) -> bool {
+    // Try to parse as IPv4 address
+    let parts: Vec<&str> = addr.split('.').collect();
+    if parts.len() != 4 {
+        return false;
+    }
+
+    // Parse first octet
+    if let Ok(first_octet) = parts[0].parse::<u8>() {
+        // Multicast range is 224-239 (class D)
+        (224..=239).contains(&first_octet)
+    } else {
+        false
+    }
+}
+
 /// Generate SDP for an AES67 output block instance.
 ///
 /// The SDP describes the RTP stream parameters that receivers need to connect.
@@ -103,12 +120,20 @@ pub fn generate_aes67_output_sdp(
         _ => "L24", // Default to 24-bit
     };
 
+    // Check if the host is a multicast address and format connection line accordingly
+    // Multicast IPv4 addresses are in range 224.0.0.0 to 239.255.255.255
+    let connection_line = if is_multicast_address(host) {
+        format!("c=IN IP4 {}/32", host) // Add TTL for multicast
+    } else {
+        format!("c=IN IP4 {}", host) // No TTL for unicast
+    };
+
     // Generate SDP
     format!(
         "v=0\r
 o=- {} {} IN IP4 {}\r
 s={}\r
-c=IN IP4 {}\r
+{}\r
 t=0 0\r
 a=recvonly\r
 m=audio {} RTP/AVP {}\r
@@ -121,7 +146,7 @@ a=mediaclk:direct=0\r
         session_id,
         origin_ip,
         session_name,
-        host,
+        connection_line,
         port,
         payload_type,
         payload_type,
@@ -193,7 +218,7 @@ mod tests {
         let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None);
 
         assert!(sdp.contains("s=Test Stream"));
-        assert!(sdp.contains("c=IN IP4 239.69.1.1"));
+        assert!(sdp.contains("c=IN IP4 239.69.1.1/32")); // Multicast should have /32 TTL
         assert!(sdp.contains("m=audio 5004 RTP/AVP 96"));
         assert!(sdp.contains("a=rtpmap:96 L24/48000/2"));
     }
@@ -219,7 +244,7 @@ mod tests {
         let sdp = generate_aes67_output_sdp(&block, "Custom Stream", None, None);
 
         assert!(sdp.contains("s=Custom Stream"));
-        assert!(sdp.contains("c=IN IP4 239.1.2.3"));
+        assert!(sdp.contains("c=IN IP4 239.1.2.3/32")); // Multicast should have /32 TTL
         assert!(sdp.contains("m=audio 6000 RTP/AVP 96"));
     }
 
@@ -347,9 +372,77 @@ mod tests {
 
         // Verify all properties are correctly reflected in SDP
         assert!(sdp.contains("s=Multi-channel Stream"));
-        assert!(sdp.contains("c=IN IP4 239.1.2.3"));
+        assert!(sdp.contains("c=IN IP4 239.1.2.3/32")); // Multicast should have /32 TTL
         assert!(sdp.contains("m=audio 5008 RTP/AVP 96"));
         assert!(sdp.contains("a=rtpmap:96 L16/96000/8")); // L16 for 16-bit
         assert!(sdp.contains("a=ptime:0.125")); // 0.125 ms ptime
+    }
+
+    #[test]
+    fn test_multicast_address_detection() {
+        // Test multicast addresses (224.0.0.0 to 239.255.255.255)
+        assert!(is_multicast_address("224.0.0.0"));
+        assert!(is_multicast_address("239.255.255.255"));
+        assert!(is_multicast_address("239.69.11.44"));
+        assert!(is_multicast_address("225.1.2.3"));
+
+        // Test non-multicast addresses
+        assert!(!is_multicast_address("127.0.0.1"));
+        assert!(!is_multicast_address("192.168.1.1"));
+        assert!(!is_multicast_address("10.0.0.1"));
+        assert!(!is_multicast_address("223.255.255.255")); // Just below multicast range
+        assert!(!is_multicast_address("240.0.0.0")); // Just above multicast range
+
+        // Test invalid addresses
+        assert!(!is_multicast_address("invalid"));
+        assert!(!is_multicast_address("999.999.999.999"));
+        assert!(!is_multicast_address(""));
+    }
+
+    #[test]
+    fn test_generate_sdp_unicast_no_ttl() {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "host".to_string(),
+            PropertyValue::String("192.168.1.100".to_string()),
+        );
+
+        let block = BlockInstance {
+            id: "block_0".to_string(),
+            block_definition_id: "builtin.aes67_output".to_string(),
+            name: None,
+            properties,
+            position: strom_types::block::Position { x: 0.0, y: 0.0 },
+            runtime_data: None,
+        };
+
+        let sdp = generate_aes67_output_sdp(&block, "Unicast Stream", None, None);
+
+        // Unicast addresses should NOT have /TTL suffix
+        assert!(sdp.contains("c=IN IP4 192.168.1.100\r"));
+        assert!(!sdp.contains("/32"));
+    }
+
+    #[test]
+    fn test_generate_sdp_multicast_has_ttl() {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "host".to_string(),
+            PropertyValue::String("239.69.11.44".to_string()),
+        );
+
+        let block = BlockInstance {
+            id: "block_0".to_string(),
+            block_definition_id: "builtin.aes67_output".to_string(),
+            name: None,
+            properties,
+            position: strom_types::block::Position { x: 0.0, y: 0.0 },
+            runtime_data: None,
+        };
+
+        let sdp = generate_aes67_output_sdp(&block, "Multicast Stream", None, None);
+
+        // Multicast addresses MUST have /32 TTL suffix
+        assert!(sdp.contains("c=IN IP4 239.69.11.44/32\r"));
     }
 }

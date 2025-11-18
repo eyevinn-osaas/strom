@@ -83,6 +83,8 @@ impl ElementDiscovery {
             "hlssink",
             "hlsdemux", // HLS demuxer - crashes in strcmp
             "hlsdemux2",
+            // Video mixer elements - crash with NULL pointer when requesting pads
+            "glvideomixer", // Crashes in strcmp when request_pad_simple() is called during linking
         ]
     }
 
