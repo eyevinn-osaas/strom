@@ -1,0 +1,107 @@
+//! Application state and channel-based IPC for async operations.
+
+use std::sync::mpsc::{channel, Receiver, Sender};
+use strom_types::element::ElementInfo;
+use strom_types::{BlockDefinition, Flow, StromEvent};
+
+/// Messages sent from async operations to the main UI thread.
+#[derive(Debug)]
+pub enum AppMessage {
+    /// Flows loaded from API
+    FlowsLoaded(Vec<Flow>),
+    /// Flows loading failed
+    FlowsError(String),
+
+    /// Elements loaded from API
+    ElementsLoaded(Vec<ElementInfo>),
+    /// Elements loading failed
+    ElementsError(String),
+
+    /// Blocks loaded from API
+    BlocksLoaded(Vec<BlockDefinition>),
+    /// Blocks loading failed
+    BlocksError(String),
+
+    /// Element properties loaded (lazy loading)
+    ElementPropertiesLoaded(ElementInfo),
+    /// Element properties loading failed
+    ElementPropertiesError(String),
+
+    /// Element pad properties loaded (lazy loading)
+    ElementPadPropertiesLoaded(ElementInfo),
+    /// Element pad properties loading failed
+    ElementPadPropertiesError(String),
+
+    /// SDP loaded for a block
+    SdpLoaded {
+        flow_id: String,
+        block_id: String,
+        sdp: String,
+    },
+    /// SDP loading failed
+    SdpError(String),
+
+    /// Event received from backend via WebSocket
+    Event(StromEvent),
+
+    /// WebSocket connection state changed
+    ConnectionStateChanged(ConnectionState),
+
+    /// Single flow fetched (for updating after WebSocket events)
+    FlowFetched(Flow),
+
+    /// Request full refresh of flows
+    RefreshNeeded,
+}
+
+/// WebSocket connection state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionState {
+    /// Connected to backend
+    Connected,
+    /// Disconnected from backend
+    Disconnected,
+    /// Attempting to reconnect
+    Reconnecting { attempt: u32 },
+}
+
+impl ConnectionState {
+    pub fn is_connected(&self) -> bool {
+        matches!(self, ConnectionState::Connected)
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            ConnectionState::Connected => "Connected",
+            ConnectionState::Disconnected => "Disconnected",
+            ConnectionState::Reconnecting { .. } => "Reconnecting",
+        }
+    }
+}
+
+/// Application state with channel-based communication.
+pub struct AppStateChannels {
+    /// Sender for app messages (cloned for each async operation)
+    pub tx: Sender<AppMessage>,
+    /// Receiver for app messages (owned by main UI thread)
+    pub rx: Receiver<AppMessage>,
+}
+
+impl AppStateChannels {
+    /// Create new application state channels.
+    pub fn new() -> Self {
+        let (tx, rx) = channel();
+        Self { tx, rx }
+    }
+
+    /// Get a clone of the sender for use in async operations.
+    pub fn sender(&self) -> Sender<AppMessage> {
+        self.tx.clone()
+    }
+}
+
+impl Default for AppStateChannels {
+    fn default() -> Self {
+        Self::new()
+    }
+}

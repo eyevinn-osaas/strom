@@ -71,6 +71,11 @@ impl EventBroadcaster {
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
     }
+
+    /// Get a raw broadcast receiver for WebSocket or other custom implementations.
+    pub fn subscribe_raw(&self) -> broadcast::Receiver<StromEvent> {
+        self.sender.subscribe()
+    }
 }
 
 impl Default for EventBroadcaster {

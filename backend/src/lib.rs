@@ -13,6 +13,7 @@ pub mod blocks;
 pub mod config;
 pub mod events;
 pub mod gst;
+pub mod gui;
 pub mod layout;
 pub mod openapi;
 pub mod state;
@@ -92,7 +93,8 @@ pub async fn create_app_with_state(state: AppState) -> Router {
             "/blocks/{id}",
             axum::routing::delete(api::blocks::delete_block),
         )
-        .route("/events", get(api::sse::events_stream));
+        .route("/events", get(api::sse::events_stream))
+        .route("/ws", get(api::websocket::websocket_handler));
 
     // Build main router with Swagger UI
     Router::new()

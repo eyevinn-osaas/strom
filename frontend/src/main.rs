@@ -1,4 +1,6 @@
 //! Strom frontend application.
+//!
+//! Supports both WASM (for web browsers) and native (embedded in backend) modes.
 
 #![warn(clippy::all, rust_2018_idioms)]
 // Allow dead code in frontend - code is used through WASM/eframe traits
@@ -9,12 +11,20 @@ mod app;
 mod graph;
 mod palette;
 mod properties;
-mod sse;
+mod state;
+mod ws;
+
+// Make StromApp public so it can be used by the backend
+pub use app::StromApp;
+
+// ============================================================================
+// WASM Entry Point
+// ============================================================================
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    use app::StromApp;
     use wasm_bindgen::JsCast;
+
     // Initialize panic handler for better error messages in browser console
     console_error_panic_hook::set_once();
 
@@ -49,9 +59,63 @@ fn main() {
     });
 }
 
+// ============================================================================
+// Native Entry Point
+// ============================================================================
+
 #[cfg(not(target_arch = "wasm32"))]
-fn main() {
-    eprintln!("This frontend is designed to run as WebAssembly in a browser.");
-    eprintln!("Please use `trunk serve` to run it.");
-    std::process::exit(1);
+fn main() -> eframe::Result<()> {
+    // Initialize tracing for native
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    tracing::info!("Starting Strom frontend in native mode");
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 720.0])
+            .with_title("Strom - GStreamer Flow Engine"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Strom",
+        native_options,
+        Box::new(|cc| {
+            // Set dark theme
+            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            Ok(Box::new(StromApp::new(cc)))
+        }),
+    )
+}
+
+// ============================================================================
+// Public API for embedding in backend
+// ============================================================================
+
+/// Run the native GUI without initializing tracing (for embedding in backend)
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_native_gui() -> eframe::Result<()> {
+    tracing::info!("Initializing Strom frontend (embedded mode)");
+
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 720.0])
+            .with_title("Strom - GStreamer Flow Engine"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "Strom",
+        native_options,
+        Box::new(|cc| {
+            // Set dark theme
+            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            Ok(Box::new(StromApp::new(cc)))
+        }),
+    )
 }
