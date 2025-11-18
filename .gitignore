@@ -12,6 +12,8 @@
 
 # Frontend build output
 frontend/dist/
+backend/dist/
+backend/.frontend-build-hash
 
 # Node
 node_modules/
