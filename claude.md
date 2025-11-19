@@ -12,3 +12,6 @@
   into backend binary)
   3. Monitor backend logs - they include both backend and GUI
   logs
+
+
+don't suggest blacklisting elements when troubleshooting segfaults. 

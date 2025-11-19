@@ -288,13 +288,19 @@ impl AppState {
 
     /// Start a flow (create and start its pipeline).
     pub async fn start_flow(&self, id: &FlowId) -> Result<PipelineState, PipelineError> {
+        info!("start_flow called for flow ID: {}", id);
+
         // Get the flow definition
+        info!("Acquiring flows read lock...");
         let flow = {
             let flows = self.inner.flows.read().await;
+            info!("Flows read lock acquired, looking up flow...");
             flows.get(id).cloned()
         };
+        info!("Flows read lock released");
 
         let Some(mut flow) = flow else {
+            error!("Flow not found: {}", id);
             return Err(PipelineError::InvalidFlow(format!(
                 "Flow not found: {}",
                 id
@@ -302,6 +308,7 @@ impl AppState {
         };
 
         // Check if pipeline is already running
+        info!("Checking if pipeline is already running...");
         {
             let pipelines = self.inner.pipelines.read().await;
             if pipelines.contains_key(id) {
@@ -309,15 +316,20 @@ impl AppState {
                 return Ok(PipelineState::Playing);
             }
         }
+        info!("Pipeline not running, proceeding with start");
 
         info!("Starting flow: {} ({})", flow.name, id);
 
         // Create pipeline with event broadcaster and block registry
+        info!("Creating PipelineManager (this may block)...");
         let mut manager =
             PipelineManager::new(&flow, self.inner.events.clone(), &self.inner.block_registry)?;
+        info!("PipelineManager created successfully");
 
         // Start pipeline
+        info!("Calling manager.start() (this may block)...");
         let state = manager.start()?;
+        info!("manager.start() returned with state: {:?}", state);
 
         // Store pipeline manager and keep a reference for SDP generation
         let pipelines_guard = {

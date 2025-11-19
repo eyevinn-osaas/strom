@@ -84,10 +84,17 @@ impl PipelineManager {
         _block_registry: &BlockRegistry,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
+        info!(
+            "Flow has {} elements, {} blocks, {} links",
+            flow.elements.len(),
+            flow.blocks.len(),
+            flow.links.len()
+        );
 
         let pipeline = gst::Pipeline::builder()
             .name(format!("flow-{}", flow.id))
             .build();
+        info!("Created GStreamer pipeline object");
 
         let mut manager = Self {
             flow_id: flow.id,
@@ -102,58 +109,119 @@ impl PipelineManager {
         };
 
         // Expand blocks into GStreamer elements
+        info!("Starting block expansion (block_in_place)...");
         let expanded = tokio::task::block_in_place(|| {
+            info!("Inside block_in_place, calling block_on...");
             tokio::runtime::Handle::current().block_on(async {
-                super::block_expansion::expand_blocks(&flow.blocks, &flow.links).await
+                info!("Inside block_on, calling expand_blocks...");
+                let result = super::block_expansion::expand_blocks(&flow.blocks, &flow.links).await;
+                info!("expand_blocks completed");
+                result
             })
         })?;
+        info!("Block expansion completed");
 
         // Add regular elements from flow
-        for element in &flow.elements {
+        info!(
+            "Adding {} regular elements from flow...",
+            flow.elements.len()
+        );
+        for (idx, element) in flow.elements.iter().enumerate() {
+            info!(
+                "Adding element {}/{}: {} (type: {})",
+                idx + 1,
+                flow.elements.len(),
+                element.id,
+                element.element_type
+            );
             manager.add_element(element)?;
+            info!("Successfully added element: {}", element.id);
         }
+        info!("All regular elements added");
 
         // Add GStreamer elements from expanded blocks
+        let block_element_count = expanded.gst_elements.len();
+        info!("Adding {} block elements...", block_element_count);
+        let mut idx = 0;
         for (element_id, gst_element) in expanded.gst_elements {
-            debug!("Adding block element: {}", element_id);
+            idx += 1;
+            info!(
+                "Adding block element {}/{}: {}",
+                idx, block_element_count, element_id
+            );
             manager.pipeline.add(&gst_element).map_err(|e| {
                 PipelineError::ElementCreation(format!(
                     "Failed to add block element {} to pipeline: {}",
                     element_id, e
                 ))
             })?;
-            manager.elements.insert(element_id, gst_element);
+            manager.elements.insert(element_id.clone(), gst_element);
+            info!("Successfully added block element: {}", element_id);
         }
+        info!("All block elements added");
 
         // Analyze links and auto-insert tee elements where needed
+        info!("Analyzing links and inserting tee elements if needed...");
         let processed_links = Self::insert_tees_if_needed(&expanded.links);
+        info!(
+            "Link analysis complete: {} links, {} tees",
+            processed_links.links.len(),
+            processed_links.tees.len()
+        );
 
         // Create tee elements
-        for tee_id in processed_links.tees.keys() {
+        info!("Creating {} tee elements...", processed_links.tees.len());
+        for (idx, tee_id) in processed_links.tees.keys().enumerate() {
+            info!(
+                "Creating tee {}/{}: {}",
+                idx + 1,
+                processed_links.tees.len(),
+                tee_id
+            );
             manager.add_tee_element(tee_id)?;
+            info!("Successfully created tee: {}", tee_id);
         }
+        info!("All tee elements created");
 
         // Link elements according to processed links
-        for link in &processed_links.links {
+        info!("Linking {} elements...", processed_links.links.len());
+        for (idx, link) in processed_links.links.iter().enumerate() {
+            info!(
+                "Linking {}/{}: {} -> {}",
+                idx + 1,
+                processed_links.links.len(),
+                link.from,
+                link.to
+            );
             if let Err(e) = manager.try_link_elements(link) {
-                debug!(
-                    "Could not link immediately: {} - will try when pad becomes available",
-                    e
+                info!(
+                    "Could not link immediately: {} - will try when pad becomes available ({})",
+                    e, link.from
                 );
                 // Store as pending link
                 manager.pending_links.push(link.clone());
+            } else {
+                info!("Successfully linked: {} -> {}", link.from, link.to);
             }
         }
+        info!(
+            "Linking phase complete ({} pending links)",
+            manager.pending_links.len()
+        );
 
         // Set up dynamic pad handlers for all elements that might have dynamic pads
+        info!("Setting up dynamic pad handlers...");
         manager.setup_dynamic_pad_handlers();
+        info!("Dynamic pad handlers set up");
 
         // Apply pad properties now that pads have been created (during linking)
         // Note: Request pads (like audiomixer sink_%u) are created during linking
+        info!("Applying pad properties...");
         manager.apply_pad_properties();
+        info!("Pad properties applied");
 
         // Note: Bus watch is set up when pipeline starts, not here
-        debug!("Pipeline created successfully for flow: {}", flow.name);
+        info!("Pipeline created successfully for flow: {}", flow.name);
         Ok(manager)
     }
 
@@ -289,31 +357,60 @@ impl PipelineManager {
 
     /// Add an element to the pipeline.
     fn add_element(&mut self, element_def: &Element) -> Result<(), PipelineError> {
-        debug!(
-            "Creating element: {} (type: {})",
+        info!(
+            "add_element: Creating element {} (type: {})",
             element_def.id, element_def.element_type
         );
 
         // Create the element
+        info!(
+            "add_element: Calling ElementFactory::make for {}",
+            element_def.element_type
+        );
         let element = gst::ElementFactory::make(&element_def.element_type)
             .name(&element_def.id)
             .build()
             .map_err(|e| {
+                error!(
+                    "add_element: Failed to create element {}: {}",
+                    element_def.id, e
+                );
                 PipelineError::ElementCreation(format!(
                     "{}: {} - {}",
                     element_def.id, element_def.element_type, e
                 ))
             })?;
+        info!(
+            "add_element: Element {} created successfully",
+            element_def.id
+        );
 
         // Set properties
+        info!(
+            "add_element: Setting {} properties for element {}",
+            element_def.properties.len(),
+            element_def.id
+        );
         for (prop_name, prop_value) in &element_def.properties {
+            info!(
+                "add_element: Setting property {}.{} = {:?}",
+                element_def.id, prop_name, prop_value
+            );
             self.set_property(&element, &element_def.id, prop_name, prop_value)?;
+            info!(
+                "add_element: Property {}.{} set successfully",
+                element_def.id, prop_name
+            );
         }
+        info!(
+            "add_element: All properties set for element {}",
+            element_def.id
+        );
 
         // Store pad properties for later application (after pads are created)
         if !element_def.pad_properties.is_empty() {
-            debug!(
-                "Storing {} pad properties for element {}",
+            info!(
+                "add_element: Storing {} pad properties for element {}",
                 element_def.pad_properties.len(),
                 element_def.id
             );
@@ -322,14 +419,34 @@ impl PipelineManager {
         }
 
         // Add to pipeline
+        info!(
+            "add_element: Adding element {} to pipeline (this may block)...",
+            element_def.id
+        );
         self.pipeline.add(&element).map_err(|e| {
+            error!(
+                "add_element: Failed to add {} to pipeline: {}",
+                element_def.id, e
+            );
             PipelineError::ElementCreation(format!(
                 "Failed to add {} to pipeline: {}",
                 element_def.id, e
             ))
         })?;
+        info!(
+            "add_element: Element {} added to pipeline successfully",
+            element_def.id
+        );
 
+        info!(
+            "add_element: Inserting {} into elements map",
+            element_def.id
+        );
         self.elements.insert(element_def.id.clone(), element);
+        info!(
+            "add_element: Successfully completed adding element {}",
+            element_def.id
+        );
         Ok(())
     }
 
@@ -448,15 +565,11 @@ impl PipelineManager {
                 } else {
                     // If that didn't work, try finding a compatible pad template
                     // This handles cases like "src_0" needing the "src_%u" template (e.g., tee)
-                    // Get templates from the element factory (class templates)
-                    let factory = src.factory().ok_or_else(|| {
-                        PipelineError::LinkError(
-                            link.from.clone(),
-                            format!("Element {} has no factory", from_element),
-                        )
-                    })?;
-                    let pad_template_list = factory.static_pad_templates();
-                    let pad_template = pad_template_list
+                    // IMPORTANT: We get pad templates directly from the element, not from the factory.
+                    // Accessing static_pad_templates from the factory can corrupt GStreamer state
+                    // for aggregator elements like mpegtsmux (see discovery.rs:533-538).
+                    let element_pad_templates = src.pad_template_list();
+                    let pad_template = element_pad_templates
                         .iter()
                         .filter(|tmpl| {
                             tmpl.presence() == gst::PadPresence::Request
@@ -473,40 +586,28 @@ impl PipelineManager {
                             }
                         });
 
-                    if let Some(static_tmpl) = pad_template {
-                        let tmpl_name = static_tmpl.name_template();
+                    if let Some(pad_tmpl) = pad_template {
+                        let tmpl_name = pad_tmpl.name_template();
                         debug!(
-                            "Found matching template '{}' for pad name '{}', getting PadTemplate from element",
+                            "Found matching pad template '{}' for pad name '{}'",
                             tmpl_name, src_pad_name
                         );
-                        // Get the actual PadTemplate from the element (not the static one)
-                        if let Some(pad_tmpl) = src.pad_template(tmpl_name) {
+                        // Request a new pad from the template - let GStreamer auto-name it
+                        if let Some(pad) = src.request_pad(pad_tmpl, None, None) {
                             debug!(
-                                "Requesting pad from template '{}' for pad name '{}'",
-                                tmpl_name, src_pad_name
+                                "Successfully requested pad '{}' for requested name '{}'",
+                                pad.name(),
+                                src_pad_name
                             );
-                            // Request a new pad from the template - let GStreamer auto-name it
-                            if let Some(pad) = src.request_pad(&pad_tmpl, None, None) {
-                                debug!(
-                                    "Successfully requested pad '{}' for requested name '{}'",
-                                    pad.name(),
-                                    src_pad_name
-                                );
-                                pad
-                            } else {
-                                // Couldn't get pad from template
-                                return Err(PipelineError::LinkError(
-                                    link.from.clone(),
-                                    format!(
-                                        "Source pad {} not available (tried template '{}')",
-                                        src_pad_name, tmpl_name
-                                    ),
-                                ));
-                            }
+                            pad
                         } else {
+                            // Couldn't get pad from template
                             return Err(PipelineError::LinkError(
                                 link.from.clone(),
-                                format!("Could not get PadTemplate '{}' from element", tmpl_name),
+                                format!(
+                                    "Source pad {} not available (tried template '{}')",
+                                    src_pad_name, tmpl_name
+                                ),
                             ));
                         }
                     } else {
@@ -523,33 +624,66 @@ impl PipelineManager {
             };
 
             // Try to get sink pad - try static first, then request if not found
+            info!(
+                "Trying to get sink pad '{}' on element '{}'",
+                sink_pad_name, to_element
+            );
+
+            // Special handling for mpegtsmux - use direct element-to-element linking to avoid request_pad() deadlock
+            let element_type_name = sink
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            if element_type_name == "mpegtsmux" {
+                info!("Detected mpegtsmux - using element-level linking to avoid request_pad deadlock");
+                // For mpegtsmux, link directly at element level using the source element
+                // GStreamer will internally handle pad requesting without us having to call request_pad()
+                // We need to link from source element, not from the source pad object
+                if let Err(e) = src.link(sink) {
+                    return Err(PipelineError::LinkError(
+                        link.from.clone(),
+                        format!("Failed to auto-link to mpegtsmux: {}", e),
+                    ));
+                }
+                info!(
+                    "Successfully auto-linked to mpegtsmux: {} -> {}",
+                    link.from, link.to
+                );
+                return Ok(());
+            }
+
             let sink_pad_obj = if let Some(pad) = sink.static_pad(sink_pad_name) {
+                info!("Found static sink pad: {}", sink_pad_name);
                 pad
             } else {
+                info!(
+                    "Sink pad '{}' not static, trying to request it...",
+                    sink_pad_name
+                );
                 // Pad not static - try to request it
                 // First try request_pad_simple with the exact name
+                info!(
+                    "Calling request_pad_simple('{}') on {} (this may block)...",
+                    sink_pad_name, to_element
+                );
                 if let Some(pad) = sink.request_pad_simple(sink_pad_name) {
+                    info!("Successfully requested sink pad: {}", sink_pad_name);
                     pad
                 } else {
+                    info!("request_pad_simple returned None, trying pad template matching...");
+
                     // If that didn't work, try finding a compatible pad template
                     // This handles cases like "sink_0" needing the "sink_%u" template
-                    // Get templates from the element factory (class templates)
-                    let factory = sink.factory().ok_or_else(|| {
-                        PipelineError::LinkError(
-                            link.to.clone(),
-                            format!("Element {} has no factory", to_element),
-                        )
-                    })?;
-                    let pad_template_list = factory.static_pad_templates();
+                    // IMPORTANT: We get pad templates directly from the element, not from the factory.
+                    // Accessing static_pad_templates from the factory can corrupt GStreamer state
+                    // for aggregator elements like mpegtsmux (see discovery.rs:533-538).
+
+                    info!("Trying to find matching pad template on element...");
+                    // Get pad template list directly from the element (not factory)
+                    let element_pad_templates = sink.pad_template_list();
                     debug!(
-                        "Searching for pad template for sink pad '{}' on element '{}' (type: {})",
-                        sink_pad_name,
-                        to_element,
-                        factory.name()
-                    );
-                    debug!(
-                        "Available pad templates from factory: {:?}",
-                        pad_template_list
+                        "Available pad templates from element: {:?}",
+                        element_pad_templates
                             .iter()
                             .map(|t| format!(
                                 "{} (direction: {:?}, presence: {:?})",
@@ -559,7 +693,8 @@ impl PipelineManager {
                             ))
                             .collect::<Vec<_>>()
                     );
-                    let pad_template = pad_template_list
+
+                    let pad_template = element_pad_templates
                         .iter()
                         .filter(|tmpl| {
                             tmpl.presence() == gst::PadPresence::Request
@@ -582,40 +717,29 @@ impl PipelineManager {
                             }
                         });
 
-                    if let Some(static_tmpl) = pad_template {
-                        let tmpl_name = static_tmpl.name_template();
-                        debug!(
-                            "Found matching template '{}' for pad name '{}', getting PadTemplate from element",
+                    if let Some(pad_tmpl) = pad_template {
+                        let tmpl_name = pad_tmpl.name_template();
+                        info!(
+                            "Found matching pad template '{}' for pad name '{}'",
                             tmpl_name, sink_pad_name
                         );
-                        // Get the actual PadTemplate from the element (not the static one)
-                        if let Some(pad_tmpl) = sink.pad_template(tmpl_name) {
-                            debug!(
-                                "Requesting pad from template '{}' for pad name '{}'",
-                                tmpl_name, sink_pad_name
+                        // Request a new pad from the template - let GStreamer auto-name it
+                        info!("Calling request_pad on element with template (this may block)...");
+                        if let Some(pad) = sink.request_pad(pad_tmpl, None, None) {
+                            info!(
+                                "Successfully requested pad '{}' for requested name '{}'",
+                                pad.name(),
+                                sink_pad_name
                             );
-                            // Request a new pad from the template - let GStreamer auto-name it
-                            if let Some(pad) = sink.request_pad(&pad_tmpl, None, None) {
-                                debug!(
-                                    "Successfully requested pad '{}' for requested name '{}'",
-                                    pad.name(),
-                                    sink_pad_name
-                                );
-                                pad
-                            } else {
-                                // Couldn't get pad from template
-                                return Err(PipelineError::LinkError(
-                                    link.to.clone(),
-                                    format!(
-                                        "Sink pad {} not available (tried template '{}')",
-                                        sink_pad_name, tmpl_name
-                                    ),
-                                ));
-                            }
+                            pad
                         } else {
+                            // Couldn't get pad from template
                             return Err(PipelineError::LinkError(
                                 link.to.clone(),
-                                format!("Could not get PadTemplate '{}' from element", tmpl_name),
+                                format!(
+                                    "Sink pad {} not available (tried template '{}')",
+                                    sink_pad_name, tmpl_name
+                                ),
                             ));
                         }
                     } else {
@@ -987,15 +1111,27 @@ impl PipelineManager {
     /// Start the pipeline (set to PLAYING state).
     pub fn start(&mut self) -> Result<PipelineState, PipelineError> {
         info!("Starting pipeline: {}", self.flow_name);
+        info!("Pipeline has {} elements", self.elements.len());
 
         // Set up bus watch before starting
+        info!("Setting up bus watch...");
         self.setup_bus_watch();
+        info!("Bus watch set up");
 
         // Configure clock before starting
+        info!(
+            "Configuring clock (type: {:?})...",
+            self.properties.clock_type
+        );
         self.configure_clock()?;
+        info!("Clock configured");
 
-        info!("Setting pipeline '{}' to PLAYING state", self.flow_name);
+        info!(
+            "Setting pipeline '{}' to PLAYING state (this may block)...",
+            self.flow_name
+        );
         let state_change_result = self.pipeline.set_state(gst::State::Playing);
+        info!("set_state(Playing) call returned");
 
         match &state_change_result {
             Ok(gst::StateChangeSuccess::Success) => {
@@ -1022,7 +1158,9 @@ impl PipelineManager {
             .map_err(|e| PipelineError::StateChange(format!("Failed to start: {}", e)))?;
 
         // Wait a moment to get the actual state
+        info!("Sleeping 100ms to allow state change to complete...");
         std::thread::sleep(std::time::Duration::from_millis(100));
+        info!("Querying pipeline state...");
         let (result, current_state, pending_state) =
             self.pipeline.state(gst::ClockTime::from_mseconds(100));
         info!(
