@@ -138,7 +138,7 @@ impl GraphEditor {
 
     /// Add a new element to the graph at the given position.
     pub fn add_element(&mut self, element_type: String, pos: Pos2) {
-        let id = Uuid::new_v4().to_string();
+        let id = format!("e{}", Uuid::new_v4().simple());
         let element = Element {
             id: id.clone(),
             element_type,
@@ -151,7 +151,7 @@ impl GraphEditor {
 
     /// Add a new block instance to the graph at the given position.
     pub fn add_block(&mut self, block_definition_id: String, pos: Pos2) {
-        let id = Uuid::new_v4().to_string();
+        let id = format!("b{}", Uuid::new_v4().simple());
         let block = BlockInstance {
             id: id.clone(),
             block_definition_id,

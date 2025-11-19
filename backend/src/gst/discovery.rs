@@ -28,8 +28,8 @@ impl ElementDiscovery {
         let registry = gst::Registry::get();
         let mut elements = Vec::new();
 
-        // Known problematic elements that cause segfaults
-        let blacklist = Self::get_element_blacklist();
+        // Elements to skip during discovery (but still available for use)
+        let skip_list = Self::get_discovery_skip_list();
 
         let features = registry.features(gst::ElementFactory::static_type());
 
@@ -40,9 +40,33 @@ impl ElementDiscovery {
 
             let name = factory.name().to_string();
 
-            // Skip blacklisted elements
-            if blacklist.contains(&name.as_str()) {
-                debug!("Skipping blacklisted element: {}", name);
+            // Skip elements that corrupt state during discovery
+            if skip_list.contains(&name.as_str()) {
+                debug!(
+                    "Skipping discovery introspection for element: {} (still usable)",
+                    name
+                );
+                // Create minimal info without introspection so it's still in the element list
+                let description = factory
+                    .metadata("long-name")
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| name.clone());
+                let klass = factory
+                    .metadata("klass")
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                let category = Self::determine_category(&klass);
+
+                let info = ElementInfo {
+                    name: name.clone(),
+                    description,
+                    category,
+                    src_pads: Vec::new(),
+                    sink_pads: Vec::new(),
+                    properties: Vec::new(),
+                };
+                self.cache.insert(name, info.clone());
+                elements.push(info);
                 continue;
             }
 
@@ -68,6 +92,27 @@ impl ElementDiscovery {
 
         debug!("Discovered {} elements", elements.len());
         elements
+    }
+
+    /// Get list of elements to skip during discovery introspection.
+    /// These elements can still be used, but we don't create temporary instances during discovery.
+    fn get_discovery_skip_list() -> Vec<&'static str> {
+        vec![
+            // GES (GStreamer Editing Services) elements that trigger GES initialization
+            // GES init can crash with NULL pointer in gst_element_class_get_pad_template()
+            "gesdemux", // GES demuxer - triggers GES init which crashes in strcmp
+            "gessrc",   // GES source - triggers GES init
+            // HLS elements - crash with NULL pointer in gst_element_class_get_pad_template()
+            "hlssink2", // Crashes in strcmp during element creation
+            "hlssink3", // HLS sink variants - same crash pattern
+            "hlssink",
+            "hlsdemux", // HLS demuxer - crashes in strcmp
+            "hlsdemux2",
+            // Video mixer elements - crash with NULL pointer when requesting pads
+            "glvideomixer", // Crashes in strcmp when request_pad_simple() is called during linking
+            // Aggregator elements - creating temporary instances during discovery corrupts state
+            "mpegtsmux", // Creating this during discovery causes lockups when adding to pipeline later
+        ]
     }
 
     /// Get list of elements known to cause crashes during introspection or use.
