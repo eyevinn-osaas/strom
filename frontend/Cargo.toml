@@ -22,6 +22,7 @@ reqwest = { workspace = true, features = ["json"] }
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 
 # Async utilities
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
