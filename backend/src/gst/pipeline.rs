@@ -74,6 +74,10 @@ pub struct PipelineManager {
     properties: strom_types::flow::FlowProperties,
     /// Pad properties to apply after pads are created (element_id -> (pad_name -> properties))
     pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
+    /// Block-specific bus watches (allows blocks to register their own bus message handlers)
+    block_bus_watches: Vec<gst::bus::BusWatchGuard>,
+    /// Bus watch setup functions from blocks (called when pipeline starts)
+    block_bus_watch_setups: Vec<crate::blocks::BusWatchSetupFn>,
 }
 
 impl PipelineManager {
@@ -106,6 +110,8 @@ impl PipelineManager {
             pending_links: Vec::new(),
             properties: flow.properties.clone(),
             pad_properties: HashMap::new(),
+            block_bus_watches: Vec::new(),
+            block_bus_watch_setups: Vec::new(),
         };
 
         // Expand blocks into GStreamer elements
@@ -159,6 +165,13 @@ impl PipelineManager {
             info!("Successfully added block element: {}", element_id);
         }
         info!("All block elements added");
+
+        // Store bus watch setup functions from blocks
+        info!(
+            "Storing {} bus watch setup function(s) from blocks",
+            expanded.bus_watch_setups.len()
+        );
+        manager.block_bus_watch_setups = expanded.bus_watch_setups;
 
         // Analyze links and auto-insert tee elements where needed
         info!("Analyzing links and inserting tee elements if needed...");
@@ -227,11 +240,12 @@ impl PipelineManager {
 
     /// Set up the bus watch to monitor pipeline messages.
     fn setup_bus_watch(&mut self) {
-        // Clean up any existing watch first
+        // Clean up any existing watches first
         if self.bus_watch.is_some() {
             debug!("Removing existing bus watch for flow: {}", self.flow_name);
             self.bus_watch = None;
         }
+        self.block_bus_watches.clear();
 
         let Some(bus) = self.pipeline.bus() else {
             error!(
@@ -240,13 +254,40 @@ impl PipelineManager {
             );
             return;
         };
+
+        // Set up block-specific bus watches
+        info!(
+            "Setting up {} block bus watch(es) for flow: {}",
+            self.block_bus_watch_setups.len(),
+            self.flow_name
+        );
         let flow_id = self.flow_id;
+        let events_for_blocks = self.events.clone();
+
+        // Take the setup functions (they're FnOnce, so we consume them)
+        let setups = std::mem::take(&mut self.block_bus_watch_setups);
+        for setup_fn in setups {
+            match setup_fn(&bus, flow_id, events_for_blocks.clone()) {
+                Ok(guard) => {
+                    debug!("Successfully set up block bus watch");
+                    self.block_bus_watches.push(guard);
+                }
+                Err(e) => {
+                    error!("Failed to set up block bus watch: {}", e);
+                }
+            }
+        }
+
+        // Set up main pipeline bus watch for standard messages
         let flow_name = self.flow_name.clone();
         let events = self.events.clone();
 
         let watch = match bus
             .add_watch(move |_bus, msg| {
                 use gst::MessageView;
+
+                // Log ALL bus messages to debug
+                debug!("Bus message type: {:?}", msg.type_());
 
                 match msg.view() {
                     MessageView::Error(err) => {
@@ -347,11 +388,19 @@ impl PipelineManager {
         debug!("Bus watch set up for flow: {}", self.flow_name);
     }
 
-    /// Remove the bus watch.
+    /// Remove the bus watches (both main and block-specific).
     fn remove_bus_watch(&mut self) {
         if self.bus_watch.is_some() {
-            debug!("Removing bus watch for flow: {}", self.flow_name);
+            debug!("Removing main bus watch for flow: {}", self.flow_name);
             self.bus_watch = None;
+        }
+        if !self.block_bus_watches.is_empty() {
+            debug!(
+                "Removing {} block bus watch(es) for flow: {}",
+                self.block_bus_watches.len(),
+                self.flow_name
+            );
+            self.block_bus_watches.clear();
         }
     }
 

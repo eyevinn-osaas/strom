@@ -9,6 +9,7 @@
 mod api;
 mod app;
 mod graph;
+mod meter;
 mod palette;
 mod properties;
 mod state;
@@ -49,8 +50,7 @@ fn main() {
                 canvas,
                 web_options,
                 Box::new(|cc| {
-                    // Set dark theme
-                    cc.egui_ctx.set_visuals(egui::Visuals::dark());
+                    // Theme is now set by the app based on user preference
                     Ok(Box::new(StromApp::new(cc)))
                 }),
             )
@@ -86,8 +86,7 @@ fn main() -> eframe::Result<()> {
         "Strom",
         native_options,
         Box::new(|cc| {
-            // Set dark theme
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Theme is now set by the app based on user preference
             Ok(Box::new(StromApp::new(cc)))
         }),
     )

@@ -1,6 +1,7 @@
 //! Strom backend server.
 
 use clap::Parser;
+use gstreamer::glib;
 use std::net::SocketAddr;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
@@ -46,6 +47,12 @@ fn main() -> anyhow::Result<()> {
     // Initialize GStreamer
     gstreamer::init()?;
     info!("GStreamer initialized");
+
+    gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
+
+    // Start GLib main loop in background thread for bus watch callbacks
+    start_glib_main_loop();
+    info!("GLib main loop started in background thread");
 
     if gui_enabled {
         // GUI mode: Run HTTP server in background, GUI on main thread
@@ -199,4 +206,15 @@ async fn restart_flows(state: &AppState) {
             }
         }
     }
+}
+
+/// Start GLib main loop in a background thread.
+/// This is required for GStreamer bus watch callbacks to be dispatched.
+fn start_glib_main_loop() {
+    std::thread::spawn(|| {
+        info!("GLib main loop thread started");
+        let main_loop = glib::MainLoop::new(None, false);
+        main_loop.run();
+        info!("GLib main loop thread exiting");
+    });
 }

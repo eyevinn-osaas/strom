@@ -1,18 +1,11 @@
-//! Event broadcasting system for real-time updates.
+//! Event broadcasting system for real-time updates via WebSocket.
 
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::Sse;
-use futures::Stream;
-use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
 use strom_types::StromEvent;
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt;
 use tracing::debug;
 
-/// Event broadcaster for SSE (Server-Sent Events).
+/// Event broadcaster for WebSocket connections.
 #[derive(Clone)]
 pub struct EventBroadcaster {
     /// Broadcast channel for events
@@ -28,7 +21,7 @@ impl EventBroadcaster {
         }
     }
 
-    /// Broadcast an event to all connected clients.
+    /// Broadcast an event to all connected WebSocket clients.
     pub fn broadcast(&self, event: StromEvent) {
         debug!("Broadcasting event: {}", event.description());
         // broadcast::send returns the number of receivers
@@ -36,44 +29,13 @@ impl EventBroadcaster {
         let _ = self.sender.send(event);
     }
 
-    /// Subscribe to events and get a SSE stream.
-    pub fn subscribe(&self) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-        let rx = self.sender.subscribe();
-        let stream = BroadcastStream::new(rx);
-
-        let event_stream = stream.filter_map(|result| match result {
-            Ok(event) => {
-                debug!("Sending SSE event: {}", event.description());
-                // Convert StromEvent to SSE Event
-                match serde_json::to_string(&event) {
-                    Ok(json) => Some(Ok(Event::default().data(json))),
-                    Err(e) => {
-                        tracing::error!("Failed to serialize event: {}", e);
-                        None
-                    }
-                }
-            }
-            Err(e) => {
-                // BroadcastStream returns RecvError when lagging
-                tracing::warn!("Client lagging, skipping events: {}", e);
-                None
-            }
-        });
-
-        Sse::new(event_stream).keep_alive(
-            KeepAlive::new()
-                .interval(Duration::from_secs(15))
-                .text("keep-alive"),
-        )
-    }
-
     /// Get the number of active subscribers.
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
     }
 
-    /// Get a raw broadcast receiver for WebSocket or other custom implementations.
-    pub fn subscribe_raw(&self) -> broadcast::Receiver<StromEvent> {
+    /// Subscribe to events via a raw broadcast receiver (used by WebSocket handler).
+    pub fn subscribe(&self) -> broadcast::Receiver<StromEvent> {
         self.sender.subscribe()
     }
 }
@@ -102,10 +64,17 @@ mod tests {
         let flow_id = FlowId::from(Uuid::new_v4());
 
         // Subscribe before broadcasting
-        let _subscription = broadcaster.subscribe();
+        let mut _rx = broadcaster.subscribe();
         assert_eq!(broadcaster.subscriber_count(), 1);
 
         // Broadcast an event
         broadcaster.broadcast(StromEvent::FlowCreated { flow_id });
+
+        // Verify we can receive the event
+        let received = _rx.recv().await.unwrap();
+        match received {
+            StromEvent::FlowCreated { flow_id: id } => assert_eq!(id, flow_id),
+            _ => panic!("Unexpected event type"),
+        }
     }
 }

@@ -117,7 +117,7 @@ impl WebSocketClient {
                                 // Parse the event
                                 match serde_json::from_str::<StromEvent>(&text) {
                                     Ok(event) => {
-                                        tracing::info!(
+                                        tracing::debug!(
                                             "Parsed WebSocket event: {}",
                                             event.description()
                                         );
@@ -212,7 +212,7 @@ impl WebSocketClient {
                                 // Parse the event
                                 match serde_json::from_str::<StromEvent>(&text) {
                                     Ok(event) => {
-                                        tracing::info!(
+                                        tracing::debug!(
                                             "Parsed WebSocket event: {}",
                                             event.description()
                                         );
