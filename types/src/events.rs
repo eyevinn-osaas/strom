@@ -57,6 +57,17 @@ pub enum StromEvent {
     },
     /// Ping event to keep connection alive
     Ping,
+    /// Audio level meter data from GStreamer level element
+    MeterData {
+        flow_id: FlowId,
+        element_id: String,
+        /// RMS values in dB for each channel
+        rms: Vec<f64>,
+        /// Peak values in dB for each channel
+        peak: Vec<f64>,
+        /// Decay values in dB for each channel
+        decay: Vec<f64>,
+    },
 }
 
 impl StromEvent {
@@ -149,6 +160,19 @@ impl StromEvent {
                 )
             }
             StromEvent::Ping => "Ping".to_string(),
+            StromEvent::MeterData {
+                flow_id,
+                element_id,
+                rms,
+                ..
+            } => {
+                format!(
+                    "Meter data from {} in flow {} ({} channels)",
+                    element_id,
+                    flow_id,
+                    rms.len()
+                )
+            }
         }
     }
 }

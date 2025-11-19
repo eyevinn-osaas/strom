@@ -352,8 +352,10 @@ impl ElementDiscovery {
 
             // Extract property flags
             let flags = pspec.flags();
-            let writable = flags.contains(glib::ParamFlags::WRITABLE);
             let construct_only = flags.contains(glib::ParamFlags::CONSTRUCT_ONLY);
+            // In the UI, we set properties during element construction, so both
+            // WRITABLE and CONSTRUCT_ONLY properties should be editable
+            let writable = flags.contains(glib::ParamFlags::WRITABLE) || construct_only;
 
             // GStreamer-specific flags
             let flags_bits = flags.bits();
@@ -755,8 +757,10 @@ impl ElementDiscovery {
 
             // Extract property flags
             let flags = pspec.flags();
-            let writable = flags.contains(glib::ParamFlags::WRITABLE);
             let construct_only = flags.contains(glib::ParamFlags::CONSTRUCT_ONLY);
+            // In the UI, we set properties during element construction, so both
+            // WRITABLE and CONSTRUCT_ONLY properties should be editable
+            let writable = flags.contains(glib::ParamFlags::WRITABLE) || construct_only;
 
             // GStreamer-specific flags
             let flags_bits = flags.bits();
@@ -1011,8 +1015,23 @@ impl ElementDiscovery {
 
             // Extract property flags for mutability information
             let flags = pspec.flags();
-            let writable = flags.contains(glib::ParamFlags::WRITABLE);
             let construct_only = flags.contains(glib::ParamFlags::CONSTRUCT_ONLY);
+            let has_writable_flag = flags.contains(glib::ParamFlags::WRITABLE);
+            // In the UI, we set properties during element construction, so both
+            // WRITABLE and CONSTRUCT_ONLY properties should be editable
+            let writable = has_writable_flag || construct_only;
+
+            // Log details for troubleshooting
+            if name == "location" || factory.name() == "souphttpsrc" {
+                debug!(
+                    "Property '{}' on {}: has_writable={}, construct_only={}, writable={}",
+                    name,
+                    factory.name(),
+                    has_writable_flag,
+                    construct_only,
+                    writable
+                );
+            }
 
             // GStreamer-specific flags (from gstreamer-sys)
             // GST_PARAM_MUTABLE_READY = 1 << (G_PARAM_USER_SHIFT + 2) = 1 << 10 = 0x400
@@ -1191,6 +1210,18 @@ impl ElementDiscovery {
                         } else {
                             continue;
                         }
+                    }
+                    "GstCaps" => {
+                        // GstCaps property - convert to/from string representation
+                        // Used by capsfilter and other elements that manipulate caps
+                        let default =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                element.property::<Option<gst::Caps>>(&name)
+                            }))
+                            .ok()
+                            .flatten()
+                            .map(|caps| PropertyValue::String(caps.to_string()));
+                        (PropertyType::String, default)
                     }
                     _ => {
                         // Skip unsupported property types

@@ -58,6 +58,7 @@ impl BlockBuilder for AES67InputBuilder {
                 format!("{}:src", filesrc_id),
                 format!("{}:sink", sdpdemux_id),
             )],
+            bus_watch_setup: None,
         })
     }
 }
@@ -224,6 +225,7 @@ impl BlockBuilder for AES67OutputBuilder {
                 (udpsink_id, udpsink),
             ],
             internal_links,
+            bus_watch_setup: None,
         })
     }
 }

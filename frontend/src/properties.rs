@@ -46,7 +46,7 @@ impl PropertyInspector {
     }
 
     /// Show the property inspector for the given element with tabbed interface.
-    /// Returns the new active tab if it was changed.
+    /// Returns (new_active_tab, delete_requested).
     pub fn show(
         ui: &mut Ui,
         element: &mut Element,
@@ -55,9 +55,10 @@ impl PropertyInspector {
         focused_pad: Option<String>,
         input_pads: Vec<String>,
         output_pads: Vec<String>,
-    ) -> PropertyTab {
+    ) -> (PropertyTab, bool) {
         let element_id = element.id.clone();
         let mut new_tab = active_tab;
+        let mut delete_requested = false;
 
         ui.push_id(&element_id, |ui| {
             // Element type (read-only)
@@ -71,6 +72,13 @@ impl PropertyInspector {
                 ui.label("ID:");
                 ui.monospace(&element.id);
             });
+
+            ui.separator();
+
+            // Delete button
+            if ui.button("🗑 Delete Element").clicked() {
+                delete_requested = true;
+            }
 
             ui.separator();
 
@@ -124,7 +132,7 @@ impl PropertyInspector {
             }
         });
 
-        new_tab
+        (new_tab, delete_requested)
     }
 
     /// Show the Element Properties tab content.
@@ -284,13 +292,17 @@ impl PropertyInspector {
     }
 
     /// Show the property inspector for the given block.
+    /// Returns true if delete was requested.
     pub fn show_block(
         ui: &mut Ui,
         block: &mut BlockInstance,
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
-    ) {
+        meter_data_store: &crate::meter::MeterDataStore,
+    ) -> bool {
         let block_id = block.id.clone();
+        let mut delete_requested = false;
+
         ui.push_id(&block_id, |ui| {
             // Block name (read-only)
             ui.horizontal(|ui| {
@@ -303,6 +315,13 @@ impl PropertyInspector {
                 ui.label("ID:");
                 ui.monospace(&block.id);
             });
+
+            ui.separator();
+
+            // Delete button
+            if ui.button("🗑 Delete Block").clicked() {
+                delete_requested = true;
+            }
 
             ui.separator();
 
@@ -324,6 +343,32 @@ impl PropertyInspector {
                         }
                     } else {
                         ui.label("This block has no configurable properties");
+                    }
+
+                    // Show meter visualization for meter blocks
+                    if definition.id == "builtin.meter" {
+                        ui.separator();
+                        tracing::debug!("📊 Checking for meter data: flow_id={:?}, block_id={}", flow_id, block.id);
+                        if let Some(flow_id) = flow_id {
+                            if let Some(meter_data) = meter_data_store.get(&flow_id, &block.id) {
+                                tracing::debug!("📊 Found meter data, calling show_full");
+                                crate::meter::show_full(ui, &block.id, meter_data);
+                            } else {
+                                tracing::debug!("📊 No meter data found for this block");
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "⚠ No audio level data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Meter data will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            tracing::debug!("📊 No flow_id available");
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "⚠ No flow selected",
+                            );
+                        }
                     }
 
                     // Show SDP for AES67 output blocks
@@ -369,6 +414,8 @@ impl PropertyInspector {
                     }
                 });
         });
+
+        delete_requested
     }
 
     fn show_exposed_property(
@@ -627,6 +674,18 @@ impl PropertyInspector {
         let prop_name = &prop_info.name;
         let default_value = prop_info.default_value.as_ref();
 
+        // Debug logging for location property
+        if prop_name == "location" {
+            tracing::debug!(
+                "Rendering property '{}' for element '{}': writable={}, construct_only={}, type={:?}",
+                prop_name,
+                element.element_type,
+                prop_info.writable,
+                prop_info.construct_only,
+                prop_info.property_type
+            );
+        }
+
         // Get current value or use default
         let mut current_value = element.properties.get(prop_name).cloned();
         let has_custom_value = current_value.is_some();
@@ -641,6 +700,20 @@ impl PropertyInspector {
                         current_value = Some(PropertyValue::String(first_value.clone()));
                     }
                 }
+            }
+
+            // For writable properties without a value, create an empty/default value
+            if current_value.is_none() && prop_info.writable {
+                current_value = Some(match &prop_info.property_type {
+                    PropertyType::String => PropertyValue::String(String::new()),
+                    PropertyType::Int { min, .. } => PropertyValue::Int(*min),
+                    PropertyType::UInt { min, .. } => PropertyValue::UInt(*min),
+                    PropertyType::Float { min, .. } => PropertyValue::Float(*min),
+                    PropertyType::Bool => PropertyValue::Bool(false),
+                    PropertyType::Enum { values } => {
+                        PropertyValue::String(values.first().cloned().unwrap_or_default())
+                    }
+                });
             }
         }
 

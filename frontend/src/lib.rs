@@ -8,6 +8,7 @@
 mod api;
 mod app;
 mod graph;
+mod meter;
 mod palette;
 mod properties;
 mod state;
@@ -32,8 +33,7 @@ pub fn run_native_gui() -> eframe::Result<()> {
         "Strom",
         native_options,
         Box::new(|cc| {
-            // Set dark theme
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Theme is now set by the app based on user preference
             Ok(Box::new(StromApp::new(cc)))
         }),
     )
@@ -57,8 +57,7 @@ pub fn run_native_gui_with_shutdown(
         "Strom",
         native_options,
         Box::new(move |cc| {
-            // Set dark theme
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            // Theme is now set by the app based on user preference
             Ok(Box::new(StromApp::new_with_shutdown(cc, shutdown_flag)))
         }),
     )

@@ -5,10 +5,19 @@ use strom_types::{Flow, PipelineState};
 
 use crate::api::ApiClient;
 use crate::graph::GraphEditor;
+use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
 use crate::properties::PropertyInspector;
 use crate::state::{AppMessage, AppStateChannels, ConnectionState};
 use crate::ws::WebSocketClient;
+
+/// Theme preference for the application
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemePreference {
+    System,
+    Light,
+    Dark,
+}
 
 // Cross-platform task spawning
 #[cfg(target_arch = "wasm32")]
@@ -76,6 +85,10 @@ pub struct StromApp {
     /// Shutdown flag for Ctrl+C handling (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Meter data storage for all audio level meters
+    meter_data: MeterDataStore,
+    /// Current theme preference
+    theme_preference: ThemePreference,
 }
 
 impl StromApp {
@@ -140,7 +153,12 @@ impl StromApp {
             properties_ptp_domain_buffer: String::new(),
             #[cfg(not(target_arch = "wasm32"))]
             shutdown_flag: None,
+            meter_data: MeterDataStore::new(),
+            theme_preference: ThemePreference::System,
         };
+
+        // Apply initial theme based on system preference
+        app.apply_theme(cc.egui_ctx.clone());
 
         // Load default elements temporarily (will be replaced by API data)
         app.palette.load_default_elements();
@@ -189,7 +207,12 @@ impl StromApp {
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
             shutdown_flag: Some(shutdown_flag),
+            meter_data: MeterDataStore::new(),
+            theme_preference: ThemePreference::System,
         };
+
+        // Apply initial theme based on system preference
+        app.apply_theme(cc.egui_ctx.clone());
 
         // Load default elements temporarily (will be replaced by API data)
         app.palette.load_default_elements();
@@ -198,6 +221,40 @@ impl StromApp {
         app.setup_websocket_connection(cc.egui_ctx.clone());
 
         app
+    }
+
+    /// Apply the current theme preference to the UI context.
+    fn apply_theme(&self, ctx: egui::Context) {
+        let visuals = match self.theme_preference {
+            ThemePreference::System => {
+                // Detect system theme preference
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // In WASM, check browser's preferred color scheme
+                    if let Some(window) = web_sys::window() {
+                        if let Ok(Some(mql)) = window.match_media("(prefers-color-scheme: dark)") {
+                            if mql.matches() {
+                                egui::Visuals::dark()
+                            } else {
+                                egui::Visuals::light()
+                            }
+                        } else {
+                            egui::Visuals::dark() // Default to dark if detection fails
+                        }
+                    } else {
+                        egui::Visuals::dark() // Default to dark if no window
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    // In native mode, default to dark theme (could be enhanced to detect OS theme)
+                    egui::Visuals::dark()
+                }
+            }
+            ThemePreference::Light => egui::Visuals::light(),
+            ThemePreference::Dark => egui::Visuals::dark(),
+        };
+        ctx.set_visuals(visuals);
     }
 
     /// Set up WebSocket connection for real-time updates.
@@ -652,6 +709,26 @@ impl StromApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label("GStreamer Flow Engine");
+
+                    ui.separator();
+
+                    // Theme switch button
+                    let theme_icon = match self.theme_preference {
+                        ThemePreference::System => "🖥",
+                        ThemePreference::Light => "☀",
+                        ThemePreference::Dark => "🌙",
+                    };
+
+                    if ui.button(theme_icon).on_hover_text("Change theme").clicked() {
+                        // Cycle through themes: System -> Light -> Dark -> System
+                        let new_theme = match self.theme_preference {
+                            ThemePreference::System => ThemePreference::Light,
+                            ThemePreference::Light => ThemePreference::Dark,
+                            ThemePreference::Dark => ThemePreference::System,
+                        };
+                        self.theme_preference = new_theme;
+                        self.apply_theme(ctx.clone());
+                    }
                 });
             });
         });
@@ -923,7 +1000,7 @@ impl StromApp {
                     // Split borrow: get mutable access to graph fields separately
                     let graph = &mut self.graph;
                     if let Some(element) = graph.get_selected_element_mut() {
-                        graph.active_property_tab = PropertyInspector::show(
+                        let (new_tab, delete_requested) = PropertyInspector::show(
                             ui,
                             element,
                             element_info,
@@ -932,6 +1009,12 @@ impl StromApp {
                             input_pads,
                             output_pads,
                         );
+                        graph.active_property_tab = new_tab;
+
+                        // Handle deletion request
+                        if delete_requested {
+                            graph.remove_selected();
+                        }
                     }
                 } else if let Some(block_def_id) = self
                     .graph
@@ -953,7 +1036,12 @@ impl StromApp {
                     if let (Some(block), Some(def)) =
                         (self.graph.get_selected_block_mut(), definition_opt)
                     {
-                        PropertyInspector::show_block(ui, block, &def, flow_id);
+                        let delete_requested = PropertyInspector::show_block(ui, block, &def, flow_id, &self.meter_data);
+
+                        // Handle deletion request
+                        if delete_requested {
+                            self.graph.remove_selected();
+                        }
                     } else {
                         ui.label("Block definition not found");
                     }
@@ -985,8 +1073,9 @@ impl StromApp {
 
                 ui.add_space(2.0);
 
-                // Show graph editor
-                let response = self.graph.show(ui);
+                // Show graph editor with flow_id and meter data for in-block visualizations
+                let flow_id = self.current_flow().map(|f| f.id);
+                let response = self.graph.show(ui, flow_id, &self.meter_data);
 
                 // Handle adding elements from palette
                 if let Some(element_type) = self.palette.take_dragging_element() {
@@ -1440,7 +1529,7 @@ impl eframe::App for StromApp {
                     self.error = Some(format!("Pad properties: {}", error));
                 }
                 AppMessage::Event(event) => {
-                    tracing::info!("Received WebSocket event: {}", event.description());
+                    tracing::debug!("Received WebSocket event: {}", event.description());
                     // Handle flow state changes
                     use strom_types::StromEvent;
                     match event {
@@ -1479,6 +1568,29 @@ impl eframe::App for StromApp {
                         }
                         StromEvent::PipelineError { error, .. } => {
                             self.error = Some(format!("Pipeline error: {}", error));
+                        }
+                        StromEvent::MeterData {
+                            flow_id,
+                            element_id,
+                            rms,
+                            peak,
+                            decay,
+                        } => {
+                            tracing::debug!(
+                                "📊 METER DATA RECEIVED: flow={}, element={}, channels={}, rms={:?}, peak={:?}",
+                                flow_id,
+                                element_id,
+                                rms.len(),
+                                rms,
+                                peak
+                            );
+                            // Store meter data for visualization
+                            self.meter_data.update(
+                                flow_id,
+                                element_id.clone(),
+                                crate::meter::MeterData { rms, peak, decay },
+                            );
+                            tracing::debug!("📊 Meter data stored for element {}", element_id);
                         }
                         _ => {}
                     }

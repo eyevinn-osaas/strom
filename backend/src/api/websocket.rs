@@ -43,7 +43,7 @@ async fn handle_socket(socket: WebSocket, broadcaster: EventBroadcaster) {
     let (mut sender, mut receiver) = socket.split();
 
     // Subscribe to the event broadcaster
-    let mut rx = broadcaster.subscribe_raw();
+    let mut rx = broadcaster.subscribe();
 
     // Ping interval for keep-alive
     let mut ping_interval = interval(Duration::from_secs(15));

@@ -6,5 +6,5 @@ pub mod registry;
 pub mod sdp;
 pub mod storage;
 
-pub use builder::{BlockBuildError, BlockBuildResult, BlockBuilder};
+pub use builder::{BlockBuildError, BlockBuildResult, BlockBuilder, BusWatchSetupFn};
 pub use registry::BlockRegistry;

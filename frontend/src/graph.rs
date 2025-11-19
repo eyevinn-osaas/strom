@@ -163,12 +163,19 @@ impl GraphEditor {
         self.blocks.push(block);
     }
 
-    /// Remove the currently selected element.
+    /// Remove the currently selected element or block.
     pub fn remove_selected(&mut self) {
         if let Some(id) = &self.selected {
-            // Remove element
-            self.elements.retain(|e| &e.id != id);
-            // Remove links connected to this element
+            // Check if it's an element (starts with 'e') or block (starts with 'b')
+            if id.starts_with('e') {
+                // Remove element
+                self.elements.retain(|e| &e.id != id);
+            } else if id.starts_with('b') {
+                // Remove block
+                self.blocks.retain(|b| &b.id != id);
+            }
+
+            // Remove links connected to this element or block
             let id_clone = id.clone();
             self.links.retain(|link| {
                 !link.from.starts_with(&id_clone) && !link.to.starts_with(&id_clone)
@@ -327,7 +334,12 @@ impl GraphEditor {
     }
 
     /// Render the graph editor.
-    pub fn show(&mut self, ui: &mut Ui) -> Response {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        flow_id: Option<strom_types::FlowId>,
+        meter_data_store: &crate::meter::MeterDataStore,
+    ) -> Response {
         ui.push_id("graph_editor", |ui| {
             let (response, painter) =
                 ui.allocate_painter(ui.available_size_before_wrap(), Sense::click_and_drag());
@@ -462,7 +474,25 @@ impl GraphEditor {
                             .max(def.external_pads.outputs.len())
                     })
                     .unwrap_or(1);
-                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+
+                // For meter blocks, add extra height for the meter visualization
+                let base_height = 80.0 + (pad_count.saturating_sub(1) * 30) as f32;
+                let meter_height = if block.block_definition_id == "builtin.meter" {
+                    if let Some(fid) = flow_id {
+                        if let Some(meter_data) = meter_data_store.get(&fid, &block.id) {
+                            crate::meter::calculate_compact_height(meter_data.rms.len()) + 10.0
+                        // 10px margin
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                let node_height = (base_height + meter_height).min(400.0);
 
                 let node_rect = Rect::from_min_size(
                     screen_pos,
@@ -472,8 +502,16 @@ impl GraphEditor {
                 let is_selected = self.selected.as_ref() == Some(&block.id);
                 let is_hovered = self.hovered_element.as_ref() == Some(&block.id);
 
-                let node_response =
-                    self.draw_block_node(ui, &painter, block, node_rect, is_selected, is_hovered);
+                let node_response = self.draw_block_node(
+                    ui,
+                    &painter,
+                    block,
+                    node_rect,
+                    is_selected,
+                    is_hovered,
+                    flow_id,
+                    meter_data_store,
+                );
 
                 // Track hover state
                 if node_response.hovered() {
@@ -973,14 +1011,17 @@ impl GraphEditor {
     }
 
     /// Draw a block instance node
+    #[allow(clippy::too_many_arguments)]
     fn draw_block_node(
         &self,
-        ui: &Ui,
+        ui: &mut Ui,
         painter: &egui::Painter,
         block: &BlockInstance,
         rect: Rect,
         is_selected: bool,
         is_hovered: bool,
+        flow_id: Option<strom_types::FlowId>,
+        meter_data_store: &crate::meter::MeterDataStore,
     ) -> Response {
         let stroke_color = if is_selected {
             Color32::from_rgb(200, 100, 255) // Purple for blocks
@@ -1046,6 +1087,28 @@ impl GraphEditor {
             FontId::proportional(14.0 * self.zoom),
             Color32::from_rgb(220, 180, 255),
         );
+
+        // Draw meter visualization for meter blocks
+        if block.block_definition_id == "builtin.meter" {
+            if let Some(fid) = flow_id {
+                if let Some(meter_data) = meter_data_store.get(&fid, &block.id) {
+                    // Calculate meter area (below the title, above the pads)
+                    let meter_height = crate::meter::calculate_compact_height(meter_data.rms.len());
+                    let meter_area = Rect::from_min_size(
+                        rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
+                        vec2(180.0 * self.zoom, meter_height * self.zoom),
+                    );
+
+                    // Create a child UI for the meter widget using new_child
+                    let mut meter_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(meter_area)
+                            .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                    );
+                    crate::meter::show_compact(&mut meter_ui, meter_data);
+                }
+            }
+        }
 
         // Draw external pads (ports) based on block definition
         let port_size = 16.0 * self.zoom;
