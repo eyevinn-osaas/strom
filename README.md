@@ -1,442 +1,194 @@
 # Strom - GStreamer Flow Engine
 
-**Strom** (Swedish for "stream") is a full-stack Rust application that provides a visual, web-based interface for creating, managing, and executing GStreamer media pipelines. Think of it as a Swiss Army knife for GStreamer - a powerful engine to design and run complex media flows without writing code.
+**Strom** (Swedish for "stream") is a visual, web-based interface for creating and managing GStreamer media pipelines. Design complex media flows without writing code.
 
-## Overview
+## Features
 
-Strom allows you to:
+- **Visual Pipeline Editor** - Node-based graph editor in your browser
+- **Real-time Control** - Start, stop, and monitor pipelines via REST API or WebSocket
+- **Element Discovery** - Browse and configure any installed GStreamer element
+- **Reusable Blocks** - Create custom components from element groups (e.g., AES67 receiver)
+- **Auto-restart** - Pipelines survive server restarts
+- **Native or Web** - Run as desktop app or web service
+- **MCP Integration** - Control pipelines with AI assistants (Claude, etc.)
 
-- **Visually design GStreamer pipelines** using a node-based flow editor in your browser
-- **Configure element properties** with a user-friendly interface
-- **Manage multiple flows** simultaneously, each running as an independent GStreamer pipeline
-- **Persist configurations** so flows can be automatically restored on server restart
-- **Monitor pipeline state** in real-time through Server-Sent Events (SSE)
-- **Start/stop flows** on-demand or automatically at startup
-- **Multi-port support** with visual color coding for audio, video, and generic media types
-- **Automatic tee insertion** when connecting one output to multiple inputs
-- **Dynamic pad linking** for elements with runtime-created pads (e.g., decodebin, demuxers)
+### Advanced Capabilities
+
+- **Dynamic Pad Linking** - Automatic handling of runtime-created pads (decodebin, demuxers)
+- **Automatic Tee Insertion** - Fan-out outputs without manual configuration
+- **Pad Properties** - Configure per-pad properties (e.g., volume/mute on audiomixer inputs)
+- **Debug Graphs** - Generate SVG visualizations of running pipelines
+- **WebSocket/SSE** - Real-time state updates and pipeline events
+
+## Quick Start
+
+### Prerequisites
+
+```bash
+# Install GStreamer
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
+# Install Rust and tools
+rustup target add wasm32-unknown-unknown
+cargo install trunk
+```
+
+### Run
+
+```bash
+# Production mode (web UI at http://localhost:3000)
+cargo run --release
+
+# Development with hot reload
+cargo run                    # Backend (Terminal 1)
+cd frontend && trunk serve   # Frontend (Terminal 2)
+
+# Headless mode (API only)
+cargo run --release -- --headless
+```
+
+### Docker
+
+```bash
+docker build -t strom .
+docker run -p 8080:8080 -v $(pwd)/data:/data strom
+```
 
 ## Architecture
 
-Strom is built as a full-stack Rust application with three main components:
-
 ```
-┌─────────────────────────────────────────────┐
-│         Web Browser (Frontend)              │
-│  ┌───────────────────────────────────────┐  │
-│  │  egui (WebAssembly)                   │  │
-│  │  - Visual flow editor                 │  │
-│  │  - Element property inspector         │  │
-│  │  - Pipeline state monitoring          │  │
-│  └───────────────────────────────────────┘  │
-└──────────────┬──────────────────────────────┘
-               │
-               │ REST API (CRUD operations)
-               │ SSE (Real-time state updates)
-               │
-┌──────────────▼──────────────────────────────┐
-│         Backend Server (Rust)               │
-│  ┌───────────────────────────────────────┐  │
-│  │  axum Web Framework                   │  │
-│  │  - REST endpoints                     │  │
-│  │  - SSE handler                        │  │
-│  └───────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────┐  │
-│  │  Flow Manager                         │  │
-│  │  - Pipeline lifecycle management      │  │
-│  │  - Element introspection              │  │
-│  │  - State tracking                     │  │
-│  └───────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────┐  │
-│  │  GStreamer (gstreamer-rs)             │  │
-│  │  - Pipeline execution                 │  │
-│  │  - Element management                 │  │
-│  └───────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────┐  │
-│  │  Persistence Layer                    │  │
-│  │  - JSON file storage (initial)        │  │
-│  │  - Database support (future)          │  │
-│  └───────────────────────────────────────┘  │
-└─────────────────────────────────────────────┘
-                    │
-                    │ depends on
-                    ▼
-         ┌──────────────────────┐
-         │   Shared Types       │
-         │   (Library Crate)    │
-         │                      │
-         │  - Domain models     │
-         │  - API contracts     │
-         │  - Serialization     │
-         └──────────────────────┘
-                    ▲
-                    │ depends on
-                    │
-         (Both frontend and backend)
+┌─────────────────────────────────┐
+│  Frontend (egui → WebAssembly)  │
+│  - Visual flow editor           │
+│  - Element palette              │
+│  - Property inspector           │
+└────────────┬────────────────────┘
+             │ REST + WebSocket/SSE
+┌────────────▼────────────────────┐
+│  Backend (Rust + Axum)          │
+│  - Flow manager                 │
+│  - GStreamer integration        │
+│  - Block registry (AES67, ...)  │
+│  - JSON persistence             │
+└─────────────────────────────────┘
 ```
 
-### Component Architecture
+**Workspace Members:**
+- `strom-types` - Shared domain models and API types
+- `strom-backend` - Server with GStreamer pipeline management
+- `strom-frontend` - egui UI (compiles to WASM or native)
+- `strom-mcp-server` - Model Context Protocol server for AI integration
 
-**Backend** - Server application that manages GStreamer pipelines
-- Depends on: `strom-types` (shared types library)
-- Responsibilities: API handling, pipeline execution, persistence
+## API Overview
 
-**Frontend** - WebAssembly UI compiled from Rust
-- Depends on: `strom-types` (shared types library)
-- Responsibilities: Visual editor, user interactions, API client
+**Flows**
+- `GET/POST/DELETE /api/flows` - Manage pipeline configurations
+- `POST /api/flows/:id/start` - Start pipeline
+- `POST /api/flows/:id/stop` - Stop pipeline
 
-**Shared Types** - Library crate (`strom-types`)
-- No dependencies on frontend or backend
-- Provides: Domain models (Flow, Element, Link), API request/response types, common utilities
-- Benefits: Type-safe API contracts, zero duplication, compile-time guarantees
-
-### Technology Stack
-
-#### Shared Types (`strom-types`)
-- **serde**: Serialization/deserialization
-- **uuid**: Unique identifiers for flows
-- **chrono**: Timestamps (optional)
-
-#### Backend (`strom-backend`)
-- **gstreamer-rs**: Rust bindings for GStreamer
-- **axum**: Modern, ergonomic web framework
-- **tokio**: Async runtime for handling concurrent operations
-- **serde_json**: JSON serialization for persistence
-- **tower-http**: CORS, static file serving for frontend
-- **utoipa**: OpenAPI documentation generation
-- **strom-types**: Shared type definitions
-
-#### Frontend (`strom-frontend`)
-- **egui**: Immediate mode GUI framework compiled to WebAssembly
-- **eframe**: Framework wrapper for egui with web support
-- **Custom graph editor**: Node-based graph editor implementation
-- **trunk**: Build tool for Rust WebAssembly applications
-- **reqwest**: HTTP client for REST API (with WASM support)
-- **gloo-net**: SSE client for real-time updates (WASM)
-- **strom-types**: Shared type definitions
-
-#### API Design
-
-**REST API** (JSON over HTTP):
-- `GET /api/flows` - List all flows
-- `GET /api/flows/:id` - Get flow details
-- `POST /api/flows` - Create new flow
-- `POST /api/flows/:id` - Update flow configuration
-- `DELETE /api/flows/:id` - Delete flow
-- `POST /api/flows/:id/start` - Start a flow
-- `POST /api/flows/:id/stop` - Stop a flow
-- `GET /api/flows/:id/debug-graph` - Generate SVG visualization of pipeline
+**Elements**
 - `GET /api/elements` - List available GStreamer elements
-- `GET /api/elements/:name` - Get element properties and capabilities
+- `GET /api/elements/:name` - Get element details and properties
 
-**Server-Sent Events (SSE)**:
-- `GET /api/events` - Real-time event stream
-  - Pipeline state changes (PLAYING, PAUSED, STOPPED, etc.)
-  - Flow creation, updates, and deletion
-  - Pipeline errors, warnings, and info messages
-  - End-of-stream notifications
-  - Keep-alive pings
+**Blocks**
+- `GET/POST/DELETE /api/blocks` - Manage reusable component definitions
+- `GET /api/blocks/categories` - List block categories
 
-## Key Features
+**Real-time**
+- `GET /api/events` - Server-Sent Events stream
+- `WS /api/ws` - WebSocket connection
 
-### Flow Management
+See OpenAPI docs at `/swagger-ui` when server is running.
 
-Each **flow** represents a complete GStreamer pipeline with:
-- **Unique ID** and name
-- **Node graph** of GStreamer elements
-- **Connections** between element pads
-- **Property configurations** for each element
-- **Auto-start flag** to launch on server startup
-- **Current state** (NULL, READY, PAUSED, PLAYING, etc.)
+## Configuration
 
-### Visual Flow Editor
+Environment variables or `config.toml`:
 
-The web UI provides:
-- **Drag-and-drop elements** from a palette
-- **Multi-port visual linking** between compatible pads with color coding:
-  - Blue ports for generic media
-  - Green ports with "A" label for audio
-  - Orange ports with "V" label for video
-- **Property inspector** with type-appropriate input widgets
-- **Live state indication** (pipeline and element states)
-- **Real-time updates** via Server-Sent Events (SSE)
-- **Error display** with helpful messages
-- **Debug graph visualization** - View running pipeline structure as interactive SVG
+```bash
+# Server
+STROM_PORT=3000
+STROM_HOST=0.0.0.0
 
-### Advanced Pipeline Features
+# Storage
+STROM_FLOWS_PATH=./flows.json
+STROM_BLOCKS_PATH=./blocks.json
 
-**Dynamic Pad Linking**: Strom automatically handles elements with dynamic pads that are created at runtime:
-- Automatically sets up pad-added signal handlers
-- Links pads as they become available (e.g., decodebin outputs, demuxer streams)
-- Supports elements with "Sometimes" pad presence
-- Compatible with complex elements like decodebin, uridecodebin, demuxers
-
-**Automatic Tee Insertion**: When you connect one output to multiple inputs:
-- Strom automatically inserts a `tee` element
-- No manual configuration needed
-- Properly handles multiple output branches
-- Each branch operates independently
-
-**Pipeline Debugging**: Click the "🔍 Debug Graph" button in the UI to generate a visual representation of your running GStreamer pipeline:
-- Generates a GraphViz DOT graph of the pipeline structure
-- Converts to SVG for interactive viewing in browser
-- Shows element connections, pad negotiations, and properties
-- Requires Graphviz installed: `sudo apt install graphviz`
-
-### AI Integration (MCP)
-
-Strom includes a Model Context Protocol (MCP) server that enables AI assistants like Claude to manage your GStreamer pipelines through natural language:
-- **Create and configure flows** - "Create a flow that records RTSP video to a file"
-- **Start/stop pipelines** - "Start the recording flow"
-- **Discover elements** - "What video encoders are available?"
-- **Troubleshoot issues** - "Why isn't my pipeline working?"
-
-See [mcp-server/README.md](mcp-server/README.md) for setup instructions.
-
-### Persistence
-
-Flows are persisted to `flows.json` with the following structure:
-
-```json
-{
-  "flows": [
-    {
-      "id": "uuid-v4",
-      "name": "RTSP Camera Recorder",
-      "auto_start": true,
-      "elements": [
-        {
-          "id": "src1",
-          "type": "rtspsrc",
-          "properties": {
-            "location": "rtsp://camera.local/stream"
-          }
-        },
-        {
-          "id": "sink1",
-          "type": "filesink",
-          "properties": {
-            "location": "/recordings/output.mp4"
-          }
-        }
-      ],
-      "links": [
-        {
-          "from": "src1:src",
-          "to": "sink1:sink"
-        }
-      ]
-    }
-  ]
-}
+# Logging
+RUST_LOG=info
 ```
 
-On startup, the server:
-1. Loads `flows.json`
-2. Reconstructs GStreamer pipelines
-3. Auto-starts flows with `auto_start: true`
+## Blocks System
 
-## Use Cases
+Create reusable components from element groups:
 
-- **Video transcoding farms**: Create multiple encoding pipelines
-- **Live streaming**: RTSP/RTMP ingest and restream
-- **Recording systems**: Multi-camera recording with various formats
-- **Media testing**: Quickly prototype and test GStreamer pipelines
-- **Broadcast automation**: Pre-configured workflows that start automatically
-- **Development tool**: Visual GStreamer learning and experimentation
+**Built-in Blocks:**
+- **AES67 Receiver** - ST 2110-30 audio receiver with SDP generation
+- Custom blocks via JSON or API
+
+Example: Add AES67 block to receive network audio streams, automatically generates proper SDP with multicast addressing.
+
+See `docs/BLOCKS_IMPLEMENTATION.md` for details.
+
+## MCP Integration
+
+Enable AI assistants to manage pipelines:
+
+```bash
+# Start MCP server
+cd mcp-server
+cargo run
+
+# Configure in Claude Desktop
+# See mcp-server/README.md
+```
+
+Example: "Create a flow that encodes video to H.264 and streams via SRT"
+
+## Development
+
+```bash
+# Format and lint
+cargo fmt --all
+cargo clippy --workspace -- -D warnings
+
+# Run tests
+cargo test --workspace
+
+# Install git hooks
+./scripts/install-hooks.sh
+```
 
 ## Project Structure
 
 ```
 strom/
-├── Cargo.toml                 # Workspace definition
-├── README.md
-├── docs/                      # Documentation
-│   ├── TODO.md                # Development roadmap
-│   ├── PROGRESS.md            # Current status
-│   ├── CONTRIBUTING.md        # Contribution guidelines
-│   └── INTEGRATION.md         # Integration options
-├── types/                     # Shared types library
-│   ├── Cargo.toml
+├── types/          # Shared types (flows, elements, blocks, API)
+├── backend/        # Axum server + GStreamer integration
 │   └── src/
-│       ├── lib.rs             # Library entry point
-│       ├── flow.rs            # Flow domain models
-│       ├── element.rs         # Element and property types
-│       ├── api.rs             # API request/response types
-│       ├── state.rs           # Pipeline state enums
-│       └── events.rs          # SSE event types
-├── backend/
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs            # Server entry point
-│       ├── lib.rs             # Library entry point
-│       ├── api/               # REST and SSE handlers
-│       │   ├── flows.rs       # Flow CRUD operations
-│       │   ├── elements.rs    # Element discovery
-│       │   └── sse.rs         # Server-Sent Events
-│       ├── gst/               # GStreamer integration
-│       │   ├── pipeline.rs    # Pipeline management
-│       │   └── discovery.rs   # Element discovery
-│       ├── storage/           # Persistence layer
-│       │   └── json_storage.rs
-│       ├── state.rs           # Application state
-│       ├── config.rs          # Configuration
-│       ├── events.rs          # Event broadcasting
-│       ├── openapi.rs         # OpenAPI documentation
-│       └── assets.rs          # Static asset serving
-├── frontend/
-│   ├── Cargo.toml
-│   ├── Trunk.toml             # Build configuration
-│   ├── index.html
-│   └── src/
-│       ├── main.rs            # Frontend entry point
-│       ├── app.rs             # Main egui application
-│       ├── graph.rs           # Node graph editor
-│       ├── palette.rs         # Element palette
-│       ├── properties.rs      # Property inspector
-│       ├── api.rs             # API client
-│       └── sse.rs             # SSE client
-└── mcp-server/
-    ├── Cargo.toml
-    ├── README.md              # MCP integration guide
-    └── src/
-        ├── main.rs            # MCP server entry point
-        └── client.rs          # Strom API client
-
+│       ├── api/    # REST endpoints
+│       ├── gst/    # Pipeline management
+│       └── blocks/ # Block registry and built-ins
+├── frontend/       # egui UI (WASM/native)
+├── mcp-server/     # AI assistant integration
+└── docs/           # Documentation
+    ├── BLOCKS_IMPLEMENTATION.md
+    ├── CONTRIBUTING.md
+    └── TODO.md
 ```
 
-## Getting Started
+## Known Issues
 
-### Prerequisites
+Some GStreamer elements cause segfaults during introspection and are automatically skipped:
+- GES elements (gesdemux, gessrc)
+- HLS elements (hlssink*, hlsdemux*)
+- Certain aggregator elements require special handling
 
-- Rust 1.82+ with `cargo`
-- GStreamer 1.20+ development libraries
-- Graphviz (for debug graph feature): `sudo apt install graphviz`
-- WebAssembly target: `rustup target add wasm32-unknown-unknown`
-- Trunk: `cargo install trunk`
-
-### Building
-
-```bash
-# Build all components
-cargo build --release
-
-# Build specific components
-cargo build --release -p strom-types
-cargo build --release -p strom-backend
-cd frontend && trunk build --release
-
-# Development mode with hot reload
-# Terminal 1: Backend
-cargo run -p strom-backend
-
-# Terminal 2: Frontend
-cd frontend && trunk serve
-```
-
-### Running
-
-```bash
-# Production: backend serves frontend
-cargo run --release -p strom-backend
-
-# Open browser to http://localhost:3000
-```
-
-## Configuration
-
-Configuration is handled via environment variables or `config.toml`:
-
-```toml
-[server]
-host = "127.0.0.1"
-port = 3000
-static_dir = "./frontend/dist"
-
-[storage]
-type = "json"
-path = "./flows.json"
-
-[gstreamer]
-debug_level = 2
-```
-
-## Development Roadmap
-
-See [docs/TODO.md](docs/TODO.md) for detailed development tasks.
-
-**Phase 1**: Core infrastructure (backend framework, basic frontend, persistence)
-**Phase 2**: GStreamer integration (element discovery, pipeline management)
-**Phase 3**: Visual editor (node graph, property inspector)
-**Phase 4**: Polish (error handling, validation, documentation)
-**Phase 5**: Advanced features (templates, monitoring, database support)
-
-## Docker
-
-Strom can be run as a Docker container with optimal build caching using cargo-chef.
-
-### Quick Start with Docker
-
-```bash
-# Build the image
-docker build -t strom:latest .
-
-# Run with Docker
-docker run -p 8080:8080 -v $(pwd)/data:/data strom:latest
-
-# Or use docker-compose
-docker-compose up
-```
-
-### Docker Configuration
-
-The Docker image:
-- Uses multi-stage builds with cargo-chef for fast rebuilds
-- Includes all GStreamer runtime dependencies
-- Exposes port 8080 by default
-- Persists flows to `/data/flows.json`
-
-Environment variables:
-- `RUST_LOG` - Log level (default: info)
-- `STROM_PORT` - Server port (default: 8080)
-- `STROM_FLOWS_PATH` - Flow storage path (default: /data/flows.json)
-
-## Continuous Integration
-
-The project includes comprehensive CI/CD via GitHub Actions:
-
-- **Format Check** - Ensures code follows rustfmt standards
-- **Clippy** - Linting with no warnings allowed
-- **Tests** - Full test suite must pass
-- **Build** - Verifies complete build including frontend
-- **Docker** - Builds and caches Docker images
-
-All checks run automatically on pull requests and must pass before merging.
+See `docs/PAD_TEMPLATE_CRASH_FIX.md` and `docs/MPEGTSMUX_DEADLOCK_FIX.md` for technical details.
 
 ## Contributing
 
-We welcome contributions! Please see [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for detailed guidelines.
-
-### Quick Start for Contributors
-
-1. Fork and clone the repository
-2. Install development dependencies (see docs/CONTRIBUTING.md)
-3. Install Git hooks: `./scripts/install-hooks.sh`
-4. Make your changes
-5. Ensure all checks pass:
-   ```bash
-   cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features -- -D warnings
-   cargo test --workspace
-   ```
-6. Submit a pull request
-
-The pre-commit hook will automatically check formatting and linting before each commit.
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
 
 ## License
 
-MIT OR Apache-2.0 (standard Rust dual license)
-
-## Name Origin
-
-**Strom** is Swedish, translated as "ström" meaning "stream" - fitting for a GStreamer-based application with Scandinavian roots.
+MIT OR Apache-2.0
