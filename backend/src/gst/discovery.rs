@@ -70,8 +70,9 @@ impl ElementDiscovery {
         elements
     }
 
-    /// Get list of elements known to cause crashes during introspection.
-    fn get_element_blacklist() -> Vec<&'static str> {
+    /// Get list of elements known to cause crashes during introspection or use.
+    /// This list is shared with pipeline creation to prevent creating these elements.
+    pub fn get_element_blacklist() -> Vec<&'static str> {
         vec![
             // GES (GStreamer Editing Services) elements that trigger GES initialization
             // GES init can crash with NULL pointer in gst_element_class_get_pad_template()
@@ -529,7 +530,13 @@ impl ElementDiscovery {
             .flatten();
 
         for static_pad_template in factory.static_pad_templates() {
-            let caps_string = static_pad_template.caps().to_string();
+            // IMPORTANT: Don't call caps.to_string() during discover_all()!
+            // Calling caps.to_string() on thousands of pad templates corrupts
+            // GStreamer's global pad template registry, causing strcmp crashes
+            // when creating aggregator elements like mpegtsmux later.
+            // See MPEGTSMUX_CRASH_INVESTIGATION.md for details.
+            // Caps will be lazy-loaded on-demand when user clicks the element.
+            let caps_string = String::new();
 
             // Determine pad presence
             let presence = match static_pad_template.presence() {
@@ -538,8 +545,8 @@ impl ElementDiscovery {
                 gst::PadPresence::Request => PadPresence::Request,
             };
 
-            // Determine media type from caps
-            let media_type = Self::classify_media_type(&caps_string);
+            // Determine media type - use Generic since we don't have caps
+            let media_type = MediaType::Generic;
 
             // Try to introspect pad properties
             let properties = if let Some(ref element) = temp_element {
@@ -608,6 +615,9 @@ impl ElementDiscovery {
     }
 
     /// Classify media type from caps string.
+    /// Currently unused during discover_all() to avoid calling caps.to_string().
+    /// Kept for future use when implementing lazy caps loading.
+    #[allow(dead_code)]
     fn classify_media_type(caps: &str) -> MediaType {
         let caps_lower = caps.to_lowercase();
 

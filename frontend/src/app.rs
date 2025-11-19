@@ -1535,33 +1535,48 @@ impl eframe::App for StromApp {
                         if is_selected_flow {
                             tracing::info!("This is the selected flow - updating graph editor");
 
-                            // Log before update
-                            for block in &self.graph.blocks {
-                                if block.block_definition_id == "builtin.aes67_output" {
-                                    tracing::info!(
-                                        "BEFORE UPDATE: Graph block {} has runtime_data: {}",
-                                        block.id,
-                                        block.runtime_data.is_some()
-                                    );
+                            // Selectively update graph editor data without overwriting positions
+                            // This ensures property inspector sees latest runtime_data while preserving
+                            // local position changes that may have occurred after save
+
+                            // Update element properties (but preserve positions)
+                            for updated_elem in &flow.elements {
+                                if let Some(local_elem) = self
+                                    .graph
+                                    .elements
+                                    .iter_mut()
+                                    .find(|e| e.id == updated_elem.id)
+                                {
+                                    // Preserve local position
+                                    let saved_position = local_elem.position;
+                                    // Update properties from backend
+                                    local_elem.properties = updated_elem.properties.clone();
+                                    local_elem.pad_properties = updated_elem.pad_properties.clone();
+                                    // Restore local position
+                                    local_elem.position = saved_position;
                                 }
                             }
 
-                            // Update the graph editor's data to match the updated flow
-                            // This ensures property inspector sees the latest runtime_data
-                            self.graph.elements = flow.elements.clone();
+                            // Update block runtime_data and properties (but preserve positions)
+                            for updated_block in &flow.blocks {
+                                if let Some(local_block) = self
+                                    .graph
+                                    .blocks
+                                    .iter_mut()
+                                    .find(|b| b.id == updated_block.id)
+                                {
+                                    // Preserve local position
+                                    let saved_position = local_block.position;
+                                    // Update runtime_data and properties from backend
+                                    local_block.runtime_data = updated_block.runtime_data.clone();
+                                    local_block.properties = updated_block.properties.clone();
+                                    // Restore local position
+                                    local_block.position = saved_position;
+                                }
+                            }
+
+                            // Update links (links don't have positions)
                             self.graph.links = flow.links.clone();
-                            self.graph.blocks = flow.blocks.clone();
-
-                            // Log after update
-                            for block in &self.graph.blocks {
-                                if block.block_definition_id == "builtin.aes67_output" {
-                                    tracing::info!(
-                                        "AFTER UPDATE: Graph block {} has runtime_data: {}",
-                                        block.id,
-                                        block.runtime_data.is_some()
-                                    );
-                                }
-                            }
 
                             tracing::info!(
                                 "Graph editor updated with {} blocks",

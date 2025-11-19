@@ -6,6 +6,7 @@ use strom_types::{
     element::{ElementInfo, PadInfo},
     BlockDefinition, BlockInstance, Element, ElementId, Link,
 };
+use uuid::Uuid;
 
 /// Represents the state of the graph editor.
 pub struct GraphEditor {
@@ -137,7 +138,7 @@ impl GraphEditor {
 
     /// Add a new element to the graph at the given position.
     pub fn add_element(&mut self, element_type: String, pos: Pos2) {
-        let id = format!("elem_{}", self.elements.len());
+        let id = Uuid::new_v4().to_string();
         let element = Element {
             id: id.clone(),
             element_type,
@@ -150,7 +151,7 @@ impl GraphEditor {
 
     /// Add a new block instance to the graph at the given position.
     pub fn add_block(&mut self, block_definition_id: String, pos: Pos2) {
-        let id = format!("block_{}", self.blocks.len());
+        let id = Uuid::new_v4().to_string();
         let block = BlockInstance {
             id: id.clone(),
             block_definition_id,
@@ -692,16 +693,6 @@ impl GraphEditor {
             Color32::WHITE,
         );
 
-        // Draw element ID
-        let id_pos = rect.min + vec2(10.0 * self.zoom, 30.0 * self.zoom);
-        painter.text(
-            id_pos,
-            egui::Align2::LEFT_TOP,
-            &element.id,
-            FontId::proportional(12.0 * self.zoom),
-            Color32::from_gray(180),
-        );
-
         // Draw ports based on element metadata
         let port_size = 16.0 * self.zoom;
 
@@ -1054,26 +1045,6 @@ impl GraphEditor {
             block_name,
             FontId::proportional(14.0 * self.zoom),
             Color32::from_rgb(220, 180, 255),
-        );
-
-        // Draw block instance ID
-        let id_pos = rect.min + vec2(10.0 * self.zoom, 30.0 * self.zoom);
-        painter.text(
-            id_pos,
-            egui::Align2::LEFT_TOP,
-            &block.id,
-            FontId::proportional(12.0 * self.zoom),
-            Color32::from_gray(180),
-        );
-
-        // Draw "BLOCK" badge
-        let badge_pos = rect.min + vec2(10.0 * self.zoom, 55.0 * self.zoom);
-        painter.text(
-            badge_pos,
-            egui::Align2::LEFT_TOP,
-            "BLOCK",
-            FontId::proportional(10.0 * self.zoom),
-            Color32::from_rgb(150, 100, 200),
         );
 
         // Draw external pads (ports) based on block definition
