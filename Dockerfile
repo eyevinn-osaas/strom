@@ -19,10 +19,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 WORKDIR /app
 
-# Install GStreamer development dependencies
+# Install GStreamer development dependencies (including WebRTC plugin)
 RUN apt-get update && apt-get install -y \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad \
@@ -31,8 +32,8 @@ RUN apt-get update && apt-get install -y \
     gstreamer1.0-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Install trunk for building the WASM frontend from binary release
-RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.20.3/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+# Install trunk for building the WASM frontend from binary release (match CI version)
+RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.5/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
 
 # Add WASM target for frontend compilation
 RUN rustup target add wasm32-unknown-unknown

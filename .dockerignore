@@ -51,3 +51,11 @@ scripts/
 
 # Test data
 test-data/
+
+# Core dumps and debug files
+core-dumps/
+*.core
+gst-debug.log
+
+# Test and development scripts
+*.sh
