@@ -102,20 +102,28 @@ See OpenAPI docs at `/swagger-ui` when server is running.
 
 ## Configuration
 
-Environment variables or `config.toml`:
+Configure via command-line arguments or environment variables:
 
 ```bash
 # Server
-STROM_PORT=3000
-STROM_HOST=0.0.0.0
+--port 3000                           # or STROM_PORT=3000
 
-# Storage
-STROM_FLOWS_PATH=./flows.json
-STROM_BLOCKS_PATH=./blocks.json
+# Storage paths (priority: CLI args > env vars > defaults)
+--data-dir /path/to/data              # or STROM_DATA_DIR=/path/to/data
+--flows-path /custom/flows.json       # or STROM_FLOWS_PATH=/custom/flows.json
+--blocks-path /custom/blocks.json     # or STROM_BLOCKS_PATH=/custom/blocks.json
 
 # Logging
 RUST_LOG=info
 ```
+
+**Default storage locations:**
+- **Docker:** `./data/` (current directory)
+- **Linux:** `~/.local/share/strom/`
+- **Windows:** `%APPDATA%\strom\`
+- **macOS:** `~/Library/Application Support/strom/`
+
+**Note:** Individual file paths (`--flows-path`, `--blocks-path`) override `--data-dir`.
 
 ## Blocks System
 

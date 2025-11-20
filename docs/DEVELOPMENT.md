@@ -72,9 +72,26 @@ cargo run -p strom-backend
 
 The server will start on `http://localhost:3000` by default.
 
-**Environment variables:**
-- `STROM_PORT` - Port to listen on (default: 3000)
-- `STROM_FLOWS_PATH` - Path to flows.json file (default: flows.json)
+**Configuration options:**
+```bash
+# Via CLI arguments
+cargo run -p strom-backend -- --port 3000 --data-dir ./my-data
+
+# Via environment variables
+STROM_PORT=3000 STROM_DATA_DIR=./my-data cargo run -p strom-backend
+```
+
+**Available options:**
+- `--port` / `STROM_PORT` - Port to listen on (default: 3000)
+- `--data-dir` / `STROM_DATA_DIR` - Data directory for storage files
+- `--flows-path` / `STROM_FLOWS_PATH` - Override flows file path
+- `--blocks-path` / `STROM_BLOCKS_PATH` - Override blocks file path
+- `--headless` - Run without GUI (API only)
+
+**Default storage locations:**
+- Linux: `~/.local/share/strom/`
+- Windows: `%APPDATA%\strom\`
+- macOS: `~/Library/Application Support/strom/`
 
 ### Frontend (Development)
 
@@ -201,7 +218,15 @@ rustup target add wasm32-unknown-unknown
 ### Port already in use
 Change the backend port:
 ```bash
+cargo run -p strom-backend -- --port 3001
+# or
 STROM_PORT=3001 cargo run -p strom-backend
 ```
 
-Then update the frontend API URL in `frontend/src/app.rs` line 14.
+Then update the frontend API URL if needed.
+
+### Storage files in unexpected location
+By default, storage files go to platform-specific directories. To use current directory:
+```bash
+cargo run -p strom-backend -- --data-dir ./data
+```

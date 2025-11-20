@@ -52,6 +52,9 @@ pub enum AppMessage {
 
     /// Request full refresh of flows
     RefreshNeeded,
+
+    /// Version information loaded from backend
+    VersionLoaded(crate::api::VersionInfo),
 }
 
 /// WebSocket connection state.

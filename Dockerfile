@@ -77,7 +77,7 @@ COPY --from=builder /app/target/release/strom-mcp-server /usr/local/bin/strom-mc
 # Set environment variables
 ENV RUST_LOG=info
 ENV STROM_PORT=8080
-ENV STROM_FLOWS_PATH=/data/flows.json
+ENV STROM_DATA_DIR=/data
 
 # Create data directory for persistent storage
 RUN mkdir -p /data

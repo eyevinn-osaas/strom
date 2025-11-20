@@ -1,7 +1,19 @@
 //! API client for communicating with the Strom backend.
 
+use serde::Deserialize;
 use strom_types::element::ElementInfo;
 use strom_types::{Flow, FlowId};
+
+/// Version information from the backend
+#[derive(Debug, Clone, Deserialize)]
+pub struct VersionInfo {
+    pub version: String,
+    pub git_hash: String,
+    pub git_tag: String,
+    pub git_branch: String,
+    pub git_dirty: bool,
+    pub build_timestamp: String,
+}
 
 /// Result type for API operations.
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -545,5 +557,34 @@ impl ApiClient {
             categories_response.categories.len()
         );
         Ok(categories_response.categories)
+    }
+
+    /// Get version and build information from the backend.
+    pub async fn get_version(&self) -> ApiResult<VersionInfo> {
+        use tracing::info;
+
+        let url = format!("{}/version", self.base_url);
+        info!("Fetching version info from: {}", url);
+
+        let response = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        let version_info: VersionInfo = response
+            .json()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+
+        info!("Successfully fetched version: v{}", version_info.version);
+        Ok(version_info)
     }
 }

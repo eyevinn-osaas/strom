@@ -1,0 +1,275 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  TRUNK_VERSION: "0.21.5"
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  build-frontend:
+    name: Build Frontend (WASM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable with WASM target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache trunk binary
+        id: cache-trunk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/trunk
+          key: trunk-${{ env.TRUNK_VERSION }}-${{ runner.os }}
+
+      - name: Install trunk
+        if: steps.cache-trunk.outputs.cache-hit != 'true'
+        run: |
+          wget -qO- https://github.com/trunk-rs/trunk/releases/download/v${{ env.TRUNK_VERSION }}/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xzf- -C ~/.cargo/bin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: frontend-wasm
+          cache-on-failure: true
+
+      - name: Build frontend
+        run: |
+          cd frontend
+          trunk build --release
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/dist
+          retention-days: 1
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: build-frontend
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            target: x86_64-unknown-linux-gnu
+            binary_ext: ""
+          - os: windows-latest
+            platform: windows
+            target: x86_64-pc-windows-msvc
+            binary_ext: ".exe"
+          - os: macos-latest
+            platform: macos
+            target: x86_64-apple-darwin
+            binary_ext: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Install Rust stable with WASM target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Linux: Install GStreamer via apt
+      - name: Cache apt packages (Linux)
+        if: matrix.platform == 'linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
+          version: 1.1
+
+      # Windows: Install GStreamer and pkg-config via Chocolatey
+      - name: Install GStreamer (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          choco install pkgconfiglite gstreamer gstreamer-devel --yes --no-progress
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=D:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
+          echo "D:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+          echo "PKG_CONFIG_PATH=D:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      # macOS: Install GStreamer via Homebrew
+      - name: Install GStreamer (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
+
+      # Download the pre-built frontend from the frontend build job
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: backend/dist
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.platform }}
+          cache-on-failure: true
+
+      - name: Build backend (with embedded frontend)
+        run: cargo build --release --package strom-backend
+
+      - name: Build MCP server
+        run: cargo build --release --package strom-mcp-server
+
+      - name: Upload backend binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: strom-backend-v${{ steps.version.outputs.version }}-${{ matrix.platform }}-${{ matrix.target }}
+          path: target/release/strom-backend${{ matrix.binary_ext }}
+          retention-days: 90
+
+      - name: Upload MCP server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: strom-mcp-server-v${{ steps.version.outputs.version }}-${{ matrix.platform }}-${{ matrix.target }}
+          path: target/release/strom-mcp-server${{ matrix.binary_ext }}
+          retention-days: 90
+
+  create-release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+
+          # Rename binaries with platform suffixes
+          mv artifacts/strom-backend-v${{ steps.version.outputs.version }}-linux-x86_64-unknown-linux-gnu/strom-backend \
+             release-assets/strom-backend-v${{ steps.version.outputs.version }}-linux-x86_64
+
+          mv artifacts/strom-backend-v${{ steps.version.outputs.version }}-macos-x86_64-apple-darwin/strom-backend \
+             release-assets/strom-backend-v${{ steps.version.outputs.version }}-macos-x86_64
+
+          mv artifacts/strom-backend-v${{ steps.version.outputs.version }}-windows-x86_64-pc-windows-msvc/strom-backend.exe \
+             release-assets/strom-backend-v${{ steps.version.outputs.version }}-windows-x86_64.exe
+
+          mv artifacts/strom-mcp-server-v${{ steps.version.outputs.version }}-linux-x86_64-unknown-linux-gnu/strom-mcp-server \
+             release-assets/strom-mcp-server-v${{ steps.version.outputs.version }}-linux-x86_64
+
+          mv artifacts/strom-mcp-server-v${{ steps.version.outputs.version }}-macos-x86_64-apple-darwin/strom-mcp-server \
+             release-assets/strom-mcp-server-v${{ steps.version.outputs.version }}-macos-x86_64
+
+          mv artifacts/strom-mcp-server-v${{ steps.version.outputs.version }}-windows-x86_64-pc-windows-msvc/strom-mcp-server.exe \
+             release-assets/strom-mcp-server-v${{ steps.version.outputs.version }}-windows-x86_64.exe
+
+          chmod +x release-assets/strom-*-linux-* release-assets/strom-*-macos-*
+          ls -lh release-assets/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: release-assets/*
+          body: |
+            # Strom v${{ steps.version.outputs.version }}
+
+            🎉 Release of **Strom** - A GStreamer Flow Engine for visual pipeline management!
+
+            ## Features
+
+            ### Backend (strom-backend)
+            - **Axum-based REST API** for pipeline management
+            - **GStreamer Integration** - Full pipeline lifecycle management
+            - **Element Discovery** - Introspect all available GStreamer elements and their properties
+            - **Flow Persistence** - JSON-based storage with auto-save
+            - **OpenAPI Documentation** - Interactive Swagger UI
+            - **WebSocket Support** - Real-time pipeline updates
+            - **Server-Sent Events** - Live flow change notifications
+            - **DOT Graph Export** - Debug visualization support
+            - **Embedded Web UI** - Frontend served from single binary
+            - **Native GUI Option** - Optional egui-based native interface
+            - **Docker Support** - Multi-platform container builds
+
+            ### Frontend (strom-frontend)
+            - **WebAssembly UI** - Built with egui for web and native
+            - **Node-based Graph Editor** - Visual pipeline construction
+            - **Element Palette** - Searchable catalog with filtering
+            - **Property Inspector** - Configure element parameters
+            - **Real-time Controls** - Start/stop/delete pipelines
+            - **Debug Graph Viewer** - Visualize GStreamer DOT graphs
+            - **Live Updates** - SSE-based automatic flow refresh
+
+            ### MCP Server (strom-mcp-server)
+            - **Model Context Protocol** support for LLM integration
+            - **Claude Code Integration** - AI-assisted pipeline management
+
+            ## Platform Support
+            - **Linux** (x86_64)
+            - **Windows** (x86_64)
+            - **macOS** (x86_64)
+
+            ## Docker Images
+            Available on Docker Hub: `eyevinntech/strom:${{ steps.version.outputs.version }}`
+            - Multi-platform support (linux/amd64, linux/arm64)
+            - Includes all GStreamer plugins
+            - Web UI accessible on port 3000
+
+            ## Installation
+
+            ### Pre-built Binaries
+            Download the appropriate binary for your platform from the assets below.
+
+            ### Docker
+            ```bash
+            docker run -p 3000:3000 eyevinntech/strom:${{ steps.version.outputs.version }}
+            ```
+
+            ### From Source
+            ```bash
+            cargo install --path backend
+            ```
+
+            ## Quick Start
+            ```bash
+            # Start the server
+            ./strom-backend-v${{ steps.version.outputs.version }}-<platform>
+
+            # Open browser
+            http://localhost:3000
+            ```
+
+            ## Documentation
+            - [README](https://github.com/Eyevinn/strom/blob/main/README.md)
+            - [Development Guide](https://github.com/Eyevinn/strom/blob/main/docs/DEVELOPMENT.md)
+            - [Docker Guide](https://github.com/Eyevinn/strom/blob/main/docs/DOCKER.md)
+            - API Documentation: http://localhost:3000/swagger-ui/

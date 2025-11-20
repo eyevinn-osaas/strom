@@ -1,5 +1,6 @@
 //! OpenAPI documentation configuration.
 
+use crate::version::VersionInfo;
 use strom_types::api::{
     CreateFlowRequest, ElementInfoResponse, ElementListResponse, ElementPropertiesResponse,
     ErrorResponse, FlowListResponse, FlowResponse, UpdateFlowPropertiesRequest,
@@ -34,6 +35,7 @@ use utoipa::OpenApi;
         crate::api::blocks::update_block,
         crate::api::blocks::delete_block,
         crate::api::blocks::get_categories,
+        crate::api::version::get_version,
     ),
     components(
         schemas(
@@ -59,12 +61,14 @@ use utoipa::OpenApi;
             PropertyType,
             ExternalPads,
             ExternalPad,
+            VersionInfo,
         )
     ),
     tags(
         (name = "flows", description = "GStreamer flow management endpoints"),
         (name = "elements", description = "GStreamer element discovery endpoints"),
-        (name = "blocks", description = "Reusable block management endpoints")
+        (name = "blocks", description = "Reusable block management endpoints"),
+        (name = "System", description = "System information endpoints")
     ),
     info(
         title = "Strom GStreamer Flow Engine API",
