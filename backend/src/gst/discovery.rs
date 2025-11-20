@@ -419,8 +419,12 @@ impl ElementDiscovery {
                             (PropertyType::Int { min, max }, default)
                         } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>()
                         {
-                            let min = param_spec.minimum();
-                            let max = param_spec.maximum();
+                            // Cast glong to i64 for cross-platform compatibility
+                            // glong is i32 on Windows but i64 on Linux
+                            #[allow(clippy::unnecessary_cast)]
+                            let min = param_spec.minimum() as i64;
+                            #[allow(clippy::unnecessary_cast)]
+                            let max = param_spec.maximum() as i64;
                             let default =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     pad.property::<i64>(&name)
@@ -446,8 +450,12 @@ impl ElementDiscovery {
                         } else if let Some(param_spec) =
                             pspec.downcast_ref::<glib::ParamSpecULong>()
                         {
-                            let min = param_spec.minimum();
-                            let max = param_spec.maximum();
+                            // Cast gulong to u64 for cross-platform compatibility
+                            // gulong is u32 on Windows but u64 on Linux
+                            #[allow(clippy::unnecessary_cast)]
+                            let min = param_spec.minimum() as u64;
+                            #[allow(clippy::unnecessary_cast)]
+                            let max = param_spec.maximum() as u64;
                             let default =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     pad.property::<u64>(&name)
@@ -824,8 +832,12 @@ impl ElementDiscovery {
                             (PropertyType::Int { min, max }, default)
                         } else if let Some(param_spec) = pspec.downcast_ref::<glib::ParamSpecLong>()
                         {
-                            let min = param_spec.minimum();
-                            let max = param_spec.maximum();
+                            // Cast glong to i64 for cross-platform compatibility
+                            // glong is i32 on Windows but i64 on Linux
+                            #[allow(clippy::unnecessary_cast)]
+                            let min = param_spec.minimum() as i64;
+                            #[allow(clippy::unnecessary_cast)]
+                            let max = param_spec.maximum() as i64;
                             let default =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     pad.property::<i64>(&name)
@@ -851,8 +863,12 @@ impl ElementDiscovery {
                         } else if let Some(param_spec) =
                             pspec.downcast_ref::<glib::ParamSpecULong>()
                         {
-                            let min = param_spec.minimum();
-                            let max = param_spec.maximum();
+                            // Cast gulong to u64 for cross-platform compatibility
+                            // gulong is u32 on Windows but u64 on Linux
+                            #[allow(clippy::unnecessary_cast)]
+                            let min = param_spec.minimum() as u64;
+                            #[allow(clippy::unnecessary_cast)]
+                            let max = param_spec.maximum() as u64;
                             let default =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     pad.property::<u64>(&name)
