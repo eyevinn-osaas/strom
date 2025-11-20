@@ -178,6 +178,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Extract version from Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
       - name: Install Rust stable with WASM target
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -228,13 +236,13 @@ jobs:
       - name: Upload backend binary
         uses: actions/upload-artifact@v4
         with:
-          name: strom-backend-${{ matrix.platform }}
+          name: strom-backend-v${{ steps.version.outputs.version }}-${{ matrix.platform }}
           path: target/release/strom-backend${{ matrix.binary_ext }}
           retention-days: 7
 
       - name: Upload MCP server binary
         uses: actions/upload-artifact@v4
         with:
-          name: strom-mcp-server-${{ matrix.platform }}
+          name: strom-mcp-server-v${{ steps.version.outputs.version }}-${{ matrix.platform }}
           path: target/release/strom-mcp-server${{ matrix.binary_ext }}
           retention-days: 7

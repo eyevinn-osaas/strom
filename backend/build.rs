@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
+    // Set version and build information
+    set_version_info();
+
     let frontend_dir = PathBuf::from("../frontend");
     let dist_dir = PathBuf::from("dist");
     let hash_file = PathBuf::from(".frontend-build-hash");
@@ -16,6 +19,9 @@ fn main() {
     println!("cargo:rerun-if-changed=../frontend/Trunk.toml");
     // Also rerun if dist directory changes (manual builds)
     println!("cargo:rerun-if-changed=dist");
+    // Rerun if .git/HEAD changes (new commits)
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/refs");
 
     // Compute current hash of frontend sources
     let current_hash = compute_frontend_hash(&frontend_dir);
@@ -35,6 +41,83 @@ fn main() {
     } else {
         println!("cargo:warning=Frontend unchanged - skipping WASM rebuild");
     }
+}
+
+/// Set version and build information as environment variables
+fn set_version_info() {
+    // Get git commit hash (short)
+    let git_hash = Command::new("git")
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Get git tag (if on a tagged commit)
+    let git_tag = Command::new("git")
+        .args(["describe", "--tags", "--exact-match"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    // Get build timestamp (ISO 8601 format)
+    let build_timestamp = chrono::Utc::now().to_rfc3339();
+
+    // Get git branch
+    let git_branch = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Check if working directory is dirty
+    let git_dirty = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()
+        .map(|output| !output.stdout.is_empty())
+        .unwrap_or(false);
+
+    // Set environment variables for compile-time embedding
+    println!("cargo:rustc-env=GIT_HASH={}", git_hash);
+    println!("cargo:rustc-env=GIT_TAG={}", git_tag);
+    println!("cargo:rustc-env=GIT_BRANCH={}", git_branch);
+    println!("cargo:rustc-env=GIT_DIRTY={}", git_dirty);
+    println!("cargo:rustc-env=BUILD_TIMESTAMP={}", build_timestamp);
+
+    // Print warnings for visibility during build
+    println!(
+        "cargo:warning=Building version: {} ({})",
+        if git_tag.is_empty() {
+            std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "unknown".to_string())
+        } else {
+            git_tag.clone()
+        },
+        git_hash
+    );
 }
 
 /// Compute a hash of all frontend source files
