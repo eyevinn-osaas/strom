@@ -89,6 +89,8 @@ pub struct StromApp {
     meter_data: MeterDataStore,
     /// Current theme preference
     theme_preference: ThemePreference,
+    /// Version information from the backend
+    version_info: Option<crate::api::VersionInfo>,
 }
 
 impl StromApp {
@@ -155,6 +157,7 @@ impl StromApp {
             shutdown_flag: None,
             meter_data: MeterDataStore::new(),
             theme_preference: ThemePreference::System,
+            version_info: None,
         };
 
         // Apply initial theme based on system preference
@@ -165,6 +168,9 @@ impl StromApp {
 
         // Set up WebSocket connection for real-time updates
         app.setup_websocket_connection(cc.egui_ctx.clone());
+
+        //Load version info
+        app.load_version(cc.egui_ctx.clone());
 
         app
     }
@@ -209,6 +215,7 @@ impl StromApp {
             shutdown_flag: Some(shutdown_flag),
             meter_data: MeterDataStore::new(),
             theme_preference: ThemePreference::System,
+            version_info: None,
         };
 
         // Apply initial theme based on system preference
@@ -219,6 +226,9 @@ impl StromApp {
 
         // Set up WebSocket connection for real-time updates
         app.setup_websocket_connection(cc.egui_ctx.clone());
+
+        // Load version info
+        app.load_version(cc.egui_ctx.clone());
 
         app
     }
@@ -353,6 +363,31 @@ impl StromApp {
                 Err(e) => {
                     tracing::error!("Failed to load blocks: {}", e);
                     let _ = tx.send(AppMessage::BlocksError(e.to_string()));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Load version information from the backend.
+    fn load_version(&mut self, ctx: egui::Context) {
+        tracing::info!("Loading version information from backend...");
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.get_version().await {
+                Ok(version_info) => {
+                    tracing::info!(
+                        "Successfully loaded version: v{} ({})",
+                        version_info.version,
+                        version_info.git_hash
+                    );
+                    let _ = tx.send(AppMessage::VersionLoaded(version_info));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load version info: {}", e);
                 }
             }
             ctx.request_repaint();
@@ -1155,7 +1190,49 @@ impl StromApp {
                     ui.colored_label(Color32::RED, format!("Error: {}", error));
                 }
 
-                // Connection state is now shown via full-screen overlay when disconnected
+                // Version info on the right side
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(ref version_info) = self.version_info {
+                        let version_text = if !version_info.git_tag.is_empty() {
+                            // On a tagged release
+                            version_info.git_tag.to_string()
+                        } else {
+                            // Development version
+                            format!("v{}-{}", version_info.version, version_info.git_hash)
+                        };
+
+                        let color = if version_info.git_dirty {
+                            Color32::from_rgb(255, 165, 0) // Orange for dirty
+                        } else if !version_info.git_tag.is_empty() {
+                            Color32::from_rgb(0, 200, 0) // Green for release
+                        } else {
+                            Color32::GRAY // Gray for dev
+                        };
+
+                        let full_version_text = if version_info.git_dirty {
+                            format!("{} (modified)", version_text)
+                        } else {
+                            version_text
+                        };
+
+                        ui.colored_label(color, full_version_text)
+                            .on_hover_ui(|ui| {
+                                ui.label(format!("Version: v{}", version_info.version));
+                                ui.label(format!("Git: {}", version_info.git_hash));
+                                if !version_info.git_tag.is_empty() {
+                                    ui.label(format!("Tag: {}", version_info.git_tag));
+                                }
+                                ui.label(format!("Branch: {}", version_info.git_branch));
+                                ui.label(format!("Built: {}", version_info.build_timestamp));
+                                if version_info.git_dirty {
+                                    ui.colored_label(
+                                        Color32::YELLOW,
+                                        "⚠ Working directory had uncommitted changes",
+                                    );
+                                }
+                            });
+                    }
+                });
             });
         });
     }
@@ -1735,6 +1812,14 @@ impl eframe::App for StromApp {
                 AppMessage::RefreshNeeded => {
                     tracing::info!("Refresh requested due to flow fetch failure");
                     self.needs_refresh = true;
+                }
+                AppMessage::VersionLoaded(version_info) => {
+                    tracing::info!(
+                        "Version info loaded: v{} ({})",
+                        version_info.version,
+                        version_info.git_hash
+                    );
+                    self.version_info = Some(version_info);
                 }
                 _ => {
                     tracing::debug!("Received unhandled AppMessage variant");

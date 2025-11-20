@@ -18,6 +18,7 @@ pub mod layout;
 pub mod openapi;
 pub mod state;
 pub mod storage;
+pub mod version;
 
 use state::AppState;
 
@@ -93,6 +94,7 @@ pub async fn create_app_with_state(state: AppState) -> Router {
             "/blocks/{id}",
             axum::routing::delete(api::blocks::delete_block),
         )
+        .route("/version", get(api::version::get_version))
         .route("/ws", get(api::websocket::websocket_handler));
 
     // Build main router with Swagger UI
