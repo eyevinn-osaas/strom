@@ -7,12 +7,51 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use strom_backend::{config::Config, create_app_with_state, state::AppState};
+use strom_backend::{auth, config::Config, create_app_with_state, state::AppState};
+
+/// Handle the hash-password subcommand
+fn handle_hash_password(password: Option<&str>) -> anyhow::Result<()> {
+    use std::io::{self, Write};
+
+    let password = if let Some(pwd) = password {
+        pwd.to_string()
+    } else {
+        // Read from stdin
+        print!("Enter password to hash: ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        input.trim().to_string()
+    };
+
+    if password.is_empty() {
+        eprintln!("Error: Password cannot be empty");
+        std::process::exit(1);
+    }
+
+    match auth::hash_password(&password) {
+        Ok(hash) => {
+            println!("\nPassword hash:");
+            println!("{}", hash);
+            println!("\nAdd this to your environment:");
+            println!("export STROM_ADMIN_PASSWORD_HASH='{}'", hash);
+        }
+        Err(e) => {
+            eprintln!("Error hashing password: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
 
 /// Strom - GStreamer Flow Engine Backend
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Port to listen on
     #[arg(short, long, env = "STROM_PORT", default_value = "3000")]
     port: u16,
@@ -35,10 +74,28 @@ struct Args {
     headless: bool,
 }
 
+#[derive(Parser, Debug)]
+enum Commands {
+    /// Hash a password for use with STROM_ADMIN_PASSWORD_HASH
+    HashPassword {
+        /// Password to hash (if not provided, will read from stdin)
+        password: Option<String>,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse command line arguments
     #[cfg_attr(not(feature = "gui"), allow(unused_variables))]
     let args = Args::parse();
+
+    // Handle subcommands before starting server
+    if let Some(command) = &args.command {
+        match command {
+            Commands::HashPassword { password } => {
+                return handle_hash_password(password.as_deref());
+            }
+        }
+    }
 
     // Initialize logging - use RUST_LOG env var or default to info
     fmt()

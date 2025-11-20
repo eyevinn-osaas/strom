@@ -55,6 +55,13 @@ pub enum AppMessage {
 
     /// Version information loaded from backend
     VersionLoaded(crate::api::VersionInfo),
+
+    /// Authentication status loaded
+    AuthStatusLoaded(crate::api::AuthStatusResponse),
+    /// Login result received
+    LoginResult(crate::api::LoginResponse),
+    /// Logout completed
+    LogoutComplete,
 }
 
 /// WebSocket connection state.

@@ -2,13 +2,16 @@
 //!
 //! This module exposes the application builder for use in tests.
 
-use axum::{routing::get, routing::patch, routing::post, Router};
+use axum::{middleware, routing::get, routing::patch, routing::post, Router};
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub mod api;
 pub mod assets;
+pub mod auth;
 pub mod blocks;
 pub mod config;
 pub mod events;
@@ -40,8 +43,28 @@ pub async fn create_app_with_state(state: AppState) -> Router {
         );
     }
 
-    // Build API router
-    let api_router = Router::new()
+    // Load authentication configuration
+    let auth_config = Arc::new(auth::AuthConfig::from_env());
+
+    if auth_config.enabled {
+        tracing::info!("Authentication enabled");
+        if auth_config.has_session_auth() {
+            tracing::info!("  - Session authentication configured");
+        }
+        if auth_config.has_api_key_auth() {
+            tracing::info!("  - API key authentication configured");
+        }
+    } else {
+        tracing::warn!("Authentication disabled - all endpoints are public!");
+    }
+
+    // Create session store (in-memory, sessions lost on restart)
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_expiry(Expiry::OnInactivity(Duration::hours(24)));
+
+    // Build protected API router (requires authentication)
+    let protected_api_router = Router::new()
         .route("/flows", get(api::flows::list_flows))
         .route("/flows", post(api::flows::create_flow))
         .route("/flows/{id}", get(api::flows::get_flow))
@@ -96,7 +119,24 @@ pub async fn create_app_with_state(state: AppState) -> Router {
             axum::routing::delete(api::blocks::delete_block),
         )
         .route("/version", get(api::version::get_version))
-        .route("/ws", get(api::websocket::websocket_handler));
+        .route("/ws", get(api::websocket::websocket_handler))
+        // Apply authentication middleware to all routes
+        .layer(middleware::from_fn_with_state(
+            auth_config.clone(),
+            auth::auth_middleware,
+        ));
+
+    // Build public API router (no authentication required)
+    let public_api_router = Router::new()
+        .route("/login", post(auth::login_handler))
+        .route("/logout", post(auth::logout_handler))
+        .route("/auth/status", get(auth::auth_status_handler))
+        .with_state(auth_config.clone());
+
+    // Combine routers
+    let api_router = Router::new()
+        .merge(public_api_router)
+        .merge(protected_api_router);
 
     // Build main router with Swagger UI
     Router::new()
@@ -105,11 +145,13 @@ pub async fn create_app_with_state(state: AppState) -> Router {
             SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::ApiDoc::openapi()),
         )
         .nest("/api", api_router)
+        .layer(session_layer)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_headers(Any)
+                .allow_credentials(true),
         )
         .with_state(state)
         // Serve embedded frontend for all other routes
