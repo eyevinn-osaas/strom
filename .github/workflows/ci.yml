@@ -114,10 +114,9 @@ jobs:
       - name: Run tests on MCP server
         run: cargo test --package strom-mcp-server --all-features
 
-  build:
-    name: Build (Backend + Frontend + MCP)
+  build-frontend:
+    name: Build Frontend (WASM)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -125,12 +124,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-
-      - name: Cache apt packages
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
-          version: 1.1
 
       - name: Cache trunk binary
         id: cache-trunk
@@ -147,16 +140,81 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: build
+          shared-key: frontend-wasm
           cache-on-failure: true
-          # Cache trunk build artifacts
-          cache-directories: |
-            frontend/dist
 
       - name: Build frontend
         run: |
           cd frontend
           trunk build --release
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 1
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: build-frontend
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            binary_ext: ""
+          - os: windows-latest
+            platform: windows
+            binary_ext: ".exe"
+          - os: macos-latest
+            platform: macos
+            binary_ext: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable with WASM target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Linux: Install GStreamer via apt
+      - name: Cache apt packages (Linux)
+        if: matrix.platform == 'linux'
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
+          version: 1.1
+
+      # Windows: Install GStreamer via Chocolatey
+      - name: Install GStreamer (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          choco install gstreamer gstreamer-devel --yes --no-progress
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
+          echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+
+      # macOS: Install GStreamer via Homebrew
+      - name: Install GStreamer (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
+
+      # Download the pre-built frontend from the frontend build job
+      - name: Download frontend dist
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-${{ matrix.platform }}
+          cache-on-failure: true
 
       - name: Build backend (with embedded frontend)
         run: cargo build --release --package strom-backend
@@ -167,13 +225,13 @@ jobs:
       - name: Upload backend binary
         uses: actions/upload-artifact@v4
         with:
-          name: strom-backend
-          path: target/release/strom-backend
+          name: strom-backend-${{ matrix.platform }}
+          path: target/release/strom-backend${{ matrix.binary_ext }}
           retention-days: 7
 
       - name: Upload MCP server binary
         uses: actions/upload-artifact@v4
         with:
-          name: strom-mcp-server
-          path: target/release/strom-mcp-server
+          name: strom-mcp-server-${{ matrix.platform }}
+          path: target/release/strom-mcp-server${{ matrix.binary_ext }}
           retention-days: 7
