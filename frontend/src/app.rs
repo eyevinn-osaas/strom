@@ -1073,9 +1073,39 @@ impl StromApp {
 
                 ui.add_space(2.0);
 
-                // Show graph editor with flow_id and meter data for in-block visualizations
-                let flow_id = self.current_flow().map(|f| f.id);
-                let response = self.graph.show(ui, flow_id, &self.meter_data);
+                // Setup dynamic content for meter blocks before rendering
+                self.graph.clear_block_content();
+                if let Some(flow_id) = self.current_flow().map(|f| f.id) {
+                    // Clone block IDs to avoid borrowing issues
+                    let meter_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.meter")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in meter_blocks {
+                        if let Some(meter_data) = self.meter_data.get(&flow_id, &block_id) {
+                            let height =
+                                crate::meter::calculate_compact_height(meter_data.rms.len());
+                            let meter_data_clone = meter_data.clone();
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: height + 10.0,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::meter::show_compact(ui, &meter_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+                }
+
+                // Show graph editor
+                let response = self.graph.show(ui);
 
                 // Handle adding elements from palette
                 if let Some(element_type) = self.palette.take_dragging_element() {
