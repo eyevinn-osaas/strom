@@ -49,8 +49,8 @@ Open your browser to `http://localhost:3000` to access the web UI.
 
 ```bash
 # Pull and run the latest version
-docker pull eyevinntech/strom:latest
-docker run -p 3000:3000 -v $(pwd)/data:/data eyevinntech/strom:latest
+docker pull eyevinntechnology/strom:latest
+docker run -p 3000:3000 -v $(pwd)/data:/data eyevinntechnology/strom:latest
 
 # Or build locally
 docker build -t strom .
@@ -128,8 +128,8 @@ When a version tag is pushed (e.g., `v0.1.0`):
 Pre-built Docker images are available:
 
 ```bash
-docker pull eyevinntech/strom:latest
-docker pull eyevinntech/strom:0.1.0  # Specific version
+docker pull eyevinntechnology/strom:latest
+docker pull eyevinntechnology/strom:0.1.0  # Specific version
 ```
 
 ## Architecture
