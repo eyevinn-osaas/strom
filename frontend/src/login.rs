@@ -47,10 +47,8 @@ impl LoginScreen {
                 let username_response = ui.text_edit_singleline(&mut self.username);
 
                 ui.label("Password:");
-                let password_response = ui.add(
-                    egui::TextEdit::singleline(&mut self.password)
-                        .password(true)
-                );
+                let password_response =
+                    ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
 
                 // Submit on Enter in either field
                 if (username_response.lost_focus() || password_response.lost_focus())

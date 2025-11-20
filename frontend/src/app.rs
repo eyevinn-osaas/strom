@@ -443,7 +443,8 @@ impl StromApp {
         let password = self.login_screen.password.clone();
 
         if username.is_empty() || password.is_empty() {
-            self.login_screen.set_error("Username and password are required".to_string());
+            self.login_screen
+                .set_error("Username and password are required".to_string());
             return;
         }
 
