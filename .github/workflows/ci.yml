@@ -196,9 +196,9 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           choco install pkgconfiglite gstreamer gstreamer-devel --yes --no-progress
-          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
-          echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
-          echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=D:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
+          echo "D:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+          echo "PKG_CONFIG_PATH=D:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
 
       # macOS: Install GStreamer via Homebrew
       - name: Install GStreamer (macOS)
