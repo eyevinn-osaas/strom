@@ -2,6 +2,9 @@
 
 **Strom** (Swedish for "stream") is a visual, web-based interface for creating and managing GStreamer media pipelines. Design complex media flows without writing code.
 
+![Strom Screenshot](docs/images/strom-demo-flow.png)
+*Visual pipeline editor showing a simple test flow*
+
 ## Features
 
 - **Visual Pipeline Editor** - Node-based graph editor in your browser
@@ -11,6 +14,7 @@
 - **Auto-restart** - Pipelines survive server restarts
 - **Native or Web** - Run as desktop app or web service
 - **MCP Integration** - Control pipelines with AI assistants (Claude, etc.)
+- **CI/CD** - Automated testing, building, and releases for Linux, Windows, and macOS
 
 ### Advanced Capabilities
 
@@ -22,18 +26,56 @@
 
 ## Quick Start
 
-### Prerequisites
+### Option 1: Using Pre-built Binaries (Fastest)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/Eyevinn/strom/releases):
+
+```bash
+# Linux
+wget https://github.com/Eyevinn/strom/releases/latest/download/strom-backend-v*-linux-x86_64
+chmod +x strom-backend-v*-linux-x86_64
+./strom-backend-v*-linux-x86_64
+
+# macOS
+# Download and run the macOS binary
+
+# Windows
+# Download and run the .exe file
+```
+
+Open your browser to `http://localhost:3000` to access the web UI.
+
+### Option 2: Using Docker (Recommended for Testing)
+
+```bash
+# Pull and run the latest version
+docker pull eyevinntech/strom:latest
+docker run -p 3000:3000 -v $(pwd)/data:/data eyevinntech/strom:latest
+
+# Or build locally
+docker build -t strom .
+docker run -p 3000:3000 -v $(pwd)/data:/data strom
+```
+
+Access the web UI at `http://localhost:3000`
+
+### Option 3: Building from Source
+
+#### Prerequisites
 
 ```bash
 # Install GStreamer
-sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 
 # Install Rust and tools
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 cargo install trunk
 ```
 
-### Run
+#### Run
 
 ```bash
 # Production mode (web UI at http://localhost:3000)
@@ -47,11 +89,47 @@ cd frontend && trunk serve   # Frontend (Terminal 2)
 cargo run --release -- --headless
 ```
 
-### Docker
+### First Steps
+
+Once Strom is running:
+
+1. Open `http://localhost:3000` in your browser
+2. Browse available GStreamer elements in the palette
+3. Drag elements onto the canvas to create your pipeline
+4. Connect elements by dragging from output pads to input pads
+5. Configure element properties in the inspector panel
+6. Click "Start" to launch your pipeline
+
+For API usage, visit `http://localhost:3000/swagger-ui` for interactive documentation.
+
+## CI/CD
+
+Strom includes automated CI/CD pipelines for continuous integration, testing, and releases:
+
+### Continuous Integration
+
+On every push to `main` and pull requests, automated checks run:
+
+- **Format Check** - Ensures code follows Rust formatting standards
+- **Clippy Linting** - Static analysis for backend, MCP server, and frontend (WASM)
+- **Test Suite** - Runs all tests for backend and MCP server
+- **Multi-platform Builds** - Builds binaries for Linux, Windows, and macOS
+
+### Automated Releases
+
+When a version tag is pushed (e.g., `v0.1.0`):
+
+- **Cross-platform Binaries** - Automatically builds for Linux, Windows, and macOS
+- **GitHub Releases** - Creates release with binaries and generated release notes
+- **Docker Publishing** - Publishes multi-platform images (amd64/arm64) to Docker Hub
+
+### Docker Hub
+
+Pre-built Docker images are available:
 
 ```bash
-docker build -t strom .
-docker run -p 8080:8080 -v $(pwd)/data:/data strom
+docker pull eyevinntech/strom:latest
+docker pull eyevinntech/strom:0.1.0  # Specific version
 ```
 
 ## Architecture
@@ -154,17 +232,141 @@ Example: "Create a flow that encodes video to H.264 and streams via SRT"
 
 ## Development
 
+### Setup Development Environment
+
 ```bash
-# Format and lint
-cargo fmt --all
-cargo clippy --workspace -- -D warnings
+# Clone the repository
+git clone https://github.com/Eyevinn/strom.git
+cd strom
 
-# Run tests
-cargo test --workspace
+# Install GStreamer dependencies
+sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
 
-# Install git hooks
+# Install Rust toolchain
+rustup target add wasm32-unknown-unknown
+cargo install trunk
+
+# Install git hooks for automated checks
 ./scripts/install-hooks.sh
 ```
+
+### Testing
+
+Strom includes comprehensive tests to ensure quality and reliability.
+
+#### Run All Tests
+
+```bash
+# Run all tests across the workspace
+cargo test --workspace
+
+# Run tests with output
+cargo test --workspace -- --nocapture
+
+# Run tests for specific package
+cargo test --package strom-backend
+cargo test --package strom-mcp-server
+cargo test --package strom-types
+```
+
+#### Run Specific Tests
+
+```bash
+# Run a specific test by name
+cargo test test_name
+
+# Run tests matching a pattern
+cargo test pipeline
+
+# Run integration tests only
+cargo test --test '*'
+```
+
+#### Code Quality Checks
+
+```bash
+# Format code (required before committing)
+cargo fmt --all
+
+# Check formatting without modifying files
+cargo fmt --all -- --check
+
+# Run linter (Clippy)
+cargo clippy --workspace -- -D warnings
+
+# Lint specific packages
+cargo clippy --package strom-backend --all-targets --all-features -- -D warnings
+cargo clippy --package strom-frontend --target wasm32-unknown-unknown -- -D warnings
+```
+
+#### Frontend Testing
+
+```bash
+# Build frontend for development
+cd frontend
+trunk serve
+
+# Build frontend for production
+trunk build --release
+
+# Check frontend compiles for WASM
+cargo check --package strom-frontend --target wasm32-unknown-unknown
+```
+
+#### Manual Testing
+
+To test Strom manually:
+
+1. **Start the backend:**
+   ```bash
+   cargo run --package strom-backend
+   ```
+
+2. **Access the UI:**
+   Open `http://localhost:3000` in your browser
+
+3. **Test a simple pipeline:**
+   - Add a `videotestsrc` element
+   - Add an `autovideosink` element
+   - Connect them and click "Start"
+   - You should see a test pattern window
+
+4. **Test the API:**
+   ```bash
+   # List all flows
+   curl http://localhost:3000/api/flows
+
+   # Get available elements
+   curl http://localhost:3000/api/elements
+
+   # View API documentation
+   open http://localhost:3000/swagger-ui
+   ```
+
+#### Docker Testing
+
+```bash
+# Build Docker image locally
+docker build -t strom:test .
+
+# Run and test
+docker run -p 3000:3000 strom:test
+
+# Test with custom data directory
+docker run -p 3000:3000 -v $(pwd)/test-data:/data strom:test
+```
+
+#### Pre-commit Checks
+
+The git hooks run these checks automatically before each commit:
+
+- Code formatting (`cargo fmt`)
+- Linting (`cargo clippy`)
+- Tests (`cargo test`)
+
+If any check fails, the commit is blocked until issues are resolved.
 
 ## Project Structure
 
