@@ -66,7 +66,7 @@ docker run -d \
 │         │                                │
 │         │ Volume Mount                   │
 │         ▼                                │
-│    ./data/flows.json                     │
+│    ./data/ (flows.json, blocks.json)     │
 └─────────────────────────────────────────┘
 ```
 
@@ -77,7 +77,9 @@ docker run -d \
 #### Backend (strom-backend)
 - `RUST_LOG` - Logging level (default: `info`)
 - `STROM_PORT` - HTTP server port (default: `8080`)
-- `STROM_FLOWS_PATH` - Path to flows storage (default: `/data/flows.json`)
+- `STROM_DATA_DIR` - Data directory for storage files (default: `/data`)
+- `STROM_FLOWS_PATH` - Override flows file path (optional)
+- `STROM_BLOCKS_PATH` - Override blocks file path (optional)
 
 #### MCP Server (strom-mcp)
 - `RUST_LOG` - Logging level (default: `info`)
@@ -240,9 +242,12 @@ services:
 
 ### Backup
 
-Backup flow configurations:
+Backup data files:
 ```bash
 docker cp strom-backend:/data/flows.json ./backup/
+docker cp strom-backend:/data/blocks.json ./backup/
+# Or backup entire data directory
+docker cp strom-backend:/data ./backup/
 ```
 
 ## Development
