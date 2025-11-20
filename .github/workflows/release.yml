@@ -239,7 +239,7 @@ jobs:
             - **macOS** (x86_64)
 
             ## Docker Images
-            Available on Docker Hub: `eyevinntech/strom:${{ steps.version.outputs.version }}`
+            Available on Docker Hub: `eyevinntechnology/strom:${{ steps.version.outputs.version }}`
             - Multi-platform support (linux/amd64, linux/arm64)
             - Includes all GStreamer plugins
             - Web UI accessible on port 3000
@@ -251,7 +251,7 @@ jobs:
 
             ### Docker
             ```bash
-            docker run -p 3000:3000 eyevinntech/strom:${{ steps.version.outputs.version }}
+            docker run -p 3000:3000 eyevinntechnology/strom:${{ steps.version.outputs.version }}
             ```
 
             ### From Source
