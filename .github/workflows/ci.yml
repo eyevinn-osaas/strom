@@ -13,8 +13,6 @@ env:
   TRUNK_VERSION: "0.21.5"
   # Disable incremental compilation to avoid deadlocks
   CARGO_INCREMENTAL: 0
-  # Limit parallel cargo jobs to avoid deadlocks
-  CARGO_BUILD_JOBS: 2
 
 jobs:
   fmt:
