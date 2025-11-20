@@ -3,6 +3,7 @@
 use clap::Parser;
 use gstreamer::glib;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -12,6 +13,22 @@ use strom_backend::{config::Config, create_app_with_state, state::AppState};
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    /// Port to listen on
+    #[arg(short, long, env = "STROM_PORT", default_value = "3000")]
+    port: u16,
+
+    /// Data directory (contains flows.json and blocks.json)
+    #[arg(long, env = "STROM_DATA_DIR")]
+    data_dir: Option<PathBuf>,
+
+    /// Path to flows storage file (overrides --data-dir)
+    #[arg(long, env = "STROM_FLOWS_PATH")]
+    flows_path: Option<PathBuf>,
+
+    /// Path to blocks storage file (overrides --data-dir)
+    #[arg(long, env = "STROM_BLOCKS_PATH")]
+    blocks_path: Option<PathBuf>,
+
     /// Run in headless mode (no GUI) - only available when gui feature is enabled
     #[cfg(feature = "gui")]
     #[arg(long)]
@@ -56,15 +73,20 @@ fn main() -> anyhow::Result<()> {
 
     if gui_enabled {
         // GUI mode: Run HTTP server in background, GUI on main thread
-        run_with_gui()
+        run_with_gui(args.port, args.data_dir, args.flows_path, args.blocks_path)
     } else {
         // Headless mode: Run HTTP server on main thread
-        run_headless()
+        run_headless(args.port, args.data_dir, args.flows_path, args.blocks_path)
     }
 }
 
 #[cfg(feature = "gui")]
-fn run_with_gui() -> anyhow::Result<()> {
+fn run_with_gui(
+    port: u16,
+    data_dir: Option<PathBuf>,
+    flows_path: Option<PathBuf>,
+    blocks_path: Option<PathBuf>,
+) -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -79,8 +101,9 @@ fn run_with_gui() -> anyhow::Result<()> {
     let (server_started_tx, server_started_rx) = std::sync::mpsc::channel();
 
     runtime.spawn(async move {
-        // Load configuration
-        let config = Config::from_env();
+        // Load configuration from CLI args
+        let config = Config::new(port, data_dir, flows_path, blocks_path)
+            .expect("Failed to resolve configuration");
         info!("Configuration loaded");
 
         // Create application with persistent storage
@@ -149,9 +172,14 @@ fn run_with_gui() -> anyhow::Result<()> {
 }
 
 #[tokio::main]
-async fn run_headless() -> anyhow::Result<()> {
-    // Load configuration
-    let config = Config::from_env();
+async fn run_headless(
+    port: u16,
+    data_dir: Option<PathBuf>,
+    flows_path: Option<PathBuf>,
+    blocks_path: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    // Load configuration from CLI args
+    let config = Config::new(port, data_dir, flows_path, blocks_path)?;
     info!("Configuration loaded");
 
     // Create application with persistent storage
