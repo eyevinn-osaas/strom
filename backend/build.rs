@@ -109,6 +109,28 @@ fn is_dir_empty(dir: &Path) -> Result<bool, std::io::Error> {
 
 /// Build the frontend using trunk
 fn build_frontend(frontend_dir: &Path) {
+    // Check if trunk is available
+    let trunk_check = Command::new("trunk").arg("--version").output();
+
+    if trunk_check.is_err() {
+        println!("cargo:warning=trunk not found - skipping frontend build");
+        println!("cargo:warning=Install trunk with: cargo install trunk");
+        println!("cargo:warning=Backend will compile without embedded frontend");
+
+        // Create empty dist directory with placeholder so RustEmbed doesn't fail
+        let dist_dir = PathBuf::from("dist");
+        if !dist_dir.exists() {
+            fs::create_dir(&dist_dir).expect("Failed to create dist directory");
+        }
+        fs::write(
+            dist_dir.join(".placeholder"),
+            "Frontend not built - trunk not available during compilation",
+        )
+        .expect("Failed to create placeholder file");
+
+        return;
+    }
+
     let status = Command::new("trunk")
         .arg("build")
         .arg("--release")

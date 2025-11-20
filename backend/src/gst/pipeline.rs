@@ -2030,8 +2030,8 @@ mod tests {
         flow
     }
 
-    #[test]
-    fn test_create_pipeline() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_create_pipeline() {
         gst::init().unwrap();
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
@@ -2040,8 +2040,8 @@ mod tests {
         assert!(manager.is_ok());
     }
 
-    #[test]
-    fn test_start_stop_pipeline() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_start_stop_pipeline() {
         gst::init().unwrap();
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
@@ -2063,8 +2063,8 @@ mod tests {
         assert_eq!(state.unwrap(), PipelineState::Null);
     }
 
-    #[test]
-    fn test_invalid_element() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_invalid_element() {
         gst::init().unwrap();
         let mut flow = create_test_flow();
         flow.elements[0].element_type = "nonexistentelement".to_string();
@@ -2075,8 +2075,8 @@ mod tests {
         assert!(manager.is_err());
     }
 
-    #[test]
-    fn test_auto_tee_insertion() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_auto_tee_insertion() {
         gst::init().unwrap();
 
         // Create a flow with one source and two sinks (should auto-insert a tee)
@@ -2127,8 +2127,8 @@ mod tests {
         assert!(manager.elements.contains_key("auto_tee_src"));
     }
 
-    #[test]
-    fn test_no_tee_insertion_when_not_needed() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_no_tee_insertion_when_not_needed() {
         gst::init().unwrap();
 
         let flow = create_test_flow(); // Simple 1-to-1 connection
