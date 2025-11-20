@@ -16,6 +16,7 @@ pub mod gst;
 pub mod gui;
 pub mod layout;
 pub mod openapi;
+pub mod paths;
 pub mod state;
 pub mod storage;
 pub mod version;
