@@ -20,6 +20,8 @@ pub struct GraphEditor {
     element_info_map: HashMap<String, ElementInfo>,
     /// Block definitions (id -> definition) for rendering ports and properties
     block_definition_map: HashMap<String, BlockDefinition>,
+    /// Dynamic content info per block (block_id -> content info)
+    block_content_map: HashMap<String, BlockContentInfo>,
     /// Currently selected element ID
     pub selected: Option<ElementId>,
     /// Element being dragged
@@ -65,6 +67,18 @@ struct PadToRender {
     is_empty: bool,
 }
 
+/// Callback type for rendering custom block content
+pub type BlockRenderCallback = Box<dyn Fn(&mut egui::Ui, egui::Rect) + 'static>;
+
+/// Dynamic content information for a block (e.g., meter visualization).
+/// This allows the graph editor to remain generic while supporting blocks with custom content.
+pub struct BlockContentInfo {
+    /// Additional height for dynamic content (beyond base node height)
+    pub additional_height: f32,
+    /// Optional render callback for custom content within the block node
+    pub render_callback: Option<BlockRenderCallback>,
+}
+
 impl Default for GraphEditor {
     fn default() -> Self {
         Self {
@@ -73,6 +87,7 @@ impl Default for GraphEditor {
             links: Vec::new(),
             element_info_map: HashMap::new(),
             block_definition_map: HashMap::new(),
+            block_content_map: HashMap::new(),
             selected: None,
             dragging: None,
             pan_offset: Vec2::ZERO,
@@ -215,6 +230,17 @@ impl GraphEditor {
         }
     }
 
+    /// Set dynamic content info for a specific block.
+    /// This allows blocks to have custom rendering and dynamic height.
+    pub fn set_block_content(&mut self, block_id: String, content_info: BlockContentInfo) {
+        self.block_content_map.insert(block_id, content_info);
+    }
+
+    /// Clear all block content info (typically called before re-rendering).
+    pub fn clear_block_content(&mut self) {
+        self.block_content_map.clear();
+    }
+
     /// Get the currently selected block instance.
     pub fn get_selected_block(&self) -> Option<&BlockInstance> {
         self.selected
@@ -334,12 +360,7 @@ impl GraphEditor {
     }
 
     /// Render the graph editor.
-    pub fn show(
-        &mut self,
-        ui: &mut Ui,
-        flow_id: Option<strom_types::FlowId>,
-        meter_data_store: &crate::meter::MeterDataStore,
-    ) -> Response {
+    pub fn show(&mut self, ui: &mut Ui) -> Response {
         ui.push_id("graph_editor", |ui| {
             let (response, painter) =
                 ui.allocate_painter(ui.available_size_before_wrap(), Sense::click_and_drag());
@@ -475,24 +496,17 @@ impl GraphEditor {
                     })
                     .unwrap_or(1);
 
-                // For meter blocks, add extra height for the meter visualization
+                // Base height for block node
                 let base_height = 80.0 + (pad_count.saturating_sub(1) * 30) as f32;
-                let meter_height = if block.block_definition_id == "builtin.meter" {
-                    if let Some(fid) = flow_id {
-                        if let Some(meter_data) = meter_data_store.get(&fid, &block.id) {
-                            crate::meter::calculate_compact_height(meter_data.rms.len()) + 10.0
-                        // 10px margin
-                        } else {
-                            0.0
-                        }
-                    } else {
-                        0.0
-                    }
-                } else {
-                    0.0
-                };
 
-                let node_height = (base_height + meter_height).min(400.0);
+                // Add any dynamic content height (provided by caller)
+                let content_height = self
+                    .block_content_map
+                    .get(&block.id)
+                    .map(|info| info.additional_height)
+                    .unwrap_or(0.0);
+
+                let node_height = (base_height + content_height).min(400.0);
 
                 let node_rect = Rect::from_min_size(
                     screen_pos,
@@ -502,16 +516,8 @@ impl GraphEditor {
                 let is_selected = self.selected.as_ref() == Some(&block.id);
                 let is_hovered = self.hovered_element.as_ref() == Some(&block.id);
 
-                let node_response = self.draw_block_node(
-                    ui,
-                    &painter,
-                    block,
-                    node_rect,
-                    is_selected,
-                    is_hovered,
-                    flow_id,
-                    meter_data_store,
-                );
+                let node_response =
+                    self.draw_block_node(ui, &painter, block, node_rect, is_selected, is_hovered);
 
                 // Track hover state
                 if node_response.hovered() {
@@ -1011,7 +1017,6 @@ impl GraphEditor {
     }
 
     /// Draw a block instance node
-    #[allow(clippy::too_many_arguments)]
     fn draw_block_node(
         &self,
         ui: &mut Ui,
@@ -1020,8 +1025,6 @@ impl GraphEditor {
         rect: Rect,
         is_selected: bool,
         is_hovered: bool,
-        flow_id: Option<strom_types::FlowId>,
-        meter_data_store: &crate::meter::MeterDataStore,
     ) -> Response {
         let stroke_color = if is_selected {
             Color32::from_rgb(200, 100, 255) // Purple for blocks
@@ -1088,25 +1091,25 @@ impl GraphEditor {
             Color32::from_rgb(220, 180, 255),
         );
 
-        // Draw meter visualization for meter blocks
-        if block.block_definition_id == "builtin.meter" {
-            if let Some(fid) = flow_id {
-                if let Some(meter_data) = meter_data_store.get(&fid, &block.id) {
-                    // Calculate meter area (below the title, above the pads)
-                    let meter_height = crate::meter::calculate_compact_height(meter_data.rms.len());
-                    let meter_area = Rect::from_min_size(
-                        rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
-                        vec2(180.0 * self.zoom, meter_height * self.zoom),
-                    );
+        // Render any dynamic content (e.g., meter visualization)
+        if let Some(content_info) = self.block_content_map.get(&block.id) {
+            if let Some(ref render_callback) = content_info.render_callback {
+                // Calculate content area (below the title, above the pads)
+                let content_area = Rect::from_min_size(
+                    rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
+                    vec2(
+                        180.0 * self.zoom,
+                        content_info.additional_height * self.zoom,
+                    ),
+                );
 
-                    // Create a child UI for the meter widget using new_child
-                    let mut meter_ui = ui.new_child(
-                        egui::UiBuilder::new()
-                            .max_rect(meter_area)
-                            .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                    );
-                    crate::meter::show_compact(&mut meter_ui, meter_data);
-                }
+                // Create a child UI for the custom content
+                let mut content_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(content_area)
+                        .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                );
+                render_callback(&mut content_ui, content_area);
             }
         }
 
@@ -1377,7 +1380,18 @@ impl GraphEditor {
                     .inputs
                     .len()
                     .max(def.external_pads.outputs.len());
-                let node_height = (80.0 + (pad_count.saturating_sub(1) * 30) as f32).min(400.0);
+
+                // Base height for block node
+                let base_height = 80.0 + (pad_count.saturating_sub(1) * 30) as f32;
+
+                // Add any dynamic content height (provided by caller)
+                let content_height = self
+                    .block_content_map
+                    .get(&block.id)
+                    .map(|info| info.additional_height)
+                    .unwrap_or(0.0);
+
+                let node_height = (base_height + content_height).min(400.0);
 
                 if is_input {
                     // Find the pad in inputs
