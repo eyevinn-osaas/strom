@@ -191,13 +191,14 @@ jobs:
           packages: libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools
           version: 1.1
 
-      # Windows: Install GStreamer via Chocolatey
+      # Windows: Install GStreamer and pkg-config via Chocolatey
       - name: Install GStreamer (Windows)
         if: matrix.platform == 'windows'
         run: |
-          choco install gstreamer gstreamer-devel --yes --no-progress
+          choco install pkgconfiglite gstreamer gstreamer-devel --yes --no-progress
           echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=C:\gstreamer\1.0\msvc_x86_64\" >> $env:GITHUB_ENV
           echo "C:\gstreamer\1.0\msvc_x86_64\bin" >> $env:GITHUB_PATH
+          echo "PKG_CONFIG_PATH=C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig" >> $env:GITHUB_ENV
 
       # macOS: Install GStreamer via Homebrew
       - name: Install GStreamer (macOS)
