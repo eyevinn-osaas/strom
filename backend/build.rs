@@ -109,6 +109,16 @@ fn is_dir_empty(dir: &Path) -> Result<bool, std::io::Error> {
 
 /// Build the frontend using trunk
 fn build_frontend(frontend_dir: &Path) {
+    // Check if trunk is available
+    let trunk_check = Command::new("trunk").arg("--version").output();
+
+    if trunk_check.is_err() {
+        println!("cargo:warning=trunk not found - skipping frontend build");
+        println!("cargo:warning=Install trunk with: cargo install trunk");
+        println!("cargo:warning=Backend will compile without embedded frontend");
+        return;
+    }
+
     let status = Command::new("trunk")
         .arg("build")
         .arg("--release")
