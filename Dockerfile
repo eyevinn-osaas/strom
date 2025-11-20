@@ -19,13 +19,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 WORKDIR /app
 
-# Set Cargo environment variables to prevent hangs and reduce resource usage
-ENV CARGO_INCREMENTAL=0 \
-    CARGO_BUILD_JOBS=2 \
-    CARGO_NET_RETRY=10 \
-    CARGO_HTTP_TIMEOUT=300 \
-    CARGO_HTTP_MULTIPLEXING=false
-
 # Install GStreamer development dependencies (including WebRTC plugin)
 RUN apt-get update && apt-get install -y \
     libgstreamer1.0-dev \
@@ -47,7 +40,7 @@ RUN rustup target add wasm32-unknown-unknown
 
 # Copy recipe and build dependencies (this layer is cached)
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json --verbose
+RUN cargo chef cook --release --recipe-path recipe.json
 
 # Copy entire project source
 COPY . .
@@ -55,12 +48,9 @@ COPY . .
 # Build the frontend
 RUN mkdir -p backend/dist && cd frontend && trunk build --release
 
-# Build the backend (with embedded frontend) - build packages separately to reduce memory pressure
-RUN cargo build --release --package strom-types --verbose
-RUN cargo build --release --package strom-backend --verbose
-
-# Build MCP server separately
-RUN cargo build --release --package strom-mcp-server --verbose
+# Build the backend (with embedded frontend) and MCP server
+RUN cargo build --release --package strom-backend
+RUN cargo build --release --package strom-mcp-server
 
 # Stage 4: Runtime - Minimal runtime image with trixie for newer GStreamer
 FROM debian:trixie-slim as runtime
