@@ -116,6 +116,18 @@ fn build_frontend(frontend_dir: &Path) {
         println!("cargo:warning=trunk not found - skipping frontend build");
         println!("cargo:warning=Install trunk with: cargo install trunk");
         println!("cargo:warning=Backend will compile without embedded frontend");
+
+        // Create empty dist directory with placeholder so RustEmbed doesn't fail
+        let dist_dir = PathBuf::from("dist");
+        if !dist_dir.exists() {
+            fs::create_dir(&dist_dir).expect("Failed to create dist directory");
+        }
+        fs::write(
+            dist_dir.join(".placeholder"),
+            "Frontend not built - trunk not available during compilation",
+        )
+        .expect("Failed to create placeholder file");
+
         return;
     }
 
