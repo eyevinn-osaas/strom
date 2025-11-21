@@ -288,6 +288,29 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Get latency information for a running flow.
+    pub async fn get_flow_latency(&self, id: FlowId) -> ApiResult<LatencyInfo> {
+        let url = format!("{}/flows/{}/latency", self.base_url, id);
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        let latency_info: LatencyInfo = response
+            .json()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+
+        Ok(latency_info)
+    }
+
     /// List available GStreamer elements.
     pub async fn list_elements(&self) -> ApiResult<Vec<ElementInfo>> {
         use strom_types::api::ElementListResponse;
@@ -717,4 +740,19 @@ pub struct AuthStatusResponse {
     pub authenticated: bool,
     pub auth_required: bool,
     pub methods: Vec<String>,
+}
+
+/// Pipeline latency information
+#[derive(Debug, Clone, Deserialize)]
+pub struct LatencyInfo {
+    /// Minimum latency in nanoseconds
+    pub min_latency_ns: u64,
+    /// Maximum latency in nanoseconds
+    pub max_latency_ns: u64,
+    /// Whether the pipeline is a live pipeline
+    pub live: bool,
+    /// Minimum latency formatted as human-readable string
+    pub min_latency_formatted: String,
+    /// Maximum latency formatted as human-readable string
+    pub max_latency_formatted: String,
 }

@@ -10,8 +10,8 @@ use std::process::Command;
 use strom_types::{
     api::{
         CreateFlowRequest, ElementPropertiesResponse, ErrorResponse, FlowListResponse,
-        FlowResponse, PadPropertiesResponse, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
-        UpdatePropertyRequest,
+        FlowResponse, LatencyResponse, PadPropertiesResponse, UpdateFlowPropertiesRequest,
+        UpdatePadPropertyRequest, UpdatePropertyRequest,
     },
     Flow, FlowId,
 };
@@ -763,4 +763,44 @@ pub async fn update_flow_properties(
     info!("Successfully updated properties for flow {}", id);
 
     Ok(Json(FlowResponse { flow }))
+}
+
+/// Get pipeline latency for a running flow.
+///
+/// Returns the latency information for a running pipeline. The flow must be
+/// started and in PLAYING state for latency information to be available.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/latency",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Latency retrieved successfully", body = LatencyResponse),
+        (status = 404, description = "Flow not running or latency not available", body = ErrorResponse)
+    )
+)]
+pub async fn get_flow_latency(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+) -> Result<Json<LatencyResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!("Getting latency for flow {}", id);
+
+    let latency = state.get_flow_latency(&id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new(
+                "Flow not running or latency not available",
+            )),
+        )
+    })?;
+
+    let (min_ns, max_ns, live) = latency;
+    info!(
+        "Flow {} latency: min={}ns, max={}ns, live={}",
+        id, min_ns, max_ns, live
+    );
+
+    Ok(Json(LatencyResponse::new(min_ns, max_ns, live)))
 }
