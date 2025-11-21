@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use strom_backend::{
-    auth, config::Config, create_app_with_state, create_app_with_state_and_auth, state::AppState,
-};
+#[cfg(feature = "gui")]
+use strom_backend::create_app_with_state_and_auth;
+use strom_backend::{auth, config::Config, create_app_with_state, state::AppState};
 
 /// Handle the hash-password subcommand
 fn handle_hash_password(password: Option<&str>) -> anyhow::Result<()> {
@@ -171,11 +171,20 @@ fn main() -> anyhow::Result<()> {
     start_glib_main_loop();
     info!("GLib main loop started in background thread");
 
-    if gui_enabled {
-        // GUI mode: Run HTTP server in background, GUI on main thread
-        run_with_gui(args.port, args.data_dir, args.flows_path, args.blocks_path)
-    } else {
-        // Headless mode: Run HTTP server on main thread
+    #[cfg(feature = "gui")]
+    {
+        if gui_enabled {
+            // GUI mode: Run HTTP server in background, GUI on main thread
+            run_with_gui(args.port, args.data_dir, args.flows_path, args.blocks_path)
+        } else {
+            // Headless mode: Run HTTP server on main thread
+            run_headless(args.port, args.data_dir, args.flows_path, args.blocks_path)
+        }
+    }
+
+    #[cfg(not(feature = "gui"))]
+    {
+        // Always headless when gui feature is disabled
         run_headless(args.port, args.data_dir, args.flows_path, args.blocks_path)
     }
 }
