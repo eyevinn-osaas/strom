@@ -13,6 +13,7 @@ mod meter;
 mod palette;
 mod properties;
 mod state;
+mod webrtc_stats;
 mod ws;
 
 // Re-export the app for use by the backend

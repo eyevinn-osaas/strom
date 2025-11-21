@@ -161,6 +161,77 @@ pub enum ClientMessage {
 }
 
 // ============================================================================
+// WebRTC Stats Types
+// ============================================================================
+
+/// WebRTC statistics for a flow.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct WebRtcStats {
+    /// Stats for each WebRTC connection (keyed by element name)
+    pub connections: HashMap<String, WebRtcConnectionStats>,
+}
+
+/// Stats for a single WebRTC connection (webrtcbin element).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct WebRtcConnectionStats {
+    /// Inbound RTP stream statistics
+    pub inbound_rtp: Vec<RtpStreamStats>,
+    /// Outbound RTP stream statistics
+    pub outbound_rtp: Vec<RtpStreamStats>,
+    /// ICE candidate pair statistics
+    pub ice_candidates: Option<IceCandidateStats>,
+    /// Raw stats as key-value pairs (for debugging/extensibility)
+    pub raw: HashMap<String, String>,
+}
+
+/// RTP stream statistics (inbound or outbound).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct RtpStreamStats {
+    /// Stream identifier
+    pub ssrc: Option<u32>,
+    /// Media type (audio or video)
+    pub media_type: Option<String>,
+    /// Codec being used
+    pub codec: Option<String>,
+    /// Total bytes sent/received
+    pub bytes: Option<u64>,
+    /// Total packets sent/received
+    pub packets: Option<u64>,
+    /// Packets lost (inbound only)
+    pub packets_lost: Option<i64>,
+    /// Jitter in seconds (inbound only)
+    pub jitter: Option<f64>,
+    /// Round-trip time in seconds
+    pub round_trip_time: Option<f64>,
+    /// Bitrate in bits per second (calculated)
+    pub bitrate: Option<u64>,
+}
+
+/// ICE candidate statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct IceCandidateStats {
+    /// Local candidate type (host, srflx, relay)
+    pub local_candidate_type: Option<String>,
+    /// Remote candidate type
+    pub remote_candidate_type: Option<String>,
+    /// Connection state
+    pub state: Option<String>,
+}
+
+/// Response containing WebRTC statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct WebRtcStatsResponse {
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+    pub flow_id: FlowId,
+    pub stats: WebRtcStats,
+}
+
+// ============================================================================
 // Error Response
 // ============================================================================
 

@@ -11,7 +11,7 @@ use strom_types::{
     api::{
         CreateFlowRequest, ElementPropertiesResponse, ErrorResponse, FlowListResponse,
         FlowResponse, PadPropertiesResponse, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
-        UpdatePropertyRequest,
+        UpdatePropertyRequest, WebRtcStatsResponse,
     },
     Flow, FlowId,
 };
@@ -763,4 +763,39 @@ pub async fn update_flow_properties(
     info!("Successfully updated properties for flow {}", id);
 
     Ok(Json(FlowResponse { flow }))
+}
+
+/// Get WebRTC statistics from a running flow.
+///
+/// Returns statistics from all webrtcbin elements in the pipeline, including
+/// those nested in bins like whepclientsrc and whipclientsink. Stats include
+/// RTP stream information, ICE connection state, and raw stats data.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/webrtc-stats",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "WebRTC statistics retrieved", body = WebRtcStatsResponse),
+        (status = 404, description = "Flow not running", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn get_webrtc_stats(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+) -> Result<Json<WebRtcStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let stats = state.get_webrtc_stats(&id).await.map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::with_details(
+                "Pipeline not running or no WebRTC elements found",
+                e.to_string(),
+            )),
+        )
+    })?;
+
+    Ok(Json(WebRtcStatsResponse { flow_id: id, stats }))
 }

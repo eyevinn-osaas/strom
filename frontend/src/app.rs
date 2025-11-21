@@ -10,6 +10,7 @@ use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
 use crate::properties::PropertyInspector;
 use crate::state::{AppMessage, AppStateChannels, ConnectionState};
+use crate::webrtc_stats::WebRtcStatsStore;
 use crate::ws::WebSocketClient;
 
 /// Theme preference for the application
@@ -94,6 +95,11 @@ pub struct StromApp {
     auth_token: Option<String>,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
+    /// WebRTC stats storage for all WebRTC connections
+    webrtc_stats: WebRtcStatsStore,
+    /// Last time WebRTC stats were polled
+    #[cfg(not(target_arch = "wasm32"))]
+    last_webrtc_poll: std::time::Instant,
     /// Current theme preference
     theme_preference: ThemePreference,
     /// Version information from the backend
@@ -182,6 +188,7 @@ impl StromApp {
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
             meter_data: MeterDataStore::new(),
+            webrtc_stats: WebRtcStatsStore::new(),
             theme_preference: ThemePreference::System,
             version_info: None,
             login_screen: LoginScreen::default(),
@@ -240,6 +247,8 @@ impl StromApp {
             port,
             auth_token,
             meter_data: MeterDataStore::new(),
+            webrtc_stats: WebRtcStatsStore::new(),
+            last_webrtc_poll: std::time::Instant::now(),
             theme_preference: ThemePreference::System,
             version_info: None,
             login_screen: LoginScreen::default(),
@@ -450,6 +459,45 @@ impl StromApp {
             }
             ctx.request_repaint();
         });
+    }
+
+    /// Poll WebRTC stats for running flows that have WebRTC elements.
+    /// Called periodically (every second) for native mode.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_webrtc_stats(&mut self, ctx: &Context) {
+        // Find running flows
+        let running_flows: Vec<_> = self
+            .flows
+            .iter()
+            .filter(|f| matches!(f.state, Some(PipelineState::Playing)))
+            .map(|f| f.id)
+            .collect();
+
+        for flow_id in running_flows {
+            let api = self.api.clone();
+            let tx = self.channels.sender();
+            let ctx = ctx.clone();
+
+            spawn_task(async move {
+                match api.get_webrtc_stats(flow_id).await {
+                    Ok(stats) => {
+                        if !stats.connections.is_empty() {
+                            tracing::debug!(
+                                "Fetched WebRTC stats for flow {}: {} connections",
+                                flow_id,
+                                stats.connections.len()
+                            );
+                            let _ = tx.send(AppMessage::WebRtcStatsLoaded { flow_id, stats });
+                        }
+                    }
+                    Err(e) => {
+                        // Don't log errors for flows without WebRTC elements
+                        tracing::trace!("No WebRTC stats for flow {}: {}", flow_id, e);
+                    }
+                }
+                ctx.request_repaint();
+            });
+        }
     }
 
     /// Check authentication status
@@ -1231,7 +1279,7 @@ impl StromApp {
                     if let (Some(block), Some(def)) =
                         (self.graph.get_selected_block_mut(), definition_opt)
                     {
-                        let delete_requested = PropertyInspector::show_block(ui, block, &def, flow_id, &self.meter_data);
+                        let delete_requested = PropertyInspector::show_block(ui, block, &def, flow_id, &self.meter_data, &self.webrtc_stats);
 
                         // Handle deletion request
                         if delete_requested {
@@ -1292,6 +1340,34 @@ impl StromApp {
                                     additional_height: height + 10.0,
                                     render_callback: Some(Box::new(move |ui, _rect| {
                                         crate::meter::show_compact(ui, &meter_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
+                    // Setup dynamic content for WHIP/WHEP blocks
+                    let webrtc_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| {
+                            b.block_definition_id == "builtin.whep_input"
+                                || b.block_definition_id == "builtin.whip_output"
+                        })
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    if let Some(stats) = self.webrtc_stats.get(&flow_id) {
+                        let stats_clone = stats.clone();
+                        for block_id in webrtc_blocks {
+                            let stats_for_block = stats_clone.clone();
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: 25.0,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::webrtc_stats::show_compact(ui, &stats_for_block);
                                     })),
                                 },
                             );
@@ -2035,9 +2111,19 @@ impl eframe::App for StromApp {
                         self.check_auth_status(ctx.clone());
                     }
                 }
-                _ => {
-                    tracing::debug!("Received unhandled AppMessage variant");
+                AppMessage::WebRtcStatsLoaded { flow_id, stats } => {
+                    tracing::debug!(
+                        "WebRTC stats loaded for flow {}: {} connections",
+                        flow_id,
+                        stats.connections.len()
+                    );
+                    self.webrtc_stats.update(flow_id, stats);
                 }
+                AppMessage::WebRtcStatsError(error) => {
+                    tracing::trace!("WebRTC stats error: {}", error);
+                }
+                // SDP messages are handled elsewhere
+                AppMessage::SdpLoaded { .. } | AppMessage::SdpError(_) => {}
             }
         }
 
@@ -2073,6 +2159,16 @@ impl eframe::App for StromApp {
         if self.needs_refresh {
             self.load_flows(ctx);
             self.needs_refresh = false;
+        }
+
+        // Poll WebRTC stats every second for running flows (native only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let poll_interval = std::time::Duration::from_secs(1);
+            if self.last_webrtc_poll.elapsed() >= poll_interval {
+                self.poll_webrtc_stats(ctx);
+                self.last_webrtc_poll = std::time::Instant::now();
+            }
         }
 
         self.render_toolbar(ctx);

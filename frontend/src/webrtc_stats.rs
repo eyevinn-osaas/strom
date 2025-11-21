@@ -1,0 +1,408 @@
+//! WebRTC statistics visualization widget.
+
+use egui::{Color32, Ui};
+use serde_json::Value;
+use std::collections::HashMap;
+use strom_types::api::{RtpStreamStats, WebRtcConnectionStats, WebRtcStats};
+use strom_types::FlowId;
+
+/// Key for identifying WebRTC stats data (flow).
+#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+pub struct WebRtcStatsKey {
+    pub flow_id: FlowId,
+}
+
+/// Storage for all WebRTC stats data in the application.
+#[derive(Debug, Clone, Default)]
+pub struct WebRtcStatsStore {
+    data: HashMap<WebRtcStatsKey, WebRtcStats>,
+    /// Timestamp of last update for each flow
+    last_update: HashMap<FlowId, std::time::Instant>,
+}
+
+impl WebRtcStatsStore {
+    pub fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+            last_update: HashMap::new(),
+        }
+    }
+
+    /// Update WebRTC stats for a specific flow.
+    pub fn update(&mut self, flow_id: FlowId, stats: WebRtcStats) {
+        let key = WebRtcStatsKey { flow_id };
+        self.data.insert(key, stats);
+        self.last_update.insert(flow_id, std::time::Instant::now());
+    }
+
+    /// Get WebRTC stats for a specific flow.
+    pub fn get(&self, flow_id: &FlowId) -> Option<&WebRtcStats> {
+        let key = WebRtcStatsKey { flow_id: *flow_id };
+        self.data.get(&key)
+    }
+
+    /// Check if stats are stale (older than given duration).
+    pub fn is_stale(&self, flow_id: &FlowId, max_age: std::time::Duration) -> bool {
+        self.last_update
+            .get(flow_id)
+            .map(|t| t.elapsed() > max_age)
+            .unwrap_or(true)
+    }
+
+    /// Clear all WebRTC stats data.
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.last_update.clear();
+    }
+
+    /// Remove WebRTC stats for a specific flow.
+    pub fn clear_flow(&mut self, flow_id: &FlowId) {
+        let key = WebRtcStatsKey { flow_id: *flow_id };
+        self.data.remove(&key);
+        self.last_update.remove(flow_id);
+    }
+}
+
+/// Format bytes to human-readable string.
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.2} GB", bytes as f64 / 1_000_000_000.0)
+    } else if bytes >= 1_000_000 {
+        format!("{:.2} MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.2} KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Format bitrate to human-readable string.
+fn format_bitrate(bitrate: u64) -> String {
+    if bitrate >= 1_000_000 {
+        format!("{:.2} Mbps", bitrate as f64 / 1_000_000.0)
+    } else if bitrate >= 1_000 {
+        format!("{:.2} Kbps", bitrate as f64 / 1_000.0)
+    } else {
+        format!("{} bps", bitrate)
+    }
+}
+
+/// Format a JSON value for display.
+fn format_json_value(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => {
+            // Format numbers nicely
+            if let Some(f) = n.as_f64() {
+                if f.fract() == 0.0 && f.abs() < 1e15 {
+                    format!("{:.0}", f)
+                } else {
+                    format!("{:.3}", f)
+                }
+            } else {
+                n.to_string()
+            }
+        }
+        Value::String(s) => s.clone(),
+        Value::Array(arr) => format!("[{} items]", arr.len()),
+        Value::Object(obj) => format!("{{{} fields}}", obj.len()),
+    }
+}
+
+/// Recursively render a JSON value in the UI.
+fn show_json_value(ui: &mut Ui, key: &str, value: &Value, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let key_text = format!("{}{}", indent, key);
+
+    match value {
+        Value::Object(obj) => {
+            // Render object as collapsible section
+            ui.collapsing(egui::RichText::new(&key_text).small().strong(), |ui| {
+                for (k, v) in obj {
+                    show_json_value(ui, k, v, 0);
+                }
+            });
+        }
+        Value::Array(arr) => {
+            // Render array as collapsible section
+            ui.collapsing(
+                egui::RichText::new(format!("{} [{} items]", key_text, arr.len())).small(),
+                |ui| {
+                    for (i, v) in arr.iter().enumerate() {
+                        show_json_value(ui, &format!("[{}]", i), v, 0);
+                    }
+                },
+            );
+        }
+        _ => {
+            // Render simple value inline
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{}:", key_text)).small());
+                ui.label(egui::RichText::new(format_json_value(value)).small());
+            });
+        }
+    }
+}
+
+/// Render raw stats with proper JSON parsing and display.
+fn show_raw_stats(ui: &mut Ui, raw: &HashMap<String, String>) {
+    for (key, value_str) in raw {
+        // Try to parse as JSON
+        if let Ok(json_value) = serde_json::from_str::<Value>(value_str) {
+            show_json_value(ui, key, &json_value, 0);
+        } else {
+            // Not valid JSON, display as plain string
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{}:", key)).small());
+                ui.label(egui::RichText::new(value_str).small());
+            });
+        }
+    }
+}
+
+/// Render a compact WebRTC stats widget (for graph nodes).
+pub fn show_compact(ui: &mut Ui, stats: &WebRtcStats) {
+    if stats.connections.is_empty() {
+        ui.label("No WebRTC connections");
+        return;
+    }
+
+    for (name, conn) in &stats.connections {
+        ui.label(egui::RichText::new(name).small().strong());
+
+        // Show ICE state if available
+        if let Some(ref ice) = conn.ice_candidates {
+            if let Some(ref state) = ice.state {
+                let (icon, color) = match state.as_str() {
+                    "connected" | "completed" => ("*", Color32::from_rgb(0, 200, 0)),
+                    "checking" => ("~", Color32::from_rgb(255, 165, 0)),
+                    "failed" | "disconnected" => ("!", Color32::from_rgb(255, 0, 0)),
+                    _ => ("?", Color32::GRAY),
+                };
+                ui.horizontal(|ui| {
+                    ui.colored_label(color, icon);
+                    ui.small(state.as_str());
+                });
+            }
+        }
+
+        // Show total bitrate
+        let total_inbound: u64 = conn.inbound_rtp.iter().filter_map(|s| s.bitrate).sum();
+        let total_outbound: u64 = conn.outbound_rtp.iter().filter_map(|s| s.bitrate).sum();
+
+        if total_inbound > 0 {
+            ui.small(format!("In: {}", format_bitrate(total_inbound)));
+        }
+        if total_outbound > 0 {
+            ui.small(format!("Out: {}", format_bitrate(total_outbound)));
+        }
+    }
+}
+
+/// Render RTP stream stats.
+fn show_rtp_stats(ui: &mut Ui, stats: &RtpStreamStats, label: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(label).strong());
+        if let Some(media_type) = &stats.media_type {
+            ui.label(format!("({})", media_type));
+        }
+    });
+
+    egui::Grid::new(format!("rtp_stats_{:?}_{}", stats.ssrc, label))
+        .num_columns(2)
+        .spacing([10.0, 2.0])
+        .show(ui, |ui| {
+            if let Some(ssrc) = stats.ssrc {
+                ui.label("SSRC:");
+                ui.label(format!("{}", ssrc));
+                ui.end_row();
+            }
+
+            if let Some(codec) = &stats.codec {
+                ui.label("Codec:");
+                ui.label(codec);
+                ui.end_row();
+            }
+
+            if let Some(bitrate) = stats.bitrate {
+                ui.label("Bitrate:");
+                ui.label(format_bitrate(bitrate));
+                ui.end_row();
+            }
+
+            if let Some(packets) = stats.packets {
+                ui.label("Packets:");
+                ui.label(format!("{}", packets));
+                ui.end_row();
+            }
+
+            if let Some(bytes) = stats.bytes {
+                ui.label("Bytes:");
+                ui.label(format_bytes(bytes));
+                ui.end_row();
+            }
+
+            if let Some(packets_lost) = stats.packets_lost {
+                let color = if packets_lost > 0 {
+                    Color32::from_rgb(255, 165, 0)
+                } else {
+                    Color32::GRAY
+                };
+                ui.label("Packets Lost:");
+                ui.colored_label(color, format!("{}", packets_lost));
+                ui.end_row();
+            }
+
+            if let Some(jitter) = stats.jitter {
+                let color = if jitter > 0.05 {
+                    Color32::from_rgb(255, 165, 0)
+                } else {
+                    Color32::GRAY
+                };
+                ui.label("Jitter:");
+                ui.colored_label(color, format!("{:.3} s", jitter));
+                ui.end_row();
+            }
+
+            if let Some(rtt) = stats.round_trip_time {
+                let color = if rtt > 0.1 {
+                    Color32::from_rgb(255, 165, 0)
+                } else {
+                    Color32::GRAY
+                };
+                ui.label("RTT:");
+                ui.colored_label(color, format!("{:.3} s", rtt));
+                ui.end_row();
+            }
+        });
+}
+
+/// Render ICE candidate stats.
+fn show_ice_stats(ui: &mut Ui, ice: &strom_types::api::IceCandidateStats) {
+    ui.label(egui::RichText::new("ICE Candidates").strong());
+
+    egui::Grid::new("ice_stats")
+        .num_columns(2)
+        .spacing([10.0, 2.0])
+        .show(ui, |ui| {
+            if let Some(ref state) = ice.state {
+                let (text_color, bg_color) = match state.as_str() {
+                    "connected" | "completed" => (Color32::WHITE, Color32::from_rgb(0, 150, 0)),
+                    "checking" => (Color32::BLACK, Color32::from_rgb(255, 200, 0)),
+                    "failed" | "disconnected" => (Color32::WHITE, Color32::from_rgb(200, 0, 0)),
+                    _ => (Color32::WHITE, Color32::GRAY),
+                };
+                ui.label("State:");
+                egui::Frame::NONE
+                    .fill(bg_color)
+                    .inner_margin(egui::Margin::symmetric(4, 1))
+                    .corner_radius(2.0)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(state.as_str()).color(text_color));
+                    });
+                ui.end_row();
+            }
+
+            if let Some(ref local_type) = ice.local_candidate_type {
+                ui.label("Local Type:");
+                ui.label(local_type);
+                ui.end_row();
+            }
+
+            if let Some(ref remote_type) = ice.remote_candidate_type {
+                ui.label("Remote Type:");
+                ui.label(remote_type);
+                ui.end_row();
+            }
+        });
+}
+
+/// Render connection stats.
+fn show_connection_stats(ui: &mut Ui, name: &str, conn: &WebRtcConnectionStats) {
+    ui.collapsing(egui::RichText::new(name).strong(), |ui| {
+        // ICE candidates
+        if let Some(ref ice) = conn.ice_candidates {
+            show_ice_stats(ui, ice);
+            ui.add_space(10.0);
+        }
+
+        // Inbound RTP streams
+        if !conn.inbound_rtp.is_empty() {
+            ui.label(egui::RichText::new("Inbound RTP Streams").underline());
+            for (i, rtp) in conn.inbound_rtp.iter().enumerate() {
+                show_rtp_stats(ui, rtp, &format!("Stream {}", i + 1));
+                ui.add_space(5.0);
+            }
+        }
+
+        // Outbound RTP streams
+        if !conn.outbound_rtp.is_empty() {
+            ui.label(egui::RichText::new("Outbound RTP Streams").underline());
+            for (i, rtp) in conn.outbound_rtp.iter().enumerate() {
+                show_rtp_stats(ui, rtp, &format!("Stream {}", i + 1));
+                ui.add_space(5.0);
+            }
+        }
+
+        // Raw stats (collapsed)
+        if !conn.raw.is_empty() {
+            ui.collapsing("Raw Stats", |ui| {
+                show_raw_stats(ui, &conn.raw);
+            });
+        }
+    });
+}
+
+/// Render a full WebRTC stats widget (for property inspector or dedicated panel).
+pub fn show_full(ui: &mut Ui, stats: &WebRtcStats) {
+    ui.heading("WebRTC Statistics");
+    ui.separator();
+
+    if stats.connections.is_empty() {
+        ui.label("No WebRTC connections found");
+        ui.label("Start a flow with WHIP/WHEP blocks to see statistics.");
+        return;
+    }
+
+    ui.label(format!("{} connection(s)", stats.connections.len()));
+    ui.add_space(5.0);
+
+    for (name, conn) in &stats.connections {
+        show_connection_stats(ui, name, conn);
+        ui.add_space(10.0);
+    }
+}
+
+/// Render a summary line of WebRTC stats for toolbar display.
+pub fn show_summary(ui: &mut Ui, stats: &WebRtcStats) {
+    if stats.connections.is_empty() {
+        return;
+    }
+
+    let total_connections = stats.connections.len();
+    let connected_count = stats
+        .connections
+        .values()
+        .filter(|c| {
+            c.ice_candidates
+                .as_ref()
+                .and_then(|ice| ice.state.as_ref())
+                .map(|s| s == "connected" || s == "completed")
+                .unwrap_or(false)
+        })
+        .count();
+
+    let color = if connected_count == total_connections {
+        Color32::from_rgb(0, 200, 0)
+    } else if connected_count > 0 {
+        Color32::from_rgb(255, 165, 0)
+    } else {
+        Color32::from_rgb(255, 0, 0)
+    };
+
+    ui.colored_label(
+        color,
+        format!("WebRTC: {}/{}", connected_count, total_connections),
+    );
+}

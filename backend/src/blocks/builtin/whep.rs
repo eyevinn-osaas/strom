@@ -141,6 +141,17 @@ impl BlockBuilder for WHEPInputBuilder {
         // - Video: discard via fakesink (no decode - that would be expensive)
         whepclientsrc.connect_pad_added(move |src, pad| {
             let pad_name = pad.name();
+
+            // Skip ghost pads - these are pads we created ourselves from unlinked webrtcbin pads
+            // We handle those via setup_stream_with_caps_detection_via_ghostpad
+            if pad_name.starts_with("ghost_") {
+                info!(
+                    "WHEP: Skipping ghost pad {} in whepclientsrc pad-added (handled separately)",
+                    pad_name
+                );
+                return;
+            }
+
             info!(
                 "WHEP: New pad added on whepclientsrc: {} - waiting for caps to determine media type",
                 pad_name
@@ -186,7 +197,7 @@ impl BlockBuilder for WHEPInputBuilder {
                     let whepclientsrc_weak2 = whepclientsrc_weak.clone();
 
                     // Connect to webrtcbin's pad-added signal
-                    element.connect_pad_added(move |webrtcbin, pad| {
+                    element.connect_pad_added(move |_webrtcbin, pad| {
                         let pad_name = pad.name();
 
                         // Only handle src pads
@@ -215,7 +226,7 @@ impl BlockBuilder for WHEPInputBuilder {
                             pad_name
                         );
 
-                        // Get the pipeline from whepclientsrc
+                        // Get whepclientsrc - we need it to create ghost pads
                         let whepclientsrc = match whepclientsrc_weak2.upgrade() {
                             Some(e) => e,
                             None => {
@@ -239,16 +250,44 @@ impl BlockBuilder for WHEPInputBuilder {
                                 stream_num, pad_name
                             );
 
-                            // Setup caps detection on this webrtcbin pad directly
-                            if let Err(e) = setup_stream_with_caps_detection_direct(
-                                webrtcbin,
-                                pad,
-                                &pipeline,
-                                &liveadder,
-                                &instance_id_owned3,
-                                stream_num,
-                            ) {
-                                error!("Failed to setup stream from webrtcbin: {}", e);
+                            // Create a ghost pad on whepclientsrc to expose the webrtcbin pad
+                            // This is needed because we can't link across bin hierarchies
+                            let ghost_pad_name = format!("ghost_audio_{}", stream_num);
+                            let ghost_pad = gst::GhostPad::builder_with_target(pad)
+                                .expect("Failed to set ghost pad target")
+                                .name(&ghost_pad_name)
+                                .build();
+
+                            // Get whepclientsrc as a bin and add the ghost pad
+                            if let Ok(whep_bin) = whepclientsrc.clone().downcast::<gst::Bin>() {
+                                // Add ghost pad to the bin - this exposes the internal pad to the outside
+                                whep_bin
+                                    .add_pad(&ghost_pad)
+                                    .expect("Failed to add ghost pad to bin");
+                                ghost_pad
+                                    .set_active(true)
+                                    .expect("Failed to activate ghost pad");
+
+                                info!(
+                                    "WHEP: Created ghost pad {} on whepclientsrc for stream {}",
+                                    ghost_pad_name, stream_num
+                                );
+
+                                // Now setup caps detection using the ghost pad (which is at pipeline level)
+                                if let Err(e) = setup_stream_with_caps_detection_via_ghostpad(
+                                    &ghost_pad.upcast(),
+                                    &pipeline,
+                                    &liveadder,
+                                    &instance_id_owned3,
+                                    stream_num,
+                                ) {
+                                    error!(
+                                        "Failed to setup stream from webrtcbin via ghost pad: {}",
+                                        e
+                                    );
+                                }
+                            } else {
+                                error!("WHEP: whepclientsrc is not a bin, cannot add ghost pad");
                             }
                         }
                     });
@@ -417,12 +456,11 @@ fn setup_stream_with_caps_detection(
     Ok(())
 }
 
-/// Setup a stream from webrtcbin directly (for pads that don't get ghostpadded).
-/// Similar to setup_stream_with_caps_detection but takes the pipeline directly since
-/// webrtcbin is nested inside whepclientsrc.
-fn setup_stream_with_caps_detection_direct(
-    _webrtcbin: &gst::Element,
-    src_pad: &gst::Pad,
+/// Setup a stream via a ghost pad (for pads that don't get ghostpadded by whepclientsrc).
+/// The ghost pad has been created on whepclientsrc, so we can now link to elements
+/// in the main pipeline.
+fn setup_stream_with_caps_detection_via_ghostpad(
+    ghost_pad: &gst::Pad,
     pipeline: &gst::Pipeline,
     liveadder: &gst::Element,
     instance_id: &str,
@@ -438,7 +476,7 @@ fn setup_stream_with_caps_detection_direct(
     let handled_clone = Arc::clone(&handled);
 
     // Add a probe to detect caps events
-    src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |pad, info| {
+    ghost_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |pad, info| {
         // Only handle once
         if handled_clone.load(Ordering::SeqCst) {
             return gst::PadProbeReturn::Pass;
@@ -452,7 +490,7 @@ fn setup_stream_with_caps_detection_direct(
                     if let Some(structure) = caps.structure(0) {
                         let caps_name = structure.name();
                         info!(
-                            "WHEP: Direct stream {} detected caps: {}",
+                            "WHEP: Ghost pad stream {} detected caps: {}",
                             stream_num, caps_name
                         );
 
@@ -465,7 +503,7 @@ fn setup_stream_with_caps_detection_direct(
                                 .ok()
                                 .unwrap_or("unknown");
                             info!(
-                                "WHEP: Direct stream {} RTP media={}, encoding={}",
+                                "WHEP: Ghost pad stream {} RTP media={}, encoding={}",
                                 stream_num, media_field, encoding
                             );
                             media_field == "audio"
@@ -487,7 +525,7 @@ fn setup_stream_with_caps_detection_direct(
                         let pipeline = match pipeline_weak.upgrade() {
                             Some(p) => p,
                             None => {
-                                error!("WHEP: Pipeline no longer exists (direct stream)");
+                                error!("WHEP: Pipeline no longer exists (ghost pad stream)");
                                 return gst::PadProbeReturn::Remove;
                             }
                         };
@@ -495,7 +533,7 @@ fn setup_stream_with_caps_detection_direct(
                         if is_audio {
                             // Audio stream - use decodebin to decode, then route to liveadder
                             info!(
-                                "WHEP: Direct stream {} is audio, setting up decode chain",
+                                "WHEP: Ghost pad stream {} is audio, setting up decode chain",
                                 stream_num
                             );
                             if let Some(liveadder) = liveadder_weak.upgrade() {
@@ -507,7 +545,7 @@ fn setup_stream_with_caps_detection_direct(
                                     stream_num,
                                 ) {
                                     error!(
-                                        "WHEP: Failed to setup audio decode chain (direct): {}",
+                                        "WHEP: Failed to setup audio decode chain (ghost pad): {}",
                                         e
                                     );
                                 }
@@ -515,17 +553,17 @@ fn setup_stream_with_caps_detection_direct(
                         } else if is_video {
                             // Video stream - use fakesink to discard (no decode)
                             info!(
-                                "WHEP: Direct stream {} is video, discarding via fakesink",
+                                "WHEP: Ghost pad stream {} is video, discarding via fakesink",
                                 stream_num
                             );
                             if let Err(e) =
                                 setup_video_discard(pad, &pipeline, &instance_id_owned, stream_num)
                             {
-                                error!("WHEP: Failed to setup video discard (direct): {}", e);
+                                error!("WHEP: Failed to setup video discard (ghost pad): {}", e);
                             }
                         } else {
                             warn!(
-                                "WHEP: Direct stream {} has unknown media type: {}",
+                                "WHEP: Ghost pad stream {} has unknown media type: {}",
                                 stream_num, caps_name
                             );
                         }
@@ -540,7 +578,7 @@ fn setup_stream_with_caps_detection_direct(
     });
 
     info!(
-        "WHEP: Caps probe installed on direct webrtcbin stream {}",
+        "WHEP: Caps probe installed on ghost pad for stream {}",
         stream_num
     );
     Ok(())
