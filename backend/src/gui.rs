@@ -6,23 +6,26 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 #[cfg(feature = "gui")]
-pub fn launch_gui() -> eframe::Result<()> {
-    tracing::info!("Launching native GUI...");
-    strom_frontend::run_native_gui()
+pub fn launch_gui(port: u16) -> eframe::Result<()> {
+    tracing::info!("Launching native GUI connecting to port {}...", port);
+    strom_frontend::run_native_gui(port)
 }
 
 #[cfg(feature = "gui")]
-pub fn launch_gui_with_shutdown(shutdown_flag: Arc<AtomicBool>) -> eframe::Result<()> {
-    tracing::info!("Launching native GUI with shutdown handler...");
-    strom_frontend::run_native_gui_with_shutdown(shutdown_flag)
+pub fn launch_gui_with_shutdown(port: u16, shutdown_flag: Arc<AtomicBool>) -> eframe::Result<()> {
+    tracing::info!(
+        "Launching native GUI with shutdown handler connecting to port {}...",
+        port
+    );
+    strom_frontend::run_native_gui_with_shutdown(port, shutdown_flag)
 }
 
 #[cfg(not(feature = "gui"))]
-pub fn launch_gui() -> Result<(), String> {
+pub fn launch_gui(_port: u16) -> Result<(), String> {
     Err("GUI feature not enabled. Rebuild with --features gui".to_string())
 }
 
 #[cfg(not(feature = "gui"))]
-pub fn launch_gui_with_shutdown(_shutdown_flag: Arc<AtomicBool>) -> Result<(), String> {
+pub fn launch_gui_with_shutdown(_port: u16, _shutdown_flag: Arc<AtomicBool>) -> Result<(), String> {
     Err("GUI feature not enabled. Rebuild with --features gui".to_string())
 }
