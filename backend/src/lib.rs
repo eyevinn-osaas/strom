@@ -2,9 +2,10 @@
 //!
 //! This module exposes the application builder for use in tests.
 
+use axum::http::{header, HeaderValue, Method};
 use axum::{middleware, routing::get, routing::patch, routing::post, Extension, Router};
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -145,9 +146,21 @@ pub async fn create_app_with_state(state: AppState) -> Router {
         .layer(session_layer)
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any)
+                .allow_origin("http://localhost:3000".parse::<HeaderValue>().unwrap())
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
+                .allow_headers([
+                    header::CONTENT_TYPE,
+                    header::AUTHORIZATION,
+                    header::ACCEPT,
+                    header::COOKIE,
+                ])
                 .allow_credentials(true),
         )
         .with_state(state)
