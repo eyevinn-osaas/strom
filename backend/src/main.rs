@@ -7,12 +7,53 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
 
-use strom_backend::{config::Config, create_app_with_state, state::AppState};
+use strom_backend::{
+    auth, config::Config, create_app_with_state, create_app_with_state_and_auth, state::AppState,
+};
+
+/// Handle the hash-password subcommand
+fn handle_hash_password(password: Option<&str>) -> anyhow::Result<()> {
+    use std::io::{self, Write};
+
+    let password = if let Some(pwd) = password {
+        pwd.to_string()
+    } else {
+        // Read from stdin
+        print!("Enter password to hash: ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        input.trim().to_string()
+    };
+
+    if password.is_empty() {
+        eprintln!("Error: Password cannot be empty");
+        std::process::exit(1);
+    }
+
+    match auth::hash_password(&password) {
+        Ok(hash) => {
+            println!("\nPassword hash:");
+            println!("{}", hash);
+            println!("\nAdd this to your environment:");
+            println!("export STROM_ADMIN_PASSWORD_HASH='{}'", hash);
+        }
+        Err(e) => {
+            eprintln!("Error hashing password: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
 
 /// Strom - GStreamer Flow Engine Backend
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     /// Port to listen on
     #[arg(short, long, env = "STROM_PORT", default_value = "3000")]
     port: u16,
@@ -56,10 +97,28 @@ fn is_wsl() -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Parser, Debug)]
+enum Commands {
+    /// Hash a password for use with STROM_ADMIN_PASSWORD_HASH
+    HashPassword {
+        /// Password to hash (if not provided, will read from stdin)
+        password: Option<String>,
+    },
+}
+
 fn main() -> anyhow::Result<()> {
     // Parse command line arguments
     #[cfg_attr(not(feature = "gui"), allow(unused_variables))]
     let args = Args::parse();
+
+    // Handle subcommands before starting server
+    if let Some(command) = &args.command {
+        match command {
+            Commands::HashPassword { password } => {
+                return handle_hash_password(password.as_deref());
+            }
+        }
+    }
 
     // Select display backend based on platform and CLI flags
     // WSL2 has clipboard issues with Wayland (smithay-clipboard), so default to X11 there
@@ -138,6 +197,16 @@ fn run_with_gui(
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let shutdown_flag_gui = shutdown_flag.clone();
 
+    // Create auth config and generate native GUI token if auth is enabled
+    let mut auth_config = auth::AuthConfig::from_env();
+    let native_gui_token = if auth_config.enabled {
+        let token = auth_config.generate_native_gui_token();
+        info!("Generated native GUI token for auto-authentication");
+        Some(token)
+    } else {
+        None
+    };
+
     // Initialize and start server in runtime
     let (server_started_tx, server_started_rx) = std::sync::mpsc::channel();
 
@@ -159,7 +228,7 @@ fn run_with_gui(
         // Restart flows that were running before shutdown
         restart_flows(&state).await;
 
-        let app = create_app_with_state(state.clone()).await;
+        let app = create_app_with_state_and_auth(state.clone(), auth_config).await;
 
         // Start server - bind to 0.0.0.0 to be accessible from all interfaces
         let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
@@ -205,7 +274,14 @@ fn run_with_gui(
     let _guard = runtime.enter();
 
     // Run GUI on main thread (blocks until window closes)
-    if let Err(e) = strom_backend::gui::launch_gui_with_shutdown(port, shutdown_flag_gui) {
+    // If auth is enabled, pass the native GUI token for auto-authentication
+    let gui_result = if let Some(token) = native_gui_token {
+        strom_backend::gui::launch_gui_with_auth(port, shutdown_flag_gui, token)
+    } else {
+        strom_backend::gui::launch_gui_with_shutdown(port, shutdown_flag_gui)
+    };
+
+    if let Err(e) = gui_result {
         error!("GUI error: {:?}", e);
     }
 

@@ -12,15 +12,244 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
         }
 
         canvas {
             width: 100%;
             height: 100%;
         }
+
+        /* Login form styles */
+        #login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+
+        #login-box {
+            background: #0f0f23;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 40px;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        }
+
+        #login-box h1 {
+            margin: 0 0 8px 0;
+            font-size: 24px;
+            color: #fff;
+        }
+
+        #login-box .subtitle {
+            color: #888;
+            margin-bottom: 24px;
+            font-size: 14px;
+        }
+
+        #login-box label {
+            display: block;
+            margin-bottom: 6px;
+            color: #aaa;
+            font-size: 14px;
+        }
+
+        #login-box input[type="text"],
+        #login-box input[type="password"] {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 16px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            background: #1a1a2e;
+            color: #fff;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+
+        #login-box input:focus {
+            outline: none;
+            border-color: #4a9eff;
+        }
+
+        #login-box button {
+            width: 100%;
+            padding: 12px;
+            background: #4a9eff;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        #login-box button:hover {
+            background: #3a8eef;
+        }
+
+        #login-box button:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        #login-error {
+            color: #ff6b6b;
+            margin-bottom: 16px;
+            font-size: 14px;
+            display: none;
+        }
+
+        #loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            color: #888;
+        }
+
+        .hidden {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
-    <canvas id="strom_app_canvas"></canvas>
+    <!-- Loading indicator -->
+    <div id="loading">Loading...</div>
+
+    <!-- Login form (hidden by default) -->
+    <div id="login-container" class="hidden">
+        <div id="login-box">
+            <h1>Strom</h1>
+            <p class="subtitle">GStreamer Flow Engine</p>
+
+            <form id="login-form" action="/api/login" method="POST">
+                <div id="login-error"></div>
+
+                <label for="username">Username</label>
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    autocomplete="username"
+                    required
+                    autofocus
+                />
+
+                <label for="password">Password</label>
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    autocomplete="current-password"
+                    required
+                />
+
+                <button type="submit" id="login-btn">Login</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Canvas for WASM app (hidden by default) -->
+    <canvas id="strom_app_canvas" class="hidden"></canvas>
+
+    <script>
+        const loginContainer = document.getElementById('login-container');
+        const loginForm = document.getElementById('login-form');
+        const loginError = document.getElementById('login-error');
+        const loginBtn = document.getElementById('login-btn');
+        const canvas = document.getElementById('strom_app_canvas');
+        const loading = document.getElementById('loading');
+
+        // Check authentication status
+        async function checkAuth() {
+            try {
+                const response = await fetch('/api/auth/status', {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                return data;
+            } catch (e) {
+                console.error('Failed to check auth status:', e);
+                // If we can't check auth, assume it's not required
+                return { auth_required: false, authenticated: true };
+            }
+        }
+
+        // Show login form
+        function showLogin() {
+            loading.classList.add('hidden');
+            loginContainer.classList.remove('hidden');
+            canvas.classList.add('hidden');
+        }
+
+        // Show app (WASM will take over)
+        function showApp() {
+            loading.classList.add('hidden');
+            loginContainer.classList.add('hidden');
+            canvas.classList.remove('hidden');
+            // Store auth state so WASM app knows it's authenticated
+            sessionStorage.setItem('strom_authenticated', 'true');
+        }
+
+        // Handle login form submission
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = 'Logging in...';
+            loginError.style.display = 'none';
+
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Reload the page so WASM app gets fresh authentication state
+                    // The session cookie is now set, so the reload will show the app
+                    window.location.reload();
+                } else {
+                    loginError.textContent = data.message || 'Login failed';
+                    loginError.style.display = 'block';
+                    loginBtn.disabled = false;
+                    loginBtn.textContent = 'Login';
+                }
+            } catch (e) {
+                loginError.textContent = 'Connection error. Please try again.';
+                loginError.style.display = 'block';
+                loginBtn.disabled = false;
+                loginBtn.textContent = 'Login';
+            }
+        });
+
+        // Initialize
+        async function init() {
+            const authStatus = await checkAuth();
+
+            if (authStatus.auth_required && !authStatus.authenticated) {
+                showLogin();
+            } else {
+                showApp();
+            }
+        }
+
+        init();
+    </script>
 </body>
 </html>

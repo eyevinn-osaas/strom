@@ -11,6 +11,8 @@ use crate::state::{AppMessage, ConnectionState};
 pub struct WebSocketClient {
     url: String,
     connected: bool,
+    /// Optional auth token for authentication
+    auth_token: Option<String>,
 }
 
 impl WebSocketClient {
@@ -19,6 +21,16 @@ impl WebSocketClient {
         Self {
             url: url.into(),
             connected: false,
+            auth_token: None,
+        }
+    }
+
+    /// Create a new WebSocket client with auth token.
+    pub fn new_with_auth(url: impl Into<String>, auth_token: Option<String>) -> Self {
+        Self {
+            url: url.into(),
+            connected: false,
+            auth_token,
         }
     }
 
@@ -30,7 +42,16 @@ impl WebSocketClient {
     pub fn connect(&mut self, tx: Sender<AppMessage>, ctx: egui::Context) {
         tracing::info!("Connecting to WebSocket: {}", self.url);
 
-        let url = self.url.clone();
+        // Build URL with auth token as query parameter if present
+        let url = if let Some(ref token) = self.auth_token {
+            if self.url.contains('?') {
+                format!("{}&auth_token={}", self.url, token)
+            } else {
+                format!("{}?auth_token={}", self.url, token)
+            }
+        } else {
+            self.url.clone()
+        };
 
         #[cfg(target_arch = "wasm32")]
         {

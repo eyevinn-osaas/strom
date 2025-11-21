@@ -3,8 +3,9 @@
 use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
 use strom_types::{Flow, PipelineState};
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, AuthStatusResponse};
 use crate::graph::GraphEditor;
+use crate::login::LoginScreen;
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
 use crate::properties::PropertyInspector;
@@ -88,12 +89,21 @@ pub struct StromApp {
     /// Port number for backend connection (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     port: u16,
+    /// Auth token for native GUI authentication
+    #[cfg(not(target_arch = "wasm32"))]
+    auth_token: Option<String>,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
     /// Current theme preference
     theme_preference: ThemePreference,
     /// Version information from the backend
     version_info: Option<crate::api::VersionInfo>,
+    /// Login screen
+    login_screen: LoginScreen,
+    /// Authentication status
+    auth_status: Option<AuthStatusResponse>,
+    /// Whether we're checking auth status
+    checking_auth: bool,
 }
 
 impl StromApp {
@@ -135,7 +145,7 @@ impl StromApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(cc: &eframe::CreationContext<'_>, port: u16) -> Self {
         let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, None, port)
+        Self::new_internal(cc, api_base_url, None, port, None)
     }
 
     /// Internal constructor shared by all creation methods (WASM version).
@@ -174,6 +184,9 @@ impl StromApp {
             meter_data: MeterDataStore::new(),
             theme_preference: ThemePreference::System,
             version_info: None,
+            login_screen: LoginScreen::default(),
+            auth_status: None,
+            checking_auth: false,
         };
 
         // Apply initial theme based on system preference
@@ -182,11 +195,8 @@ impl StromApp {
         // Load default elements temporarily (will be replaced by API data)
         app.palette.load_default_elements();
 
-        // Set up WebSocket connection for real-time updates
-        app.setup_websocket_connection(cc.egui_ctx.clone());
-
-        // Load version info
-        app.load_version(cc.egui_ctx.clone());
+        // Check authentication status first
+        app.check_auth_status(cc.egui_ctx.clone());
 
         app
     }
@@ -198,12 +208,13 @@ impl StromApp {
         api_base_url: String,
         shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         port: u16,
+        auth_token: Option<String>,
     ) -> Self {
         // Create channels for async communication
         let channels = AppStateChannels::new();
 
         let mut app = Self {
-            api: ApiClient::new(&api_base_url),
+            api: ApiClient::new_with_auth(&api_base_url, auth_token.clone()),
             flows: Vec::new(),
             selected_flow_idx: None,
             graph: GraphEditor::new(),
@@ -227,9 +238,13 @@ impl StromApp {
             properties_ptp_domain_buffer: String::new(),
             shutdown_flag,
             port,
+            auth_token,
             meter_data: MeterDataStore::new(),
             theme_preference: ThemePreference::System,
             version_info: None,
+            login_screen: LoginScreen::default(),
+            auth_status: None,
+            checking_auth: false,
         };
 
         // Apply initial theme based on system preference
@@ -255,7 +270,19 @@ impl StromApp {
         shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port)
+        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port, None)
+    }
+
+    /// Create a new application instance with shutdown handler and auth token (native mode only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_with_shutdown_and_auth(
+        cc: &eframe::CreationContext<'_>,
+        port: u16,
+        shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        auth_token: Option<String>,
+    ) -> Self {
+        let api_base_url = format!("http://localhost:{}/api", port);
+        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port, auth_token)
     }
 
     /// Apply the current theme preference to the UI context.
@@ -326,6 +353,12 @@ impl StromApp {
         let ws_url = format!("ws://localhost:{}/api/ws", self.port);
 
         tracing::info!("Connecting WebSocket to: {}", ws_url);
+
+        // Create WebSocket client with auth token if available
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut ws_client = WebSocketClient::new_with_auth(ws_url, self.auth_token.clone());
+
+        #[cfg(target_arch = "wasm32")]
         let mut ws_client = WebSocketClient::new(ws_url);
 
         // Connect the WebSocket with the channel sender
@@ -413,6 +446,98 @@ impl StromApp {
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load version info: {}", e);
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Check authentication status
+    fn check_auth_status(&mut self, ctx: egui::Context) {
+        if self.checking_auth {
+            return;
+        }
+
+        self.checking_auth = true;
+        tracing::info!("Checking authentication status...");
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.get_auth_status().await {
+                Ok(status) => {
+                    tracing::info!(
+                        "Auth status: required={}, authenticated={}",
+                        status.auth_required,
+                        status.authenticated
+                    );
+                    let _ = tx.send(AppMessage::AuthStatusLoaded(status));
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to check auth status: {}", e);
+                    // Assume auth is not required if check fails
+                    let _ = tx.send(AppMessage::AuthStatusLoaded(AuthStatusResponse {
+                        authenticated: true,
+                        auth_required: false,
+                        methods: vec![],
+                    }));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Handle login attempt
+    fn handle_login(&mut self, ctx: egui::Context) {
+        let username = self.login_screen.username.clone();
+        let password = self.login_screen.password.clone();
+
+        if username.is_empty() || password.is_empty() {
+            self.login_screen
+                .set_error("Username and password are required".to_string());
+            return;
+        }
+
+        self.login_screen.set_logging_in(true);
+        tracing::info!("Attempting login for user: {}", username);
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.login(username, password).await {
+                Ok(response) => {
+                    tracing::info!("Login response: success={}", response.success);
+                    let _ = tx.send(AppMessage::LoginResult(response));
+                }
+                Err(e) => {
+                    tracing::error!("Login failed: {}", e);
+                    let _ = tx.send(AppMessage::LoginResult(crate::api::LoginResponse {
+                        success: false,
+                        message: format!("Login failed: {}", e),
+                    }));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Handle logout
+    fn handle_logout(&mut self, ctx: egui::Context) {
+        tracing::info!("Logging out...");
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.logout().await {
+                Ok(_) => {
+                    tracing::info!("Logged out successfully");
+                    let _ = tx.send(AppMessage::LogoutComplete);
+                }
+                Err(e) => {
+                    tracing::error!("Logout failed: {}", e);
                 }
             }
             ctx.request_repaint();
@@ -771,6 +896,16 @@ impl StromApp {
                     ui.label("GStreamer Flow Engine");
 
                     ui.separator();
+
+                    // Logout button (only show if auth is enabled and user is authenticated)
+                    if let Some(ref status) = self.auth_status {
+                        if status.auth_required && status.authenticated {
+                            if ui.button("🚪 Logout").on_hover_text("Logout").clicked() {
+                                self.handle_logout(ctx.clone());
+                            }
+                            ui.separator();
+                        }
+                    }
 
                     // Theme switch button
                     let theme_icon = match self.theme_preference {
@@ -1846,9 +1981,73 @@ impl eframe::App for StromApp {
                     );
                     self.version_info = Some(version_info);
                 }
+                AppMessage::AuthStatusLoaded(status) => {
+                    tracing::info!(
+                        "Auth status loaded: required={}, authenticated={}",
+                        status.auth_required,
+                        status.authenticated
+                    );
+                    self.auth_status = Some(status.clone());
+                    self.checking_auth = false;
+
+                    // If authenticated or auth not required, set up connections
+                    if !status.auth_required || status.authenticated {
+                        self.setup_websocket_connection(ctx.clone());
+                        self.load_version(ctx.clone());
+                    }
+                }
+                AppMessage::LoginResult(response) => {
+                    tracing::info!("Login result: success={}", response.success);
+                    self.login_screen.set_logging_in(false);
+
+                    if response.success {
+                        // Clear login form
+                        self.login_screen.username.clear();
+                        self.login_screen.password.clear();
+                        self.login_screen.clear_error();
+
+                        // Recheck auth status to update UI
+                        self.check_auth_status(ctx.clone());
+                    } else {
+                        self.login_screen.set_error(response.message);
+                    }
+                }
+                AppMessage::LogoutComplete => {
+                    tracing::info!("Logout complete, reloading page to show login form");
+
+                    // Reload the page so the HTML login form can re-initialize
+                    // The session cookie has been cleared by the logout API call
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if let Some(window) = web_sys::window() {
+                            if let Err(e) = window.location().reload() {
+                                tracing::error!("Failed to reload page: {:?}", e);
+                            }
+                        }
+                    }
+
+                    // For native mode, just reset state and recheck auth
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.flows.clear();
+                        self.ws_client = None;
+                        self.connection_state = ConnectionState::Disconnected;
+                        self.check_auth_status(ctx.clone());
+                    }
+                }
                 _ => {
                     tracing::debug!("Received unhandled AppMessage variant");
                 }
+            }
+        }
+
+        // Check authentication - if required and not authenticated, don't render
+        // The HTML login form (in index.html) handles authentication
+        // WASM should just stay quiet until authentication is complete
+        if let Some(ref status) = self.auth_status {
+            if status.auth_required && !status.authenticated {
+                // Don't render anything - HTML login form is handling auth
+                return;
             }
         }
 

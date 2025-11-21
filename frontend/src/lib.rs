@@ -8,6 +8,7 @@
 mod api;
 mod app;
 mod graph;
+mod login;
 mod meter;
 mod palette;
 mod properties;
@@ -47,6 +48,7 @@ pub fn run_native_gui(port: u16) -> eframe::Result<()> {
 pub fn run_native_gui_with_shutdown(
     port: u16,
     shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    auth_token: Option<String>,
 ) -> eframe::Result<()> {
     tracing::info!(
         "Initializing Strom frontend (embedded mode with shutdown handler) connecting to port {}",
@@ -65,10 +67,11 @@ pub fn run_native_gui_with_shutdown(
         native_options,
         Box::new(move |cc| {
             // Theme is now set by the app based on user preference
-            Ok(Box::new(StromApp::new_with_shutdown(
+            Ok(Box::new(StromApp::new_with_shutdown_and_auth(
                 cc,
                 port,
                 shutdown_flag,
+                auth_token,
             )))
         }),
     )
