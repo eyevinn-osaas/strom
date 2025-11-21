@@ -20,6 +20,8 @@ pub struct AuthConfig {
     pub admin_password_hash: Option<String>,
     /// API key for bearer token auth (from STROM_API_KEY env var)
     pub api_key: Option<String>,
+    /// Native GUI token (auto-generated for embedded GUI authentication)
+    pub native_gui_token: Option<String>,
     /// Whether authentication is enabled
     pub enabled: bool,
 }
@@ -37,8 +39,26 @@ impl AuthConfig {
             admin_user,
             admin_password_hash,
             api_key,
+            native_gui_token: None,
             enabled,
         }
+    }
+
+    /// Generate a native GUI token for embedded GUI authentication.
+    /// Returns the token that should be passed to the GUI.
+    pub fn generate_native_gui_token(&mut self) -> String {
+        use uuid::Uuid;
+        let token = format!("native-gui-{}", Uuid::new_v4());
+        self.native_gui_token = Some(token.clone());
+        token
+    }
+
+    /// Verify a native GUI token
+    pub fn verify_native_gui_token(&self, token: &str) -> bool {
+        self.native_gui_token
+            .as_ref()
+            .map(|t| t == token)
+            .unwrap_or(false)
     }
 
     /// Check if session-based authentication is configured
@@ -101,7 +121,7 @@ pub struct AuthStatusResponse {
     pub methods: Vec<String>,
 }
 
-/// Authentication middleware that checks both session and API key
+/// Authentication middleware that checks session, API key, native GUI token, and query param
 pub async fn auth_middleware(
     Extension(config): Extension<Arc<AuthConfig>>,
     session: Session,
@@ -118,11 +138,32 @@ pub async fn auth_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Check API key authentication
+    // Check Bearer token authentication (API key or native GUI token)
     if let Some(auth_header) = request.headers().get(header::AUTHORIZATION) {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(token) = auth_str.strip_prefix("Bearer ") {
+                // Check API key
                 if config.verify_api_key(token) {
+                    return Ok(next.run(request).await);
+                }
+                // Check native GUI token
+                if config.verify_native_gui_token(token) {
+                    return Ok(next.run(request).await);
+                }
+            }
+        }
+    }
+
+    // Check auth_token query parameter (for WebSocket connections)
+    if let Some(query) = request.uri().query() {
+        for param in query.split('&') {
+            if let Some(token) = param.strip_prefix("auth_token=") {
+                // Check API key
+                if config.verify_api_key(token) {
+                    return Ok(next.run(request).await);
+                }
+                // Check native GUI token
+                if config.verify_native_gui_token(token) {
                     return Ok(next.run(request).await);
                 }
             }
@@ -238,6 +279,7 @@ mod tests {
             admin_user: None,
             admin_password_hash: None,
             api_key: None,
+            native_gui_token: None,
             enabled: false,
         };
 

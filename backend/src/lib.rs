@@ -36,6 +36,14 @@ pub async fn create_app() -> Router {
 
 /// Create the Axum application router with a given state.
 pub async fn create_app_with_state(state: AppState) -> Router {
+    create_app_with_state_and_auth(state, auth::AuthConfig::from_env()).await
+}
+
+/// Create the Axum application router with a given state and auth configuration.
+pub async fn create_app_with_state_and_auth(
+    state: AppState,
+    auth_config: auth::AuthConfig,
+) -> Router {
     // Initialize GStreamer (idempotent - OK if already initialized)
     if let Err(e) = gstreamer::init() {
         tracing::warn!(
@@ -44,8 +52,7 @@ pub async fn create_app_with_state(state: AppState) -> Router {
         );
     }
 
-    // Load authentication configuration
-    let auth_config = Arc::new(auth::AuthConfig::from_env());
+    let auth_config = Arc::new(auth_config);
 
     if auth_config.enabled {
         tracing::info!("Authentication enabled");

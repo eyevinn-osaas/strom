@@ -89,6 +89,9 @@ pub struct StromApp {
     /// Port number for backend connection (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     port: u16,
+    /// Auth token for native GUI authentication
+    #[cfg(not(target_arch = "wasm32"))]
+    auth_token: Option<String>,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
     /// Current theme preference
@@ -142,7 +145,7 @@ impl StromApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(cc: &eframe::CreationContext<'_>, port: u16) -> Self {
         let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, None, port)
+        Self::new_internal(cc, api_base_url, None, port, None)
     }
 
     /// Internal constructor shared by all creation methods (WASM version).
@@ -205,12 +208,13 @@ impl StromApp {
         api_base_url: String,
         shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         port: u16,
+        auth_token: Option<String>,
     ) -> Self {
         // Create channels for async communication
         let channels = AppStateChannels::new();
 
         let mut app = Self {
-            api: ApiClient::new(&api_base_url),
+            api: ApiClient::new_with_auth(&api_base_url, auth_token.clone()),
             flows: Vec::new(),
             selected_flow_idx: None,
             graph: GraphEditor::new(),
@@ -234,6 +238,7 @@ impl StromApp {
             properties_ptp_domain_buffer: String::new(),
             shutdown_flag,
             port,
+            auth_token,
             meter_data: MeterDataStore::new(),
             theme_preference: ThemePreference::System,
             version_info: None,
@@ -265,7 +270,19 @@ impl StromApp {
         shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port)
+        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port, None)
+    }
+
+    /// Create a new application instance with shutdown handler and auth token (native mode only).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_with_shutdown_and_auth(
+        cc: &eframe::CreationContext<'_>,
+        port: u16,
+        shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        auth_token: Option<String>,
+    ) -> Self {
+        let api_base_url = format!("http://localhost:{}/api", port);
+        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port, auth_token)
     }
 
     /// Apply the current theme preference to the UI context.
@@ -336,6 +353,12 @@ impl StromApp {
         let ws_url = format!("ws://localhost:{}/api/ws", self.port);
 
         tracing::info!("Connecting WebSocket to: {}", ws_url);
+
+        // Create WebSocket client with auth token if available
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut ws_client = WebSocketClient::new_with_auth(ws_url, self.auth_token.clone());
+
+        #[cfg(target_arch = "wasm32")]
         let mut ws_client = WebSocketClient::new(ws_url);
 
         // Connect the WebSocket with the channel sender
