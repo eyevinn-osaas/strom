@@ -33,12 +33,53 @@ struct Args {
     #[cfg(feature = "gui")]
     #[arg(long)]
     headless: bool,
+
+    /// Force X11 display backend (default on WSL2, option on native Linux)
+    #[cfg(feature = "gui")]
+    #[arg(long)]
+    x11: bool,
+
+    /// Force Wayland display backend (default on native Linux, option on WSL2)
+    #[cfg(feature = "gui")]
+    #[arg(long)]
+    wayland: bool,
+}
+
+/// Detect if running under WSL (Windows Subsystem for Linux).
+#[cfg(feature = "gui")]
+fn is_wsl() -> bool {
+    std::fs::read_to_string("/proc/version")
+        .map(|v| {
+            let lower = v.to_lowercase();
+            lower.contains("microsoft") || lower.contains("wsl")
+        })
+        .unwrap_or(false)
 }
 
 fn main() -> anyhow::Result<()> {
     // Parse command line arguments
     #[cfg_attr(not(feature = "gui"), allow(unused_variables))]
     let args = Args::parse();
+
+    // Select display backend based on platform and CLI flags
+    // WSL2 has clipboard issues with Wayland (smithay-clipboard), so default to X11 there
+    // Native Linux works better with Wayland by default
+    // This must happen before any GUI initialization
+    #[cfg(feature = "gui")]
+    if !args.headless {
+        let force_x11 = if args.x11 {
+            true // Explicit --x11 flag
+        } else if args.wayland {
+            false // Explicit --wayland flag
+        } else {
+            // Default: X11 on WSL (clipboard compatibility), Wayland on native Linux
+            is_wsl()
+        };
+
+        if force_x11 {
+            std::env::set_var("WAYLAND_DISPLAY", "");
+        }
+    }
 
     // Initialize logging - use RUST_LOG env var or default to info
     fmt()
