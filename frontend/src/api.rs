@@ -1,6 +1,6 @@
 //! API client for communicating with the Strom backend.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use strom_types::element::ElementInfo;
 use strom_types::{Flow, FlowId};
 
@@ -44,6 +44,8 @@ impl std::fmt::Display for ApiError {
 pub struct ApiClient {
     base_url: String,
     client: reqwest::Client,
+    /// Optional auth token for Bearer authentication (used by native GUI)
+    auth_token: Option<String>,
 }
 
 impl ApiClient {
@@ -52,6 +54,30 @@ impl ApiClient {
         Self {
             base_url: base_url.into(),
             client: reqwest::Client::new(),
+            auth_token: None,
+        }
+    }
+
+    /// Create a new API client with authentication token.
+    pub fn new_with_auth(base_url: impl Into<String>, auth_token: Option<String>) -> Self {
+        Self {
+            base_url: base_url.into(),
+            client: reqwest::Client::new(),
+            auth_token,
+        }
+    }
+
+    /// Get the auth token (for WebSocket connections)
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
+
+    /// Helper to add auth header to a request builder
+    fn with_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(ref token) = self.auth_token {
+            builder.header("Authorization", format!("Bearer {}", token))
+        } else {
+            builder
         }
     }
 
@@ -68,10 +94,14 @@ impl ApiClient {
         let url = format!("{}/flows", self.base_url);
         info!("Fetching flows from: {}", url);
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            tracing::error!("Network error fetching flows: {}", e);
-            ApiError::Network(e.to_string())
-        })?;
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Network error fetching flows: {}", e);
+                ApiError::Network(e.to_string())
+            })?;
 
         info!("Flows response status: {}", response.status());
 
@@ -100,8 +130,7 @@ impl ApiClient {
         info!("Fetching flow from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .with_auth(self.client.get(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -137,9 +166,7 @@ impl ApiClient {
         };
 
         let response = self
-            .client
-            .post(&url)
-            .json(&request)
+            .with_auth(self.client.post(&url).json(&request))
             .send()
             .await
             .map_err(|e| {
@@ -181,9 +208,7 @@ impl ApiClient {
         );
 
         let response = self
-            .client
-            .post(&url)
-            .json(flow)
+            .with_auth(self.client.post(&url).json(flow))
             .send()
             .await
             .map_err(|e| {
@@ -213,8 +238,7 @@ impl ApiClient {
     pub async fn delete_flow(&self, id: FlowId) -> ApiResult<()> {
         let url = format!("{}/flows/{}", self.base_url, id);
         let response = self
-            .client
-            .delete(&url)
+            .with_auth(self.client.delete(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -232,8 +256,7 @@ impl ApiClient {
     pub async fn start_flow(&self, id: FlowId) -> ApiResult<()> {
         let url = format!("{}/flows/{}/start", self.base_url, id);
         let response = self
-            .client
-            .post(&url)
+            .with_auth(self.client.post(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -251,8 +274,7 @@ impl ApiClient {
     pub async fn stop_flow(&self, id: FlowId) -> ApiResult<()> {
         let url = format!("{}/flows/{}/stop", self.base_url, id);
         let response = self
-            .client
-            .post(&url)
+            .with_auth(self.client.post(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -274,10 +296,14 @@ impl ApiClient {
         let url = format!("{}/elements", self.base_url);
         info!("Fetching elements from: {}", url);
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            tracing::error!("Network error fetching elements: {}", e);
-            ApiError::Network(e.to_string())
-        })?;
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Network error fetching elements: {}", e);
+                ApiError::Network(e.to_string())
+            })?;
 
         info!("Elements response status: {}", response.status());
 
@@ -309,8 +335,7 @@ impl ApiClient {
         info!("Fetching element info from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .with_auth(self.client.get(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -339,8 +364,7 @@ impl ApiClient {
         info!("Fetching element pad properties from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .with_auth(self.client.get(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -374,10 +398,14 @@ impl ApiClient {
         let url = format!("{}/blocks", self.base_url);
         info!("Fetching blocks from: {}", url);
 
-        let response = self.client.get(&url).send().await.map_err(|e| {
-            tracing::error!("Network error fetching blocks: {}", e);
-            ApiError::Network(e.to_string())
-        })?;
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Network error fetching blocks: {}", e);
+                ApiError::Network(e.to_string())
+            })?;
 
         info!("Blocks response status: {}", response.status());
 
@@ -406,8 +434,7 @@ impl ApiClient {
         info!("Fetching block from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .with_auth(self.client.get(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -439,9 +466,7 @@ impl ApiClient {
         info!("Creating block via API: POST {}", url);
 
         let response = self
-            .client
-            .post(&url)
-            .json(block)
+            .with_auth(self.client.post(&url).json(block))
             .send()
             .await
             .map_err(|e| {
@@ -479,9 +504,7 @@ impl ApiClient {
         info!("Updating block via API: PUT {}", url);
 
         let response = self
-            .client
-            .put(&url)
-            .json(block)
+            .with_auth(self.client.put(&url).json(block))
             .send()
             .await
             .map_err(|e| {
@@ -511,8 +534,7 @@ impl ApiClient {
     pub async fn delete_block(&self, id: &str) -> ApiResult<()> {
         let url = format!("{}/blocks/{}", self.base_url, id);
         let response = self
-            .client
-            .delete(&url)
+            .with_auth(self.client.delete(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -535,8 +557,7 @@ impl ApiClient {
         info!("Fetching block categories from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .with_auth(self.client.get(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -567,8 +588,7 @@ impl ApiClient {
         info!("Fetching version info from: {}", url);
 
         let response = self
-            .client
-            .get(&url)
+            .with_auth(self.client.get(&url))
             .send()
             .await
             .map_err(|e| ApiError::Network(e.to_string()))?;
@@ -587,4 +607,114 @@ impl ApiClient {
         info!("Successfully fetched version: v{}", version_info.version);
         Ok(version_info)
     }
+
+    /// Check authentication status and whether auth is required.
+    pub async fn get_auth_status(&self) -> ApiResult<AuthStatusResponse> {
+        use tracing::info;
+
+        let url = format!("{}/auth/status", self.base_url);
+        info!("Fetching auth status from: {}", url);
+
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        let auth_status: AuthStatusResponse = response
+            .json()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+
+        info!(
+            "Auth status: required={}, authenticated={}",
+            auth_status.auth_required, auth_status.authenticated
+        );
+        Ok(auth_status)
+    }
+
+    /// Login with username and password.
+    pub async fn login(&self, username: String, password: String) -> ApiResult<LoginResponse> {
+        use tracing::info;
+
+        let url = format!("{}/login", self.base_url);
+        info!("Attempting login for user: {}", username);
+
+        let request = LoginRequest { username, password };
+
+        let response = self
+            .with_auth(self.client.post(&url).json(&request))
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Network request failed: {}", e);
+                ApiError::Network(e.to_string())
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            tracing::error!("HTTP error {}: {}", status, text);
+            return Err(ApiError::Http(status, text));
+        }
+
+        let login_response: LoginResponse = response.json().await.map_err(|e| {
+            tracing::error!("Failed to parse login response: {}", e);
+            ApiError::Decode(e.to_string())
+        })?;
+
+        info!("Login response: success={}", login_response.success);
+        Ok(login_response)
+    }
+
+    /// Logout the current session.
+    pub async fn logout(&self) -> ApiResult<()> {
+        use tracing::info;
+
+        let url = format!("{}/logout", self.base_url);
+        info!("Logging out");
+
+        let response = self
+            .with_auth(self.client.post(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        info!("Logged out successfully");
+        Ok(())
+    }
+}
+
+/// Login request payload
+#[derive(Debug, Serialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Login response
+#[derive(Debug, Deserialize)]
+pub struct LoginResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Authentication status response
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthStatusResponse {
+    pub authenticated: bool,
+    pub auth_required: bool,
+    pub methods: Vec<String>,
 }
