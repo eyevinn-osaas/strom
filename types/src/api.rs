@@ -122,6 +122,54 @@ pub struct PadPropertiesResponse {
 }
 
 // ============================================================================
+// Latency API Types
+// ============================================================================
+
+/// Response containing pipeline latency information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct LatencyResponse {
+    /// Minimum latency in nanoseconds
+    pub min_latency_ns: u64,
+    /// Maximum latency in nanoseconds
+    pub max_latency_ns: u64,
+    /// Whether the pipeline is a live pipeline
+    pub live: bool,
+    /// Minimum latency formatted as human-readable string (e.g., "10.5 ms")
+    pub min_latency_formatted: String,
+    /// Maximum latency formatted as human-readable string
+    pub max_latency_formatted: String,
+}
+
+impl LatencyResponse {
+    /// Create a new latency response from raw values.
+    pub fn new(min_ns: u64, max_ns: u64, live: bool) -> Self {
+        Self {
+            min_latency_ns: min_ns,
+            max_latency_ns: max_ns,
+            live,
+            min_latency_formatted: Self::format_ns(min_ns),
+            max_latency_formatted: Self::format_ns(max_ns),
+        }
+    }
+
+    /// Format nanoseconds as a human-readable string.
+    fn format_ns(ns: u64) -> String {
+        if ns == 0 {
+            "0 ns".to_string()
+        } else if ns < 1_000 {
+            format!("{} ns", ns)
+        } else if ns < 1_000_000 {
+            format!("{:.2} µs", ns as f64 / 1_000.0)
+        } else if ns < 1_000_000_000 {
+            format!("{:.2} ms", ns as f64 / 1_000_000.0)
+        } else {
+            format!("{:.2} s", ns as f64 / 1_000_000_000.0)
+        }
+    }
+}
+
+// ============================================================================
 // WebSocket Message Types
 // ============================================================================
 
