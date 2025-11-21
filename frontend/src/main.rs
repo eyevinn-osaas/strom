@@ -9,6 +9,7 @@
 mod api;
 mod app;
 mod graph;
+mod login;
 mod meter;
 mod palette;
 mod properties;

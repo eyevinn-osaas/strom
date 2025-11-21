@@ -45,7 +45,7 @@ async-trait = "0.1"
 
 # Authentication
 bcrypt = "0.15"
-tower-sessions = "0.13"
+tower-sessions = "0.14"
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive", "env"] }

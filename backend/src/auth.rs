@@ -1,17 +1,13 @@
 use axum::{
-    async_trait,
-    extract::{FromRequestParts, Request, State},
-    http::{header, request::Parts, StatusCode},
+    extract::Request,
+    http::{header, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
-    Json,
+    response::Response,
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use tower_sessions::{Session, SessionManagerLayer};
-use uuid::Uuid;
+use tower_sessions::Session;
 
 const SESSION_USER_KEY: &str = "user_authenticated";
 
@@ -105,49 +101,11 @@ pub struct AuthStatusResponse {
     pub methods: Vec<String>,
 }
 
-/// Extractor for authenticated requests
-pub struct Authenticated;
-
-#[async_trait]
-impl<S> FromRequestParts<S> for Authenticated
-where
-    S: Send + Sync,
-{
-    type Rejection = StatusCode;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        // Check if user is authenticated via session
-        if let Some(session) = parts.extensions.get::<Session>() {
-            if session
-                .get::<bool>(SESSION_USER_KEY)
-                .await
-                .unwrap_or(false)
-                .unwrap_or(false)
-            {
-                return Ok(Authenticated);
-            }
-        }
-
-        // Check for API key in Authorization header
-        if let Some(auth_header) = parts.headers.get(header::AUTHORIZATION) {
-            if let Ok(auth_str) = auth_header.to_str() {
-                if auth_str.starts_with("Bearer ") {
-                    // API key authentication is validated in middleware
-                    // If we reach here with a Bearer token, it was validated
-                    return Ok(Authenticated);
-                }
-            }
-        }
-
-        Err(StatusCode::UNAUTHORIZED)
-    }
-}
-
 /// Authentication middleware that checks both session and API key
 pub async fn auth_middleware(
-    State(config): State<Arc<AuthConfig>>,
+    Extension(config): Extension<Arc<AuthConfig>>,
     session: Session,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     // If authentication is disabled, allow all requests
@@ -177,7 +135,7 @@ pub async fn auth_middleware(
 
 /// Login handler
 pub async fn login_handler(
-    State(config): State<Arc<AuthConfig>>,
+    Extension(config): Extension<Arc<AuthConfig>>,
     session: Session,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
@@ -189,7 +147,6 @@ pub async fn login_handler(
     }
 
     if config.verify_credentials(&payload.username, &payload.password) {
-        // Set session
         session
             .insert(SESSION_USER_KEY, true)
             .await
@@ -222,7 +179,7 @@ pub async fn logout_handler(session: Session) -> Result<Json<LoginResponse>, Sta
 
 /// Get authentication status
 pub async fn auth_status_handler(
-    State(config): State<Arc<AuthConfig>>,
+    Extension(config): Extension<Arc<AuthConfig>>,
     session: Session,
 ) -> Json<AuthStatusResponse> {
     let authenticated = if !config.enabled {
@@ -233,7 +190,8 @@ pub async fn auth_status_handler(
         session
             .get::<bool>(SESSION_USER_KEY)
             .await
-            .unwrap_or(false)
+            .ok()
+            .flatten()
             .unwrap_or(false)
     };
 

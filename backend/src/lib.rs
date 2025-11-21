@@ -2,7 +2,7 @@
 //!
 //! This module exposes the application builder for use in tests.
 
-use axum::{middleware, routing::get, routing::patch, routing::post, Router};
+use axum::{middleware, routing::get, routing::patch, routing::post, Extension, Router};
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
@@ -120,23 +120,20 @@ pub async fn create_app_with_state(state: AppState) -> Router {
         )
         .route("/version", get(api::version::get_version))
         .route("/ws", get(api::websocket::websocket_handler))
-        // Apply authentication middleware to all routes
-        .layer(middleware::from_fn_with_state(
-            auth_config.clone(),
-            auth::auth_middleware,
-        ));
+        // Apply authentication middleware to all protected routes
+        .layer(middleware::from_fn(auth::auth_middleware));
 
     // Build public API router (no authentication required)
     let public_api_router = Router::new()
         .route("/login", post(auth::login_handler))
         .route("/logout", post(auth::logout_handler))
-        .route("/auth/status", get(auth::auth_status_handler))
-        .with_state(auth_config.clone());
+        .route("/auth/status", get(auth::auth_status_handler));
 
-    // Combine routers
+    // Combine routers with auth config extension
     let api_router = Router::new()
         .merge(public_api_router)
-        .merge(protected_api_router);
+        .merge(protected_api_router)
+        .layer(Extension(auth_config));
 
     // Build main router with Swagger UI
     Router::new()
