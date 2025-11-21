@@ -1,8 +1,15 @@
 //! Audio meter visualization widget.
 
 use egui::{Color32, Rect, Stroke, Ui, Vec2};
+use instant::Instant;
 use std::collections::HashMap;
+use std::time::Duration;
 use strom_types::FlowId;
+
+/// Time-to-live for meter data before it's considered stale.
+/// If no updates are received within this duration, the meter data is invalidated.
+/// Set to 500ms since meter updates typically arrive every ~100ms when active.
+const METER_DATA_TTL: Duration = Duration::from_millis(500);
 
 /// Meter data for a specific element (block or element).
 #[derive(Debug, Clone)]
@@ -15,6 +22,13 @@ pub struct MeterData {
     pub decay: Vec<f64>,
 }
 
+/// Meter data with timestamp for TTL tracking.
+#[derive(Debug, Clone)]
+struct TimestampedMeterData {
+    data: MeterData,
+    updated_at: Instant,
+}
+
 /// Key for identifying meter data (flow + element).
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 pub struct MeterKey {
@@ -25,7 +39,7 @@ pub struct MeterKey {
 /// Storage for all meter data in the application.
 #[derive(Debug, Clone, Default)]
 pub struct MeterDataStore {
-    data: HashMap<MeterKey, MeterData>,
+    data: HashMap<MeterKey, TimestampedMeterData>,
 }
 
 impl MeterDataStore {
@@ -41,16 +55,29 @@ impl MeterDataStore {
             flow_id,
             element_id,
         };
-        self.data.insert(key, data);
+        self.data.insert(
+            key,
+            TimestampedMeterData {
+                data,
+                updated_at: Instant::now(),
+            },
+        );
     }
 
     /// Get meter data for a specific element.
+    /// Returns None if the data is stale (older than TTL).
     pub fn get(&self, flow_id: &FlowId, element_id: &str) -> Option<&MeterData> {
         let key = MeterKey {
             flow_id: *flow_id,
             element_id: element_id.to_string(),
         };
-        self.data.get(&key)
+        self.data.get(&key).and_then(|timestamped| {
+            if timestamped.updated_at.elapsed() < METER_DATA_TTL {
+                Some(&timestamped.data)
+            } else {
+                None
+            }
+        })
     }
 
     /// Clear all meter data.
@@ -61,6 +88,14 @@ impl MeterDataStore {
     /// Remove meter data for a specific flow.
     pub fn clear_flow(&mut self, flow_id: &FlowId) {
         self.data.retain(|k, _| k.flow_id != *flow_id);
+    }
+
+    /// Remove stale meter data entries (older than TTL).
+    /// Can be called periodically to clean up memory.
+    #[allow(dead_code)]
+    pub fn expire_stale(&mut self) {
+        self.data
+            .retain(|_, v| v.updated_at.elapsed() < METER_DATA_TTL);
     }
 }
 
