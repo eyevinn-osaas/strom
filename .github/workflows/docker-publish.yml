@@ -50,6 +50,9 @@ jobs:
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
+        env:
+          # Enable verbose output for debugging build progress
+          BUILDKIT_PROGRESS: plain
         with:
           context: .
           push: true
