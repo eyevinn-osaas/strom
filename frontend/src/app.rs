@@ -1962,14 +1962,27 @@ impl eframe::App for StromApp {
                     }
                 }
                 AppMessage::LogoutComplete => {
-                    tracing::info!("Logout complete, checking auth status");
-                    // Reset state
-                    self.flows.clear();
-                    self.ws_client = None;
-                    self.connection_state = ConnectionState::Disconnected;
+                    tracing::info!("Logout complete, reloading page to show login form");
 
-                    // Recheck auth status
-                    self.check_auth_status(ctx.clone());
+                    // Reload the page so the HTML login form can re-initialize
+                    // The session cookie has been cleared by the logout API call
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if let Some(window) = web_sys::window() {
+                            if let Err(e) = window.location().reload() {
+                                tracing::error!("Failed to reload page: {:?}", e);
+                            }
+                        }
+                    }
+
+                    // For native mode, just reset state and recheck auth
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.flows.clear();
+                        self.ws_client = None;
+                        self.connection_state = ConnectionState::Disconnected;
+                        self.check_auth_status(ctx.clone());
+                    }
                 }
                 _ => {
                     tracing::debug!("Received unhandled AppMessage variant");
@@ -1977,13 +1990,13 @@ impl eframe::App for StromApp {
             }
         }
 
-        // Check authentication - if required and not authenticated, show login screen
+        // Check authentication - if required and not authenticated, don't render
+        // The HTML login form (in index.html) handles authentication
+        // WASM should just stay quiet until authentication is complete
         if let Some(ref status) = self.auth_status {
             if status.auth_required && !status.authenticated {
-                if self.login_screen.show(ctx) {
-                    self.handle_login(ctx.clone());
-                }
-                return; // Don't render main UI
+                // Don't render anything - HTML login form is handling auth
+                return;
             }
         }
 
