@@ -14,6 +14,7 @@ mod meter;
 mod palette;
 mod properties;
 mod state;
+mod webrtc_stats;
 mod ws;
 
 // Make StromApp public so it can be used by the backend

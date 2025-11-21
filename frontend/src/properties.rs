@@ -299,6 +299,7 @@ impl PropertyInspector {
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
         meter_data_store: &crate::meter::MeterDataStore,
+        webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
     ) -> bool {
         let block_id = block.id.clone();
         let mut delete_requested = false;
@@ -419,6 +420,40 @@ impl PropertyInspector {
                             );
                             ui.add_space(4.0);
                             ui.small("Start the flow to generate SDP based on the actual stream capabilities.");
+                        }
+                    }
+
+                    // Show WebRTC statistics for WHIP/WHEP blocks
+                    if definition.id == "builtin.whep_input" || definition.id == "builtin.whip_output" {
+                        ui.separator();
+                        ui.heading("📊 WebRTC Statistics");
+                        ui.add_space(4.0);
+
+                        if let Some(flow_id) = flow_id {
+                            if let Some(stats) = webrtc_stats_store.get(&flow_id) {
+                                if !stats.connections.is_empty() {
+                                    crate::webrtc_stats::show_full(ui, stats);
+                                } else {
+                                    ui.colored_label(
+                                        Color32::from_rgb(200, 200, 100),
+                                        "⚠ No WebRTC connections established",
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.small("WebRTC statistics will appear when the connection is established.");
+                                }
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "⚠ WebRTC statistics not available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Start the flow to see WebRTC statistics.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "⚠ No flow selected",
+                            );
                         }
                     }
                 });

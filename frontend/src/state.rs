@@ -62,6 +62,14 @@ pub enum AppMessage {
     LoginResult(crate::api::LoginResponse),
     /// Logout completed
     LogoutComplete,
+
+    /// WebRTC stats loaded for a flow
+    WebRtcStatsLoaded {
+        flow_id: strom_types::FlowId,
+        stats: strom_types::api::WebRtcStats,
+    },
+    /// WebRTC stats loading failed
+    WebRtcStatsError(String),
 }
 
 /// WebSocket connection state.

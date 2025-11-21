@@ -1992,6 +1992,315 @@ impl PipelineManager {
         // Get current negotiated caps (not template caps)
         Ok(pad.current_caps())
     }
+
+    /// Get WebRTC statistics from all webrtcbin elements in the pipeline.
+    /// Searches for webrtcbin elements (including those nested in bins like whepclientsrc/whipclientsink)
+    /// and collects their stats using the "get-stats" action signal.
+    pub fn get_webrtc_stats(&self) -> strom_types::api::WebRtcStats {
+        use strom_types::api::{WebRtcConnectionStats, WebRtcStats};
+
+        let mut stats = WebRtcStats::default();
+
+        // Find all webrtcbin elements in the pipeline
+        let webrtcbins = self.find_webrtcbin_elements();
+
+        for (name, webrtcbin) in webrtcbins {
+            debug!("Getting stats from webrtcbin: {}", name);
+
+            let mut conn_stats = WebRtcConnectionStats::default();
+
+            // Call the get-stats action signal
+            // The signal takes:
+            // - GstPad* (optional, NULL for all stats)
+            // - GstPromise* (to receive the stats)
+            // Returns void, stats come via the promise
+            let pad_none: Option<&gst::Pad> = None;
+            let promise = gst::Promise::new();
+            webrtcbin.emit_by_name::<()>("get-stats", &[&pad_none, &promise]);
+
+            // Wait for the promise to be fulfilled (with timeout)
+            let promise_result = promise.wait();
+            match promise_result {
+                gst::PromiseResult::Replied => {
+                    if let Some(reply) = promise.get_reply() {
+                        // The reply is a GstStructure containing the stats
+                        // Convert StructureRef to owned Structure for parsing
+                        conn_stats = self.parse_webrtc_stats_structure(&reply.to_owned());
+                    } else {
+                        debug!("No stats in promise reply from webrtcbin: {}", name);
+                    }
+                }
+                gst::PromiseResult::Interrupted => {
+                    debug!("get-stats promise was interrupted for webrtcbin: {}", name);
+                }
+                gst::PromiseResult::Expired => {
+                    debug!("get-stats promise expired for webrtcbin: {}", name);
+                }
+                gst::PromiseResult::Pending => {
+                    debug!("get-stats promise still pending for webrtcbin: {}", name);
+                }
+                _ => {
+                    debug!("Unknown promise result for webrtcbin: {}", name);
+                }
+            }
+
+            // Also try to get basic element properties as fallback/additional info
+            if let Some(ice_state) = self.get_ice_connection_state(&webrtcbin) {
+                if conn_stats.ice_candidates.is_none() {
+                    conn_stats.ice_candidates = Some(strom_types::api::IceCandidateStats {
+                        state: Some(ice_state),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            stats.connections.insert(name, conn_stats);
+        }
+
+        stats
+    }
+
+    /// Find all webrtcbin elements in the pipeline, including those nested in bins.
+    fn find_webrtcbin_elements(&self) -> Vec<(String, gst::Element)> {
+        let mut results = Vec::new();
+
+        debug!(
+            "find_webrtcbin_elements: Searching {} elements in elements map",
+            self.elements.len()
+        );
+
+        // Check direct elements
+        for (name, element) in &self.elements {
+            let factory_name = element
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            debug!(
+                "find_webrtcbin_elements: Checking element '{}' (factory: {})",
+                name, factory_name
+            );
+
+            if factory_name == "webrtcbin" {
+                debug!("find_webrtcbin_elements: Found direct webrtcbin: {}", name);
+                results.push((name.clone(), element.clone()));
+            }
+
+            // Check if element is a bin (like whepclientsrc, whipclientsink)
+            // and search inside it recursively
+            if element.is::<gst::Bin>() {
+                let bin = element.clone().downcast::<gst::Bin>().unwrap();
+                debug!(
+                    "find_webrtcbin_elements: Element '{}' is a Bin, searching children",
+                    name
+                );
+
+                // Use iterate_recurse to find all nested elements
+                let iter = bin.iterate_recurse();
+                for child_elem in iter.into_iter().flatten() {
+                    let child_factory = child_elem
+                        .factory()
+                        .map(|f| f.name().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    if child_factory == "webrtcbin" {
+                        let child_name = format!("{}:{}", name, child_elem.name());
+                        debug!(
+                            "find_webrtcbin_elements: Found nested webrtcbin: {}",
+                            child_name
+                        );
+                        results.push((child_name, child_elem));
+                    }
+                }
+            }
+        }
+
+        // Also search the pipeline directly in case elements were added dynamically
+        debug!("find_webrtcbin_elements: Also searching pipeline directly");
+        let pipeline_iter = self.pipeline.iterate_recurse();
+        for elem in pipeline_iter.into_iter().flatten() {
+            let factory_name = elem
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            if factory_name == "webrtcbin" {
+                let elem_name = elem.name().to_string();
+                // Check if we already have this element
+                let already_found = results.iter().any(|(_, e)| e.name() == elem.name());
+                if !already_found {
+                    debug!(
+                        "find_webrtcbin_elements: Found webrtcbin in pipeline: {}",
+                        elem_name
+                    );
+                    results.push((elem_name, elem));
+                }
+            }
+        }
+
+        debug!(
+            "find_webrtcbin_elements: Found {} webrtcbin element(s)",
+            results.len()
+        );
+        results
+    }
+
+    /// Parse a GstStructure containing WebRTC stats into our typed format.
+    fn parse_webrtc_stats_structure(
+        &self,
+        structure: &gst::Structure,
+    ) -> strom_types::api::WebRtcConnectionStats {
+        use strom_types::api::{IceCandidateStats, WebRtcConnectionStats};
+
+        let mut conn_stats = WebRtcConnectionStats::default();
+
+        // WebRTC stats structure contains nested structures for each stat type
+        // The structure format varies by GStreamer version, so we try multiple approaches
+
+        // Iterate over all fields in the structure
+        for (field_name, value) in structure.iter() {
+            let field_str = field_name.to_string();
+
+            // Try to get as nested structure (common format)
+            if let Ok(nested) = value.get::<gst::Structure>() {
+                // Check the type field to categorize
+                if let Ok(stat_type) = nested.get::<&str>("type") {
+                    match stat_type {
+                        "inbound-rtp" => {
+                            conn_stats
+                                .inbound_rtp
+                                .push(self.parse_rtp_stats(&nested, true));
+                        }
+                        "outbound-rtp" => {
+                            conn_stats
+                                .outbound_rtp
+                                .push(self.parse_rtp_stats(&nested, false));
+                        }
+                        "candidate-pair" | "local-candidate" | "remote-candidate" => {
+                            // Parse ICE candidate info
+                            if conn_stats.ice_candidates.is_none() {
+                                conn_stats.ice_candidates = Some(IceCandidateStats::default());
+                            }
+                            if let Some(ref mut ice) = conn_stats.ice_candidates {
+                                if let Ok(candidate_type) = nested.get::<&str>("candidate-type") {
+                                    if stat_type == "local-candidate" {
+                                        ice.local_candidate_type = Some(candidate_type.to_string());
+                                    } else if stat_type == "remote-candidate" {
+                                        ice.remote_candidate_type =
+                                            Some(candidate_type.to_string());
+                                    }
+                                }
+                                if let Ok(state) = nested.get::<&str>("state") {
+                                    ice.state = Some(state.to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Store raw value for debugging
+                conn_stats.raw.insert(field_str, nested.to_string());
+            } else {
+                // Store as raw string
+                conn_stats.raw.insert(field_str, format!("{:?}", value));
+            }
+        }
+
+        conn_stats
+    }
+
+    /// Parse RTP stream stats from a GstStructure.
+    fn parse_rtp_stats(
+        &self,
+        structure: &gst::Structure,
+        inbound: bool,
+    ) -> strom_types::api::RtpStreamStats {
+        use strom_types::api::RtpStreamStats;
+
+        let mut stats = RtpStreamStats::default();
+
+        // SSRC
+        if let Ok(ssrc) = structure.get::<u32>("ssrc") {
+            stats.ssrc = Some(ssrc);
+        }
+
+        // Media type
+        if let Ok(media_type) = structure.get::<&str>("media-type") {
+            stats.media_type = Some(media_type.to_string());
+        } else if let Ok(kind) = structure.get::<&str>("kind") {
+            stats.media_type = Some(kind.to_string());
+        }
+
+        // Codec
+        if let Ok(codec) = structure.get::<&str>("codec-id") {
+            stats.codec = Some(codec.to_string());
+        }
+
+        // Bytes
+        if inbound {
+            if let Ok(bytes) = structure.get::<u64>("bytes-received") {
+                stats.bytes = Some(bytes);
+            }
+        } else if let Ok(bytes) = structure.get::<u64>("bytes-sent") {
+            stats.bytes = Some(bytes);
+        }
+
+        // Packets
+        if inbound {
+            if let Ok(packets) = structure.get::<u64>("packets-received") {
+                stats.packets = Some(packets);
+            }
+            // Packets lost (signed for inbound)
+            if let Ok(lost) = structure.get::<i64>("packets-lost") {
+                stats.packets_lost = Some(lost);
+            } else if let Ok(lost) = structure.get::<i32>("packets-lost") {
+                stats.packets_lost = Some(lost as i64);
+            }
+            // Jitter
+            if let Ok(jitter) = structure.get::<f64>("jitter") {
+                stats.jitter = Some(jitter);
+            }
+        } else if let Ok(packets) = structure.get::<u64>("packets-sent") {
+            stats.packets = Some(packets);
+        }
+
+        // RTT (round-trip time)
+        if let Ok(rtt) = structure.get::<f64>("round-trip-time") {
+            stats.round_trip_time = Some(rtt);
+        }
+
+        // Bitrate (if available)
+        if let Ok(bitrate) = structure.get::<u64>("bitrate") {
+            stats.bitrate = Some(bitrate);
+        }
+
+        stats
+    }
+
+    /// Get ICE connection state from webrtcbin element.
+    fn get_ice_connection_state(&self, webrtcbin: &gst::Element) -> Option<String> {
+        // Try to get ice-connection-state property
+        if webrtcbin.has_property("ice-connection-state") {
+            let state_value = webrtcbin.property_value("ice-connection-state");
+            // The state is an enum, try to get it as a string
+            if let Ok(state_int) = state_value.get::<i32>() {
+                // Map enum values to strings
+                let state_str = match state_int {
+                    0 => "new",
+                    1 => "checking",
+                    2 => "connected",
+                    3 => "completed",
+                    4 => "failed",
+                    5 => "disconnected",
+                    6 => "closed",
+                    _ => "unknown",
+                };
+                return Some(state_str.to_string());
+            }
+        }
+        None
+    }
 }
 
 impl Drop for PipelineManager {

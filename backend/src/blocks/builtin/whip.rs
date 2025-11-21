@@ -91,6 +91,9 @@ impl BlockBuilder for WHIPOutputBuilder {
         // whipclientsink exposes signaller properties via signaller::property-name
         whipclientsink.set_property("stun-server", &stun_server);
 
+        // Disable video codecs by setting video-caps to empty
+        whipclientsink.set_property("video-caps", gst::Caps::new_empty());
+
         // Access the signaller child and set its properties
         let signaller = whipclientsink.property::<gst::glib::Object>("signaller");
 
