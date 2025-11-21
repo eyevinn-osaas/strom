@@ -89,7 +89,8 @@ fn main() -> eframe::Result<()> {
         native_options,
         Box::new(|cc| {
             // Theme is now set by the app based on user preference
-            Ok(Box::new(StromApp::new(cc)))
+            // Default to port 3000 for standalone native mode
+            Ok(Box::new(StromApp::new(cc, 3000)))
         }),
     )
 }

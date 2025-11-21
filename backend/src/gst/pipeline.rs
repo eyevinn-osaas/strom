@@ -2003,9 +2003,13 @@ impl PipelineManager {
 
         // Find all webrtcbin elements in the pipeline
         let webrtcbins = self.find_webrtcbin_elements();
+        info!(
+            "get_webrtc_stats: Found {} webrtcbin element(s)",
+            webrtcbins.len()
+        );
 
         for (name, webrtcbin) in webrtcbins {
-            debug!("Getting stats from webrtcbin: {}", name);
+            info!("get_webrtc_stats: Getting stats from webrtcbin: {}", name);
 
             let mut conn_stats = WebRtcConnectionStats::default();
 
@@ -2016,47 +2020,90 @@ impl PipelineManager {
             // Returns void, stats come via the promise
             let pad_none: Option<&gst::Pad> = None;
             let promise = gst::Promise::new();
+            info!("get_webrtc_stats: Emitting get-stats signal...");
             webrtcbin.emit_by_name::<()>("get-stats", &[&pad_none, &promise]);
 
             // Wait for the promise to be fulfilled (with timeout)
+            info!("get_webrtc_stats: Waiting for promise...");
             let promise_result = promise.wait();
+            info!("get_webrtc_stats: Promise result: {:?}", promise_result);
+
             match promise_result {
                 gst::PromiseResult::Replied => {
                     if let Some(reply) = promise.get_reply() {
                         // The reply is a GstStructure containing the stats
+                        info!(
+                            "get_webrtc_stats: Got reply structure with {} fields: {}",
+                            reply.n_fields(),
+                            reply.name()
+                        );
+                        // Log all field names
+                        for i in 0..reply.n_fields() {
+                            if let Some(field_name) = reply.nth_field_name(i) {
+                                info!("get_webrtc_stats: Field [{}]: {}", i, field_name);
+                            }
+                        }
                         // Convert StructureRef to owned Structure for parsing
                         conn_stats = self.parse_webrtc_stats_structure(&reply.to_owned());
+                        info!(
+                            "get_webrtc_stats: Parsed stats - ICE: {:?}, inbound_rtp: {}, outbound_rtp: {}",
+                            conn_stats.ice_candidates.is_some(),
+                            conn_stats.inbound_rtp.len(),
+                            conn_stats.outbound_rtp.len()
+                        );
                     } else {
-                        debug!("No stats in promise reply from webrtcbin: {}", name);
+                        info!(
+                            "get_webrtc_stats: No stats in promise reply from webrtcbin: {}",
+                            name
+                        );
                     }
                 }
                 gst::PromiseResult::Interrupted => {
-                    debug!("get-stats promise was interrupted for webrtcbin: {}", name);
+                    info!(
+                        "get_webrtc_stats: Promise was interrupted for webrtcbin: {}",
+                        name
+                    );
                 }
                 gst::PromiseResult::Expired => {
-                    debug!("get-stats promise expired for webrtcbin: {}", name);
+                    info!("get_webrtc_stats: Promise expired for webrtcbin: {}", name);
                 }
                 gst::PromiseResult::Pending => {
-                    debug!("get-stats promise still pending for webrtcbin: {}", name);
+                    info!(
+                        "get_webrtc_stats: Promise still pending for webrtcbin: {}",
+                        name
+                    );
                 }
                 _ => {
-                    debug!("Unknown promise result for webrtcbin: {}", name);
+                    info!(
+                        "get_webrtc_stats: Unknown promise result for webrtcbin: {}",
+                        name
+                    );
                 }
             }
 
             // Also try to get basic element properties as fallback/additional info
             if let Some(ice_state) = self.get_ice_connection_state(&webrtcbin) {
+                info!(
+                    "get_webrtc_stats: Got ICE state from property: {}",
+                    ice_state
+                );
                 if conn_stats.ice_candidates.is_none() {
                     conn_stats.ice_candidates = Some(strom_types::api::IceCandidateStats {
                         state: Some(ice_state),
                         ..Default::default()
                     });
                 }
+            } else {
+                info!("get_webrtc_stats: Could not get ICE state from property");
             }
 
             stats.connections.insert(name, conn_stats);
         }
 
+        info!(
+            "get_webrtc_stats: Returning stats with {} connection(s)",
+            stats.connections.len()
+        );
         stats
     }
 
@@ -2154,59 +2201,85 @@ impl PipelineManager {
 
         let mut conn_stats = WebRtcConnectionStats::default();
 
+        debug!(
+            "parse_webrtc_stats_structure: Parsing structure '{}' with {} fields",
+            structure.name(),
+            structure.n_fields()
+        );
+
         // WebRTC stats structure contains nested structures for each stat type
-        // The structure format varies by GStreamer version, so we try multiple approaches
+        // The field NAME indicates the type (e.g., "rtp-inbound-stream-stats_1234")
 
         // Iterate over all fields in the structure
         for (field_name, value) in structure.iter() {
             let field_str = field_name.to_string();
 
-            // Try to get as nested structure (common format)
+            // Try to get as nested structure
             if let Ok(nested) = value.get::<gst::Structure>() {
-                // Check the type field to categorize
-                if let Ok(stat_type) = nested.get::<&str>("type") {
-                    match stat_type {
-                        "inbound-rtp" => {
-                            conn_stats
-                                .inbound_rtp
-                                .push(self.parse_rtp_stats(&nested, true));
-                        }
-                        "outbound-rtp" => {
-                            conn_stats
-                                .outbound_rtp
-                                .push(self.parse_rtp_stats(&nested, false));
-                        }
-                        "candidate-pair" | "local-candidate" | "remote-candidate" => {
-                            // Parse ICE candidate info
-                            if conn_stats.ice_candidates.is_none() {
-                                conn_stats.ice_candidates = Some(IceCandidateStats::default());
-                            }
-                            if let Some(ref mut ice) = conn_stats.ice_candidates {
-                                if let Ok(candidate_type) = nested.get::<&str>("candidate-type") {
-                                    if stat_type == "local-candidate" {
-                                        ice.local_candidate_type = Some(candidate_type.to_string());
-                                    } else if stat_type == "remote-candidate" {
-                                        ice.remote_candidate_type =
-                                            Some(candidate_type.to_string());
-                                    }
-                                }
-                                if let Ok(state) = nested.get::<&str>("state") {
-                                    ice.state = Some(state.to_string());
-                                }
-                            }
-                        }
-                        _ => {}
+                // Determine type from field name prefix
+                if field_str.starts_with("rtp-inbound-stream-stats") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found inbound RTP stats: {}",
+                        field_str
+                    );
+                    conn_stats
+                        .inbound_rtp
+                        .push(self.parse_rtp_stats(&nested, true));
+                } else if field_str.starts_with("rtp-outbound-stream-stats") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found outbound RTP stats: {}",
+                        field_str
+                    );
+                    conn_stats
+                        .outbound_rtp
+                        .push(self.parse_rtp_stats(&nested, false));
+                } else if field_str.starts_with("ice-candidate-local") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found local ICE candidate: {}",
+                        field_str
+                    );
+                    if conn_stats.ice_candidates.is_none() {
+                        conn_stats.ice_candidates = Some(IceCandidateStats::default());
                     }
+                    if let Some(ref mut ice) = conn_stats.ice_candidates {
+                        if let Ok(candidate_type) = nested.get::<&str>("candidate-type") {
+                            ice.local_candidate_type = Some(candidate_type.to_string());
+                        }
+                    }
+                } else if field_str.starts_with("ice-candidate-remote") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found remote ICE candidate: {}",
+                        field_str
+                    );
+                    if conn_stats.ice_candidates.is_none() {
+                        conn_stats.ice_candidates = Some(IceCandidateStats::default());
+                    }
+                    if let Some(ref mut ice) = conn_stats.ice_candidates {
+                        if let Ok(candidate_type) = nested.get::<&str>("candidate-type") {
+                            ice.remote_candidate_type = Some(candidate_type.to_string());
+                        }
+                    }
+                } else if field_str.starts_with("ice-candidate-pair") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found ICE candidate pair: {}",
+                        field_str
+                    );
+                    // Candidate pair stats - this is where we can get connection state
+                    if conn_stats.ice_candidates.is_none() {
+                        conn_stats.ice_candidates = Some(IceCandidateStats::default());
+                    }
+                    // Note: GStreamer webrtcbin doesn't expose ICE state in stats
+                    // We get it from the ice-connection-state property instead
                 }
-
-                // Store raw value for debugging
-                conn_stats.raw.insert(field_str, nested.to_string());
-            } else {
-                // Store as raw string
-                conn_stats.raw.insert(field_str, format!("{:?}", value));
             }
         }
 
+        debug!(
+            "parse_webrtc_stats_structure: Done - ICE: {:?}, inbound: {}, outbound: {}",
+            conn_stats.ice_candidates.is_some(),
+            conn_stats.inbound_rtp.len(),
+            conn_stats.outbound_rtp.len()
+        );
         conn_stats
     }
 
