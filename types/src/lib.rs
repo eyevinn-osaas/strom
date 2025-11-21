@@ -3,6 +3,9 @@
 //! This crate contains domain models and API types shared between
 //! the backend and frontend components.
 
+/// Default port for the Strom backend server.
+pub const DEFAULT_PORT: u16 = 3000;
+
 pub mod api;
 pub mod block;
 pub mod element;
