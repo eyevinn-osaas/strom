@@ -55,8 +55,11 @@ pub struct BlockDefinition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ExposedProperty {
-    /// Name of the exposed property
+    /// Name of the exposed property (used as key)
     pub name: String,
+
+    /// Human-readable label for display in UI (e.g., "Auth Token" instead of "auth_token")
+    pub label: String,
 
     /// Description for users
     pub description: String,
