@@ -696,7 +696,7 @@ pub struct LoginResponse {
 }
 
 /// Authentication status response
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AuthStatusResponse {
     pub authenticated: bool,
     pub auth_required: bool,

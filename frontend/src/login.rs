@@ -3,6 +3,7 @@
 use egui::{Align2, Context, Vec2, Window};
 
 /// Login screen state
+#[derive(Default)]
 pub struct LoginScreen {
     /// Username input
     pub username: String,
@@ -12,17 +13,6 @@ pub struct LoginScreen {
     pub error: Option<String>,
     /// Whether login is in progress
     pub logging_in: bool,
-}
-
-impl Default for LoginScreen {
-    fn default() -> Self {
-        Self {
-            username: String::new(),
-            password: String::new(),
-            error: None,
-            logging_in: false,
-        }
-    }
 }
 
 impl LoginScreen {
