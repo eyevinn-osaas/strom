@@ -164,7 +164,7 @@ fn run_with_gui(
     let _guard = runtime.enter();
 
     // Run GUI on main thread (blocks until window closes)
-    if let Err(e) = strom_backend::gui::launch_gui_with_shutdown(shutdown_flag_gui) {
+    if let Err(e) = strom_backend::gui::launch_gui_with_shutdown(port, shutdown_flag_gui) {
         error!("GUI error: {:?}", e);
     }
 
