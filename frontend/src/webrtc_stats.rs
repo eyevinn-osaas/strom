@@ -1,7 +1,6 @@
 //! WebRTC statistics visualization widget.
 
 use egui::{Color32, Ui};
-use serde_json::Value;
 use std::collections::HashMap;
 use strom_types::api::{RtpStreamStats, WebRtcConnectionStats, WebRtcStats};
 use strom_types::FlowId;
@@ -84,80 +83,6 @@ fn format_bitrate(bitrate: u64) -> String {
         format!("{:.2} Kbps", bitrate as f64 / 1_000.0)
     } else {
         format!("{} bps", bitrate)
-    }
-}
-
-/// Format a JSON value for display.
-fn format_json_value(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => {
-            // Format numbers nicely
-            if let Some(f) = n.as_f64() {
-                if f.fract() == 0.0 && f.abs() < 1e15 {
-                    format!("{:.0}", f)
-                } else {
-                    format!("{:.3}", f)
-                }
-            } else {
-                n.to_string()
-            }
-        }
-        Value::String(s) => s.clone(),
-        Value::Array(arr) => format!("[{} items]", arr.len()),
-        Value::Object(obj) => format!("{{{} fields}}", obj.len()),
-    }
-}
-
-/// Recursively render a JSON value in the UI.
-fn show_json_value(ui: &mut Ui, key: &str, value: &Value, depth: usize) {
-    let indent = "  ".repeat(depth);
-    let key_text = format!("{}{}", indent, key);
-
-    match value {
-        Value::Object(obj) => {
-            // Render object as collapsible section
-            ui.collapsing(egui::RichText::new(&key_text).small().strong(), |ui| {
-                for (k, v) in obj {
-                    show_json_value(ui, k, v, 0);
-                }
-            });
-        }
-        Value::Array(arr) => {
-            // Render array as collapsible section
-            ui.collapsing(
-                egui::RichText::new(format!("{} [{} items]", key_text, arr.len())).small(),
-                |ui| {
-                    for (i, v) in arr.iter().enumerate() {
-                        show_json_value(ui, &format!("[{}]", i), v, 0);
-                    }
-                },
-            );
-        }
-        _ => {
-            // Render simple value inline
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("{}:", key_text)).small());
-                ui.label(egui::RichText::new(format_json_value(value)).small());
-            });
-        }
-    }
-}
-
-/// Render raw stats with proper JSON parsing and display.
-fn show_raw_stats(ui: &mut Ui, raw: &HashMap<String, String>) {
-    for (key, value_str) in raw {
-        // Try to parse as JSON
-        if let Ok(json_value) = serde_json::from_str::<Value>(value_str) {
-            show_json_value(ui, key, &json_value, 0);
-        } else {
-            // Not valid JSON, display as plain string
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("{}:", key)).small());
-                ui.label(egui::RichText::new(value_str).small());
-            });
-        }
     }
 }
 
@@ -345,11 +270,15 @@ fn show_connection_stats(ui: &mut Ui, name: &str, conn: &WebRtcConnectionStats) 
             }
         }
 
-        // Raw stats (collapsed)
-        if !conn.raw.is_empty() {
-            ui.collapsing("Raw Stats", |ui| {
-                show_raw_stats(ui, &conn.raw);
-            });
+        // Show message if no parsed stats available
+        if conn.ice_candidates.is_none()
+            && conn.inbound_rtp.is_empty()
+            && conn.outbound_rtp.is_empty()
+        {
+            ui.colored_label(
+                Color32::from_rgb(150, 150, 150),
+                "Waiting for WebRTC stats...",
+            );
         }
     });
 }
