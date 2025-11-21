@@ -55,7 +55,7 @@ struct Args {
     command: Option<Commands>,
 
     /// Port to listen on
-    #[arg(short, long, env = "STROM_PORT", default_value = "3000")]
+    #[arg(short, long, env = "STROM_PORT", default_value_t = strom_types::DEFAULT_PORT)]
     port: u16,
 
     /// Data directory (contains flows.json and blocks.json)

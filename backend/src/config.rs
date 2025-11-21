@@ -48,7 +48,7 @@ impl Config {
         let port = env::var("STROM_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
-            .unwrap_or(3000);
+            .unwrap_or(strom_types::DEFAULT_PORT);
 
         let data_dir = env::var("STROM_DATA_DIR").ok().map(PathBuf::from);
         let flows_path = env::var("STROM_FLOWS_PATH").ok().map(PathBuf::from);
@@ -64,7 +64,7 @@ impl Default for Config {
         Self::from_env().unwrap_or_else(|_| {
             // Ultimate fallback (should rarely happen)
             Self {
-                port: 3000,
+                port: strom_types::DEFAULT_PORT,
                 flows_path: PathBuf::from("flows.json"),
                 blocks_path: PathBuf::from("blocks.json"),
             }
