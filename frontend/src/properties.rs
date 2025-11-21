@@ -316,6 +316,15 @@ impl PropertyInspector {
                 ui.monospace(&block.id);
             });
 
+            // Block description
+            if !definition.description.is_empty() {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Description:");
+                    ui.label(&definition.description);
+                });
+            }
+
             ui.separator();
 
             // Delete button
@@ -426,6 +435,7 @@ impl PropertyInspector {
         _flow_id: Option<strom_types::FlowId>,
     ) {
         let prop_name = &exposed_prop.name;
+        let display_label = &exposed_prop.label;
         let default_value = exposed_prop.default_value.as_ref();
         let is_multiline = matches!(
             exposed_prop.property_type,
@@ -442,15 +452,15 @@ impl PropertyInspector {
 
         // For multiline, use vertical layout
         if is_multiline {
-            // Property name with indicator
+            // Property label with indicator
             ui.horizontal(|ui| {
                 if has_custom_value {
                     ui.colored_label(
                         Color32::from_rgb(150, 100, 255), // Purple for blocks
-                        format!("● {}:", prop_name),
+                        format!("● {}:", display_label),
                     );
                 } else {
-                    ui.label(format!("{}:", prop_name));
+                    ui.label(format!("{}:", display_label));
                 }
 
                 // Reset button if modified
@@ -498,14 +508,14 @@ impl PropertyInspector {
         } else {
             // For non-multiline, use horizontal layout
             ui.horizontal(|ui| {
-                // Show property name with indicator if modified
+                // Show property label with indicator if modified
                 if has_custom_value {
                     ui.colored_label(
                         Color32::from_rgb(150, 100, 255), // Purple for blocks
-                        format!("● {}:", prop_name),
+                        format!("● {}:", display_label),
                     );
                 } else {
-                    ui.label(format!("{}:", prop_name));
+                    ui.label(format!("{}:", display_label));
                 }
 
                 if let Some(mut value) = current_value {
