@@ -179,6 +179,19 @@ fn show_rtp_stats(ui: &mut Ui, stats: &RtpStreamStats, label: &str) {
                 ui.end_row();
             }
 
+            if let Some(fraction_lost) = stats.fraction_lost {
+                let color = if fraction_lost > 0.01 {
+                    Color32::from_rgb(255, 165, 0)
+                } else if fraction_lost > 0.05 {
+                    Color32::from_rgb(255, 0, 0)
+                } else {
+                    Color32::GRAY
+                };
+                ui.label("Loss Rate:");
+                ui.colored_label(color, format!("{:.1}%", fraction_lost * 100.0));
+                ui.end_row();
+            }
+
             if let Some(jitter) = stats.jitter {
                 let color = if jitter > 0.05 {
                     Color32::from_rgb(255, 165, 0)
@@ -191,13 +204,16 @@ fn show_rtp_stats(ui: &mut Ui, stats: &RtpStreamStats, label: &str) {
             }
 
             if let Some(rtt) = stats.round_trip_time {
-                let color = if rtt > 0.1 {
+                let color = if rtt > 0.2 {
+                    Color32::from_rgb(255, 0, 0)
+                } else if rtt > 0.1 {
                     Color32::from_rgb(255, 165, 0)
                 } else {
                     Color32::GRAY
                 };
                 ui.label("RTT:");
-                ui.colored_label(color, format!("{:.3} s", rtt));
+                // Show in ms for better readability
+                ui.colored_label(color, format!("{:.0} ms", rtt * 1000.0));
                 ui.end_row();
             }
         });
@@ -235,12 +251,106 @@ fn show_ice_stats(ui: &mut Ui, ice: &strom_types::api::IceCandidateStats) {
                 ui.end_row();
             }
 
+            // Show local endpoint
+            if ice.local_address.is_some() || ice.local_port.is_some() {
+                ui.label("Local:");
+                let addr = ice.local_address.as_deref().unwrap_or("?");
+                let port = ice
+                    .local_port
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let proto = ice.local_protocol.as_deref().unwrap_or("");
+                ui.label(format!("{}:{} {}", addr, port, proto));
+                ui.end_row();
+            }
+
             if let Some(ref remote_type) = ice.remote_candidate_type {
                 ui.label("Remote Type:");
                 ui.label(remote_type);
                 ui.end_row();
             }
+
+            // Show remote endpoint
+            if ice.remote_address.is_some() || ice.remote_port.is_some() {
+                ui.label("Remote:");
+                let addr = ice.remote_address.as_deref().unwrap_or("?");
+                let port = ice
+                    .remote_port
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let proto = ice.remote_protocol.as_deref().unwrap_or("");
+                ui.label(format!("{}:{} {}", addr, port, proto));
+                ui.end_row();
+            }
         });
+}
+
+/// Render transport stats.
+fn show_transport_stats(ui: &mut Ui, transport: &strom_types::api::TransportStats) {
+    ui.label(egui::RichText::new("Transport").strong());
+
+    egui::Grid::new("transport_stats")
+        .num_columns(2)
+        .spacing([10.0, 2.0])
+        .show(ui, |ui| {
+            if let Some(bytes) = transport.bytes_sent {
+                ui.label("Bytes Sent:");
+                ui.label(format_bytes(bytes));
+                ui.end_row();
+            }
+            if let Some(bytes) = transport.bytes_received {
+                ui.label("Bytes Received:");
+                ui.label(format_bytes(bytes));
+                ui.end_row();
+            }
+            if let Some(packets) = transport.packets_sent {
+                ui.label("Packets Sent:");
+                ui.label(format!("{}", packets));
+                ui.end_row();
+            }
+            if let Some(packets) = transport.packets_received {
+                ui.label("Packets Received:");
+                ui.label(format!("{}", packets));
+                ui.end_row();
+            }
+        });
+}
+
+/// Render codec stats.
+fn show_codec_stats(ui: &mut Ui, codecs: &[strom_types::api::CodecStats]) {
+    if codecs.is_empty() {
+        return;
+    }
+
+    ui.label(egui::RichText::new("Codecs").strong());
+
+    for (i, codec) in codecs.iter().enumerate() {
+        egui::Grid::new(format!("codec_stats_{}", i))
+            .num_columns(2)
+            .spacing([10.0, 2.0])
+            .show(ui, |ui| {
+                if let Some(ref mime) = codec.mime_type {
+                    ui.label("Type:");
+                    ui.label(mime);
+                    ui.end_row();
+                }
+                if let Some(clock_rate) = codec.clock_rate {
+                    ui.label("Clock Rate:");
+                    ui.label(format!("{} Hz", clock_rate));
+                    ui.end_row();
+                }
+                if let Some(pt) = codec.payload_type {
+                    ui.label("Payload Type:");
+                    ui.label(format!("{}", pt));
+                    ui.end_row();
+                }
+                if let Some(channels) = codec.channels {
+                    ui.label("Channels:");
+                    ui.label(format!("{}", channels));
+                    ui.end_row();
+                }
+            });
+    }
 }
 
 /// Render connection stats.
@@ -249,6 +359,18 @@ fn show_connection_stats(ui: &mut Ui, name: &str, conn: &WebRtcConnectionStats) 
         // ICE candidates
         if let Some(ref ice) = conn.ice_candidates {
             show_ice_stats(ui, ice);
+            ui.add_space(10.0);
+        }
+
+        // Transport stats
+        if let Some(ref transport) = conn.transport {
+            show_transport_stats(ui, transport);
+            ui.add_space(10.0);
+        }
+
+        // Codec stats
+        if !conn.codecs.is_empty() {
+            show_codec_stats(ui, &conn.codecs);
             ui.add_space(10.0);
         }
 
@@ -274,6 +396,8 @@ fn show_connection_stats(ui: &mut Ui, name: &str, conn: &WebRtcConnectionStats) 
         if conn.ice_candidates.is_none()
             && conn.inbound_rtp.is_empty()
             && conn.outbound_rtp.is_empty()
+            && conn.transport.is_none()
+            && conn.codecs.is_empty()
         {
             ui.colored_label(
                 Color32::from_rgb(150, 150, 150),
