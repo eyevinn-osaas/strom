@@ -15,3 +15,5 @@
 
 
 don't suggest blacklisting elements when troubleshooting segfaults. 
+
+when investigating pipeline errors and similar gstreamer issues, use GST_DEBUG to see more logs. 

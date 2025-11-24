@@ -337,7 +337,7 @@ impl BlockBuilder for AES67InputBuilder {
                         format!("{}:sink", audioresample_id),
                     ),
                 ],
-                bus_watch_setup: None,
+                bus_message_handler: None,
             })
         } else {
             // No decode - output RTP stream directly
@@ -350,7 +350,7 @@ impl BlockBuilder for AES67InputBuilder {
                     format!("{}:src", filesrc_id),
                     format!("{}:sink", sdpdemux_id),
                 )],
-                bus_watch_setup: None,
+                bus_message_handler: None,
             })
         }
     }
@@ -525,7 +525,7 @@ impl BlockBuilder for AES67OutputBuilder {
                 (udpsink_id, udpsink),
             ],
             internal_links,
-            bus_watch_setup: None,
+            bus_message_handler: None,
         })
     }
 }

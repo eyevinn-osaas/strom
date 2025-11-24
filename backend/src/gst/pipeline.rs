@@ -68,7 +68,6 @@ pub struct PipelineManager {
     flow_name: String,
     pipeline: gst::Pipeline,
     elements: HashMap<String, gst::Element>,
-    bus_watch: Option<gst::bus::BusWatchGuard>,
     events: EventBroadcaster,
     /// Pending links that couldn't be made because source pads don't exist yet (dynamic pads)
     pending_links: Vec<Link>,
@@ -76,10 +75,10 @@ pub struct PipelineManager {
     properties: strom_types::flow::FlowProperties,
     /// Pad properties to apply after pads are created (element_id -> (pad_name -> properties))
     pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
-    /// Block-specific bus watches (allows blocks to register their own bus message handlers)
-    block_bus_watches: Vec<gst::bus::BusWatchGuard>,
-    /// Bus watch setup functions from blocks (called when pipeline starts)
-    block_bus_watch_setups: Vec<crate::blocks::BusWatchSetupFn>,
+    /// Block-specific bus message handler IDs (allows blocks to register their own bus message handlers)
+    block_message_handlers: Vec<gst::glib::SignalHandlerId>,
+    /// Bus message handler connection functions from blocks (called when pipeline starts)
+    block_message_connect_fns: Vec<crate::blocks::BusMessageConnectFn>,
     /// Thread priority state tracker (tracks whether priority was successfully set)
     thread_priority_state: Option<ThreadPriorityState>,
 }
@@ -109,13 +108,12 @@ impl PipelineManager {
             flow_name: flow.name.clone(),
             pipeline,
             elements: HashMap::new(),
-            bus_watch: None,
             events,
             pending_links: Vec::new(),
             properties: flow.properties.clone(),
             pad_properties: HashMap::new(),
-            block_bus_watches: Vec::new(),
-            block_bus_watch_setups: Vec::new(),
+            block_message_handlers: Vec::new(),
+            block_message_connect_fns: Vec::new(),
             thread_priority_state: None,
         };
 
@@ -171,12 +169,12 @@ impl PipelineManager {
         }
         info!("All block elements added");
 
-        // Store bus watch setup functions from blocks
+        // Store bus message handler connection functions from blocks
         info!(
-            "Storing {} bus watch setup function(s) from blocks",
-            expanded.bus_watch_setups.len()
+            "Storing {} bus message handler(s) from blocks",
+            expanded.bus_message_handlers.len()
         );
-        manager.block_bus_watch_setups = expanded.bus_watch_setups;
+        manager.block_message_connect_fns = expanded.bus_message_handlers;
 
         // Analyze links and auto-insert tee elements where needed
         info!("Analyzing links and inserting tee elements if needed...");
@@ -243,14 +241,17 @@ impl PipelineManager {
         Ok(manager)
     }
 
-    /// Set up the bus watch to monitor pipeline messages.
+    /// Set up bus message handlers to monitor pipeline messages.
     fn setup_bus_watch(&mut self) {
-        // Clean up any existing watches first
-        if self.bus_watch.is_some() {
-            debug!("Removing existing bus watch for flow: {}", self.flow_name);
-            self.bus_watch = None;
+        // Clean up any existing message handlers first
+        if !self.block_message_handlers.is_empty() {
+            debug!(
+                "Clearing {} existing message handlers for flow: {}",
+                self.block_message_handlers.len(),
+                self.flow_name
+            );
+            self.block_message_handlers.clear();
         }
-        self.block_bus_watches.clear();
 
         let Some(bus) = self.pipeline.bus() else {
             error!(
@@ -260,152 +261,150 @@ impl PipelineManager {
             return;
         };
 
-        // Set up block-specific bus watches
+        // Set up block-specific message handlers using connect_message (allows multiple handlers)
         info!(
-            "Setting up {} block bus watch(es) for flow: {}",
-            self.block_bus_watch_setups.len(),
+            "Connecting {} block message handler(s) for flow: {}",
+            self.block_message_connect_fns.len(),
             self.flow_name
         );
         let flow_id = self.flow_id;
         let events_for_blocks = self.events.clone();
 
-        // Take the setup functions (they're FnOnce, so we consume them)
-        let setups = std::mem::take(&mut self.block_bus_watch_setups);
-        for setup_fn in setups {
-            match setup_fn(&bus, flow_id, events_for_blocks.clone()) {
-                Ok(guard) => {
-                    debug!("Successfully set up block bus watch");
-                    self.block_bus_watches.push(guard);
-                }
-                Err(e) => {
-                    error!("Failed to set up block bus watch: {}", e);
-                }
-            }
+        // Take the connect functions (they're FnOnce, so we consume them)
+        let connect_fns = std::mem::take(&mut self.block_message_connect_fns);
+        for connect_fn in connect_fns {
+            // Each block's connect_fn calls bus.add_signal_watch() and bus.connect_message()
+            // add_signal_watch is ref-counted so multiple calls are safe
+            let handler_id = connect_fn(&bus, flow_id, events_for_blocks.clone());
+            debug!("Successfully connected block message handler");
+            self.block_message_handlers.push(handler_id);
         }
 
-        // Set up main pipeline bus watch for standard messages
+        // Enable signal watch on the bus (ref-counted, safe to call multiple times)
+        // This allows using connect_message for multiple handlers
+        bus.add_signal_watch();
+
+        // Set up main pipeline message handler using connect_message
         let flow_name = self.flow_name.clone();
         let events = self.events.clone();
 
-        let watch = match bus
-            .add_watch(move |_bus, msg| {
-                use gst::MessageView;
+        let main_handler_id = bus.connect_message(None, move |_bus, msg| {
+            use gst::MessageView;
 
-                // Log ALL bus messages to debug
-                debug!("Bus message type: {:?}", msg.type_());
+            // Log ALL bus messages to debug
+            debug!("Bus message type: {:?}", msg.type_());
 
-                match msg.view() {
-                    MessageView::Error(err) => {
-                        let error_msg = err.error().to_string();
-                        let debug_info = err.debug();
-                        let source = err.src().map(|s| s.name().to_string());
+            match msg.view() {
+                MessageView::Error(err) => {
+                    let error_msg = err.error().to_string();
+                    let debug_info = err.debug();
+                    let source = err.src().map(|s| s.name().to_string());
 
-                        error!(
-                            "Pipeline error in flow '{}': {} (debug: {:?}, source: {:?})",
-                            flow_name, error_msg, debug_info, source
-                        );
+                    error!(
+                        "Pipeline error in flow '{}': {} (debug: {:?}, source: {:?})",
+                        flow_name, error_msg, debug_info, source
+                    );
 
-                        events.broadcast(StromEvent::PipelineError {
-                            flow_id,
-                            error: error_msg,
-                            source,
-                        });
-                    }
-                    MessageView::Warning(warn) => {
-                        let warning_msg = warn.error().to_string();
-                        let debug_info = warn.debug();
-                        let source = warn.src().map(|s| s.name().to_string());
+                    events.broadcast(StromEvent::PipelineError {
+                        flow_id,
+                        error: error_msg,
+                        source,
+                    });
+                }
+                MessageView::Warning(warn) => {
+                    let warning_msg = warn.error().to_string();
+                    let debug_info = warn.debug();
+                    let source = warn.src().map(|s| s.name().to_string());
 
-                        warn!(
-                            "Pipeline warning in flow '{}': {} (debug: {:?}, source: {:?})",
-                            flow_name, warning_msg, debug_info, source
-                        );
+                    warn!(
+                        "Pipeline warning in flow '{}': {} (debug: {:?}, source: {:?})",
+                        flow_name, warning_msg, debug_info, source
+                    );
 
-                        events.broadcast(StromEvent::PipelineWarning {
-                            flow_id,
-                            warning: warning_msg,
-                            source,
-                        });
-                    }
-                    MessageView::Info(inf) => {
-                        let info_msg = inf.error().to_string();
-                        let source = inf.src().map(|s| s.name().to_string());
+                    events.broadcast(StromEvent::PipelineWarning {
+                        flow_id,
+                        warning: warning_msg,
+                        source,
+                    });
+                }
+                MessageView::Info(inf) => {
+                    let info_msg = inf.error().to_string();
+                    let source = inf.src().map(|s| s.name().to_string());
 
-                        info!(
-                            "Pipeline info in flow '{}': {} (source: {:?})",
-                            flow_name, info_msg, source
-                        );
+                    info!(
+                        "Pipeline info in flow '{}': {} (source: {:?})",
+                        flow_name, info_msg, source
+                    );
 
-                        events.broadcast(StromEvent::PipelineInfo {
-                            flow_id,
-                            message: info_msg,
-                            source,
-                        });
-                    }
-                    MessageView::Eos(_) => {
-                        info!("Pipeline '{}' reached end of stream", flow_name);
-                        events.broadcast(StromEvent::PipelineEos { flow_id });
-                    }
-                    MessageView::StateChanged(state_changed) => {
-                        // Log state changes from all elements to debug pausing issues
-                        if let Some(source) = msg.src() {
-                            let source_name = source.name();
-                            let old_state = state_changed.old();
-                            let new_state = state_changed.current();
-                            let pending_state = state_changed.pending();
+                    events.broadcast(StromEvent::PipelineInfo {
+                        flow_id,
+                        message: info_msg,
+                        source,
+                    });
+                }
+                MessageView::Eos(_) => {
+                    info!("Pipeline '{}' reached end of stream", flow_name);
+                    events.broadcast(StromEvent::PipelineEos { flow_id });
+                }
+                MessageView::StateChanged(state_changed) => {
+                    // Log state changes from all elements to debug pausing issues
+                    if let Some(source) = msg.src() {
+                        let source_name = source.name();
+                        let old_state = state_changed.old();
+                        let new_state = state_changed.current();
+                        let pending_state = state_changed.pending();
 
-                            if source.type_() == gst::Pipeline::static_type() {
-                                info!(
-                                    "Pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
-                                    flow_name,
-                                    old_state,
-                                    new_state,
-                                    pending_state
-                                );
-                            } else {
-                                // Log all element state changes for debugging
-                                info!(
-                                    "Element '{}' in pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
-                                    source_name,
-                                    flow_name,
-                                    old_state,
-                                    new_state,
-                                    pending_state
-                                );
-                            }
+                        if source.type_() == gst::Pipeline::static_type() {
+                            info!(
+                                "Pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
+                                flow_name,
+                                old_state,
+                                new_state,
+                                pending_state
+                            );
+                        } else {
+                            // Log all element state changes for debugging
+                            info!(
+                                "Element '{}' in pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
+                                source_name,
+                                flow_name,
+                                old_state,
+                                new_state,
+                                pending_state
+                            );
                         }
                     }
-                    _ => {
-                        // Ignore other message types
-                    }
                 }
-
-                glib::ControlFlow::Continue
-            }) {
-            Ok(watch) => watch,
-            Err(e) => {
-                error!("Failed to add bus watch for flow '{}': {}", self.flow_name, e);
-                return;
+                _ => {
+                    // Ignore other message types
+                }
             }
-        };
+        });
 
-        self.bus_watch = Some(watch);
-        debug!("Bus watch set up for flow: {}", self.flow_name);
+        // Store main handler ID (we'll disconnect it when stopping)
+        self.block_message_handlers.push(main_handler_id);
+        debug!("Bus message handlers set up for flow: {}", self.flow_name);
     }
 
-    /// Remove the bus watches (both main and block-specific).
+    /// Remove the bus message handlers.
     fn remove_bus_watch(&mut self) {
-        if self.bus_watch.is_some() {
-            debug!("Removing main bus watch for flow: {}", self.flow_name);
-            self.bus_watch = None;
-        }
-        if !self.block_bus_watches.is_empty() {
+        if !self.block_message_handlers.is_empty() {
             debug!(
-                "Removing {} block bus watch(es) for flow: {}",
-                self.block_bus_watches.len(),
+                "Disconnecting {} message handler(s) for flow: {}",
+                self.block_message_handlers.len(),
                 self.flow_name
             );
-            self.block_bus_watches.clear();
+            // Disconnect signal handlers from the bus
+            if let Some(bus) = self.pipeline.bus() {
+                for handler_id in self.block_message_handlers.drain(..) {
+                    bus.disconnect(handler_id);
+                }
+                // Remove the signal watch (ref-counted, so this balances the add_signal_watch calls)
+                bus.remove_signal_watch();
+            } else {
+                // Bus already gone, just clear the handlers
+                self.block_message_handlers.clear();
+            }
         }
     }
 
