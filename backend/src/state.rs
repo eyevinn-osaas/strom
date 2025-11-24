@@ -634,6 +634,23 @@ impl AppState {
         let pipelines = self.inner.pipelines.read().await;
         pipelines.get(flow_id).and_then(|p| p.query_latency())
     }
+
+    /// Get statistics for a running flow.
+    /// Returns statistics from all blocks that support statistics collection.
+    pub async fn get_flow_stats(&self, flow_id: &FlowId) -> Option<strom_types::stats::FlowStats> {
+        use crate::stats::StatsCollector;
+
+        let pipelines = self.inner.pipelines.read().await;
+        let flows = self.inner.flows.read().await;
+
+        let pipeline = pipelines.get(flow_id)?;
+        let flow = flows.get(flow_id)?;
+
+        Some(StatsCollector::collect_flow_stats(
+            pipeline.pipeline(),
+            flow,
+        ))
+    }
 }
 
 impl Default for AppState {

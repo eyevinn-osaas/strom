@@ -75,6 +75,14 @@ pub enum AppMessage {
     },
     /// Latency loading failed (flow not running)
     LatencyNotAvailable(String),
+
+    /// Statistics loaded for a flow
+    StatsLoaded {
+        flow_id: String,
+        stats: crate::api::FlowStatsInfo,
+    },
+    /// Statistics loading failed (flow not running)
+    StatsNotAvailable(String),
 }
 
 /// WebSocket connection state.

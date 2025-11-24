@@ -299,6 +299,7 @@ impl PropertyInspector {
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
         meter_data_store: &crate::meter::MeterDataStore,
+        stats: Option<&crate::api::FlowStatsInfo>,
     ) -> bool {
         let block_id = block.id.clone();
         let mut delete_requested = false;
@@ -410,6 +411,44 @@ impl PropertyInspector {
                             );
                             ui.add_space(4.0);
                             ui.small("Start the flow to generate SDP based on the actual stream capabilities.");
+                        }
+                    }
+
+                    // Show RTP statistics for AES67 input blocks
+                    if definition.id == "builtin.aes67_input" {
+                        ui.separator();
+                        ui.heading("📊 RTP Statistics");
+                        ui.add_space(4.0);
+
+                        // Find stats for this block
+                        let block_stats = stats.and_then(|s| {
+                            s.blocks.iter().find(|bs| bs.block_instance_id == block.id)
+                        });
+
+                        if let Some(block_stats) = block_stats {
+                            // Use a grid for clean alignment
+                            egui::Grid::new("rtp_stats_grid")
+                                .num_columns(2)
+                                .spacing([20.0, 4.0])
+                                .show(ui, |ui| {
+                                    for stat in &block_stats.stats {
+                                        // Stat name with description tooltip
+                                        let label = ui.label(&stat.metadata.display_name);
+                                        label.on_hover_text(&stat.metadata.description);
+
+                                        // Stat value formatted appropriately
+                                        let formatted = stat.value.format();
+                                        ui.monospace(&formatted);
+                                        ui.end_row();
+                                    }
+                                });
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "⚠ Statistics are only available when the flow is running",
+                            );
+                            ui.add_space(4.0);
+                            ui.small("Start the flow to see RTP jitterbuffer statistics.");
                         }
                     }
                 });
