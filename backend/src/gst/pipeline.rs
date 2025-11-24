@@ -363,8 +363,8 @@ impl PipelineManager {
                                 pending_state
                             );
                         } else {
-                            // Log all element state changes for debugging
-                            info!(
+                            // Log element state changes at debug level to avoid log spam
+                            debug!(
                                 "Element '{}' in pipeline '{}' state changed: {:?} -> {:?} (pending: {:?})",
                                 source_name,
                                 flow_name,
