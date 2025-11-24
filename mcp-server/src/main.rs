@@ -187,7 +187,7 @@ impl McpServer {
                             },
                             "clock_type": {
                                 "type": "string",
-                                "enum": ["monotonic", "realtime", "pipeline_default", "ptp", "ntp"],
+                                "enum": ["monotonic", "realtime", "ptp", "ntp"],
                                 "description": "Optional GStreamer clock type. Default is 'monotonic'."
                             }
                         },
@@ -352,7 +352,6 @@ impl McpServer {
                     properties.clock_type = match clock_type_str {
                         "monotonic" => GStreamerClockType::Monotonic,
                         "realtime" => GStreamerClockType::Realtime,
-                        "pipeline_default" => GStreamerClockType::PipelineDefault,
                         "ptp" => GStreamerClockType::Ptp,
                         "ntp" => GStreamerClockType::Ntp,
                         _ => return Err(anyhow::anyhow!("Invalid clock_type: {}", clock_type_str)),
