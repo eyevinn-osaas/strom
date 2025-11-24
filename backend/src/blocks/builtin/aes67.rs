@@ -2,11 +2,12 @@
 
 use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
+use gstreamer::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
 use std::str::FromStr;
 use strom_types::{block::*, PropertyValue, *};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 /// AES67 Input block builder.
 pub struct AES67InputBuilder;
@@ -46,8 +47,77 @@ impl BlockBuilder for AES67InputBuilder {
 
         let sdpdemux = gst::ElementFactory::make("sdpdemux")
             .name(&sdpdemux_id)
+            .property("rtcp-mode", 0i32) // Disable RTCP for AES67 input
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("sdpdemux: {}", e)))?;
+
+        // Set up pad-added handler to log new SSRC/streams
+        // This is important for debugging SSRC changes in AES67 streams
+        let sdpdemux_id_for_handler = sdpdemux_id.clone();
+        sdpdemux.connect_pad_added(move |element, new_pad| {
+            let pad_name = new_pad.name();
+            let caps = new_pad.current_caps();
+
+            info!(
+                "AES67 Input [{}]: New pad added: {}",
+                sdpdemux_id_for_handler, pad_name
+            );
+
+            // Log caps information if available
+            if let Some(caps) = caps {
+                info!(
+                    "AES67 Input [{}]: Pad {} caps: {}",
+                    sdpdemux_id_for_handler, pad_name, caps
+                );
+            }
+
+            // Try to extract SSRC from the pad name or caps
+            // sdpdemux typically names pads like "src_0", "src_1" etc.
+            // The SSRC might be available in the caps or via RTP info
+            if let Some(caps) = new_pad.current_caps() {
+                if let Some(structure) = caps.structure(0) {
+                    // Check for payload type, clock-rate, encoding-name
+                    if let Ok(pt) = structure.get::<i32>("payload") {
+                        info!(
+                            "AES67 Input [{}]: Pad {} payload type: {}",
+                            sdpdemux_id_for_handler, pad_name, pt
+                        );
+                    }
+                    if let Ok(clock_rate) = structure.get::<i32>("clock-rate") {
+                        info!(
+                            "AES67 Input [{}]: Pad {} clock-rate: {}",
+                            sdpdemux_id_for_handler, pad_name, clock_rate
+                        );
+                    }
+                    if let Ok(encoding_name) = structure.get::<&str>("encoding-name") {
+                        info!(
+                            "AES67 Input [{}]: Pad {} encoding: {}",
+                            sdpdemux_id_for_handler, pad_name, encoding_name
+                        );
+                    }
+                }
+            }
+
+            // Log element state for debugging
+            let (_, current_state, _) = element.state(gst::ClockTime::ZERO);
+            info!(
+                "AES67 Input [{}]: Element state when pad added: {:?}",
+                sdpdemux_id_for_handler, current_state
+            );
+
+            // Check if pad is already linked
+            if new_pad.is_linked() {
+                info!(
+                    "AES67 Input [{}]: Pad {} is already linked",
+                    sdpdemux_id_for_handler, pad_name
+                );
+            } else {
+                warn!(
+                    "AES67 Input [{}]: Pad {} is NOT linked - downstream needs to handle this!",
+                    sdpdemux_id_for_handler, pad_name
+                );
+            }
+        });
 
         Ok(BlockBuildResult {
             elements: vec![
