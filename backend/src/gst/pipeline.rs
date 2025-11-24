@@ -1136,13 +1136,6 @@ impl PipelineManager {
                     PipelineError::StateChange(format!("Failed to set realtime clock: {}", e))
                 })?;
             }
-            GStreamerClockType::PipelineDefault => {
-                info!(
-                    "Using pipeline default clock for pipeline '{}' (letting GStreamer choose)",
-                    self.flow_name
-                );
-                // Don't set a clock - let GStreamer choose the default
-            }
             GStreamerClockType::Ntp => {
                 info!(
                     "NTP clock requested for pipeline '{}' - using system clock as fallback",
