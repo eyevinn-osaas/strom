@@ -1075,6 +1075,13 @@ impl PipelineManager {
     }
 
     /// Configure the pipeline clock based on flow properties.
+    ///
+    /// For direct media timing (AES67), we always set:
+    /// - base_time = 0
+    /// - start_time = None (GST_CLOCK_TIME_NONE)
+    ///
+    /// This ensures that RTP timestamps directly correspond to the reference clock,
+    /// which is required for `a=mediaclk:direct=0` signaling in SDP (RFC 7273).
     fn configure_clock(&mut self) -> Result<(), PipelineError> {
         use strom_types::flow::GStreamerClockType;
 
@@ -1105,15 +1112,7 @@ impl PipelineManager {
                     PipelineError::StateChange(format!("Failed to set PTP clock: {}", e))
                 })?;
 
-                // For PTP, set base_time to 0 and don't use start_time
-                // This makes the pipeline refer directly to the PTP clock
-                self.pipeline.set_base_time(gst::ClockTime::ZERO);
-                self.pipeline.set_start_time(gst::ClockTime::NONE);
-
-                info!(
-                    "PTP clock configured: domain={}, base_time=0, start_time=None",
-                    domain
-                );
+                info!("PTP clock configured: domain={}", domain);
             }
             GStreamerClockType::Monotonic => {
                 info!("Using Monotonic clock for pipeline '{}'", self.flow_name);
@@ -1153,6 +1152,21 @@ impl PipelineManager {
                 warn!("NTP clock not yet fully implemented, using system clock");
             }
         }
+
+        // For direct media timing (AES67 / RFC 7273):
+        // Set base_time to 0 and start_time to NONE for ALL clock types.
+        // This makes RTP timestamps directly correspond to the reference clock,
+        // which is required for mediaclk:direct=0 signaling.
+        //
+        // Combined with timestamp-offset=0 on the RTP payloader (set in aes67.rs),
+        // this ensures GStreamer generates RTP timestamps that directly reflect
+        // the pipeline clock time.
+        self.pipeline.set_base_time(gst::ClockTime::ZERO);
+        self.pipeline.set_start_time(gst::ClockTime::NONE);
+        info!(
+            "Pipeline '{}' configured for direct media timing: base_time=0, start_time=None",
+            self.flow_name
+        );
 
         Ok(())
     }

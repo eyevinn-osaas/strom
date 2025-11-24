@@ -122,6 +122,12 @@ pub struct StromApp {
     latency_cache: std::collections::HashMap<String, crate::api::LatencyInfo>,
     /// Last time latency was fetched (for periodic refresh)
     last_latency_fetch: instant::Instant,
+    /// Cached stats info for flows (flow_id -> FlowStatsInfo)
+    stats_cache: std::collections::HashMap<String, crate::api::FlowStatsInfo>,
+    /// Last time stats was fetched (for periodic refresh)
+    last_stats_fetch: instant::Instant,
+    /// Whether to show the stats panel
+    show_stats_panel: bool,
 }
 
 impl StromApp {
@@ -212,6 +218,9 @@ impl StromApp {
             import_error: None,
             latency_cache: std::collections::HashMap::new(),
             last_latency_fetch: instant::Instant::now(),
+            stats_cache: std::collections::HashMap::new(),
+            last_stats_fetch: instant::Instant::now(),
+            show_stats_panel: false,
         };
 
         // Apply initial theme based on system preference
@@ -278,6 +287,9 @@ impl StromApp {
             import_error: None,
             latency_cache: std::collections::HashMap::new(),
             last_latency_fetch: instant::Instant::now(),
+            stats_cache: std::collections::HashMap::new(),
+            last_stats_fetch: instant::Instant::now(),
+            show_stats_panel: false,
         };
 
         // Apply initial theme based on system preference
@@ -740,6 +752,47 @@ impl StromApp {
                     Err(_) => {
                         // Flow not running or latency not available - silently ignore
                         let _ = tx.send(AppMessage::LatencyNotAvailable(flow_id_str));
+                    }
+                }
+                ctx.request_repaint();
+            });
+        }
+    }
+
+    /// Fetch statistics for all running flows.
+    fn fetch_stats_for_running_flows(&self, ctx: &Context) {
+        use strom_types::PipelineState;
+
+        // Find all flows that are currently playing
+        let running_flows: Vec<_> = self
+            .flows
+            .iter()
+            .filter(|f| f.state == Some(PipelineState::Playing))
+            .map(|f| f.id)
+            .collect();
+
+        if running_flows.is_empty() {
+            return;
+        }
+
+        // Fetch stats for each running flow
+        for flow_id in running_flows {
+            let api = self.api.clone();
+            let tx = self.channels.sender();
+            let ctx = ctx.clone();
+            let flow_id_str = flow_id.to_string();
+
+            spawn_task(async move {
+                match api.get_flow_stats(flow_id).await {
+                    Ok(stats) => {
+                        let _ = tx.send(AppMessage::StatsLoaded {
+                            flow_id: flow_id_str,
+                            stats,
+                        });
+                    }
+                    Err(_) => {
+                        // Flow not running or stats not available - silently ignore
+                        let _ = tx.send(AppMessage::StatsNotAvailable(flow_id_str));
                     }
                 }
                 ctx.request_repaint();
@@ -1417,11 +1470,16 @@ impl StromApp {
                         .cloned();
                     let flow_id = self.current_flow().map(|f| f.id);
 
+                    // Get stats for this flow if available
+                    let stats = flow_id
+                        .map(|fid| fid.to_string())
+                        .and_then(|fid| self.stats_cache.get(&fid));
+
                     // Then get mutable reference to block
                     if let (Some(block), Some(def)) =
                         (self.graph.get_selected_block_mut(), definition_opt)
                     {
-                        let delete_requested = PropertyInspector::show_block(ui, block, &def, flow_id, &self.meter_data, &self.webrtc_stats);
+                        let delete_requested = PropertyInspector::show_block(ui, block, &def, flow_id, &self.meter_data, &self.webrtc_stats, stats);
 
                         // Handle deletion request
                         if delete_requested {
@@ -2541,6 +2599,18 @@ impl eframe::App for StromApp {
                 AppMessage::WebRtcStatsError(error) => {
                     tracing::trace!("WebRTC stats error: {}", error);
                 }
+                AppMessage::StatsLoaded { flow_id, stats } => {
+                    tracing::debug!(
+                        "Stats loaded for flow {}: {} blocks",
+                        flow_id,
+                        stats.blocks.len()
+                    );
+                    self.stats_cache.insert(flow_id, stats);
+                }
+                AppMessage::StatsNotAvailable(flow_id) => {
+                    tracing::debug!("Stats not available for flow {}", flow_id);
+                    self.stats_cache.remove(&flow_id);
+                }
                 // SDP messages are handled elsewhere
                 AppMessage::SdpLoaded { .. } | AppMessage::SdpError(_) => {}
             }
@@ -2594,6 +2664,12 @@ impl eframe::App for StromApp {
         if self.last_latency_fetch.elapsed() > std::time::Duration::from_secs(2) {
             self.last_latency_fetch = instant::Instant::now();
             self.fetch_latency_for_running_flows(ctx);
+        }
+
+        // Periodically fetch stats for running flows (every 2 seconds)
+        if self.last_stats_fetch.elapsed() > std::time::Duration::from_secs(2) {
+            self.last_stats_fetch = instant::Instant::now();
+            self.fetch_stats_for_running_flows(ctx);
         }
 
         self.render_toolbar(ctx);

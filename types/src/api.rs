@@ -326,6 +326,25 @@ pub struct WebRtcStatsResponse {
 }
 
 // ============================================================================
+// Statistics API Types
+// ============================================================================
+
+/// Response containing statistics for a running flow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FlowStatsResponse {
+    /// The flow ID
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+    pub flow_id: FlowId,
+    /// The flow name
+    pub flow_name: String,
+    /// Statistics for each block in the flow
+    pub blocks: Vec<crate::stats::BlockStats>,
+    /// Timestamp when stats were collected (nanoseconds since UNIX epoch)
+    pub collected_at: u64,
+}
+
+// ============================================================================
 // Error Response
 // ============================================================================
 

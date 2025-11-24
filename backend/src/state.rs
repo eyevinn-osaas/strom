@@ -373,11 +373,14 @@ impl AppState {
                     channels.unwrap_or(2)
                 );
 
+                // Generate SDP with flow properties for correct clock signaling (RFC 7273)
                 let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
                     block,
                     &flow.name,
                     sample_rate,
                     channels,
+                    Some(&flow.properties),
+                    None, // PTP clock identity - could be obtained from pipeline clock if needed
                 );
 
                 // Initialize runtime_data if needed
@@ -647,6 +650,23 @@ impl AppState {
     pub async fn get_flow_latency(&self, flow_id: &FlowId) -> Option<(u64, u64, bool)> {
         let pipelines = self.inner.pipelines.read().await;
         pipelines.get(flow_id).and_then(|p| p.query_latency())
+    }
+
+    /// Get statistics for a running flow.
+    /// Returns statistics from all blocks that support statistics collection.
+    pub async fn get_flow_stats(&self, flow_id: &FlowId) -> Option<strom_types::stats::FlowStats> {
+        use crate::stats::StatsCollector;
+
+        let pipelines = self.inner.pipelines.read().await;
+        let flows = self.inner.flows.read().await;
+
+        let pipeline = pipelines.get(flow_id)?;
+        let flow = flows.get(flow_id)?;
+
+        Some(StatsCollector::collect_flow_stats(
+            pipeline.pipeline(),
+            flow,
+        ))
     }
 }
 

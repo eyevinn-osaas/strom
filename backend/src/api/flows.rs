@@ -10,8 +10,9 @@ use std::process::Command;
 use strom_types::{
     api::{
         CreateFlowRequest, ElementPropertiesResponse, ErrorResponse, FlowListResponse,
-        FlowResponse, LatencyResponse, PadPropertiesResponse, UpdateFlowPropertiesRequest,
-        UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcStatsResponse,
+        FlowResponse, FlowStatsResponse, LatencyResponse, PadPropertiesResponse,
+        UpdateFlowPropertiesRequest, UpdatePadPropertyRequest, UpdatePropertyRequest,
+        WebRtcStatsResponse,
     },
     Flow, FlowId,
 };
@@ -457,7 +458,15 @@ pub async fn get_block_sdp(
     }
 
     // Generate SDP (using default sample rate and channels since we can't query caps here)
-    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(block, &flow.name, None, None);
+    // Pass flow properties for correct clock signaling (RFC 7273)
+    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
+        block,
+        &flow.name,
+        None,
+        None,
+        Some(&flow.properties),
+        None, // PTP clock identity not available at this point
+    );
 
     info!("Successfully generated SDP for block {}", block_id);
 
@@ -838,4 +847,50 @@ pub async fn get_flow_latency(
     );
 
     Ok(Json(LatencyResponse::new(min_ns, max_ns, live)))
+}
+
+/// Get runtime statistics for a flow's pipeline.
+///
+/// Returns statistics from running pipeline elements, such as RTP jitterbuffer
+/// statistics for AES67 input blocks. The flow must be started and running
+/// for statistics to be available.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/stats",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Statistics retrieved successfully", body = FlowStatsResponse),
+        (status = 404, description = "Flow not running or no statistics available", body = ErrorResponse)
+    )
+)]
+pub async fn get_flow_stats(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+) -> Result<Json<FlowStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!("Getting statistics for flow {}", id);
+
+    let stats = state.get_flow_stats(&id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new(
+                "Flow not running or no statistics available",
+            )),
+        )
+    })?;
+
+    info!(
+        "Flow {} stats: {} blocks with statistics",
+        id,
+        stats.block_stats.len()
+    );
+
+    Ok(Json(FlowStatsResponse {
+        flow_id: stats.flow_id,
+        flow_name: stats.flow_name,
+        blocks: stats.block_stats,
+        collected_at: stats.collected_at,
+    }))
 }
