@@ -63,6 +63,14 @@ pub enum AppMessage {
     /// Logout completed
     LogoutComplete,
 
+    /// WebRTC stats loaded for a flow
+    WebRtcStatsLoaded {
+        flow_id: strom_types::FlowId,
+        stats: strom_types::api::WebRtcStats,
+    },
+    /// WebRTC stats loading failed
+    WebRtcStatsError(String),
+
     /// Flow operation completed successfully
     FlowOperationSuccess(String),
     /// Flow operation failed

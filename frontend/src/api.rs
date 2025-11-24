@@ -719,6 +719,38 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Get WebRTC statistics from a running flow.
+    pub async fn get_webrtc_stats(&self, id: FlowId) -> ApiResult<strom_types::api::WebRtcStats> {
+        use strom_types::api::WebRtcStatsResponse;
+        use tracing::info;
+
+        let url = format!("{}/flows/{}/webrtc-stats", self.base_url, id);
+        info!("Fetching WebRTC stats from: {}", url);
+
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        let stats_response: WebRtcStatsResponse = response
+            .json()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+
+        info!(
+            "Successfully fetched WebRTC stats: {} connections",
+            stats_response.stats.connections.len()
+        );
+        Ok(stats_response.stats)
+    }
+
     /// Get statistics for a running flow.
     pub async fn get_flow_stats(&self, id: FlowId) -> ApiResult<FlowStatsInfo> {
         let url = format!("{}/flows/{}/stats", self.base_url, id);

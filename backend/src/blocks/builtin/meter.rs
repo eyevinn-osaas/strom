@@ -166,12 +166,13 @@ fn meter_definition() -> BlockDefinition {
         id: "builtin.meter".to_string(),
         name: "Audio Meter".to_string(),
         description:
-            "Audio level meter - analyzes audio and displays RMS/peak levels for each channel"
+            "Analyzes audio levels. Uses GStreamer level element to report RMS and peak per channel."
                 .to_string(),
         category: "Analysis".to_string(),
         exposed_properties: vec![ExposedProperty {
             name: "interval".to_string(),
-            description: "Update interval in milliseconds (how often meter values are sent)"
+            label: "Update Interval (ms)".to_string(),
+            description: "How often meter values are sent (lower = more responsive, higher CPU)"
                 .to_string(),
             property_type: PropertyType::Enum {
                 values: vec![

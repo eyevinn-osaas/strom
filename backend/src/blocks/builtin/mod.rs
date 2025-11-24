@@ -2,6 +2,8 @@
 
 pub mod aes67;
 pub mod meter;
+pub mod whep;
+pub mod whip;
 
 use crate::blocks::BlockBuilder;
 use std::sync::Arc;
@@ -17,6 +19,12 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
     // Add Meter blocks
     blocks.extend(meter::get_blocks());
 
+    // Add WHIP blocks
+    blocks.extend(whip::get_blocks());
+
+    // Add WHEP blocks
+    blocks.extend(whep::get_blocks());
+
     // Future: Add more protocols here
     // blocks.extend(ndi::get_blocks());
     // blocks.extend(rtmp::get_blocks());
@@ -31,6 +39,8 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.aes67_input" => Some(Arc::new(aes67::AES67InputBuilder)),
         "builtin.aes67_output" => Some(Arc::new(aes67::AES67OutputBuilder)),
         "builtin.meter" => Some(Arc::new(meter::MeterBuilder)),
+        "builtin.whip_output" => Some(Arc::new(whip::WHIPOutputBuilder)),
+        "builtin.whep_input" => Some(Arc::new(whep::WHEPInputBuilder)),
         // Future: Add more builders here
         _ => None,
     }
