@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use strom_types::flow::ThreadPriorityStatus;
 use strom_types::{Element, Flow, FlowId, Link, PipelineState, PropertyValue, StromEvent};
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 /// Result of processing links with automatic tee insertion.
 struct ProcessedLinks {
@@ -2015,9 +2015,12 @@ impl PipelineManager {
             let (live, min, max) = query.result();
             let min_ns = min.nseconds();
             let max_ns = max.map_or(u64::MAX, |t| t.nseconds());
-            info!(
+            trace!(
                 "Pipeline '{}' latency query: live={}, min={}ns, max={}ns",
-                self.flow_name, live, min_ns, max_ns
+                self.flow_name,
+                live,
+                min_ns,
+                max_ns
             );
 
             // If pipeline is live and has meaningful latency, use it
@@ -2030,9 +2033,11 @@ impl PipelineManager {
             let sink_latency = self.query_sink_latency();
             if let Some((sink_min, sink_max)) = sink_latency {
                 if sink_min > 0 {
-                    info!(
+                    trace!(
                         "Pipeline '{}' using sink latency: min={}ns, max={}ns",
-                        self.flow_name, sink_min, sink_max
+                        self.flow_name,
+                        sink_min,
+                        sink_max
                     );
                     return Some((sink_min, sink_max, live));
                 }
@@ -2041,7 +2046,7 @@ impl PipelineManager {
             // Return pipeline values even if 0 (user sees it's not live)
             Some((min_ns, max_ns, live))
         } else {
-            info!(
+            trace!(
                 "Pipeline '{}' latency query failed (may not be in playing state)",
                 self.flow_name
             );
@@ -2174,20 +2179,20 @@ impl PipelineManager {
 
         // Find all webrtcbin elements in the pipeline
         let webrtcbins = self.find_webrtcbin_elements();
-        info!(
+        trace!(
             "get_webrtc_stats: Found {} webrtcbin element(s)",
             webrtcbins.len()
         );
 
         for (name, webrtcbin) in webrtcbins {
-            info!("get_webrtc_stats: Getting stats from webrtcbin: {}", name);
+            trace!("get_webrtc_stats: Getting stats from webrtcbin: {}", name);
 
             let mut conn_stats = WebRtcConnectionStats::default();
 
             // First check if ICE connection is established - skip if not ready
             // This avoids blocking on promise.wait() for webrtcbins that aren't connected
             let ice_state = self.get_ice_connection_state(&webrtcbin);
-            info!("get_webrtc_stats: ICE state for {}: {:?}", name, ice_state);
+            trace!("get_webrtc_stats: ICE state for {}: {:?}", name, ice_state);
 
             // Only get detailed stats if we have a reasonable ICE state
             let should_get_stats = match ice_state.as_deref() {
@@ -2218,7 +2223,7 @@ impl PipelineManager {
                 // Returns void, stats come via the promise
                 let pad_none: Option<&gst::Pad> = None;
                 let promise = gst::Promise::new();
-                info!("get_webrtc_stats: Emitting get-stats signal...");
+                trace!("get_webrtc_stats: Emitting get-stats signal...");
                 webrtcbin.emit_by_name::<()>("get-stats", &[&pad_none, &promise]);
 
                 // Wait for the promise with a timeout using interrupt from another thread
@@ -2228,19 +2233,19 @@ impl PipelineManager {
                     promise_clone.interrupt();
                 });
 
-                info!("get_webrtc_stats: Waiting for promise (500ms timeout)...");
+                trace!("get_webrtc_stats: Waiting for promise (500ms timeout)...");
                 let promise_result = promise.wait();
 
                 // Clean up timeout thread (it will either have interrupted or not)
                 let _ = timeout_thread.join();
 
-                info!("get_webrtc_stats: Promise result: {:?}", promise_result);
+                trace!("get_webrtc_stats: Promise result: {:?}", promise_result);
 
                 match promise_result {
                     gst::PromiseResult::Replied => {
                         if let Some(reply) = promise.get_reply() {
                             // The reply is a GstStructure containing the stats
-                            info!(
+                            trace!(
                                 "get_webrtc_stats: Got reply structure with {} fields: {}",
                                 reply.n_fields(),
                                 reply.name()
@@ -2248,35 +2253,35 @@ impl PipelineManager {
                             // Log all field names
                             for i in 0..reply.n_fields() {
                                 if let Some(field_name) = reply.nth_field_name(i) {
-                                    info!("get_webrtc_stats: Field [{}]: {}", i, field_name);
+                                    trace!("get_webrtc_stats: Field [{}]: {}", i, field_name);
                                 }
                             }
                             // Convert StructureRef to owned Structure for parsing
                             conn_stats = self.parse_webrtc_stats_structure(&reply.to_owned());
-                            info!(
+                            trace!(
                                 "get_webrtc_stats: Parsed stats - ICE: {:?}, inbound_rtp: {}, outbound_rtp: {}",
                                 conn_stats.ice_candidates.is_some(),
                                 conn_stats.inbound_rtp.len(),
                                 conn_stats.outbound_rtp.len()
                             );
                         } else {
-                            info!(
+                            trace!(
                                 "get_webrtc_stats: No stats in promise reply from webrtcbin: {}",
                                 name
                             );
                         }
                     }
                     gst::PromiseResult::Interrupted => {
-                        warn!(
+                        debug!(
                             "get_webrtc_stats: Promise timed out (interrupted) for webrtcbin: {}",
                             name
                         );
                     }
                     gst::PromiseResult::Expired => {
-                        info!("get_webrtc_stats: Promise expired for webrtcbin: {}", name);
+                        trace!("get_webrtc_stats: Promise expired for webrtcbin: {}", name);
                     }
                     gst::PromiseResult::Pending => {
-                        info!(
+                        trace!(
                             "get_webrtc_stats: Promise still pending for webrtcbin: {}",
                             name
                         );
@@ -2303,7 +2308,7 @@ impl PipelineManager {
             stats.connections.insert(name, conn_stats);
         }
 
-        info!(
+        trace!(
             "get_webrtc_stats: Returning stats with {} connection(s)",
             stats.connections.len()
         );
@@ -2404,21 +2409,21 @@ impl PipelineManager {
 
         let mut conn_stats = WebRtcConnectionStats::default();
 
-        info!(
+        trace!(
             "parse_webrtc_stats_structure: Parsing structure '{}' with {} fields",
             structure.name(),
             structure.n_fields()
         );
 
         // Log ALL field names and their types for debugging
-        info!("=== RAW WEBRTC STATS STRUCTURE ===");
+        trace!("=== RAW WEBRTC STATS STRUCTURE ===");
         for (field_name, value) in structure.iter() {
             let type_name = value.type_().name();
-            info!("  Field: '{}' (type: {})", field_name, type_name);
+            trace!("  Field: '{}' (type: {})", field_name, type_name);
 
             // If it's a nested structure, log its contents too
             if let Ok(nested) = value.get::<gst::Structure>() {
-                info!("    Nested structure '{}' fields:", nested.name());
+                trace!("    Nested structure '{}' fields:", nested.name());
                 for (nested_field, nested_value) in nested.iter() {
                     let nested_type = nested_value.type_().name();
                     // Try to get the actual value for common types
@@ -2441,11 +2446,11 @@ impl PipelineManager {
                     } else {
                         format!("<{}>", nested_type)
                     };
-                    info!("      {}: {} = {}", nested_field, nested_type, value_str);
+                    trace!("      {}: {} = {}", nested_field, nested_type, value_str);
                 }
             }
         }
-        info!("=== END RAW STATS ===");
+        trace!("=== END RAW STATS ===");
 
         // WebRTC stats structure contains nested structures for each stat type
         // The field NAME indicates the type (e.g., "rtp-inbound-stream-stats_1234")

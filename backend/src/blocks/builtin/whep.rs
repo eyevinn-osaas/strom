@@ -70,10 +70,23 @@ impl BlockBuilder for WHEPInputBuilder {
             })
             .unwrap_or_else(|| "stun://stun.l.google.com:19302".to_string());
 
+        // Get mixer latency (default 30ms - lower than default 200ms for lower latency)
+        let mixer_latency_ms = properties
+            .get("mixer_latency_ms")
+            .and_then(|v| {
+                if let PropertyValue::Int(i) = v {
+                    Some(*i as u64)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(30);
+
         // Create namespaced element IDs
         let instance_id_owned = instance_id.to_string();
         let whepclientsrc_id = format!("{}:whepclientsrc", instance_id);
         let liveadder_id = format!("{}:liveadder", instance_id);
+        let capsfilter_id = format!("{}:capsfilter", instance_id);
         let output_audioconvert_id = format!("{}:output_audioconvert", instance_id);
         let output_audioresample_id = format!("{}:output_audioresample", instance_id);
 
@@ -95,8 +108,10 @@ impl BlockBuilder for WHEPInputBuilder {
         }
 
         // Create liveadder - this is our always-present mixer for dynamic audio streams
+        // latency property is in milliseconds as a guint (u32)
         let liveadder = gst::ElementFactory::make("liveadder")
             .name(&liveadder_id)
+            .property("latency", mixer_latency_ms as u32)
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("liveadder: {}", e)))?;
 
@@ -112,7 +127,18 @@ impl BlockBuilder for WHEPInputBuilder {
                 BlockBuildError::ElementCreation(format!("audiotestsrc (silence): {}", e))
             })?;
 
-        // Create output audio processing chain (after liveadder)
+        // Create capsfilter to enforce 48kHz stereo audio after liveadder
+        let caps = gst::Caps::builder("audio/x-raw")
+            .field("rate", 48000i32)
+            .field("channels", 2i32)
+            .build();
+        let capsfilter = gst::ElementFactory::make("capsfilter")
+            .name(&capsfilter_id)
+            .property("caps", &caps)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
+
+        // Create output audio processing chain (after liveadder -> capsfilter)
         let output_audioconvert = gst::ElementFactory::make("audioconvert")
             .name(&output_audioconvert_id)
             .build()
@@ -302,7 +328,7 @@ impl BlockBuilder for WHEPInputBuilder {
             whep_endpoint, stun_server
         );
 
-        // Internal links: silence -> liveadder -> audioconvert -> audioresample
+        // Internal links: silence -> liveadder -> capsfilter -> audioconvert -> audioresample
         // The whepclientsrc pads are linked dynamically via pad-added callback
         let internal_links = vec![
             (
@@ -311,6 +337,10 @@ impl BlockBuilder for WHEPInputBuilder {
             ),
             (
                 format!("{}:src", liveadder_id),
+                format!("{}:sink", capsfilter_id),
+            ),
+            (
+                format!("{}:src", capsfilter_id),
                 format!("{}:sink", output_audioconvert_id),
             ),
             (
@@ -324,6 +354,7 @@ impl BlockBuilder for WHEPInputBuilder {
                 (whepclientsrc_id, whepclientsrc),
                 (silence_id, silence),
                 (liveadder_id, liveadder),
+                (capsfilter_id, capsfilter),
                 (output_audioconvert_id, output_audioconvert),
                 (output_audioresample_id, output_audioresample),
             ],
@@ -863,6 +894,18 @@ fn whep_input_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "stun_server".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "mixer_latency_ms".to_string(),
+                label: "Mixer Latency (ms)".to_string(),
+                description: "Latency of the audio mixer in milliseconds (default 30ms, lower = less delay but may cause glitches)".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(30)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "mixer_latency_ms".to_string(),
                     transform: None,
                 },
             },
