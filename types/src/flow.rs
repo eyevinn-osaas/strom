@@ -71,6 +71,10 @@ pub struct FlowProperties {
     /// PTP domain (0-255, only used when clock_type is PTP)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ptp_domain: Option<u8>,
+    /// NTP server address (hostname or IP, only used when clock_type is NTP)
+    /// If not set but clock_type is NTP, will signal as "ntp=/traceable/"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntp_server: Option<String>,
     /// Clock synchronization status (updated by backend for running pipelines)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_sync_status: Option<ClockSyncStatus>,
