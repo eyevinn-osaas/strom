@@ -22,17 +22,32 @@ const START_Y: f32 = 50.0;
 /// Check if a flow needs auto-layout applied.
 ///
 /// Returns true if:
-/// - All elements have identical positions (stacked at 0,0 or same location)
+/// - There are at least 3 nodes (elements + blocks) to make layout meaningful
+/// - All elements and blocks have identical positions (stacked at 0,0 or same location)
 pub fn needs_auto_layout(flow: &Flow) -> bool {
+    // Count total nodes (elements + blocks)
+    let total_nodes = flow.elements.len() + flow.blocks.len();
+
+    // Don't auto-layout trivial graphs (2 or fewer nodes)
+    // A single element or one element + one block doesn't need automatic arrangement
+    if total_nodes <= 2 {
+        return false;
+    }
+
+    // Need at least some elements to layout (blocks alone aren't layouted)
     if flow.elements.is_empty() {
         return false;
     }
 
-    // Check if all positions are identical (stacked)
-    let positions: Vec<_> = flow.elements.iter().map(|e| e.position).collect();
+    // Collect all positions (elements and blocks)
+    let mut all_positions: Vec<(f32, f32)> = flow.elements.iter().map(|e| e.position).collect();
+    for block in &flow.blocks {
+        all_positions.push((block.position.x, block.position.y));
+    }
 
-    let first_pos = positions[0];
-    let all_same = positions.iter().all(|&pos| pos == first_pos);
+    // Check if all positions are identical (stacked)
+    let first_pos = all_positions[0];
+    let all_same = all_positions.iter().all(|&pos| pos == first_pos);
 
     all_same
 }
@@ -180,7 +195,9 @@ mod tests {
         let mut flow = Flow::new("test");
         flow.elements.push(create_element("elem1", (0.0, 0.0)));
         flow.elements.push(create_element("elem2", (0.0, 0.0)));
+        flow.elements.push(create_element("elem3", (0.0, 0.0)));
 
+        // 3 elements stacked at origin should trigger auto-layout
         assert!(needs_auto_layout(&flow));
     }
 
@@ -189,7 +206,9 @@ mod tests {
         let mut flow = Flow::new("test");
         flow.elements.push(create_element("elem1", (50.0, 50.0)));
         flow.elements.push(create_element("elem2", (50.0, 50.0)));
+        flow.elements.push(create_element("elem3", (50.0, 50.0)));
 
+        // 3 elements stacked at same location should trigger auto-layout
         assert!(needs_auto_layout(&flow));
     }
 
@@ -198,6 +217,38 @@ mod tests {
         let mut flow = Flow::new("test");
         flow.elements.push(create_element("elem1", (0.0, 0.0)));
         flow.elements.push(create_element("elem2", (100.0, 100.0)));
+        flow.elements.push(create_element("elem3", (200.0, 200.0)));
+
+        // Elements already spread out should not trigger auto-layout
+        assert!(!needs_auto_layout(&flow));
+    }
+
+    #[test]
+    fn test_needs_auto_layout_trivial_graph() {
+        // Two elements should not trigger auto-layout (trivial graph)
+        let mut flow = Flow::new("test");
+        flow.elements.push(create_element("elem1", (0.0, 0.0)));
+        flow.elements.push(create_element("elem2", (0.0, 0.0)));
+
+        assert!(!needs_auto_layout(&flow));
+    }
+
+    #[test]
+    fn test_needs_auto_layout_one_element_one_block() {
+        use std::collections::HashMap;
+        use strom_types::block::{BlockInstance, Position};
+
+        // One element + one block should not trigger auto-layout
+        let mut flow = Flow::new("test");
+        flow.elements.push(create_element("elem1", (100.0, 100.0)));
+        flow.blocks.push(BlockInstance {
+            id: "block1".to_string(),
+            block_definition_id: "test".to_string(),
+            name: None,
+            properties: HashMap::new(),
+            position: Position { x: 100.0, y: 100.0 },
+            runtime_data: None,
+        });
 
         assert!(!needs_auto_layout(&flow));
     }
