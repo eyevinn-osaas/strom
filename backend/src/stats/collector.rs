@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use strom_types::block::BlockInstance;
 use strom_types::stats::{BlockStats, FlowStats, Statistic};
 use strom_types::Flow;
-use tracing::{debug, info, warn};
+use tracing::{debug, trace, warn};
 
 /// Collector for pipeline statistics.
 pub struct StatsCollector;
@@ -90,7 +90,7 @@ impl StatsCollector {
             if let Ok(bin) = sdpdemux.dynamic_cast::<gst::Bin>() {
                 let jb_stats = collect_all_jitterbuffer_stats(&bin);
                 let jb_count = jb_stats.len();
-                info!("Found {} jitterbuffer(s) in {}", jb_count, sdpdemux_name);
+                trace!("Found {} jitterbuffer(s) in {}", jb_count, sdpdemux_name);
 
                 for (jb_name, stats) in jb_stats {
                     debug!("Jitterbuffer '{}' stats: {:?}", jb_name, stats);
