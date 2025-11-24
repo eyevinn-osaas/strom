@@ -1,6 +1,11 @@
 //! SDP (Session Description Protocol) generation for AES67 blocks.
+//!
+//! Implements RFC 7273 clock signaling for AES67 streams:
+//! - ts-refclk: indicates the reference clock (PTP, NTP, or local)
+//! - mediaclk: indicates media clock relationship to reference clock
 
 use gstreamer as gst;
+use strom_types::flow::{FlowProperties, GStreamerClockType};
 use strom_types::{BlockInstance, PropertyValue};
 
 /// Extract audio format details from GStreamer caps.
@@ -24,6 +29,67 @@ pub fn parse_audio_caps(caps: &gst::Caps) -> Option<(i32, i32)> {
     Some((sample_rate, channels))
 }
 
+/// Generate the ts-refclk attribute based on flow clock configuration.
+///
+/// Per RFC 7273:
+/// - PTP: `a=ts-refclk:ptp=IEEE1588-2008:<clock-identity>:<domain>`
+/// - NTP: `a=ts-refclk:ntp=<server>` or `a=ts-refclk:ntp=/traceable/`
+/// - Local/other: `a=ts-refclk:local`
+///
+/// The `ptp_clock_identity` parameter is optional - if not provided for PTP,
+/// a placeholder identity will be used.
+pub fn generate_ts_refclk(
+    flow_properties: Option<&FlowProperties>,
+    ptp_clock_identity: Option<&str>,
+) -> String {
+    let props = match flow_properties {
+        Some(p) => p,
+        None => {
+            // Default to local sender clock when no properties specified
+            return "a=ts-refclk:local".to_string();
+        }
+    };
+
+    match props.clock_type {
+        GStreamerClockType::Ptp => {
+            let domain = props.ptp_domain.unwrap_or(0);
+            // Use provided clock identity or placeholder
+            // Clock identity format: XX-XX-XX-FF-FE-XX-XX-XX (8 bytes, hyphen-separated)
+            let identity = ptp_clock_identity.unwrap_or("00-00-00-FF-FE-00-00-00");
+            format!("a=ts-refclk:ptp=IEEE1588-2008:{}:{}", identity, domain)
+        }
+        GStreamerClockType::Ntp => {
+            // Use specific NTP server if configured, otherwise use traceable
+            match &props.ntp_server {
+                Some(server) => format!("a=ts-refclk:ntp={}", server),
+                None => "a=ts-refclk:ntp=/traceable/".to_string(),
+            }
+        }
+        GStreamerClockType::Monotonic
+        | GStreamerClockType::Realtime
+        | GStreamerClockType::PipelineDefault => {
+            // For system clocks, use local sender reference
+            "a=ts-refclk:local".to_string()
+        }
+    }
+}
+
+/// Generate the mediaclk attribute for direct media timing.
+///
+/// Per RFC 7273:
+/// - `direct=0`: Media clock is directly related to the reference clock with zero offset.
+///
+/// For AES67 direct media timing, we always use offset=0 because:
+/// - Pipeline base_time is set to 0
+/// - Pipeline start_time is set to 0/None
+/// - RTP payloader timestamp-offset is set to 0
+///
+/// This configuration makes GStreamer generate RTP timestamps that directly
+/// correspond to the reference clock (PTP, NTP, or system clock).
+pub fn generate_mediaclk() -> String {
+    "a=mediaclk:direct=0".to_string()
+}
+
 /// Check if an IP address is multicast (224.0.0.0 to 239.255.255.255).
 fn is_multicast_address(addr: &str) -> bool {
     // Try to parse as IPv4 address
@@ -45,11 +111,25 @@ fn is_multicast_address(addr: &str) -> bool {
 ///
 /// The SDP describes the RTP stream parameters that receivers need to connect.
 /// Uses configured block properties for accurate stream description.
+///
+/// # Clock Signaling (RFC 7273)
+///
+/// The `flow_properties` parameter controls clock signaling in the SDP:
+/// - PTP clock: `a=ts-refclk:ptp=IEEE1588-2008:<identity>:<domain>`
+/// - NTP clock: `a=ts-refclk:ntp=<server>` or `a=ts-refclk:ntp=/traceable/`
+/// - Local/system clock: `a=ts-refclk:local`
+///
+/// The `ptp_clock_identity` parameter can provide the actual PTP clock identity
+/// for accurate signaling when using PTP.
+///
+/// Media clock is always `a=mediaclk:direct=0` for direct media timing.
 pub fn generate_aes67_output_sdp(
     block: &BlockInstance,
     session_name: &str,
     sample_rate: Option<i32>,
     channels: Option<i32>,
+    flow_properties: Option<&FlowProperties>,
+    ptp_clock_identity: Option<&str>,
 ) -> String {
     // Extract properties or use defaults
     let host = block
@@ -128,6 +208,10 @@ pub fn generate_aes67_output_sdp(
         format!("c=IN IP4 {}", host) // No TTL for unicast
     };
 
+    // Generate clock signaling attributes per RFC 7273
+    let ts_refclk = generate_ts_refclk(flow_properties, ptp_clock_identity);
+    let mediaclk = generate_mediaclk();
+
     // Generate SDP
     format!(
         "v=0\r
@@ -139,8 +223,8 @@ a=recvonly\r
 m=audio {} RTP/AVP {}\r
 a=rtpmap:{} {}/{}/{}\r
 a=ptime:{}\r
-a=ts-refclk:ptp=IEEE1588-2008:00-00-00-00-00-00-00-00:0\r
-a=mediaclk:direct=0\r
+{}\r
+{}\r
 ",
         session_id,
         session_id,
@@ -153,7 +237,9 @@ a=mediaclk:direct=0\r
         encoding,
         sample_rate,
         channels,
-        ptime
+        ptime,
+        ts_refclk,
+        mediaclk
     )
 }
 
@@ -215,12 +301,15 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
 
         assert!(sdp.contains("s=Test Stream"));
         assert!(sdp.contains("c=IN IP4 239.69.1.1/32")); // Multicast should have /32 TTL
         assert!(sdp.contains("m=audio 5004 RTP/AVP 96"));
         assert!(sdp.contains("a=rtpmap:96 L24/48000/2"));
+        // Default clock signaling (no flow properties) should use local
+        assert!(sdp.contains("a=ts-refclk:local"));
+        assert!(sdp.contains("a=mediaclk:direct=0"));
     }
 
     #[test]
@@ -241,7 +330,7 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Custom Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Custom Stream", None, None, None, None);
 
         assert!(sdp.contains("s=Custom Stream"));
         assert!(sdp.contains("c=IN IP4 239.1.2.3/32")); // Multicast should have /32 TTL
@@ -260,7 +349,8 @@ mod tests {
         };
 
         // Test with audiotestsrc defaults: 44.1kHz mono
-        let sdp = generate_aes67_output_sdp(&block, "Test Stream", Some(44100), Some(1));
+        let sdp =
+            generate_aes67_output_sdp(&block, "Test Stream", Some(44100), Some(1), None, None);
 
         assert!(sdp.contains("s=Test Stream"));
         assert!(sdp.contains("a=rtpmap:96 L24/44100/1"));
@@ -283,7 +373,7 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
 
         // Should use L16 encoding, not L24
         assert!(sdp.contains("a=rtpmap:96 L16/48000/2"));
@@ -307,7 +397,7 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
 
         // Should use L24 encoding
         assert!(sdp.contains("a=rtpmap:96 L24/48000/2"));
@@ -330,7 +420,7 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
 
         // Should have ptime=4.0, not 1.0
         assert!(sdp.contains("a=ptime:4"));
@@ -368,7 +458,14 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Multi-channel Stream", Some(96000), Some(8));
+        let sdp = generate_aes67_output_sdp(
+            &block,
+            "Multi-channel Stream",
+            Some(96000),
+            Some(8),
+            None,
+            None,
+        );
 
         // Verify all properties are correctly reflected in SDP
         assert!(sdp.contains("s=Multi-channel Stream"));
@@ -416,7 +513,7 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Unicast Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Unicast Stream", None, None, None, None);
 
         // Unicast addresses should NOT have /TTL suffix
         assert!(sdp.contains("c=IN IP4 192.168.1.100\r"));
@@ -440,9 +537,142 @@ mod tests {
             runtime_data: None,
         };
 
-        let sdp = generate_aes67_output_sdp(&block, "Multicast Stream", None, None);
+        let sdp = generate_aes67_output_sdp(&block, "Multicast Stream", None, None, None, None);
 
         // Multicast addresses MUST have /32 TTL suffix
         assert!(sdp.contains("c=IN IP4 239.69.11.44/32\r"));
+    }
+
+    // RFC 7273 clock signaling tests
+
+    #[test]
+    fn test_ts_refclk_ptp() {
+        let props = FlowProperties {
+            clock_type: GStreamerClockType::Ptp,
+            ptp_domain: Some(42),
+            ..Default::default()
+        };
+
+        let ts_refclk = generate_ts_refclk(Some(&props), Some("AA-BB-CC-FF-FE-DD-EE-FF"));
+        assert_eq!(
+            ts_refclk,
+            "a=ts-refclk:ptp=IEEE1588-2008:AA-BB-CC-FF-FE-DD-EE-FF:42"
+        );
+    }
+
+    #[test]
+    fn test_ts_refclk_ptp_default_domain() {
+        let props = FlowProperties {
+            clock_type: GStreamerClockType::Ptp,
+            ptp_domain: None,
+            ..Default::default()
+        };
+
+        let ts_refclk = generate_ts_refclk(Some(&props), None);
+        assert_eq!(
+            ts_refclk,
+            "a=ts-refclk:ptp=IEEE1588-2008:00-00-00-FF-FE-00-00-00:0"
+        );
+    }
+
+    #[test]
+    fn test_ts_refclk_ntp_with_server() {
+        let props = FlowProperties {
+            clock_type: GStreamerClockType::Ntp,
+            ntp_server: Some("ntp.example.com".to_string()),
+            ..Default::default()
+        };
+
+        let ts_refclk = generate_ts_refclk(Some(&props), None);
+        assert_eq!(ts_refclk, "a=ts-refclk:ntp=ntp.example.com");
+    }
+
+    #[test]
+    fn test_ts_refclk_ntp_traceable() {
+        let props = FlowProperties {
+            clock_type: GStreamerClockType::Ntp,
+            ntp_server: None,
+            ..Default::default()
+        };
+
+        let ts_refclk = generate_ts_refclk(Some(&props), None);
+        assert_eq!(ts_refclk, "a=ts-refclk:ntp=/traceable/");
+    }
+
+    #[test]
+    fn test_ts_refclk_local() {
+        let props = FlowProperties {
+            clock_type: GStreamerClockType::Monotonic,
+            ..Default::default()
+        };
+
+        let ts_refclk = generate_ts_refclk(Some(&props), None);
+        assert_eq!(ts_refclk, "a=ts-refclk:local");
+    }
+
+    #[test]
+    fn test_ts_refclk_no_properties() {
+        let ts_refclk = generate_ts_refclk(None, None);
+        assert_eq!(ts_refclk, "a=ts-refclk:local");
+    }
+
+    #[test]
+    fn test_mediaclk_direct() {
+        let mediaclk = generate_mediaclk();
+        assert_eq!(mediaclk, "a=mediaclk:direct=0");
+    }
+
+    #[test]
+    fn test_generate_sdp_with_ptp_clock() {
+        let block = BlockInstance {
+            id: "block_0".to_string(),
+            block_definition_id: "builtin.aes67_output".to_string(),
+            name: None,
+            properties: HashMap::new(),
+            position: strom_types::block::Position { x: 0.0, y: 0.0 },
+            runtime_data: None,
+        };
+
+        let flow_props = FlowProperties {
+            clock_type: GStreamerClockType::Ptp,
+            ptp_domain: Some(127),
+            ..Default::default()
+        };
+
+        let sdp = generate_aes67_output_sdp(
+            &block,
+            "PTP Stream",
+            None,
+            None,
+            Some(&flow_props),
+            Some("12-34-56-FF-FE-78-9A-BC"),
+        );
+
+        assert!(sdp.contains("a=ts-refclk:ptp=IEEE1588-2008:12-34-56-FF-FE-78-9A-BC:127"));
+        assert!(sdp.contains("a=mediaclk:direct=0"));
+    }
+
+    #[test]
+    fn test_generate_sdp_with_ntp_clock() {
+        let block = BlockInstance {
+            id: "block_0".to_string(),
+            block_definition_id: "builtin.aes67_output".to_string(),
+            name: None,
+            properties: HashMap::new(),
+            position: strom_types::block::Position { x: 0.0, y: 0.0 },
+            runtime_data: None,
+        };
+
+        let flow_props = FlowProperties {
+            clock_type: GStreamerClockType::Ntp,
+            ntp_server: Some("time.google.com".to_string()),
+            ..Default::default()
+        };
+
+        let sdp =
+            generate_aes67_output_sdp(&block, "NTP Stream", None, None, Some(&flow_props), None);
+
+        assert!(sdp.contains("a=ts-refclk:ntp=time.google.com"));
+        assert!(sdp.contains("a=mediaclk:direct=0"));
     }
 }
