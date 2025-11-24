@@ -53,71 +53,168 @@ impl BlockBuilder for AES67InputBuilder {
         // Disable RTCP for AES67 input - set as string enum value
         sdpdemux.set_property_from_str("rtcp-mode", "inactivate");
 
-        // Set up pad-added handler to log new SSRC/streams
-        // This is important for debugging SSRC changes in AES67 streams
-        let sdpdemux_id_for_handler = sdpdemux_id.clone();
+        // Set up pad-added handler on sdpdemux to log new streams
+        let sdpdemux_id_for_pad_handler = sdpdemux_id.clone();
         sdpdemux.connect_pad_added(move |element, new_pad| {
             let pad_name = new_pad.name();
-            let caps = new_pad.current_caps();
-
             info!(
                 "AES67 Input [{}]: New pad added: {}",
-                sdpdemux_id_for_handler, pad_name
+                sdpdemux_id_for_pad_handler, pad_name
             );
-
-            // Log caps information if available
-            if let Some(caps) = caps {
-                info!(
-                    "AES67 Input [{}]: Pad {} caps: {}",
-                    sdpdemux_id_for_handler, pad_name, caps
-                );
-            }
-
-            // Try to extract SSRC from the pad name or caps
-            // sdpdemux typically names pads like "src_0", "src_1" etc.
-            // The SSRC might be available in the caps or via RTP info
-            if let Some(caps) = new_pad.current_caps() {
-                if let Some(structure) = caps.structure(0) {
-                    // Check for payload type, clock-rate, encoding-name
-                    if let Ok(pt) = structure.get::<i32>("payload") {
-                        info!(
-                            "AES67 Input [{}]: Pad {} payload type: {}",
-                            sdpdemux_id_for_handler, pad_name, pt
-                        );
-                    }
-                    if let Ok(clock_rate) = structure.get::<i32>("clock-rate") {
-                        info!(
-                            "AES67 Input [{}]: Pad {} clock-rate: {}",
-                            sdpdemux_id_for_handler, pad_name, clock_rate
-                        );
-                    }
-                    if let Ok(encoding_name) = structure.get::<&str>("encoding-name") {
-                        info!(
-                            "AES67 Input [{}]: Pad {} encoding: {}",
-                            sdpdemux_id_for_handler, pad_name, encoding_name
-                        );
-                    }
-                }
-            }
 
             // Log element state for debugging
             let (_, current_state, _) = element.state(gst::ClockTime::ZERO);
             info!(
                 "AES67 Input [{}]: Element state when pad added: {:?}",
-                sdpdemux_id_for_handler, current_state
+                sdpdemux_id_for_pad_handler, current_state
             );
 
             // Check if pad is already linked
             if new_pad.is_linked() {
                 info!(
                     "AES67 Input [{}]: Pad {} is already linked",
-                    sdpdemux_id_for_handler, pad_name
+                    sdpdemux_id_for_pad_handler, pad_name
                 );
             } else {
                 warn!(
                     "AES67 Input [{}]: Pad {} is NOT linked - downstream needs to handle this!",
-                    sdpdemux_id_for_handler, pad_name
+                    sdpdemux_id_for_pad_handler, pad_name
                 );
+            }
+        });
+
+        // sdpdemux is a GstBin - we can listen for element-added to find internal rtpbin
+        // and attach handlers for SSRC changes
+        let sdpdemux_id_for_element_handler = sdpdemux_id.clone();
+        let sdpdemux_bin = sdpdemux
+            .clone()
+            .dynamic_cast::<gst::Bin>()
+            .expect("sdpdemux should be a Bin");
+
+        sdpdemux_bin.connect_element_added(move |bin, element| {
+            let element_name = element.name();
+            let factory_name = element
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            info!(
+                "AES67 Input [{}]: Internal element added: {} (type: {})",
+                sdpdemux_id_for_element_handler, element_name, factory_name
+            );
+
+            // Look for rtpbin to attach SSRC change handlers
+            if factory_name == "rtpbin" {
+                info!(
+                    "AES67 Input [{}]: Found rtpbin '{}', attaching SSRC handlers",
+                    sdpdemux_id_for_element_handler, element_name
+                );
+
+                let sdpdemux_id_for_rtpbin = sdpdemux_id_for_element_handler.clone();
+                let bin_weak = bin.downgrade();
+
+                // Handle new pads from rtpbin (new SSRCs)
+                element.connect_pad_added(move |_rtpbin, new_pad| {
+                    let pad_name = new_pad.name();
+                    info!(
+                        "AES67 Input [{}]: rtpbin pad added: {}",
+                        sdpdemux_id_for_rtpbin, pad_name
+                    );
+
+                    // rtpbin pads are named like: recv_rtp_src_<session>_<ssrc>_<pt>
+                    // e.g., recv_rtp_src_0_2370698924_96
+                    // Split: [recv, rtp, src, 0, 2370698924, 96] -> indices 0-5
+                    if pad_name.to_string().starts_with("recv_rtp_src_") {
+                        // Extract SSRC from pad name
+                        let parts: Vec<&str> = pad_name.split('_').collect();
+                        if parts.len() >= 6 {
+                            let session = parts[3];
+                            let ssrc = parts[4];
+                            let pt = parts[5];
+                            info!(
+                                "AES67 Input [{}]: New SSRC detected: {} (session: {}, PT: {})",
+                                sdpdemux_id_for_rtpbin, ssrc, session, pt
+                            );
+                        }
+
+                        // Check if pad is linked
+                        if new_pad.is_linked() {
+                            info!(
+                                "AES67 Input [{}]: rtpbin pad {} is linked",
+                                sdpdemux_id_for_rtpbin, pad_name
+                            );
+                        } else {
+                            warn!(
+                                "AES67 Input [{}]: rtpbin pad {} is NOT linked - SSRC change may need handling!",
+                                sdpdemux_id_for_rtpbin, pad_name
+                            );
+
+                            // Try to find the ghost pad (stream_0) and reconnect
+                            // bin_weak points to sdpdemux itself (from connect_element_added)
+                            if let Some(sdpdemux_bin) = bin_weak.upgrade() {
+                                // sdpdemux_bin IS the sdpdemux, stream_0 is directly on it
+                                // Look for stream_0 ghost pad
+                                if let Some(stream_pad) = sdpdemux_bin.static_pad("stream_0") {
+                                    info!(
+                                        "AES67 Input [{}]: Found stream_0 pad, attempting retarget",
+                                        sdpdemux_id_for_rtpbin
+                                    );
+
+                                    // Check if stream_0's internal target is linked to old SSRC
+                                    if let Some(ghost_pad) =
+                                        stream_pad.dynamic_cast_ref::<gst::GhostPad>()
+                                    {
+                                        if let Some(target) = ghost_pad.target() {
+                                            info!(
+                                                "AES67 Input [{}]: stream_0 current target: {}",
+                                                sdpdemux_id_for_rtpbin,
+                                                target.name()
+                                            );
+                                        }
+
+                                        // Retarget ghost pad to new SSRC pad
+                                        if ghost_pad.set_target(Some(new_pad)).is_ok() {
+                                            info!(
+                                                "AES67 Input [{}]: Successfully retargeted stream_0 to new SSRC pad {}",
+                                                sdpdemux_id_for_rtpbin, pad_name
+                                            );
+                                        } else {
+                                            warn!(
+                                                "AES67 Input [{}]: Failed to retarget stream_0 to {}",
+                                                sdpdemux_id_for_rtpbin, pad_name
+                                            );
+                                        }
+                                    } else {
+                                        warn!(
+                                            "AES67 Input [{}]: stream_0 is not a GhostPad",
+                                            sdpdemux_id_for_rtpbin
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        "AES67 Input [{}]: Could not find stream_0 pad on sdpdemux",
+                                        sdpdemux_id_for_rtpbin
+                                    );
+                                }
+                            } else {
+                                warn!(
+                                    "AES67 Input [{}]: Could not upgrade weak reference to sdpdemux",
+                                    sdpdemux_id_for_rtpbin
+                                );
+                            }
+                        }
+                    }
+                });
+
+                // Also handle pad-removed for cleanup
+                let sdpdemux_id_for_removed = sdpdemux_id_for_element_handler.clone();
+                element.connect_pad_removed(move |_rtpbin, removed_pad| {
+                    let pad_name = removed_pad.name();
+                    info!(
+                        "AES67 Input [{}]: rtpbin pad removed: {}",
+                        sdpdemux_id_for_removed, pad_name
+                    );
+                });
             }
         });
 
