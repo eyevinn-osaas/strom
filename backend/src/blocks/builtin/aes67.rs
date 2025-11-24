@@ -32,6 +32,41 @@ impl BlockBuilder for AES67InputBuilder {
             })
             .ok_or_else(|| BlockBuildError::InvalidProperty("SDP property required".to_string()))?;
 
+        // Get decode property (default: true)
+        let decode = properties
+            .get("decode")
+            .and_then(|v| match v {
+                PropertyValue::Bool(b) => Some(*b),
+                PropertyValue::String(s) => s.parse::<bool>().ok(),
+                _ => None,
+            })
+            .unwrap_or(true);
+
+        // Get latency_ms property (default: 200)
+        let latency_ms = properties
+            .get("latency_ms")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as u32),
+                PropertyValue::String(s) => s.parse::<u32>().ok(),
+                _ => None,
+            })
+            .unwrap_or(200);
+
+        // Get timeout_ms property (default: 0 = disabled/indefinite)
+        let timeout_ms = properties
+            .get("timeout_ms")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as u64),
+                PropertyValue::String(s) => s.parse::<u64>().ok(),
+                _ => None,
+            })
+            .unwrap_or(0);
+
+        debug!(
+            "AES67 Input [{}]: decode={}, latency_ms={}, timeout_ms={}",
+            instance_id, decode, latency_ms, timeout_ms
+        );
+
         // Write SDP to temp file
         let sdp_file_path = write_temp_file(sdp_content)?;
 
@@ -47,6 +82,8 @@ impl BlockBuilder for AES67InputBuilder {
 
         let sdpdemux = gst::ElementFactory::make("sdpdemux")
             .name(&sdpdemux_id)
+            .property("latency", latency_ms) // Jitterbuffer latency in ms
+            .property("timeout", timeout_ms * 1000) // Convert ms to microseconds (0 = disabled)
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("sdpdemux: {}", e)))?;
 
@@ -218,17 +255,99 @@ impl BlockBuilder for AES67InputBuilder {
             }
         });
 
-        Ok(BlockBuildResult {
-            elements: vec![
-                (filesrc_id.clone(), filesrc),
-                (sdpdemux_id.clone(), sdpdemux),
-            ],
-            internal_links: vec![(
-                format!("{}:src", filesrc_id),
-                format!("{}:sink", sdpdemux_id),
-            )],
-            bus_watch_setup: None,
-        })
+        // Build result depends on decode setting
+        if decode {
+            // Create decode chain: decodebin -> audioconvert -> audioresample
+            let decodebin_id = format!("{}:decodebin", instance_id);
+            let audioconvert_id = format!("{}:audioconvert", instance_id);
+            let audioresample_id = format!("{}:audioresample", instance_id);
+
+            let decodebin = gst::ElementFactory::make("decodebin")
+                .name(&decodebin_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("decodebin: {}", e)))?;
+
+            let audioconvert = gst::ElementFactory::make("audioconvert")
+                .name(&audioconvert_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+
+            let audioresample = gst::ElementFactory::make("audioresample")
+                .name(&audioresample_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+
+            // Set up pad-added handler on decodebin to link to audioconvert
+            let audioconvert_weak = audioconvert.downgrade();
+            let decodebin_id_clone = decodebin_id.clone();
+            decodebin.connect_pad_added(move |_element, new_pad| {
+                let pad_name = new_pad.name();
+                info!(
+                    "AES67 Input decodebin [{}]: New pad added: {}",
+                    decodebin_id_clone, pad_name
+                );
+
+                // Only link audio pads
+                if let Some(caps) = new_pad.current_caps() {
+                    let structure = caps.structure(0);
+                    if let Some(s) = structure {
+                        let name = s.name();
+                        if name.starts_with("audio/") {
+                            if let Some(audioconvert) = audioconvert_weak.upgrade() {
+                                if let Some(sink_pad) = audioconvert.static_pad("sink") {
+                                    if !sink_pad.is_linked() && new_pad.link(&sink_pad).is_ok() {
+                                        info!(
+                                            "AES67 Input decodebin [{}]: Linked {} to audioconvert",
+                                            decodebin_id_clone, pad_name
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            Ok(BlockBuildResult {
+                elements: vec![
+                    (filesrc_id.clone(), filesrc),
+                    (sdpdemux_id.clone(), sdpdemux),
+                    (decodebin_id.clone(), decodebin),
+                    (audioconvert_id.clone(), audioconvert),
+                    (audioresample_id.clone(), audioresample),
+                ],
+                internal_links: vec![
+                    (
+                        format!("{}:src", filesrc_id),
+                        format!("{}:sink", sdpdemux_id),
+                    ),
+                    // sdpdemux:stream_0 -> decodebin:sink (dynamic pad - pipeline builder handles)
+                    (
+                        format!("{}:stream_0", sdpdemux_id),
+                        format!("{}:sink", decodebin_id),
+                    ),
+                    // decodebin -> audioconvert is dynamic (handled by pad-added above)
+                    (
+                        format!("{}:src", audioconvert_id),
+                        format!("{}:sink", audioresample_id),
+                    ),
+                ],
+                bus_watch_setup: None,
+            })
+        } else {
+            // No decode - output RTP stream directly
+            Ok(BlockBuildResult {
+                elements: vec![
+                    (filesrc_id.clone(), filesrc),
+                    (sdpdemux_id.clone(), sdpdemux),
+                ],
+                internal_links: vec![(
+                    format!("{}:src", filesrc_id),
+                    format!("{}:sink", sdpdemux_id),
+                )],
+                bus_watch_setup: None,
+            })
+        }
     }
 }
 
@@ -411,25 +530,63 @@ fn aes67_input_definition() -> BlockDefinition {
         name: "AES67 Input".to_string(),
         description: "Receive AES67 audio stream via RTP using SDP description".to_string(),
         category: "Inputs".to_string(),
-        exposed_properties: vec![ExposedProperty {
-            name: "SDP".to_string(),
-            description: "SDP text describing the AES67 stream (paste SDP content here)"
-                .to_string(),
-            property_type: PropertyType::Multiline,
-            default_value: None,
-            mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: "SDP".to_string(),
-                transform: None,
+        exposed_properties: vec![
+            ExposedProperty {
+                name: "SDP".to_string(),
+                description: "SDP text describing the AES67 stream (paste SDP content here)"
+                    .to_string(),
+                property_type: PropertyType::Multiline,
+                default_value: None,
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "SDP".to_string(),
+                    transform: None,
+                },
             },
-        }],
+            ExposedProperty {
+                name: "decode".to_string(),
+                description: "Decode RTP to raw audio (decodebin + audioconvert + audioresample)"
+                    .to_string(),
+                property_type: PropertyType::Bool,
+                default_value: Some(PropertyValue::Bool(true)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "decode".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "latency_ms".to_string(),
+                description: "Jitterbuffer latency in milliseconds".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(200)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "latency_ms".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "timeout_ms".to_string(),
+                description: "UDP timeout in milliseconds (0 = disabled/indefinite)".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(0)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "timeout_ms".to_string(),
+                    transform: None,
+                },
+            },
+        ],
         external_pads: ExternalPads {
             inputs: vec![],
             outputs: vec![ExternalPad {
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
-                internal_element_id: "sdpdemux".to_string(),
-                internal_pad_name: "stream_0".to_string(),
+                // When decode=true (default), output is from audioresample
+                // When decode=false, pipeline builder will use sdpdemux:stream_0 directly
+                internal_element_id: "audioresample".to_string(),
+                internal_pad_name: "src".to_string(),
             }],
         },
         built_in: true,
