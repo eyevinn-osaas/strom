@@ -1338,34 +1338,36 @@ impl PipelineManager {
         use strom_types::flow::{ClockSyncStatus, GStreamerClockType};
 
         match self.properties.clock_type {
-            GStreamerClockType::Ptp | GStreamerClockType::Ntp => {
-                // Get the pipeline's clock
+            GStreamerClockType::Ptp => {
+                // For PTP clocks, use the is_synced() method from gst::Clock trait
+                // This returns true only when the clock has synchronized with a PTP master
                 if let Some(clock) = self.pipeline.clock() {
-                    // For PTP/NTP clocks, check if they're synced
-                    // Try to get the "synced" property (may not exist on all clock types)
-                    if clock.has_property("synced") {
-                        let synced = clock.property::<bool>("synced");
-                        if synced {
-                            ClockSyncStatus::Synced
-                        } else {
-                            ClockSyncStatus::NotSynced
-                        }
+                    if clock.is_synced() {
+                        ClockSyncStatus::Synced
                     } else {
-                        // Property doesn't exist, fall back to checking if clock is working
-                        let time = clock.time();
-                        if time.is_some() {
-                            // Clock is providing time, assume synced
-                            ClockSyncStatus::Synced
-                        } else {
-                            ClockSyncStatus::NotSynced
-                        }
+                        ClockSyncStatus::NotSynced
                     }
                 } else {
-                    ClockSyncStatus::Unknown
+                    // No clock set yet
+                    ClockSyncStatus::NotSynced
+                }
+            }
+            GStreamerClockType::Ntp => {
+                // For NTP clocks, use the is_synced() method from gst::Clock trait
+                // Note: NTP clock not fully implemented yet, so this is best-effort
+                if let Some(clock) = self.pipeline.clock() {
+                    if clock.is_synced() {
+                        ClockSyncStatus::Synced
+                    } else {
+                        ClockSyncStatus::NotSynced
+                    }
+                } else {
+                    ClockSyncStatus::NotSynced
                 }
             }
             _ => {
-                // For other clock types, sync status is not applicable
+                // For other clock types (Monotonic, Realtime, PipelineDefault),
+                // sync status is not applicable - these are local clocks
                 ClockSyncStatus::Unknown
             }
         }
