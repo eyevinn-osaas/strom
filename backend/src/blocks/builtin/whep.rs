@@ -359,7 +359,7 @@ impl BlockBuilder for WHEPInputBuilder {
                 (output_audioresample_id, output_audioresample),
             ],
             internal_links,
-            bus_watch_setup: None,
+            bus_message_handler: None,
         })
     }
 }

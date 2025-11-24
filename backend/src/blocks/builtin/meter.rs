@@ -52,17 +52,17 @@ impl BlockBuilder for MeterBuilder {
 
         tracing::info!("📊 Level element created successfully: {}", level_id);
 
-        // Create a bus watch setup function that will be called when the pipeline starts
-        let bus_watch_setup = Some(Box::new(
+        // Create a bus message handler that will be called when the pipeline starts
+        let bus_message_handler = Some(Box::new(
             move |bus: &gst::Bus, flow_id: FlowId, events: EventBroadcaster| {
-                setup_level_bus_watch(bus, flow_id, events)
+                connect_level_message_handler(bus, flow_id, events)
             },
-        ) as crate::blocks::BusWatchSetupFn);
+        ) as crate::blocks::BusMessageConnectFn);
 
         Ok(BlockBuildResult {
             elements: vec![(level_id, level)],
             internal_links: vec![], // No internal links - it's a single element
-            bus_watch_setup,
+            bus_message_handler,
         })
     }
 }
@@ -81,19 +81,23 @@ fn extract_level_values(structure: &gst::StructureRef, field_name: &str) -> Vec<
     }
 }
 
-/// Set up a bus watch specifically for level messages from the meter block.
-/// This is called when the pipeline starts and attaches a dedicated bus watch
-/// that only handles level messages.
-fn setup_level_bus_watch(
+/// Connect a message handler for level messages from the meter block.
+/// This is called when the pipeline starts and uses `connect_message` which
+/// allows multiple handlers (unlike `add_watch` which only allows one).
+fn connect_level_message_handler(
     bus: &gst::Bus,
     flow_id: FlowId,
     events: EventBroadcaster,
-) -> Result<gst::bus::BusWatchGuard, gst::glib::BoolError> {
+) -> gst::glib::SignalHandlerId {
     use gst::MessageView;
 
-    debug!("📊 Setting up dedicated bus watch for level messages");
+    debug!("📊 Connecting level message handler via connect_message");
 
-    bus.add_watch(move |_bus, msg| {
+    // First ensure signal watch is enabled (this is ref-counted, safe to call multiple times)
+    bus.add_signal_watch();
+
+    // Connect to message signal - this allows multiple handlers unlike add_watch
+    bus.connect_message(None, move |_bus, msg| {
         // Only handle element messages with "level" structure
         if let MessageView::Element(element_msg) = msg.view() {
             if let Some(s) = element_msg.structure() {
@@ -150,8 +154,6 @@ fn setup_level_bus_watch(
                 }
             }
         }
-
-        gst::glib::ControlFlow::Continue
     })
 }
 
