@@ -2,11 +2,17 @@
 
 use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
+use gstreamer::prelude::*;
 use std::collections::HashMap;
 use std::io::Write;
 use std::str::FromStr;
 use strom_types::{block::*, PropertyValue, *};
-use tracing::debug;
+use tracing::{debug, info, warn};
+
+// AES67 Input defaults
+const AES67_INPUT_DEFAULT_DECODE: bool = true;
+const AES67_INPUT_DEFAULT_LATENCY_MS: i64 = 20;
+const AES67_INPUT_DEFAULT_TIMEOUT_MS: i64 = 0;
 
 /// AES67 Input block builder.
 pub struct AES67InputBuilder;
@@ -31,6 +37,41 @@ impl BlockBuilder for AES67InputBuilder {
             })
             .ok_or_else(|| BlockBuildError::InvalidProperty("SDP property required".to_string()))?;
 
+        // Get decode property
+        let decode = properties
+            .get("decode")
+            .and_then(|v| match v {
+                PropertyValue::Bool(b) => Some(*b),
+                PropertyValue::String(s) => s.parse::<bool>().ok(),
+                _ => None,
+            })
+            .unwrap_or(AES67_INPUT_DEFAULT_DECODE);
+
+        // Get latency_ms property
+        let latency_ms = properties
+            .get("latency_ms")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as u32),
+                PropertyValue::String(s) => s.parse::<u32>().ok(),
+                _ => None,
+            })
+            .unwrap_or(AES67_INPUT_DEFAULT_LATENCY_MS as u32);
+
+        // Get timeout_ms property (0 = disabled/indefinite)
+        let timeout_ms = properties
+            .get("timeout_ms")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as u64),
+                PropertyValue::String(s) => s.parse::<u64>().ok(),
+                _ => None,
+            })
+            .unwrap_or(AES67_INPUT_DEFAULT_TIMEOUT_MS as u64);
+
+        debug!(
+            "AES67 Input [{}]: decode={}, latency_ms={}, timeout_ms={}",
+            instance_id, decode, latency_ms, timeout_ms
+        );
+
         // Write SDP to temp file
         let sdp_file_path = write_temp_file(sdp_content)?;
 
@@ -46,20 +87,272 @@ impl BlockBuilder for AES67InputBuilder {
 
         let sdpdemux = gst::ElementFactory::make("sdpdemux")
             .name(&sdpdemux_id)
+            .property("latency", latency_ms) // Jitterbuffer latency in ms
+            .property("timeout", timeout_ms * 1000) // Convert ms to microseconds (0 = disabled)
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("sdpdemux: {}", e)))?;
 
-        Ok(BlockBuildResult {
-            elements: vec![
-                (filesrc_id.clone(), filesrc),
-                (sdpdemux_id.clone(), sdpdemux),
-            ],
-            internal_links: vec![(
-                format!("{}:src", filesrc_id),
-                format!("{}:sink", sdpdemux_id),
-            )],
-            bus_watch_setup: None,
-        })
+        // Disable RTCP for AES67 input - set as string enum value
+        sdpdemux.set_property_from_str("rtcp-mode", "inactivate");
+
+        // Set up pad-added handler on sdpdemux to log new streams
+        let sdpdemux_id_for_pad_handler = sdpdemux_id.clone();
+        sdpdemux.connect_pad_added(move |element, new_pad| {
+            let pad_name = new_pad.name();
+            info!(
+                "AES67 Input [{}]: New pad added: {}",
+                sdpdemux_id_for_pad_handler, pad_name
+            );
+
+            // Log element state for debugging
+            let (_, current_state, _) = element.state(gst::ClockTime::ZERO);
+            info!(
+                "AES67 Input [{}]: Element state when pad added: {:?}",
+                sdpdemux_id_for_pad_handler, current_state
+            );
+
+            // Check if pad is already linked
+            if new_pad.is_linked() {
+                info!(
+                    "AES67 Input [{}]: Pad {} is already linked",
+                    sdpdemux_id_for_pad_handler, pad_name
+                );
+            } else {
+                warn!(
+                    "AES67 Input [{}]: Pad {} is NOT linked - downstream needs to handle this!",
+                    sdpdemux_id_for_pad_handler, pad_name
+                );
+            }
+        });
+
+        // sdpdemux is a GstBin - we can listen for element-added to find internal rtpbin
+        // and attach handlers for SSRC changes
+        let sdpdemux_id_for_element_handler = sdpdemux_id.clone();
+        let sdpdemux_bin = sdpdemux
+            .clone()
+            .dynamic_cast::<gst::Bin>()
+            .expect("sdpdemux should be a Bin");
+
+        sdpdemux_bin.connect_element_added(move |bin, element| {
+            let element_name = element.name();
+            let factory_name = element
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            info!(
+                "AES67 Input [{}]: Internal element added: {} (type: {})",
+                sdpdemux_id_for_element_handler, element_name, factory_name
+            );
+
+            // Look for rtpbin to attach SSRC change handlers
+            if factory_name == "rtpbin" {
+                info!(
+                    "AES67 Input [{}]: Found rtpbin '{}', attaching SSRC handlers",
+                    sdpdemux_id_for_element_handler, element_name
+                );
+
+                let sdpdemux_id_for_rtpbin = sdpdemux_id_for_element_handler.clone();
+                let bin_weak = bin.downgrade();
+
+                // Handle new pads from rtpbin (new SSRCs)
+                element.connect_pad_added(move |_rtpbin, new_pad| {
+                    let pad_name = new_pad.name();
+                    info!(
+                        "AES67 Input [{}]: rtpbin pad added: {}",
+                        sdpdemux_id_for_rtpbin, pad_name
+                    );
+
+                    // rtpbin pads are named like: recv_rtp_src_<session>_<ssrc>_<pt>
+                    // e.g., recv_rtp_src_0_2370698924_96
+                    // Split: [recv, rtp, src, 0, 2370698924, 96] -> indices 0-5
+                    if pad_name.to_string().starts_with("recv_rtp_src_") {
+                        // Extract SSRC from pad name
+                        let parts: Vec<&str> = pad_name.split('_').collect();
+                        if parts.len() >= 6 {
+                            let session = parts[3];
+                            let ssrc = parts[4];
+                            let pt = parts[5];
+                            info!(
+                                "AES67 Input [{}]: New SSRC detected: {} (session: {}, PT: {})",
+                                sdpdemux_id_for_rtpbin, ssrc, session, pt
+                            );
+                        }
+
+                        // Check if pad is linked
+                        if new_pad.is_linked() {
+                            info!(
+                                "AES67 Input [{}]: rtpbin pad {} is linked",
+                                sdpdemux_id_for_rtpbin, pad_name
+                            );
+                        } else {
+                            warn!(
+                                "AES67 Input [{}]: rtpbin pad {} is NOT linked - SSRC change may need handling!",
+                                sdpdemux_id_for_rtpbin, pad_name
+                            );
+
+                            // Try to find the ghost pad (stream_0) and reconnect
+                            // bin_weak points to sdpdemux itself (from connect_element_added)
+                            if let Some(sdpdemux_bin) = bin_weak.upgrade() {
+                                // sdpdemux_bin IS the sdpdemux, stream_0 is directly on it
+                                // Look for stream_0 ghost pad
+                                if let Some(stream_pad) = sdpdemux_bin.static_pad("stream_0") {
+                                    info!(
+                                        "AES67 Input [{}]: Found stream_0 pad, attempting retarget",
+                                        sdpdemux_id_for_rtpbin
+                                    );
+
+                                    // Check if stream_0's internal target is linked to old SSRC
+                                    if let Some(ghost_pad) =
+                                        stream_pad.dynamic_cast_ref::<gst::GhostPad>()
+                                    {
+                                        if let Some(target) = ghost_pad.target() {
+                                            info!(
+                                                "AES67 Input [{}]: stream_0 current target: {}",
+                                                sdpdemux_id_for_rtpbin,
+                                                target.name()
+                                            );
+                                        }
+
+                                        // Retarget ghost pad to new SSRC pad
+                                        if ghost_pad.set_target(Some(new_pad)).is_ok() {
+                                            info!(
+                                                "AES67 Input [{}]: Successfully retargeted stream_0 to new SSRC pad {}",
+                                                sdpdemux_id_for_rtpbin, pad_name
+                                            );
+                                        } else {
+                                            warn!(
+                                                "AES67 Input [{}]: Failed to retarget stream_0 to {}",
+                                                sdpdemux_id_for_rtpbin, pad_name
+                                            );
+                                        }
+                                    } else {
+                                        warn!(
+                                            "AES67 Input [{}]: stream_0 is not a GhostPad",
+                                            sdpdemux_id_for_rtpbin
+                                        );
+                                    }
+                                } else {
+                                    warn!(
+                                        "AES67 Input [{}]: Could not find stream_0 pad on sdpdemux",
+                                        sdpdemux_id_for_rtpbin
+                                    );
+                                }
+                            } else {
+                                warn!(
+                                    "AES67 Input [{}]: Could not upgrade weak reference to sdpdemux",
+                                    sdpdemux_id_for_rtpbin
+                                );
+                            }
+                        }
+                    }
+                });
+
+                // Also handle pad-removed for cleanup
+                let sdpdemux_id_for_removed = sdpdemux_id_for_element_handler.clone();
+                element.connect_pad_removed(move |_rtpbin, removed_pad| {
+                    let pad_name = removed_pad.name();
+                    info!(
+                        "AES67 Input [{}]: rtpbin pad removed: {}",
+                        sdpdemux_id_for_removed, pad_name
+                    );
+                });
+            }
+        });
+
+        // Build result depends on decode setting
+        if decode {
+            // Create decode chain: decodebin -> audioconvert -> audioresample
+            let decodebin_id = format!("{}:decodebin", instance_id);
+            let audioconvert_id = format!("{}:audioconvert", instance_id);
+            let audioresample_id = format!("{}:audioresample", instance_id);
+
+            let decodebin = gst::ElementFactory::make("decodebin")
+                .name(&decodebin_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("decodebin: {}", e)))?;
+
+            let audioconvert = gst::ElementFactory::make("audioconvert")
+                .name(&audioconvert_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+
+            let audioresample = gst::ElementFactory::make("audioresample")
+                .name(&audioresample_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+
+            // Set up pad-added handler on decodebin to link to audioconvert
+            let audioconvert_weak = audioconvert.downgrade();
+            let decodebin_id_clone = decodebin_id.clone();
+            decodebin.connect_pad_added(move |_element, new_pad| {
+                let pad_name = new_pad.name();
+                info!(
+                    "AES67 Input decodebin [{}]: New pad added: {}",
+                    decodebin_id_clone, pad_name
+                );
+
+                // Only link audio pads
+                if let Some(caps) = new_pad.current_caps() {
+                    let structure = caps.structure(0);
+                    if let Some(s) = structure {
+                        let name = s.name();
+                        if name.starts_with("audio/") {
+                            if let Some(audioconvert) = audioconvert_weak.upgrade() {
+                                if let Some(sink_pad) = audioconvert.static_pad("sink") {
+                                    if !sink_pad.is_linked() && new_pad.link(&sink_pad).is_ok() {
+                                        info!(
+                                            "AES67 Input decodebin [{}]: Linked {} to audioconvert",
+                                            decodebin_id_clone, pad_name
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            Ok(BlockBuildResult {
+                elements: vec![
+                    (filesrc_id.clone(), filesrc),
+                    (sdpdemux_id.clone(), sdpdemux),
+                    (decodebin_id.clone(), decodebin),
+                    (audioconvert_id.clone(), audioconvert),
+                    (audioresample_id.clone(), audioresample),
+                ],
+                internal_links: vec![
+                    (
+                        format!("{}:src", filesrc_id),
+                        format!("{}:sink", sdpdemux_id),
+                    ),
+                    // sdpdemux:stream_0 -> decodebin:sink (dynamic pad - pipeline builder handles)
+                    (
+                        format!("{}:stream_0", sdpdemux_id),
+                        format!("{}:sink", decodebin_id),
+                    ),
+                    // decodebin -> audioconvert is dynamic (handled by pad-added above)
+                    (
+                        format!("{}:src", audioconvert_id),
+                        format!("{}:sink", audioresample_id),
+                    ),
+                ],
+                bus_watch_setup: None,
+            })
+        } else {
+            // No decode - output RTP stream directly
+            Ok(BlockBuildResult {
+                elements: vec![
+                    (filesrc_id.clone(), filesrc),
+                    (sdpdemux_id.clone(), sdpdemux),
+                ],
+                internal_links: vec![(
+                    format!("{}:src", filesrc_id),
+                    format!("{}:sink", sdpdemux_id),
+                )],
+                bus_watch_setup: None,
+            })
+        }
     }
 }
 
@@ -242,25 +535,63 @@ fn aes67_input_definition() -> BlockDefinition {
         name: "AES67 Input".to_string(),
         description: "Receive AES67 audio stream via RTP using SDP description".to_string(),
         category: "Inputs".to_string(),
-        exposed_properties: vec![ExposedProperty {
-            name: "SDP".to_string(),
-            description: "SDP text describing the AES67 stream (paste SDP content here)"
-                .to_string(),
-            property_type: PropertyType::Multiline,
-            default_value: None,
-            mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: "SDP".to_string(),
-                transform: None,
+        exposed_properties: vec![
+            ExposedProperty {
+                name: "SDP".to_string(),
+                description: "SDP text describing the AES67 stream (paste SDP content here)"
+                    .to_string(),
+                property_type: PropertyType::Multiline,
+                default_value: None,
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "SDP".to_string(),
+                    transform: None,
+                },
             },
-        }],
+            ExposedProperty {
+                name: "decode".to_string(),
+                description: "Decode RTP to raw audio (decodebin + audioconvert + audioresample)"
+                    .to_string(),
+                property_type: PropertyType::Bool,
+                default_value: Some(PropertyValue::Bool(AES67_INPUT_DEFAULT_DECODE)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "decode".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "latency_ms".to_string(),
+                description: "Jitterbuffer latency in milliseconds".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_LATENCY_MS)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "latency_ms".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "timeout_ms".to_string(),
+                description: "UDP timeout in milliseconds (0 = disabled/indefinite)".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_TIMEOUT_MS)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "timeout_ms".to_string(),
+                    transform: None,
+                },
+            },
+        ],
         external_pads: ExternalPads {
             inputs: vec![],
             outputs: vec![ExternalPad {
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
-                internal_element_id: "sdpdemux".to_string(),
-                internal_pad_name: "src_0".to_string(),
+                // When decode=true (default), output is from audioresample
+                // When decode=false, pipeline builder will use sdpdemux:stream_0 directly
+                internal_element_id: "audioresample".to_string(),
+                internal_pad_name: "src".to_string(),
             }],
         },
         built_in: true,
