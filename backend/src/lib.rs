@@ -92,6 +92,10 @@ pub async fn create_app_with_state_and_auth(
             patch(api::flows::update_flow_properties),
         )
         .route(
+            "/flows/{id}/webrtc-stats",
+            get(api::flows::get_webrtc_stats),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/sdp",
             get(api::flows::get_block_sdp),
         )

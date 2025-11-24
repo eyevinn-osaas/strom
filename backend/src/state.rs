@@ -633,6 +633,20 @@ impl AppState {
         manager.get_pad_property(element_id, pad_name, property_name)
     }
 
+    /// Get WebRTC statistics from a running flow's pipeline.
+    pub async fn get_webrtc_stats(
+        &self,
+        flow_id: &FlowId,
+    ) -> Result<strom_types::api::WebRtcStats, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        Ok(manager.get_webrtc_stats())
+    }
+
     /// Query the latency of a running pipeline.
     /// Returns (min_latency_ns, max_latency_ns, live) if query succeeds.
     pub async fn get_flow_latency(&self, flow_id: &FlowId) -> Option<(u64, u64, bool)> {

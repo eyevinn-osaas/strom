@@ -533,12 +533,13 @@ fn aes67_input_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.aes67_input".to_string(),
         name: "AES67 Input".to_string(),
-        description: "Receive AES67 audio stream via RTP using SDP description".to_string(),
+        description: "Receives AES67/Ravenna audio via RTP multicast. Uses sdpdemux to parse SDP and decode the incoming stream.".to_string(),
         category: "Inputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
                 name: "SDP".to_string(),
-                description: "SDP text describing the AES67 stream (paste SDP content here)"
+                label: "SDP".to_string(),
+                description: "Session Description Protocol content describing the stream source"
                     .to_string(),
                 property_type: PropertyType::Multiline,
                 default_value: None,
@@ -550,6 +551,7 @@ fn aes67_input_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "decode".to_string(),
+                label: "Decode".to_string(),
                 description: "Decode RTP to raw audio (decodebin + audioconvert + audioresample)"
                     .to_string(),
                 property_type: PropertyType::Bool,
@@ -562,6 +564,7 @@ fn aes67_input_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "latency_ms".to_string(),
+                label: "Latency (ms)".to_string(),
                 description: "Jitterbuffer latency in milliseconds".to_string(),
                 property_type: PropertyType::Int,
                 default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_LATENCY_MS)),
@@ -573,6 +576,7 @@ fn aes67_input_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "timeout_ms".to_string(),
+                label: "Timeout (ms)".to_string(),
                 description: "UDP timeout in milliseconds (0 = disabled/indefinite)".to_string(),
                 property_type: PropertyType::Int,
                 default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_TIMEOUT_MS)),
@@ -609,12 +613,13 @@ fn aes67_output_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.aes67_output".to_string(),
         name: "AES67 Output".to_string(),
-        description: "Send AES67 audio stream via RTP with configurable format".to_string(),
+        description: "Sends AES67/Ravenna audio via RTP multicast. Supports L16/L24 encoding with configurable packet time.".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
                 name: "bit_depth".to_string(),
-                description: "Audio bit depth".to_string(),
+                label: "Bit Depth".to_string(),
+                description: "Audio sample bit depth (16 or 24 bit PCM)".to_string(),
                 property_type: PropertyType::Enum {
                     values: vec!["16".to_string(), "24".to_string()],
                 },
@@ -627,7 +632,8 @@ fn aes67_output_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "sample_rate".to_string(),
-                description: "Sample rate in Hz".to_string(),
+                label: "Sample Rate".to_string(),
+                description: "Audio sample rate in Hz".to_string(),
                 property_type: PropertyType::Enum {
                     values: vec![
                         "32000".to_string(),
@@ -648,6 +654,7 @@ fn aes67_output_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "channels".to_string(),
+                label: "Channels".to_string(),
                 description: "Number of audio channels (1-8)".to_string(),
                 property_type: PropertyType::Int,
                 default_value: Some(PropertyValue::Int(2)),
@@ -659,7 +666,8 @@ fn aes67_output_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "ptime".to_string(),
-                description: "Packet time in milliseconds".to_string(),
+                label: "Packet Time (ms)".to_string(),
+                description: "RTP packet duration in milliseconds".to_string(),
                 property_type: PropertyType::Enum {
                     values: vec![
                         "0.125".to_string(),
@@ -677,7 +685,8 @@ fn aes67_output_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "host".to_string(),
-                description: "Destination IP address (multicast)".to_string(),
+                label: "Multicast Address".to_string(),
+                description: "Destination multicast IP address".to_string(),
                 property_type: PropertyType::String,
                 default_value: Some(PropertyValue::String("239.69.1.1".to_string())),
                 mapping: PropertyMapping {
@@ -688,7 +697,8 @@ fn aes67_output_definition() -> BlockDefinition {
             },
             ExposedProperty {
                 name: "port".to_string(),
-                description: "Destination UDP port".to_string(),
+                label: "UDP Port".to_string(),
+                description: "Destination UDP port number".to_string(),
                 property_type: PropertyType::Int,
                 default_value: Some(PropertyValue::Int(5004)),
                 mapping: PropertyMapping {

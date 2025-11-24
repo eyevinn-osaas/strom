@@ -299,6 +299,7 @@ impl PropertyInspector {
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
         meter_data_store: &crate::meter::MeterDataStore,
+        webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
         stats: Option<&crate::api::FlowStatsInfo>,
     ) -> bool {
         let block_id = block.id.clone();
@@ -316,6 +317,15 @@ impl PropertyInspector {
                 ui.label("ID:");
                 ui.monospace(&block.id);
             });
+
+            // Block description
+            if !definition.description.is_empty() {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Description:");
+                    ui.label(&definition.description);
+                });
+            }
 
             ui.separator();
 
@@ -414,6 +424,40 @@ impl PropertyInspector {
                         }
                     }
 
+                    // Show WebRTC statistics for WHIP/WHEP blocks
+                    if definition.id == "builtin.whep_input" || definition.id == "builtin.whip_output" {
+                        ui.separator();
+                        ui.heading("📊 WebRTC Statistics");
+                        ui.add_space(4.0);
+
+                        if let Some(flow_id) = flow_id {
+                            if let Some(stats) = webrtc_stats_store.get(&flow_id) {
+                                if !stats.connections.is_empty() {
+                                    crate::webrtc_stats::show_full(ui, stats);
+                                } else {
+                                    ui.colored_label(
+                                        Color32::from_rgb(200, 200, 100),
+                                        "⚠ No WebRTC connections established",
+                                    );
+                                    ui.add_space(4.0);
+                                    ui.small("WebRTC statistics will appear when the connection is established.");
+                                }
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "⚠ WebRTC statistics not available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Start the flow to see WebRTC statistics.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "⚠ No flow selected",
+                            );
+                        }
+                    }
+
                     // Show RTP statistics for AES67 input blocks
                     if definition.id == "builtin.aes67_input" {
                         ui.separator();
@@ -465,6 +509,7 @@ impl PropertyInspector {
         _flow_id: Option<strom_types::FlowId>,
     ) {
         let prop_name = &exposed_prop.name;
+        let display_label = &exposed_prop.label;
         let default_value = exposed_prop.default_value.as_ref();
         let is_multiline = matches!(
             exposed_prop.property_type,
@@ -481,15 +526,15 @@ impl PropertyInspector {
 
         // For multiline, use vertical layout
         if is_multiline {
-            // Property name with indicator
+            // Property label with indicator
             ui.horizontal(|ui| {
                 if has_custom_value {
                     ui.colored_label(
                         Color32::from_rgb(150, 100, 255), // Purple for blocks
-                        format!("● {}:", prop_name),
+                        format!("● {}:", display_label),
                     );
                 } else {
-                    ui.label(format!("{}:", prop_name));
+                    ui.label(format!("{}:", display_label));
                 }
 
                 // Reset button if modified
@@ -537,14 +582,14 @@ impl PropertyInspector {
         } else {
             // For non-multiline, use horizontal layout
             ui.horizontal(|ui| {
-                // Show property name with indicator if modified
+                // Show property label with indicator if modified
                 if has_custom_value {
                     ui.colored_label(
                         Color32::from_rgb(150, 100, 255), // Purple for blocks
-                        format!("● {}:", prop_name),
+                        format!("● {}:", display_label),
                     );
                 } else {
-                    ui.label(format!("{}:", prop_name));
+                    ui.label(format!("{}:", display_label));
                 }
 
                 if let Some(mut value) = current_value {
