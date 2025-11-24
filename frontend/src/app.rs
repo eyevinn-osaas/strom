@@ -1339,7 +1339,6 @@ impl StromApp {
                                     GStreamerClockType::Ptp => Some("PTP"),
                                     GStreamerClockType::Ntp => Some("NTP"),
                                     GStreamerClockType::Realtime => Some("RT"),
-                                    GStreamerClockType::PipelineDefault => Some("SYS"),
                                     GStreamerClockType::Monotonic => None,
                                 };
 
@@ -1818,31 +1817,18 @@ impl StromApp {
                     egui::ComboBox::from_id_salt("clock_type_selector")
                         .selected_text(format!("{:?}", self.properties_clock_type_buffer))
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut self.properties_clock_type_buffer,
-                                GStreamerClockType::Monotonic,
-                                "Monotonic (recommended)",
-                            );
-                            ui.selectable_value(
-                                &mut self.properties_clock_type_buffer,
-                                GStreamerClockType::Realtime,
-                                "Realtime",
-                            );
-                            ui.selectable_value(
-                                &mut self.properties_clock_type_buffer,
-                                GStreamerClockType::PipelineDefault,
-                                "Pipeline Default",
-                            );
-                            ui.selectable_value(
-                                &mut self.properties_clock_type_buffer,
-                                GStreamerClockType::Ptp,
-                                "PTP",
-                            );
-                            ui.selectable_value(
-                                &mut self.properties_clock_type_buffer,
-                                GStreamerClockType::Ntp,
-                                "NTP",
-                            );
+                            for clock_type in GStreamerClockType::all() {
+                                let label = if *clock_type == GStreamerClockType::Monotonic {
+                                    format!("{} (recommended)", clock_type.label())
+                                } else {
+                                    clock_type.label().to_string()
+                                };
+                                ui.selectable_value(
+                                    &mut self.properties_clock_type_buffer,
+                                    *clock_type,
+                                    label,
+                                );
+                            }
                         });
                 });
 

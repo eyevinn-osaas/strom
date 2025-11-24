@@ -65,9 +65,7 @@ pub fn generate_ts_refclk(
                 None => "a=ts-refclk:ntp=/traceable/".to_string(),
             }
         }
-        GStreamerClockType::Monotonic
-        | GStreamerClockType::Realtime
-        | GStreamerClockType::PipelineDefault => {
+        GStreamerClockType::Monotonic | GStreamerClockType::Realtime => {
             // For system clocks, use local sender reference
             "a=ts-refclk:local".to_string()
         }

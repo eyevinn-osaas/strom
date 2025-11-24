@@ -62,6 +62,12 @@ pub struct ThreadPriorityStatus {
 }
 
 /// GStreamer clock type selection.
+///
+/// Maps to GStreamer's clock implementations:
+/// - `Monotonic`: SystemClock with GST_CLOCK_TYPE_MONOTONIC (default)
+/// - `Realtime`: SystemClock with GST_CLOCK_TYPE_REALTIME
+/// - `Ptp`: PtpClock for IEEE 1588 PTP synchronization
+/// - `Ntp`: NtpClock for NTP synchronization
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "snake_case")]
@@ -71,9 +77,7 @@ pub enum GStreamerClockType {
     Monotonic,
     /// System realtime clock (wall clock time)
     Realtime,
-    /// Let GStreamer choose the default clock for the pipeline
-    PipelineDefault,
-    /// Precision Time Protocol clock (for synchronized multi-device scenarios)
+    /// Precision Time Protocol clock (IEEE 1588, for synchronized multi-device scenarios)
     Ptp,
     /// Network Time Protocol clock
     Ntp,
@@ -93,17 +97,30 @@ pub enum ClockSyncStatus {
 }
 
 impl GStreamerClockType {
+    /// Get the human-readable label for this clock type (for UI dropdowns).
+    /// Acronyms are capitalized (PTP, NTP).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Monotonic => "Monotonic",
+            Self::Realtime => "Realtime",
+            Self::Ptp => "PTP",
+            Self::Ntp => "NTP",
+        }
+    }
+
     /// Get the human-readable description of this clock type.
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Monotonic => {
-                "Monotonic (recommended) - stable system clock, not affected by time changes"
-            }
-            Self::Realtime => "Realtime - wall clock time, may jump if system time changes",
-            Self::PipelineDefault => "Pipeline Default - let GStreamer choose automatically",
-            Self::Ptp => "PTP - Precision Time Protocol for synchronized multi-device setups",
-            Self::Ntp => "NTP - Network Time Protocol",
+            Self::Monotonic => "Stable system clock, not affected by time changes (recommended)",
+            Self::Realtime => "Wall clock time, may jump if system time changes",
+            Self::Ptp => "Precision Time Protocol for synchronized multi-device setups",
+            Self::Ntp => "Network Time Protocol",
         }
+    }
+
+    /// Get all available clock types.
+    pub fn all() -> &'static [GStreamerClockType] {
+        &[Self::Monotonic, Self::Realtime, Self::Ptp, Self::Ntp]
     }
 }
 
