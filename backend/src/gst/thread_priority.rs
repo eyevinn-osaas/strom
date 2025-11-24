@@ -106,7 +106,9 @@ fn set_high_priority() -> Result<(), String> {
             set_current_thread_priority, ThreadPriority as TpThreadPriority, WinAPIThreadPriority,
         };
 
-        match set_current_thread_priority(TpThreadPriority::Os(WinAPIThreadPriority::AboveNormal)) {
+        match set_current_thread_priority(TpThreadPriority::Os(
+            WinAPIThreadPriority::AboveNormal.into(),
+        )) {
             Ok(()) => {
                 debug!("Thread priority set to High (Windows AboveNormal)");
                 Ok(())
@@ -182,8 +184,9 @@ fn set_realtime_priority() -> Result<(), String> {
             set_current_thread_priority, ThreadPriority as TpThreadPriority, WinAPIThreadPriority,
         };
 
-        match set_current_thread_priority(TpThreadPriority::Os(WinAPIThreadPriority::TimeCritical))
-        {
+        match set_current_thread_priority(TpThreadPriority::Os(
+            WinAPIThreadPriority::TimeCritical.into(),
+        )) {
             Ok(()) => {
                 info!("Thread priority set to Realtime (Windows TimeCritical)");
                 Ok(())
