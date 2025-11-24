@@ -9,6 +9,11 @@ use std::str::FromStr;
 use strom_types::{block::*, PropertyValue, *};
 use tracing::{debug, info, warn};
 
+// AES67 Input defaults
+const AES67_INPUT_DEFAULT_DECODE: bool = true;
+const AES67_INPUT_DEFAULT_LATENCY_MS: i64 = 20;
+const AES67_INPUT_DEFAULT_TIMEOUT_MS: i64 = 0;
+
 /// AES67 Input block builder.
 pub struct AES67InputBuilder;
 
@@ -32,7 +37,7 @@ impl BlockBuilder for AES67InputBuilder {
             })
             .ok_or_else(|| BlockBuildError::InvalidProperty("SDP property required".to_string()))?;
 
-        // Get decode property (default: true)
+        // Get decode property
         let decode = properties
             .get("decode")
             .and_then(|v| match v {
@@ -40,9 +45,9 @@ impl BlockBuilder for AES67InputBuilder {
                 PropertyValue::String(s) => s.parse::<bool>().ok(),
                 _ => None,
             })
-            .unwrap_or(true);
+            .unwrap_or(AES67_INPUT_DEFAULT_DECODE);
 
-        // Get latency_ms property (default: 200)
+        // Get latency_ms property
         let latency_ms = properties
             .get("latency_ms")
             .and_then(|v| match v {
@@ -50,9 +55,9 @@ impl BlockBuilder for AES67InputBuilder {
                 PropertyValue::String(s) => s.parse::<u32>().ok(),
                 _ => None,
             })
-            .unwrap_or(200);
+            .unwrap_or(AES67_INPUT_DEFAULT_LATENCY_MS as u32);
 
-        // Get timeout_ms property (default: 0 = disabled/indefinite)
+        // Get timeout_ms property (0 = disabled/indefinite)
         let timeout_ms = properties
             .get("timeout_ms")
             .and_then(|v| match v {
@@ -60,7 +65,7 @@ impl BlockBuilder for AES67InputBuilder {
                 PropertyValue::String(s) => s.parse::<u64>().ok(),
                 _ => None,
             })
-            .unwrap_or(0);
+            .unwrap_or(AES67_INPUT_DEFAULT_TIMEOUT_MS as u64);
 
         debug!(
             "AES67 Input [{}]: decode={}, latency_ms={}, timeout_ms={}",
@@ -548,7 +553,7 @@ fn aes67_input_definition() -> BlockDefinition {
                 description: "Decode RTP to raw audio (decodebin + audioconvert + audioresample)"
                     .to_string(),
                 property_type: PropertyType::Bool,
-                default_value: Some(PropertyValue::Bool(true)),
+                default_value: Some(PropertyValue::Bool(AES67_INPUT_DEFAULT_DECODE)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "decode".to_string(),
@@ -559,7 +564,7 @@ fn aes67_input_definition() -> BlockDefinition {
                 name: "latency_ms".to_string(),
                 description: "Jitterbuffer latency in milliseconds".to_string(),
                 property_type: PropertyType::Int,
-                default_value: Some(PropertyValue::Int(200)),
+                default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_LATENCY_MS)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "latency_ms".to_string(),
@@ -570,7 +575,7 @@ fn aes67_input_definition() -> BlockDefinition {
                 name: "timeout_ms".to_string(),
                 description: "UDP timeout in milliseconds (0 = disabled/indefinite)".to_string(),
                 property_type: PropertyType::Int,
-                default_value: Some(PropertyValue::Int(0)),
+                default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_TIMEOUT_MS)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "timeout_ms".to_string(),
