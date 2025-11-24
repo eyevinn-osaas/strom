@@ -47,9 +47,11 @@ impl BlockBuilder for AES67InputBuilder {
 
         let sdpdemux = gst::ElementFactory::make("sdpdemux")
             .name(&sdpdemux_id)
-            .property("rtcp-mode", 0i32) // Disable RTCP for AES67 input
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("sdpdemux: {}", e)))?;
+
+        // Disable RTCP for AES67 input - set as string enum value
+        sdpdemux.set_property_from_str("rtcp-mode", "inactivate");
 
         // Set up pad-added handler to log new SSRC/streams
         // This is important for debugging SSRC changes in AES67 streams
@@ -330,7 +332,7 @@ fn aes67_input_definition() -> BlockDefinition {
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "sdpdemux".to_string(),
-                internal_pad_name: "src_0".to_string(),
+                internal_pad_name: "stream_0".to_string(),
             }],
         },
         built_in: true,
