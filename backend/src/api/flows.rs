@@ -457,7 +457,15 @@ pub async fn get_block_sdp(
     }
 
     // Generate SDP (using default sample rate and channels since we can't query caps here)
-    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(block, &flow.name, None, None);
+    // Pass flow properties for correct clock signaling (RFC 7273)
+    let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
+        block,
+        &flow.name,
+        None,
+        None,
+        Some(&flow.properties),
+        None, // PTP clock identity not available at this point
+    );
 
     info!("Successfully generated SDP for block {}", block_id);
 

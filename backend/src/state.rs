@@ -373,11 +373,14 @@ impl AppState {
                     channels.unwrap_or(2)
                 );
 
+                // Generate SDP with flow properties for correct clock signaling (RFC 7273)
                 let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
                     block,
                     &flow.name,
                     sample_rate,
                     channels,
+                    Some(&flow.properties),
+                    None, // PTP clock identity - could be obtained from pipeline clock if needed
                 );
 
                 // Initialize runtime_data if needed
