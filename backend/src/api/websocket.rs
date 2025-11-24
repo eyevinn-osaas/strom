@@ -8,7 +8,7 @@ use std::time::Duration;
 use strom_types::StromEvent;
 use tokio::select;
 use tokio::time::interval;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::events::EventBroadcaster;
 use crate::state::AppState;
@@ -71,7 +71,7 @@ async fn handle_socket(socket: WebSocket, broadcaster: EventBroadcaster) {
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                        warn!("Client is lagging, skipped {} events", skipped);
+                        debug!("Client is lagging, skipped {} events", skipped);
                         // Try to continue despite lag
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
