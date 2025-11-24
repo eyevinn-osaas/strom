@@ -50,9 +50,10 @@ async fn handle_socket(socket: WebSocket, broadcaster: EventBroadcaster) {
 
     info!("WebSocket client connected");
 
-    // Send a welcome message immediately to confirm connection
-    let welcome_msg = r#"{"type":"connected","message":"Welcome to Strom WebSocket"}"#;
-    if let Err(e) = sender.send(Message::Text(welcome_msg.into())).await {
+    // Send a Ping event immediately to confirm connection
+    // This is a valid StromEvent that the frontend can parse
+    let welcome_event = StromEvent::Ping;
+    if let Err(e) = send_event(&mut sender, welcome_event).await {
         error!("Failed to send welcome message: {}", e);
         return;
     }
