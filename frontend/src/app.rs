@@ -68,6 +68,8 @@ pub struct StromApp {
     blocks_loaded: bool,
     /// Flow pending deletion (for confirmation dialog)
     flow_pending_deletion: Option<(strom_types::FlowId, String)>,
+    /// Flow pending copy (to be processed after render)
+    flow_pending_copy: Option<Flow>,
     /// WebSocket client for real-time updates
     ws_client: Option<WebSocketClient>,
     /// Connection state
@@ -110,6 +112,16 @@ pub struct StromApp {
     auth_status: Option<AuthStatusResponse>,
     /// Whether we're checking auth status
     checking_auth: bool,
+    /// Show import flow dialog
+    show_import_dialog: bool,
+    /// Buffer for import JSON text
+    import_json_buffer: String,
+    /// Error message for import dialog
+    import_error: Option<String>,
+    /// Cached latency info for flows (flow_id -> LatencyInfo)
+    latency_cache: std::collections::HashMap<String, crate::api::LatencyInfo>,
+    /// Last time latency was fetched (for periodic refresh)
+    last_latency_fetch: instant::Instant,
 }
 
 impl StromApp {
@@ -179,6 +191,7 @@ impl StromApp {
             elements_loaded: false,
             blocks_loaded: false,
             flow_pending_deletion: None,
+            flow_pending_copy: None,
             ws_client: None,
             connection_state: ConnectionState::Disconnected,
             channels,
@@ -194,6 +207,11 @@ impl StromApp {
             login_screen: LoginScreen::default(),
             auth_status: None,
             checking_auth: false,
+            show_import_dialog: false,
+            import_json_buffer: String::new(),
+            import_error: None,
+            latency_cache: std::collections::HashMap::new(),
+            last_latency_fetch: instant::Instant::now(),
         };
 
         // Apply initial theme based on system preference
@@ -235,6 +253,7 @@ impl StromApp {
             elements_loaded: false,
             blocks_loaded: false,
             flow_pending_deletion: None,
+            flow_pending_copy: None,
             ws_client: None,
             connection_state: ConnectionState::Disconnected,
             channels,
@@ -254,6 +273,11 @@ impl StromApp {
             login_screen: LoginScreen::default(),
             auth_status: None,
             checking_auth: false,
+            show_import_dialog: false,
+            import_json_buffer: String::new(),
+            import_error: None,
+            latency_cache: std::collections::HashMap::new(),
+            last_latency_fetch: instant::Instant::now(),
         };
 
         // Apply initial theme based on system preference
@@ -682,6 +706,47 @@ impl StromApp {
         });
     }
 
+    /// Fetch latency for all running flows.
+    fn fetch_latency_for_running_flows(&self, ctx: &Context) {
+        use strom_types::PipelineState;
+
+        // Find all flows that are currently playing
+        let running_flows: Vec<_> = self
+            .flows
+            .iter()
+            .filter(|f| f.state == Some(PipelineState::Playing))
+            .map(|f| f.id)
+            .collect();
+
+        if running_flows.is_empty() {
+            return;
+        }
+
+        // Fetch latency for each running flow
+        for flow_id in running_flows {
+            let api = self.api.clone();
+            let tx = self.channels.sender();
+            let ctx = ctx.clone();
+            let flow_id_str = flow_id.to_string();
+
+            spawn_task(async move {
+                match api.get_flow_latency(flow_id).await {
+                    Ok(latency) => {
+                        let _ = tx.send(AppMessage::LatencyLoaded {
+                            flow_id: flow_id_str,
+                            latency,
+                        });
+                    }
+                    Err(_) => {
+                        // Flow not running or latency not available - silently ignore
+                        let _ = tx.send(AppMessage::LatencyNotAvailable(flow_id_str));
+                    }
+                }
+                ctx.request_repaint();
+            });
+        }
+    }
+
     /// Save the current flow to the backend.
     fn save_current_flow(&mut self, ctx: &Context) {
         tracing::info!(
@@ -706,6 +771,7 @@ impl StromApp {
 
                 let flow_clone = flow.clone();
                 let api = self.api.clone();
+                let tx = self.channels.sender();
                 let ctx = ctx.clone();
 
                 self.status = "Saving flow...".to_string();
@@ -717,9 +783,15 @@ impl StromApp {
                             tracing::info!(
                                 "Flow saved successfully - WebSocket event will trigger refresh"
                             );
+                            let _ =
+                                tx.send(AppMessage::FlowOperationSuccess("Flow saved".to_string()));
                         }
                         Err(e) => {
                             tracing::error!("Failed to save flow: {}", e);
+                            let _ = tx.send(AppMessage::FlowOperationError(format!(
+                                "Failed to save flow: {}",
+                                e
+                            )));
                         }
                     }
                     ctx.request_repaint();
@@ -741,6 +813,7 @@ impl StromApp {
 
         let new_flow = Flow::new(self.new_flow_name.clone());
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
 
         self.status = "Creating flow...".to_string();
@@ -754,9 +827,17 @@ impl StromApp {
                         "Flow created successfully: {} - WebSocket event will trigger refresh",
                         created_flow.name
                     );
+                    let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                        "Flow '{}' created",
+                        created_flow.name
+                    )));
                 }
                 Err(e) => {
                     tracing::error!("Failed to create flow: {}", e);
+                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                        "Failed to create flow: {}",
+                        e
+                    )));
                 }
             }
             ctx.request_repaint();
@@ -768,6 +849,7 @@ impl StromApp {
         if let Some(flow) = self.current_flow() {
             let flow_id = flow.id;
             let api = self.api.clone();
+            let tx = self.channels.sender();
             let ctx = ctx.clone();
 
             self.status = "Starting flow...".to_string();
@@ -778,9 +860,15 @@ impl StromApp {
                         tracing::info!(
                             "Flow started successfully - WebSocket event will trigger refresh"
                         );
+                        let _ =
+                            tx.send(AppMessage::FlowOperationSuccess("Flow started".to_string()));
                     }
                     Err(e) => {
                         tracing::error!("Failed to start flow: {}", e);
+                        let _ = tx.send(AppMessage::FlowOperationError(format!(
+                            "Failed to start flow: {}",
+                            e
+                        )));
                     }
                 }
                 ctx.request_repaint();
@@ -793,6 +881,7 @@ impl StromApp {
         if let Some(flow) = self.current_flow() {
             let flow_id = flow.id;
             let api = self.api.clone();
+            let tx = self.channels.sender();
             let ctx = ctx.clone();
 
             self.status = "Stopping flow...".to_string();
@@ -803,9 +892,15 @@ impl StromApp {
                         tracing::info!(
                             "Flow stopped successfully - WebSocket event will trigger refresh"
                         );
+                        let _ =
+                            tx.send(AppMessage::FlowOperationSuccess("Flow stopped".to_string()));
                     }
                     Err(e) => {
                         tracing::error!("Failed to stop flow: {}", e);
+                        let _ = tx.send(AppMessage::FlowOperationError(format!(
+                            "Failed to stop flow: {}",
+                            e
+                        )));
                     }
                 }
                 ctx.request_repaint();
@@ -816,6 +911,7 @@ impl StromApp {
     /// Delete a flow.
     fn delete_flow(&mut self, flow_id: strom_types::FlowId, ctx: &Context) {
         let api = self.api.clone();
+        let tx = self.channels.sender();
         let ctx = ctx.clone();
 
         self.status = "Deleting flow...".to_string();
@@ -826,9 +922,14 @@ impl StromApp {
                     tracing::info!(
                         "Flow deleted successfully - WebSocket event will trigger refresh"
                     );
+                    let _ = tx.send(AppMessage::FlowOperationSuccess("Flow deleted".to_string()));
                 }
                 Err(e) => {
                     tracing::error!("Failed to delete flow: {}", e);
+                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                        "Failed to delete flow: {}",
+                        e
+                    )));
                 }
             }
             ctx.request_repaint();
@@ -844,6 +945,12 @@ impl StromApp {
 
                 if ui.button("New Flow").clicked() {
                     self.show_new_flow_dialog = true;
+                }
+
+                if ui.button("Import").clicked() {
+                    self.show_import_dialog = true;
+                    self.import_json_buffer.clear();
+                    self.import_error = None;
                 }
 
                 if ui.button("Refresh").clicked() {
@@ -870,10 +977,18 @@ impl StromApp {
                     };
 
                     ui.colored_label(state_color, format!("State: {}", state_text));
+
+                    // Show latency for running flows
+                    let is_running = matches!(state, PipelineState::Playing);
+                    if is_running {
+                        if let Some(latency) = self.latency_cache.get(&flow_id.to_string()) {
+                            ui.label(format!("Latency: {}", latency.min_latency_formatted));
+                        }
+                    }
+
                     ui.separator();
 
                     // Show Start or Restart button depending on state
-                    let is_running = matches!(state, PipelineState::Playing);
                     let button_text = if is_running {
                         "🔄 Restart"
                     } else {
@@ -884,6 +999,7 @@ impl StromApp {
                         if is_running {
                             // For restart: stop first, then start
                             let api = self.api.clone();
+                            let tx = self.channels.sender();
                             let ctx_clone = ctx.clone();
 
                             self.status = "Restarting flow...".to_string();
@@ -897,17 +1013,20 @@ impl StromApp {
                                         match api.start_flow(flow_id).await {
                                             Ok(_) => {
                                                 tracing::info!("Flow restarted successfully - WebSocket events will trigger refresh");
+                                                let _ = tx.send(AppMessage::FlowOperationSuccess("Flow restarted".to_string()));
                                             }
                                             Err(e) => {
                                                 tracing::error!(
                                                     "Failed to start flow after stop: {}",
                                                     e
                                                 );
+                                                let _ = tx.send(AppMessage::FlowOperationError(format!("Failed to restart flow: {}", e)));
                                             }
                                         }
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to stop flow for restart: {}", e);
+                                        let _ = tx.send(AppMessage::FlowOperationError(format!("Failed to restart flow: {}", e)));
                                     }
                                 }
                                 ctx_clone.request_repaint();
@@ -1114,6 +1233,29 @@ impl StromApp {
                                 ui.add_space(4.0);
                                 if ui.small_button("🗑").on_hover_text("Delete flow").clicked() {
                                     self.flow_pending_deletion = Some((flow.id, flow.name.clone()));
+                                }
+                                if ui.small_button("📋").on_hover_text("Copy flow").clicked() {
+                                    self.flow_pending_copy = Some(flow.clone());
+                                }
+                                if ui
+                                    .small_button("📤")
+                                    .on_hover_text("Export flow to clipboard")
+                                    .clicked()
+                                {
+                                    // Serialize flow to JSON and copy to clipboard
+                                    match serde_json::to_string_pretty(flow) {
+                                        Ok(json) => {
+                                            ui.ctx().copy_text(json);
+                                            self.status = format!(
+                                                "Flow '{}' exported to clipboard",
+                                                flow.name
+                                            );
+                                        }
+                                        Err(e) => {
+                                            self.error =
+                                                Some(format!("Failed to export flow: {}", e));
+                                        }
+                                    }
                                 }
                                 if ui
                                     .small_button("⚙")
@@ -1720,6 +1862,261 @@ impl StromApp {
             });
     }
 
+    /// Render the import flow dialog.
+    fn render_import_dialog(&mut self, ctx: &Context) {
+        if !self.show_import_dialog {
+            return;
+        }
+
+        egui::Window::new("Import Flow")
+            .collapsible(false)
+            .resizable(true)
+            .default_width(500.0)
+            .default_height(400.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Paste flow JSON below:");
+                ui.add_space(5.0);
+
+                // Large text area for JSON input
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.import_json_buffer)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(15)
+                                .font(egui::TextStyle::Monospace)
+                                .hint_text("Paste flow JSON here..."),
+                        );
+                    });
+
+                // Show error if any
+                if let Some(ref error) = self.import_error {
+                    ui.add_space(5.0);
+                    ui.colored_label(Color32::RED, error);
+                }
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("📥 Import").clicked() {
+                        self.import_flow_from_json(ctx);
+                    }
+
+                    if ui.button("Cancel").clicked() {
+                        self.show_import_dialog = false;
+                        self.import_json_buffer.clear();
+                        self.import_error = None;
+                    }
+                });
+            });
+    }
+
+    /// Import a flow from the JSON buffer.
+    /// Note: The backend's create_flow only takes a name, so we create first then update.
+    fn import_flow_from_json(&mut self, ctx: &Context) {
+        if self.import_json_buffer.trim().is_empty() {
+            self.import_error = Some("Please paste flow JSON first".to_string());
+            return;
+        }
+
+        // Try to parse the JSON as a Flow
+        match serde_json::from_str::<Flow>(&self.import_json_buffer) {
+            Ok(flow) => {
+                // Regenerate all IDs to avoid conflicts
+                let flow = Self::regenerate_flow_ids(flow);
+
+                let api = self.api.clone();
+                let tx = self.channels.sender();
+                let ctx = ctx.clone();
+                let flow_name = flow.name.clone();
+
+                self.status = format!("Importing flow '{}'...", flow_name);
+                self.show_import_dialog = false;
+                self.import_json_buffer.clear();
+                self.import_error = None;
+
+                spawn_task(async move {
+                    // Step 1: Create an empty flow with the name
+                    match api.create_flow(&flow).await {
+                        Ok(created_flow) => {
+                            tracing::info!(
+                                "Empty flow created: {} ({}), now updating with content...",
+                                created_flow.name,
+                                created_flow.id
+                            );
+
+                            // Step 2: Update the created flow with the full content
+                            let mut full_flow = flow.clone();
+                            full_flow.id = created_flow.id;
+
+                            match api.update_flow(&full_flow).await {
+                                Ok(_) => {
+                                    tracing::info!(
+                                        "Flow imported successfully: {} - WebSocket event will trigger refresh",
+                                        flow_name
+                                    );
+                                    let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                                        "Flow '{}' imported",
+                                        flow_name
+                                    )));
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to update imported flow with content: {}",
+                                        e
+                                    );
+                                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                                        "Failed to import flow: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create flow for import: {}", e);
+                            let _ = tx.send(AppMessage::FlowOperationError(format!(
+                                "Failed to import flow: {}",
+                                e
+                            )));
+                        }
+                    }
+                    ctx.request_repaint();
+                });
+            }
+            Err(e) => {
+                self.import_error = Some(format!("Invalid JSON: {}", e));
+            }
+        }
+    }
+
+    /// Regenerate all IDs in a flow (flow ID, element IDs, block IDs) and update links.
+    /// This is used for both import and copy operations to avoid ID conflicts.
+    fn regenerate_flow_ids(mut flow: Flow) -> Flow {
+        use std::collections::HashMap;
+
+        // Generate new flow ID
+        flow.id = uuid::Uuid::new_v4();
+
+        // Reset state to Null
+        flow.state = Some(PipelineState::Null);
+
+        // Clear auto_restart flag
+        flow.properties.auto_restart = false;
+
+        // Clear runtime data (e.g., SDP for AES67 blocks)
+        for block in &mut flow.blocks {
+            block.runtime_data = None;
+        }
+
+        // Build mapping of old IDs to new IDs for elements
+        let mut element_id_map: HashMap<String, String> = HashMap::new();
+        for element in &mut flow.elements {
+            let old_id = element.id.clone();
+            let new_id = format!("e{}", uuid::Uuid::new_v4().simple());
+            element_id_map.insert(old_id, new_id.clone());
+            element.id = new_id;
+        }
+
+        // Build mapping of old IDs to new IDs for blocks
+        let mut block_id_map: HashMap<String, String> = HashMap::new();
+        for block in &mut flow.blocks {
+            let old_id = block.id.clone();
+            let new_id = format!("b{}", uuid::Uuid::new_v4().simple());
+            block_id_map.insert(old_id, new_id.clone());
+            block.id = new_id;
+        }
+
+        // Update links to use new IDs
+        for link in &mut flow.links {
+            // Update 'from' reference (format: "element_id:pad_name")
+            if let Some((old_id, pad_name)) = link.from.split_once(':') {
+                if let Some(new_id) = element_id_map.get(old_id) {
+                    link.from = format!("{}:{}", new_id, pad_name);
+                } else if let Some(new_id) = block_id_map.get(old_id) {
+                    link.from = format!("{}:{}", new_id, pad_name);
+                }
+            }
+
+            // Update 'to' reference (format: "element_id:pad_name")
+            if let Some((old_id, pad_name)) = link.to.split_once(':') {
+                if let Some(new_id) = element_id_map.get(old_id) {
+                    link.to = format!("{}:{}", new_id, pad_name);
+                } else if let Some(new_id) = block_id_map.get(old_id) {
+                    link.to = format!("{}:{}", new_id, pad_name);
+                }
+            }
+        }
+
+        flow
+    }
+
+    /// Copy a flow with regenerated IDs and create it on the backend.
+    /// Note: The backend's create_flow only takes a name, so we create first then update.
+    fn copy_flow(&mut self, flow: &Flow, ctx: &Context) {
+        let mut flow_copy = flow.clone();
+
+        // Add " (copy)" suffix to the name
+        flow_copy.name = format!("{} (copy)", flow.name);
+
+        // Regenerate all IDs
+        let flow_copy = Self::regenerate_flow_ids(flow_copy);
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+        let ctx = ctx.clone();
+        let flow_name = flow_copy.name.clone();
+
+        self.status = format!("Copying flow '{}'...", flow.name);
+
+        spawn_task(async move {
+            // Step 1: Create an empty flow with the name
+            match api.create_flow(&flow_copy).await {
+                Ok(created_flow) => {
+                    tracing::info!(
+                        "Empty flow created: {} ({}), now updating with content...",
+                        created_flow.name,
+                        created_flow.id
+                    );
+
+                    // Step 2: Update the created flow with the full content
+                    // Use the ID from the created flow
+                    let mut full_flow = flow_copy.clone();
+                    full_flow.id = created_flow.id;
+
+                    match api.update_flow(&full_flow).await {
+                        Ok(_) => {
+                            tracing::info!(
+                                "Flow copied successfully: {} - WebSocket event will trigger refresh",
+                                flow_name
+                            );
+                            let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                                "Flow '{}' created",
+                                flow_name
+                            )));
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to update copied flow with content: {}", e);
+                            let _ = tx.send(AppMessage::FlowOperationError(format!(
+                                "Failed to copy flow: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create flow for copy: {}", e);
+                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                        "Failed to copy flow: {}",
+                        e
+                    )));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Render the full-screen disconnect overlay when WebSocket is not connected.
     fn render_disconnect_overlay(&mut self, ctx: &Context) {
         CentralPanel::default().show(ctx, |ui| {
@@ -2119,6 +2516,28 @@ impl eframe::App for StromApp {
                     );
                     self.webrtc_stats.update(flow_id, stats);
                 }
+                AppMessage::FlowOperationSuccess(message) => {
+                    tracing::info!("Flow operation succeeded: {}", message);
+                    self.status = message;
+                    self.error = None;
+                }
+                AppMessage::FlowOperationError(message) => {
+                    tracing::error!("Flow operation failed: {}", message);
+                    self.status = "Ready".to_string();
+                    self.error = Some(message);
+                }
+                AppMessage::LatencyLoaded { flow_id, latency } => {
+                    tracing::debug!(
+                        "Latency loaded for flow {}: {}",
+                        flow_id,
+                        latency.min_latency_formatted
+                    );
+                    self.latency_cache.insert(flow_id, latency);
+                }
+                AppMessage::LatencyNotAvailable(flow_id) => {
+                    tracing::debug!("Latency not available for flow {}", flow_id);
+                    self.latency_cache.remove(&flow_id);
+                }
                 AppMessage::WebRtcStatsError(error) => {
                     tracing::trace!("WebRTC stats error: {}", error);
                 }
@@ -2171,6 +2590,12 @@ impl eframe::App for StromApp {
             }
         }
 
+        // Periodically fetch latency for running flows (every 2 seconds)
+        if self.last_latency_fetch.elapsed() > std::time::Duration::from_secs(2) {
+            self.last_latency_fetch = instant::Instant::now();
+            self.fetch_latency_for_running_flows(ctx);
+        }
+
         self.render_toolbar(ctx);
         self.render_flow_list(ctx);
 
@@ -2194,5 +2619,11 @@ impl eframe::App for StromApp {
         self.render_new_flow_dialog(ctx);
         self.render_delete_confirmation_dialog(ctx);
         self.render_flow_properties_dialog(ctx);
+        self.render_import_dialog(ctx);
+
+        // Process pending flow copy (after render to avoid borrow checker issues)
+        if let Some(flow) = self.flow_pending_copy.take() {
+            self.copy_flow(&flow, ctx);
+        }
     }
 }

@@ -48,12 +48,12 @@ COPY . .
 # Build the frontend
 RUN mkdir -p backend/dist && cd frontend && trunk build --release
 
-# Build the backend (with embedded frontend) and MCP server
-RUN cargo build --release --package strom-backend
+# Build the backend (headless - no native GUI needed in Docker) and MCP server
+RUN cargo build --release --package strom-backend --no-default-features
 RUN cargo build --release --package strom-mcp-server
 
 # Stage 4: Runtime - Minimal runtime image with trixie for newer GStreamer
-FROM debian:trixie-slim as runtime
+FROM debian:trixie-slim AS runtime
 WORKDIR /app
 
 # Install only GStreamer runtime dependencies

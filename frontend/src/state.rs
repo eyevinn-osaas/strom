@@ -70,6 +70,19 @@ pub enum AppMessage {
     },
     /// WebRTC stats loading failed
     WebRtcStatsError(String),
+
+    /// Flow operation completed successfully
+    FlowOperationSuccess(String),
+    /// Flow operation failed
+    FlowOperationError(String),
+
+    /// Latency loaded for a flow
+    LatencyLoaded {
+        flow_id: String,
+        latency: crate::api::LatencyInfo,
+    },
+    /// Latency loading failed (flow not running)
+    LatencyNotAvailable(String),
 }
 
 /// WebSocket connection state.

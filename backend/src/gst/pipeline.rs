@@ -1965,6 +1965,140 @@ impl PipelineManager {
         Ok(())
     }
 
+    /// Query the latency of the pipeline.
+    /// Returns (min_latency_ns, max_latency_ns, live) if query succeeds.
+    ///
+    /// This method tries multiple approaches to get meaningful latency:
+    /// 1. Pipeline-level latency query (best for live pipelines)
+    /// 2. If pipeline returns 0, try querying individual sink elements
+    pub fn query_latency(&self) -> Option<(u64, u64, bool)> {
+        let mut query = gst::query::Latency::new();
+
+        if self.pipeline.query(&mut query) {
+            let (live, min, max) = query.result();
+            let min_ns = min.nseconds();
+            let max_ns = max.map_or(u64::MAX, |t| t.nseconds());
+            info!(
+                "Pipeline '{}' latency query: live={}, min={}ns, max={}ns",
+                self.flow_name, live, min_ns, max_ns
+            );
+
+            // If pipeline is live and has meaningful latency, use it
+            if live && min_ns > 0 {
+                return Some((min_ns, max_ns, live));
+            }
+
+            // For non-live pipelines or if latency is 0, try to get latency from sink elements
+            // This gives more useful information for streaming pipelines
+            let sink_latency = self.query_sink_latency();
+            if let Some((sink_min, sink_max)) = sink_latency {
+                if sink_min > 0 {
+                    info!(
+                        "Pipeline '{}' using sink latency: min={}ns, max={}ns",
+                        self.flow_name, sink_min, sink_max
+                    );
+                    return Some((sink_min, sink_max, live));
+                }
+            }
+
+            // Return pipeline values even if 0 (user sees it's not live)
+            Some((min_ns, max_ns, live))
+        } else {
+            info!(
+                "Pipeline '{}' latency query failed (may not be in playing state)",
+                self.flow_name
+            );
+            None
+        }
+    }
+
+    /// Query latency from sink elements in the pipeline.
+    /// This is useful for non-live pipelines where the pipeline-level query returns 0.
+    fn query_sink_latency(&self) -> Option<(u64, u64)> {
+        let mut total_latency: u64 = 0;
+
+        // Iterate over all elements and find sinks (elements with sink pads but no src pads)
+        for (element_id, element) in &self.elements {
+            // Check if this is a sink element by looking at pads
+            let has_sink_pad = element.static_pad("sink").is_some()
+                || element
+                    .iterate_sink_pads()
+                    .into_iter()
+                    .flatten()
+                    .next()
+                    .is_some();
+            let has_src_pad = element.static_pad("src").is_some()
+                || element
+                    .iterate_src_pads()
+                    .into_iter()
+                    .flatten()
+                    .next()
+                    .is_some();
+
+            // True sinks have sink pads but no source pads
+            let is_sink = has_sink_pad && !has_src_pad;
+
+            if is_sink {
+                // Try to query latency directly on the sink
+                let mut sink_query = gst::query::Latency::new();
+                if element.query(&mut sink_query) {
+                    let (live, min, max) = sink_query.result();
+                    let min_ns = min.nseconds();
+                    let max_ns = max.map_or(u64::MAX, |t| t.nseconds());
+                    debug!(
+                        "Sink element '{}' latency: live={}, min={}ns, max={}ns",
+                        element_id, live, min_ns, max_ns
+                    );
+                    if min_ns > 0 {
+                        total_latency = total_latency.max(min_ns);
+                    }
+                }
+
+                // For audio sinks, try to get the latency-time property (in microseconds)
+                if element.has_property("latency-time") {
+                    let latency_us = element.property::<i64>("latency-time");
+                    let latency_ns = (latency_us * 1000) as u64;
+                    debug!(
+                        "Audio sink '{}' latency-time: {}us ({}ns)",
+                        element_id, latency_us, latency_ns
+                    );
+                    if latency_ns > 0 {
+                        total_latency = total_latency.max(latency_ns);
+                    }
+                }
+
+                // Try buffer-time property as well (typically 2x latency-time)
+                if element.has_property("buffer-time") {
+                    let buffer_us = element.property::<i64>("buffer-time");
+                    let buffer_ns = (buffer_us * 1000) as u64;
+                    debug!(
+                        "Audio sink '{}' buffer-time: {}us ({}ns)",
+                        element_id, buffer_us, buffer_ns
+                    );
+                    // Don't use buffer-time directly as it's the full buffer, not latency
+                }
+            }
+
+            // Also check queue elements for their current level/latency
+            let factory_name = element.factory().map(|f| f.name().to_string());
+            if (factory_name.as_deref() == Some("queue")
+                || factory_name.as_deref() == Some("queue2"))
+                && element.has_property("current-level-time")
+            {
+                let level_ns = element.property::<u64>("current-level-time");
+                debug!("Queue '{}' current-level-time: {}ns", element_id, level_ns);
+                // Queue level contributes to latency
+                total_latency = total_latency.saturating_add(level_ns);
+            }
+        }
+
+        if total_latency > 0 {
+            Some((total_latency, total_latency))
+        } else {
+            None
+        }
+    }
+
     /// Get the negotiated caps for a specific pad.
     /// Returns the caps as a string, or None if caps haven't been negotiated yet.
     pub fn get_pad_caps(

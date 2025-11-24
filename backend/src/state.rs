@@ -641,6 +641,13 @@ impl AppState {
 
         Ok(manager.get_webrtc_stats())
     }
+
+    /// Query the latency of a running pipeline.
+    /// Returns (min_latency_ns, max_latency_ns, live) if query succeeds.
+    pub async fn get_flow_latency(&self, flow_id: &FlowId) -> Option<(u64, u64, bool)> {
+        let pipelines = self.inner.pipelines.read().await;
+        pipelines.get(flow_id).and_then(|p| p.query_latency())
+    }
 }
 
 impl Default for AppState {
