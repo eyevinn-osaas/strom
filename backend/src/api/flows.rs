@@ -17,7 +17,7 @@ use strom_types::{
     Flow, FlowId,
 };
 use tempfile::NamedTempFile;
-use tracing::{error, info};
+use tracing::{error, info, trace};
 use utoipa;
 
 use crate::layout;
@@ -829,7 +829,7 @@ pub async fn get_flow_latency(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
 ) -> Result<Json<LatencyResponse>, (StatusCode, Json<ErrorResponse>)> {
-    info!("Getting latency for flow {}", id);
+    trace!("Getting latency for flow {}", id);
 
     let latency = state.get_flow_latency(&id).await.ok_or_else(|| {
         (
@@ -841,9 +841,12 @@ pub async fn get_flow_latency(
     })?;
 
     let (min_ns, max_ns, live) = latency;
-    info!(
+    trace!(
         "Flow {} latency: min={}ns, max={}ns, live={}",
-        id, min_ns, max_ns, live
+        id,
+        min_ns,
+        max_ns,
+        live
     );
 
     Ok(Json(LatencyResponse::new(min_ns, max_ns, live)))
@@ -870,7 +873,7 @@ pub async fn get_flow_stats(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
 ) -> Result<Json<FlowStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
-    info!("Getting statistics for flow {}", id);
+    trace!("Getting statistics for flow {}", id);
 
     let stats = state.get_flow_stats(&id).await.ok_or_else(|| {
         (
@@ -881,7 +884,7 @@ pub async fn get_flow_stats(
         )
     })?;
 
-    info!(
+    trace!(
         "Flow {} stats: {} blocks with statistics",
         id,
         stats.block_stats.len()

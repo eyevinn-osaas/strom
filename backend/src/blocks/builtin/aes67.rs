@@ -480,12 +480,19 @@ impl BlockBuilder for AES67OutputBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", payloader_type, e)))?;
 
+        // Set processing-deadline to match ptime for proper timing
+        let processing_deadline_ns = ptime_ns as u64;
+
         let udpsink = gst::ElementFactory::make("udpsink")
             .name(&udpsink_id)
             .property("host", &host)
             .property("port", port)
             .property("async", false)
-            .property("sync", false)
+            .property("sync", true)
+            .property(
+                "processing-deadline",
+                gst::ClockTime::from_nseconds(processing_deadline_ns),
+            )
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("udpsink: {}", e)))?;
 
