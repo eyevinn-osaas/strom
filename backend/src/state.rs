@@ -29,7 +29,7 @@ struct AppStateInner {
     cached_elements: RwLock<Vec<ElementInfo>>,
     /// Active pipelines
     pipelines: RwLock<HashMap<FlowId, PipelineManager>>,
-    /// Event broadcaster for SSE
+    /// Event broadcaster for real-time updates
     events: EventBroadcaster,
     /// Block registry
     block_registry: BlockRegistry,

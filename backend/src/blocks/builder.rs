@@ -27,19 +27,18 @@ pub enum BlockBuildError {
     InvalidConfiguration(String),
 }
 
-/// Function type for setting up a block-specific bus watch.
+/// Function type for connecting a block-specific bus message handler.
 ///
 /// Takes the GStreamer bus, flow ID, and event broadcaster.
-/// Returns a BusWatchGuard that must be kept alive for the watch to remain active.
-pub type BusWatchSetupFn = Box<
-    dyn FnOnce(
-            &gst::Bus,
-            FlowId,
-            EventBroadcaster,
-        ) -> Result<gst::bus::BusWatchGuard, gst::glib::BoolError>
-        + Send
-        + Sync,
+/// Returns a SignalHandlerId that identifies the connected handler.
+/// Uses `connect_message` which allows multiple handlers (unlike `add_watch`).
+pub type BusMessageConnectFn = Box<
+    dyn FnOnce(&gst::Bus, FlowId, EventBroadcaster) -> gst::glib::SignalHandlerId + Send + Sync,
 >;
+
+/// Legacy type alias for backward compatibility
+#[deprecated(note = "Use BusMessageConnectFn instead")]
+pub type BusWatchSetupFn = BusMessageConnectFn;
 
 /// Result of building a block - contains GStreamer elements with namespaced IDs and link specifications.
 pub struct BlockBuildResult {
@@ -49,10 +48,11 @@ pub struct BlockBuildResult {
     /// Internal links between elements (using namespaced IDs)
     pub internal_links: Vec<(String, String)>, // (from_pad, to_pad)
 
-    /// Optional bus watch setup function.
+    /// Optional bus message handler connection function.
     /// If provided, this will be called when the pipeline starts to allow the block
-    /// to register its own bus message handlers without requiring changes to pipeline.rs.
-    pub bus_watch_setup: Option<BusWatchSetupFn>,
+    /// to register its own bus message handlers using `connect_message`.
+    /// Multiple blocks can register handlers since `connect_message` allows multiple handlers.
+    pub bus_message_handler: Option<BusMessageConnectFn>,
 }
 
 /// Trait for building GStreamer elements from block instances.

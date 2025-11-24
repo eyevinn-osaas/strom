@@ -1,7 +1,7 @@
 //! Block expansion logic - converts block instances to GStreamer elements using BlockBuilder trait.
 
 use crate::blocks::builtin;
-use crate::blocks::BusWatchSetupFn;
+use crate::blocks::BusMessageConnectFn;
 use gstreamer as gst;
 use strom_types::{BlockInstance, ExternalPad, Link};
 use tracing::debug;
@@ -14,8 +14,8 @@ pub struct ExpandedPipeline {
     pub gst_elements: Vec<(String, gst::Element)>,
     /// Links between all elements
     pub links: Vec<Link>,
-    /// Bus watch setup functions from blocks
-    pub bus_watch_setups: Vec<BusWatchSetupFn>,
+    /// Bus message handler connection functions from blocks
+    pub bus_message_handlers: Vec<BusMessageConnectFn>,
 }
 
 /// Expand block instances into GStreamer elements using BlockBuilder trait.
@@ -30,7 +30,7 @@ pub async fn expand_blocks(
 ) -> Result<ExpandedPipeline, PipelineError> {
     let mut gst_elements = Vec::new();
     let mut all_links = Vec::new();
-    let mut bus_watch_setups = Vec::new();
+    let mut bus_message_handlers = Vec::new();
 
     debug!("Expanding {} block instance(s)", blocks.len());
 
@@ -74,13 +74,10 @@ pub async fn expand_blocks(
             all_links.push(Link { from, to });
         }
 
-        // Collect bus watch setup function if provided
-        if let Some(bus_watch_setup) = build_result.bus_watch_setup {
-            debug!(
-                "Block {} provided a bus watch setup function",
-                block_instance.id
-            );
-            bus_watch_setups.push(bus_watch_setup);
+        // Collect bus message handler connection function if provided
+        if let Some(bus_message_handler) = build_result.bus_message_handler {
+            debug!("Block {} provided a bus message handler", block_instance.id);
+            bus_message_handlers.push(bus_message_handler);
         }
     }
 
@@ -94,16 +91,16 @@ pub async fn expand_blocks(
     }
 
     debug!(
-        "Block expansion complete: {} GStreamer elements, {} links, {} bus watch setups",
+        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers",
         gst_elements.len(),
         all_links.len(),
-        bus_watch_setups.len()
+        bus_message_handlers.len()
     );
 
     Ok(ExpandedPipeline {
         gst_elements,
         links: all_links,
-        bus_watch_setups,
+        bus_message_handlers,
     })
 }
 

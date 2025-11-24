@@ -1,4 +1,4 @@
-//! Server-Sent Events for real-time updates across clients.
+//! Events for real-time updates across clients.
 
 use crate::element::PropertyValue;
 use crate::FlowId;
@@ -71,18 +71,6 @@ pub enum StromEvent {
 }
 
 impl StromEvent {
-    /// Convert event to SSE format (data: <json>\n\n)
-    pub fn to_sse_message(&self) -> String {
-        match serde_json::to_string(self) {
-            Ok(json) => format!("data: {}\n\n", json),
-            Err(e) => {
-                // Can't use tracing in types crate
-                eprintln!("Failed to serialize event: {}", e);
-                format!("data: {{\"type\":\"Error\",\"message\":\"{}\"}}\n\n", e)
-            }
-        }
-    }
-
     /// Get a human-readable description of the event
     pub fn description(&self) -> String {
         match self {

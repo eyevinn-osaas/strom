@@ -129,7 +129,7 @@ impl BlockBuilder for WHIPOutputBuilder {
                 (whipclientsink_id, whipclientsink),
             ],
             internal_links,
-            bus_watch_setup: None,
+            bus_message_handler: None,
         })
     }
 }
