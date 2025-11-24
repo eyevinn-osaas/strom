@@ -12,6 +12,7 @@ pub mod element;
 pub mod events;
 pub mod flow;
 pub mod state;
+pub mod stats;
 
 // Re-export commonly used types
 pub use block::{
@@ -22,3 +23,7 @@ pub use element::{Element, ElementId, Link, MediaType, PropertyValue};
 pub use events::StromEvent;
 pub use flow::{Flow, FlowId};
 pub use state::PipelineState;
+pub use stats::{
+    BlockStats, BlockStatsResponse, FlowStats, FlowStatsResponse, RtpJitterbufferStats,
+    RtpSessionStats, StatMetadata, StatValue, Statistic,
+};

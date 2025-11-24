@@ -3,7 +3,7 @@
 use crate::version::VersionInfo;
 use strom_types::api::{
     CreateFlowRequest, ElementInfoResponse, ElementListResponse, ElementPropertiesResponse,
-    ErrorResponse, FlowListResponse, FlowResponse, UpdateFlowPropertiesRequest,
+    ErrorResponse, FlowListResponse, FlowResponse, FlowStatsResponse, UpdateFlowPropertiesRequest,
     UpdatePropertyRequest,
 };
 use strom_types::block::{
@@ -11,6 +11,7 @@ use strom_types::block::{
     CreateBlockRequest, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
 };
 use strom_types::flow::{FlowProperties, GStreamerClockType};
+use strom_types::stats::{BlockStats, StatMetadata, StatValue, Statistic};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -24,6 +25,7 @@ use utoipa::OpenApi;
         crate::api::flows::start_flow,
         crate::api::flows::stop_flow,
         crate::api::flows::update_flow_properties,
+        crate::api::flows::get_flow_stats,
         crate::api::flows::get_element_properties,
         crate::api::flows::update_element_property,
         crate::api::elements::list_elements,
@@ -50,6 +52,11 @@ use utoipa::OpenApi;
             ElementPropertiesResponse,
             UpdatePropertyRequest,
             ErrorResponse,
+            FlowStatsResponse,
+            BlockStats,
+            Statistic,
+            StatValue,
+            StatMetadata,
             BlockDefinition,
             BlockInstance,
             BlockResponse,
