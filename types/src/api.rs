@@ -182,6 +182,10 @@ pub struct WebRtcConnectionStats {
     pub outbound_rtp: Vec<RtpStreamStats>,
     /// ICE candidate pair statistics
     pub ice_candidates: Option<IceCandidateStats>,
+    /// Transport statistics
+    pub transport: Option<TransportStats>,
+    /// Codec statistics (keyed by codec ID)
+    pub codecs: Vec<CodecStats>,
     /// Raw stats as key-value pairs (for debugging/extensibility)
     pub raw: HashMap<String, String>,
 }
@@ -202,6 +206,8 @@ pub struct RtpStreamStats {
     pub packets: Option<u64>,
     /// Packets lost (inbound only)
     pub packets_lost: Option<i64>,
+    /// Fraction of packets lost in last interval (0.0-1.0, inbound only)
+    pub fraction_lost: Option<f64>,
     /// Jitter in seconds (inbound only)
     pub jitter: Option<f64>,
     /// Round-trip time in seconds
@@ -220,6 +226,46 @@ pub struct IceCandidateStats {
     pub remote_candidate_type: Option<String>,
     /// Connection state
     pub state: Option<String>,
+    /// Local candidate address
+    pub local_address: Option<String>,
+    /// Local candidate port
+    pub local_port: Option<u32>,
+    /// Local candidate protocol (UDP/TCP)
+    pub local_protocol: Option<String>,
+    /// Remote candidate address
+    pub remote_address: Option<String>,
+    /// Remote candidate port
+    pub remote_port: Option<u32>,
+    /// Remote candidate protocol
+    pub remote_protocol: Option<String>,
+}
+
+/// Transport statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct TransportStats {
+    /// Total bytes sent
+    pub bytes_sent: Option<u64>,
+    /// Total bytes received
+    pub bytes_received: Option<u64>,
+    /// Total packets sent
+    pub packets_sent: Option<u64>,
+    /// Total packets received
+    pub packets_received: Option<u64>,
+}
+
+/// Codec statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct CodecStats {
+    /// Codec MIME type (e.g., "audio/opus", "video/VP8")
+    pub mime_type: Option<String>,
+    /// Clock rate in Hz
+    pub clock_rate: Option<u32>,
+    /// Payload type number
+    pub payload_type: Option<u32>,
+    /// Number of channels (for audio)
+    pub channels: Option<u32>,
 }
 
 /// Response containing WebRTC statistics.

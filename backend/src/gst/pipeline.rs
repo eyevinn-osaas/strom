@@ -2013,88 +2013,120 @@ impl PipelineManager {
 
             let mut conn_stats = WebRtcConnectionStats::default();
 
-            // Call the get-stats action signal
-            // The signal takes:
-            // - GstPad* (optional, NULL for all stats)
-            // - GstPromise* (to receive the stats)
-            // Returns void, stats come via the promise
-            let pad_none: Option<&gst::Pad> = None;
-            let promise = gst::Promise::new();
-            info!("get_webrtc_stats: Emitting get-stats signal...");
-            webrtcbin.emit_by_name::<()>("get-stats", &[&pad_none, &promise]);
+            // First check if ICE connection is established - skip if not ready
+            // This avoids blocking on promise.wait() for webrtcbins that aren't connected
+            let ice_state = self.get_ice_connection_state(&webrtcbin);
+            info!("get_webrtc_stats: ICE state for {}: {:?}", name, ice_state);
 
-            // Wait for the promise to be fulfilled (with timeout)
-            info!("get_webrtc_stats: Waiting for promise...");
-            let promise_result = promise.wait();
-            info!("get_webrtc_stats: Promise result: {:?}", promise_result);
+            // Only get detailed stats if we have a reasonable ICE state
+            let should_get_stats = match ice_state.as_deref() {
+                Some("connected") | Some("completed") | Some("checking") => true,
+                Some("new") => {
+                    // New state - webrtcbin exists but connection not started
+                    // Still try to get basic stats
+                    true
+                }
+                Some("failed") | Some("disconnected") | Some("closed") => {
+                    warn!(
+                        "get_webrtc_stats: Skipping stats for {} - ICE state: {:?}",
+                        name, ice_state
+                    );
+                    false
+                }
+                _ => {
+                    // Unknown state - try anyway but be cautious
+                    true
+                }
+            };
 
-            match promise_result {
-                gst::PromiseResult::Replied => {
-                    if let Some(reply) = promise.get_reply() {
-                        // The reply is a GstStructure containing the stats
-                        info!(
-                            "get_webrtc_stats: Got reply structure with {} fields: {}",
-                            reply.n_fields(),
-                            reply.name()
-                        );
-                        // Log all field names
-                        for i in 0..reply.n_fields() {
-                            if let Some(field_name) = reply.nth_field_name(i) {
-                                info!("get_webrtc_stats: Field [{}]: {}", i, field_name);
+            if should_get_stats {
+                // Call the get-stats action signal
+                // The signal takes:
+                // - GstPad* (optional, NULL for all stats)
+                // - GstPromise* (to receive the stats)
+                // Returns void, stats come via the promise
+                let pad_none: Option<&gst::Pad> = None;
+                let promise = gst::Promise::new();
+                info!("get_webrtc_stats: Emitting get-stats signal...");
+                webrtcbin.emit_by_name::<()>("get-stats", &[&pad_none, &promise]);
+
+                // Wait for the promise with a timeout using interrupt from another thread
+                let promise_clone = promise.clone();
+                let timeout_thread = std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    promise_clone.interrupt();
+                });
+
+                info!("get_webrtc_stats: Waiting for promise (500ms timeout)...");
+                let promise_result = promise.wait();
+
+                // Clean up timeout thread (it will either have interrupted or not)
+                let _ = timeout_thread.join();
+
+                info!("get_webrtc_stats: Promise result: {:?}", promise_result);
+
+                match promise_result {
+                    gst::PromiseResult::Replied => {
+                        if let Some(reply) = promise.get_reply() {
+                            // The reply is a GstStructure containing the stats
+                            info!(
+                                "get_webrtc_stats: Got reply structure with {} fields: {}",
+                                reply.n_fields(),
+                                reply.name()
+                            );
+                            // Log all field names
+                            for i in 0..reply.n_fields() {
+                                if let Some(field_name) = reply.nth_field_name(i) {
+                                    info!("get_webrtc_stats: Field [{}]: {}", i, field_name);
+                                }
                             }
+                            // Convert StructureRef to owned Structure for parsing
+                            conn_stats = self.parse_webrtc_stats_structure(&reply.to_owned());
+                            info!(
+                                "get_webrtc_stats: Parsed stats - ICE: {:?}, inbound_rtp: {}, outbound_rtp: {}",
+                                conn_stats.ice_candidates.is_some(),
+                                conn_stats.inbound_rtp.len(),
+                                conn_stats.outbound_rtp.len()
+                            );
+                        } else {
+                            info!(
+                                "get_webrtc_stats: No stats in promise reply from webrtcbin: {}",
+                                name
+                            );
                         }
-                        // Convert StructureRef to owned Structure for parsing
-                        conn_stats = self.parse_webrtc_stats_structure(&reply.to_owned());
-                        info!(
-                            "get_webrtc_stats: Parsed stats - ICE: {:?}, inbound_rtp: {}, outbound_rtp: {}",
-                            conn_stats.ice_candidates.is_some(),
-                            conn_stats.inbound_rtp.len(),
-                            conn_stats.outbound_rtp.len()
+                    }
+                    gst::PromiseResult::Interrupted => {
+                        warn!(
+                            "get_webrtc_stats: Promise timed out (interrupted) for webrtcbin: {}",
+                            name
                         );
-                    } else {
+                    }
+                    gst::PromiseResult::Expired => {
+                        info!("get_webrtc_stats: Promise expired for webrtcbin: {}", name);
+                    }
+                    gst::PromiseResult::Pending => {
                         info!(
-                            "get_webrtc_stats: No stats in promise reply from webrtcbin: {}",
+                            "get_webrtc_stats: Promise still pending for webrtcbin: {}",
+                            name
+                        );
+                    }
+                    _ => {
+                        info!(
+                            "get_webrtc_stats: Unknown promise result for webrtcbin: {}",
                             name
                         );
                     }
                 }
-                gst::PromiseResult::Interrupted => {
-                    info!(
-                        "get_webrtc_stats: Promise was interrupted for webrtcbin: {}",
-                        name
-                    );
-                }
-                gst::PromiseResult::Expired => {
-                    info!("get_webrtc_stats: Promise expired for webrtcbin: {}", name);
-                }
-                gst::PromiseResult::Pending => {
-                    info!(
-                        "get_webrtc_stats: Promise still pending for webrtcbin: {}",
-                        name
-                    );
-                }
-                _ => {
-                    info!(
-                        "get_webrtc_stats: Unknown promise result for webrtcbin: {}",
-                        name
-                    );
-                }
             }
 
             // Also try to get basic element properties as fallback/additional info
-            if let Some(ice_state) = self.get_ice_connection_state(&webrtcbin) {
-                info!(
-                    "get_webrtc_stats: Got ICE state from property: {}",
-                    ice_state
-                );
+            if let Some(ice_state_str) = ice_state {
                 if conn_stats.ice_candidates.is_none() {
                     conn_stats.ice_candidates = Some(strom_types::api::IceCandidateStats {
-                        state: Some(ice_state),
+                        state: Some(ice_state_str),
                         ..Default::default()
                     });
                 }
-            } else {
-                info!("get_webrtc_stats: Could not get ICE state from property");
             }
 
             stats.connections.insert(name, conn_stats);
@@ -2201,11 +2233,48 @@ impl PipelineManager {
 
         let mut conn_stats = WebRtcConnectionStats::default();
 
-        debug!(
+        info!(
             "parse_webrtc_stats_structure: Parsing structure '{}' with {} fields",
             structure.name(),
             structure.n_fields()
         );
+
+        // Log ALL field names and their types for debugging
+        info!("=== RAW WEBRTC STATS STRUCTURE ===");
+        for (field_name, value) in structure.iter() {
+            let type_name = value.type_().name();
+            info!("  Field: '{}' (type: {})", field_name, type_name);
+
+            // If it's a nested structure, log its contents too
+            if let Ok(nested) = value.get::<gst::Structure>() {
+                info!("    Nested structure '{}' fields:", nested.name());
+                for (nested_field, nested_value) in nested.iter() {
+                    let nested_type = nested_value.type_().name();
+                    // Try to get the actual value for common types
+                    let value_str = if let Ok(s) = nested_value.get::<String>() {
+                        format!("\"{}\"", s)
+                    } else if let Ok(s) = nested_value.get::<&str>() {
+                        format!("\"{}\"", s)
+                    } else if let Ok(n) = nested_value.get::<u64>() {
+                        format!("{}", n)
+                    } else if let Ok(n) = nested_value.get::<i64>() {
+                        format!("{}", n)
+                    } else if let Ok(n) = nested_value.get::<u32>() {
+                        format!("{}", n)
+                    } else if let Ok(n) = nested_value.get::<i32>() {
+                        format!("{}", n)
+                    } else if let Ok(n) = nested_value.get::<f64>() {
+                        format!("{:.6}", n)
+                    } else if let Ok(b) = nested_value.get::<bool>() {
+                        format!("{}", b)
+                    } else {
+                        format!("<{}>", nested_type)
+                    };
+                    info!("      {}: {} = {}", nested_field, nested_type, value_str);
+                }
+            }
+        }
+        info!("=== END RAW STATS ===");
 
         // WebRTC stats structure contains nested structures for each stat type
         // The field NAME indicates the type (e.g., "rtp-inbound-stream-stats_1234")
@@ -2245,6 +2314,15 @@ impl PipelineManager {
                         if let Ok(candidate_type) = nested.get::<&str>("candidate-type") {
                             ice.local_candidate_type = Some(candidate_type.to_string());
                         }
+                        if let Ok(address) = nested.get::<&str>("address") {
+                            ice.local_address = Some(address.to_string());
+                        }
+                        if let Ok(port) = nested.get::<u32>("port") {
+                            ice.local_port = Some(port);
+                        }
+                        if let Ok(protocol) = nested.get::<&str>("protocol") {
+                            ice.local_protocol = Some(protocol.to_string());
+                        }
                     }
                 } else if field_str.starts_with("ice-candidate-remote") {
                     debug!(
@@ -2258,6 +2336,15 @@ impl PipelineManager {
                         if let Ok(candidate_type) = nested.get::<&str>("candidate-type") {
                             ice.remote_candidate_type = Some(candidate_type.to_string());
                         }
+                        if let Ok(address) = nested.get::<&str>("address") {
+                            ice.remote_address = Some(address.to_string());
+                        }
+                        if let Ok(port) = nested.get::<u32>("port") {
+                            ice.remote_port = Some(port);
+                        }
+                        if let Ok(protocol) = nested.get::<&str>("protocol") {
+                            ice.remote_protocol = Some(protocol.to_string());
+                        }
                     }
                 } else if field_str.starts_with("ice-candidate-pair") {
                     debug!(
@@ -2270,15 +2357,55 @@ impl PipelineManager {
                     }
                     // Note: GStreamer webrtcbin doesn't expose ICE state in stats
                     // We get it from the ice-connection-state property instead
+                } else if field_str.starts_with("transport-stats") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found transport stats: {}",
+                        field_str
+                    );
+                    let mut transport = strom_types::api::TransportStats::default();
+                    if let Ok(bytes) = nested.get::<u64>("bytes-sent") {
+                        transport.bytes_sent = Some(bytes);
+                    }
+                    if let Ok(bytes) = nested.get::<u64>("bytes-received") {
+                        transport.bytes_received = Some(bytes);
+                    }
+                    if let Ok(packets) = nested.get::<u64>("packets-sent") {
+                        transport.packets_sent = Some(packets);
+                    }
+                    if let Ok(packets) = nested.get::<u64>("packets-received") {
+                        transport.packets_received = Some(packets);
+                    }
+                    conn_stats.transport = Some(transport);
+                } else if field_str.starts_with("codec-stats") || field_str.starts_with("codec_") {
+                    debug!(
+                        "parse_webrtc_stats_structure: Found codec stats: {}",
+                        field_str
+                    );
+                    let mut codec = strom_types::api::CodecStats::default();
+                    if let Ok(mime) = nested.get::<&str>("mime-type") {
+                        codec.mime_type = Some(mime.to_string());
+                    }
+                    if let Ok(clock_rate) = nested.get::<u32>("clock-rate") {
+                        codec.clock_rate = Some(clock_rate);
+                    }
+                    if let Ok(pt) = nested.get::<u32>("payload-type") {
+                        codec.payload_type = Some(pt);
+                    }
+                    if let Ok(channels) = nested.get::<u32>("channels") {
+                        codec.channels = Some(channels);
+                    }
+                    conn_stats.codecs.push(codec);
                 }
             }
         }
 
         debug!(
-            "parse_webrtc_stats_structure: Done - ICE: {:?}, inbound: {}, outbound: {}",
+            "parse_webrtc_stats_structure: Done - ICE: {:?}, inbound: {}, outbound: {}, codecs: {}, transport: {:?}",
             conn_stats.ice_candidates.is_some(),
             conn_stats.inbound_rtp.len(),
-            conn_stats.outbound_rtp.len()
+            conn_stats.outbound_rtp.len(),
+            conn_stats.codecs.len(),
+            conn_stats.transport.is_some()
         );
         conn_stats
     }
@@ -2338,14 +2465,93 @@ impl PipelineManager {
             stats.packets = Some(packets);
         }
 
-        // RTT (round-trip time)
+        // RTT (round-trip time) - try top level first
         if let Ok(rtt) = structure.get::<f64>("round-trip-time") {
             stats.round_trip_time = Some(rtt);
         }
 
-        // Bitrate (if available)
+        // Bitrate (if available) - try top level first
         if let Ok(bitrate) = structure.get::<u64>("bitrate") {
             stats.bitrate = Some(bitrate);
+        }
+
+        // Parse nested gst-rtpsource-stats for additional fields
+        // This contains packets-lost, bitrate, and round-trip time
+        if let Ok(rtp_source_stats) = structure.get::<gst::Structure>("gst-rtpsource-stats") {
+            debug!(
+                "parse_rtp_stats: Found nested gst-rtpsource-stats with {} fields",
+                rtp_source_stats.n_fields()
+            );
+
+            // Packets lost (only for inbound)
+            if inbound && stats.packets_lost.is_none() {
+                // Try packets-lost first (cumulative)
+                if let Ok(lost) = rtp_source_stats.get::<i32>("packets-lost") {
+                    // -1 means unknown/not calculated, only set if we have a real value
+                    if lost >= 0 {
+                        stats.packets_lost = Some(lost as i64);
+                    }
+                }
+                // Try sent-rb-packetslost (from receiver report we sent)
+                if stats.packets_lost.is_none() {
+                    if let Ok(lost) = rtp_source_stats.get::<i32>("sent-rb-packetslost") {
+                        if lost >= 0 {
+                            stats.packets_lost = Some(lost as i64);
+                        }
+                    }
+                }
+                // If we have sent-rb data (sent-rb=true) but packets-lost is still -1,
+                // check sent-rb-fractionlost (0-255 representing 0-100% loss)
+                // If fraction lost is 0, we can assume 0 packets lost
+                if stats.packets_lost.is_none() {
+                    if let Ok(sent_rb) = rtp_source_stats.get::<bool>("sent-rb") {
+                        if sent_rb {
+                            if let Ok(fraction) =
+                                rtp_source_stats.get::<u32>("sent-rb-fractionlost")
+                            {
+                                // If fraction lost is 0, no recent packet loss
+                                // Set packets_lost to 0 to indicate healthy stream
+                                if fraction == 0 {
+                                    stats.packets_lost = Some(0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Bitrate from nested structure
+            if stats.bitrate.is_none() {
+                if let Ok(bitrate) = rtp_source_stats.get::<u64>("bitrate") {
+                    if bitrate > 0 {
+                        stats.bitrate = Some(bitrate);
+                    }
+                }
+            }
+
+            // Fraction lost (0-255 scale, convert to 0.0-1.0)
+            if inbound {
+                if let Ok(fraction) = rtp_source_stats.get::<u32>("sent-rb-fractionlost") {
+                    // 0-255 maps to 0.0-1.0 (0-100% loss)
+                    let fraction_pct = fraction as f64 / 255.0;
+                    stats.fraction_lost = Some(fraction_pct);
+                }
+            }
+
+            // Round-trip time from RTCP receiver reports
+            if stats.round_trip_time.is_none() {
+                // Try rb-round-trip first (from received receiver reports)
+                if let Ok(rtt_ticks) = rtp_source_stats.get::<u32>("rb-round-trip") {
+                    if rtt_ticks > 0 {
+                        // rb-round-trip is in 1/65536 seconds units
+                        let rtt_seconds = rtt_ticks as f64 / 65536.0;
+                        stats.round_trip_time = Some(rtt_seconds);
+                    }
+                }
+                // Also try sent-rb-dlsr and sent-rb-lsr to calculate RTT
+                // RTT = now - LSR - DLSR (when we have the values)
+                // For now, just use rb-round-trip if available
+            }
         }
 
         stats
