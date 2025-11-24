@@ -85,6 +85,8 @@ pub struct StromApp {
     properties_clock_type_buffer: strom_types::flow::GStreamerClockType,
     /// Temporary PTP domain buffer for properties dialog
     properties_ptp_domain_buffer: String,
+    /// Temporary thread priority for properties dialog
+    properties_thread_priority_buffer: strom_types::flow::ThreadPriority,
     /// Shutdown flag for Ctrl+C handling (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -200,6 +202,7 @@ impl StromApp {
             properties_description_buffer: String::new(),
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
+            properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             meter_data: MeterDataStore::new(),
             theme_preference: ThemePreference::System,
             version_info: None,
@@ -264,6 +267,7 @@ impl StromApp {
             properties_description_buffer: String::new(),
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
+            properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             shutdown_flag,
             port,
             auth_token,
@@ -1277,6 +1281,8 @@ impl StromApp {
                                         .ptp_domain
                                         .map(|d| d.to_string())
                                         .unwrap_or_else(|| "0".to_string());
+                                    self.properties_thread_priority_buffer =
+                                        flow.properties.thread_priority;
                                 }
 
                                 // Show clock type indicator (before settings gear)
@@ -1319,6 +1325,31 @@ impl StromApp {
                                                     .color(text_color),
                                             ));
                                         });
+                                }
+
+                                // Show thread priority warning indicator if priority not achieved
+                                if let Some(ref status) = flow.properties.thread_priority_status {
+                                    if !status.achieved && status.error.is_some() {
+                                        let warning_color = Color32::from_rgb(255, 165, 0);
+                                        let tooltip = status
+                                            .error
+                                            .as_ref()
+                                            .map(|e| format!("Thread priority not set: {}", e))
+                                            .unwrap_or_else(|| {
+                                                "Thread priority warning".to_string()
+                                            });
+
+                                        ui.add_space(2.0);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new("⚠")
+                                                    .size(12.0)
+                                                    .color(warning_color),
+                                            )
+                                            .sense(egui::Sense::hover()),
+                                        )
+                                        .on_hover_text(tooltip);
+                                    }
                                 }
                             },
                         );
@@ -1791,6 +1822,60 @@ impl StromApp {
                 }
 
                 ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                // Thread Priority
+                ui.label("Thread Priority:");
+                ui.horizontal(|ui| {
+                    use strom_types::flow::ThreadPriority;
+
+                    egui::ComboBox::from_id_salt("thread_priority_selector")
+                        .selected_text(format!("{:?}", self.properties_thread_priority_buffer))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.properties_thread_priority_buffer,
+                                ThreadPriority::Normal,
+                                "Normal",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_thread_priority_buffer,
+                                ThreadPriority::High,
+                                "High (recommended)",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_thread_priority_buffer,
+                                ThreadPriority::Realtime,
+                                "Realtime (requires privileges)",
+                            );
+                        });
+                });
+
+                // Show description of selected thread priority
+                ui.label(self.properties_thread_priority_buffer.description());
+
+                // Show thread priority status for running pipelines
+                if let Some(flow) = self.flows.get(idx) {
+                    if let Some(ref status) = flow.properties.thread_priority_status {
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Status:");
+                            if status.achieved {
+                                ui.colored_label(
+                                    Color32::from_rgb(0, 200, 0),
+                                    format!("● Achieved ({} threads)", status.threads_configured),
+                                );
+                            } else if let Some(ref err) = status.error {
+                                ui.colored_label(Color32::from_rgb(255, 165, 0), "● Warning");
+                                ui.label(format!("- {}", err));
+                            } else {
+                                ui.colored_label(Color32::GRAY, "● Not set");
+                            }
+                        });
+                    }
+                }
+
+                ui.add_space(15.0);
 
                 // Buttons
                 ui.horizontal(|ui| {
@@ -1817,6 +1902,10 @@ impl StromApp {
                             } else {
                                 None
                             };
+
+                            // Set thread priority
+                            flow.properties.thread_priority =
+                                self.properties_thread_priority_buffer;
 
                             let flow_clone = flow.clone();
                             let api = self.api.clone();

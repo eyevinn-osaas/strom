@@ -12,6 +12,55 @@ use utoipa::ToSchema;
 /// Unique identifier for a flow.
 pub type FlowId = Uuid;
 
+/// Thread priority level for GStreamer streaming threads.
+///
+/// Controls the scheduling priority of GStreamer's internal streaming threads.
+/// Higher priorities help ensure smooth media processing under system load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ThreadPriority {
+    /// Normal priority (default OS scheduling, no elevation)
+    Normal,
+    /// Elevated priority (nice -10 equivalent, good for most use cases)
+    #[default]
+    High,
+    /// Real-time priority (SCHED_FIFO, requires privileges)
+    /// Warning: May require root or CAP_SYS_NICE capability
+    Realtime,
+}
+
+impl ThreadPriority {
+    /// Get the human-readable description of this priority level.
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Normal => "Normal - default OS scheduling",
+            Self::High => "High - elevated priority (recommended)",
+            Self::Realtime => "Realtime - SCHED_FIFO (requires privileges)",
+        }
+    }
+
+    /// Get all available priority levels.
+    pub fn all() -> &'static [ThreadPriority] {
+        &[Self::Normal, Self::High, Self::Realtime]
+    }
+}
+
+/// Status of thread priority configuration for a running pipeline.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ThreadPriorityStatus {
+    /// The requested thread priority level
+    pub requested: ThreadPriority,
+    /// Whether the requested priority was successfully applied
+    pub achieved: bool,
+    /// Error message if priority could not be set (empty if achieved)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Number of threads that had priority set
+    pub threads_configured: u32,
+}
+
 /// GStreamer clock type selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -78,6 +127,15 @@ pub struct FlowProperties {
     /// Clock synchronization status (updated by backend for running pipelines)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_sync_status: Option<ClockSyncStatus>,
+
+    /// Thread priority for GStreamer streaming threads
+    /// Default is High (elevated but not realtime)
+    #[serde(default)]
+    pub thread_priority: ThreadPriority,
+
+    /// Status of thread priority configuration (updated by backend when pipeline starts)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_priority_status: Option<ThreadPriorityStatus>,
 
     /// Whether this flow should be automatically restarted when the backend starts
     /// (set to true when starting a flow, false when manually stopping it)
