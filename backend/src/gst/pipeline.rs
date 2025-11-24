@@ -2,11 +2,13 @@
 
 use crate::blocks::BlockRegistry;
 use crate::events::EventBroadcaster;
+use crate::gst::thread_priority::{self, ThreadPriorityState};
 use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use gstreamer_net as gst_net;
 use std::collections::HashMap;
+use strom_types::flow::ThreadPriorityStatus;
 use strom_types::{Element, Flow, FlowId, Link, PipelineState, PropertyValue, StromEvent};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
@@ -78,6 +80,8 @@ pub struct PipelineManager {
     block_bus_watches: Vec<gst::bus::BusWatchGuard>,
     /// Bus watch setup functions from blocks (called when pipeline starts)
     block_bus_watch_setups: Vec<crate::blocks::BusWatchSetupFn>,
+    /// Thread priority state tracker (tracks whether priority was successfully set)
+    thread_priority_state: Option<ThreadPriorityState>,
 }
 
 impl PipelineManager {
@@ -112,6 +116,7 @@ impl PipelineManager {
             pad_properties: HashMap::new(),
             block_bus_watches: Vec::new(),
             block_bus_watch_setups: Vec::new(),
+            thread_priority_state: None,
         };
 
         // Expand blocks into GStreamer elements
@@ -1176,6 +1181,19 @@ impl PipelineManager {
         info!("Starting pipeline: {}", self.flow_name);
         info!("Pipeline has {} elements", self.elements.len());
 
+        // Set up thread priority handler FIRST (before any state changes)
+        // This must be done before the pipeline starts so we catch all thread enter events
+        info!(
+            "Setting up thread priority handler (requested: {:?})...",
+            self.properties.thread_priority
+        );
+        let priority_state = thread_priority::setup_thread_priority_handler(
+            &self.pipeline,
+            self.properties.thread_priority,
+        );
+        self.thread_priority_state = Some(priority_state);
+        info!("Thread priority handler installed");
+
         // Set up bus watch before starting
         info!("Setting up bus watch...");
         self.setup_bus_watch();
@@ -1278,6 +1296,10 @@ impl PipelineManager {
         // Remove bus watch when stopped to free resources
         self.remove_bus_watch();
 
+        // Remove thread priority handler
+        thread_priority::remove_thread_priority_handler(&self.pipeline);
+        self.thread_priority_state = None;
+
         Ok(PipelineState::Null)
     }
 
@@ -1308,6 +1330,14 @@ impl PipelineManager {
     /// Get the flow ID this pipeline manages.
     pub fn flow_id(&self) -> FlowId {
         self.flow_id
+    }
+
+    /// Get the thread priority status for this pipeline.
+    /// Returns None if pipeline hasn't been started yet.
+    pub fn get_thread_priority_status(&self) -> Option<ThreadPriorityStatus> {
+        self.thread_priority_state
+            .as_ref()
+            .map(|state| state.get_status())
     }
 
     /// Get the clock synchronization status for this pipeline.

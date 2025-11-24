@@ -21,7 +21,7 @@ pub use block::{
 };
 pub use element::{Element, ElementId, Link, MediaType, PropertyValue};
 pub use events::StromEvent;
-pub use flow::{Flow, FlowId};
+pub use flow::{Flow, FlowId, ThreadPriority, ThreadPriorityStatus};
 pub use state::PipelineState;
 pub use stats::{
     BlockStats, BlockStatsResponse, FlowStats, FlowStatsResponse, RtpJitterbufferStats,
