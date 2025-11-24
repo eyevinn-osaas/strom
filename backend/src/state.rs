@@ -127,10 +127,11 @@ impl AppState {
             .values()
             .map(|flow| {
                 let mut flow = flow.clone();
-                // Update state and clock sync status for running pipelines
+                // Update state, clock sync status, and thread priority status for running pipelines
                 if let Some(pipeline) = pipelines.get(&flow.id) {
                     flow.state = Some(pipeline.get_state());
                     flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
+                    flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
                 }
                 flow
             })
@@ -144,10 +145,11 @@ impl AppState {
 
         flows.get(id).map(|flow| {
             let mut flow = flow.clone();
-            // Update state and clock sync status for running pipeline
+            // Update state, clock sync status, and thread priority status for running pipeline
             if let Some(pipeline) = pipelines.get(id) {
                 flow.state = Some(pipeline.get_state());
                 flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
+                flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
             }
             flow
         })
