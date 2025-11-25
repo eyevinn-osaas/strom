@@ -39,7 +39,7 @@ RUN cargo chef cook --release --recipe-path recipe.json \
 COPY . .
 
 # Build the frontend
-#RUN mkdir -p backend/dist && cd frontend && trunk build --release
+RUN mkdir -p backend/dist && cd frontend && trunk build --release
 
 # Build the backend (headless - no native GUI needed in Docker) and MCP server
 ENV RUST_BACKTRACE=1
