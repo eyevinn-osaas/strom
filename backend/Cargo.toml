@@ -30,15 +30,13 @@ tracing-subscriber.workspace = true
 
 # OpenAPI documentation
 utoipa.workspace = true
-# Temporarily disabled to remove rust-embed dependency
-# utoipa-swagger-ui.workspace = true
+utoipa-swagger-ui.workspace = true
 
 # GStreamer
 gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-net.workspace = true
-# Temporarily disabled for faster builds
-# gst-plugin-webrtc.workspace = true
+gst-plugin-webrtc.workspace = true
 
 # Error handling
 anyhow = "1.0"
@@ -65,6 +63,9 @@ uuid.workspace = true
 
 # MIME type detection for static assets
 mime_guess = "2.0"
+
+# Embed static assets
+rust-embed = "8.0"
 
 # Optional GUI (native frontend)
 strom-frontend = { path = "../frontend", optional = true }
