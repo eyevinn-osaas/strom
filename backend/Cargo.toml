@@ -40,30 +40,32 @@ gst-plugin-webrtc.workspace = true
 
 # Error handling
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0.17"
 async-trait = "0.1"
 
 # Thread priority management
-thread-priority = "1.2"
+thread-priority = "3.0.0"
 libc = "0.2"
 
 # Authentication
-bcrypt = "0.15"
+bcrypt = "0.17.1"
 tower-sessions = "0.14"
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive", "env"] }
 
 # Cross-platform directory paths
-directories = "5.0"
+directories = "6.0"
 
 # Temporary files for DOT/SVG conversion
 tempfile = "3.8"
 uuid.workspace = true
 
+# MIME type detection for static assets
+mime_guess = "2.0"
+
 # Embed static assets
 rust-embed = "8.0"
-mime_guess = "2.0"
 
 # Optional GUI (native frontend)
 strom-frontend = { path = "../frontend", optional = true }

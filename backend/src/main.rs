@@ -165,6 +165,7 @@ fn main() -> anyhow::Result<()> {
     gstreamer::init()?;
     info!("GStreamer initialized");
 
+    // Register WebRTC plugins
     gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
 
     // Start GLib main loop in background thread for bus watch callbacks
