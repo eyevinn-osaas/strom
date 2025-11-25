@@ -1,4 +1,4 @@
-# Dockerfile for Strom - Multi-stage build with cargo-chef for optimal caching
+# Dockerfile for Strom - Multi-stage build with separate frontend and backend builders
 
 # Stage 1: Chef base - Use lukemathwalker's cargo-chef image as base
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
@@ -9,11 +9,27 @@ FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 3: Builder - Build dependencies using cargo-chef
-FROM chef AS builder
+# Stage 3: Frontend builder - Build WASM frontend separately
+FROM chef AS frontend-builder
 WORKDIR /app
 
-# Install GStreamer development dependencies (including WebRTC plugin)
+# Install trunk for building the WASM frontend from binary release (match CI version)
+RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+
+# Add WASM target for frontend compilation
+RUN rustup target add wasm32-unknown-unknown
+
+# Copy workspace (needed for cargo metadata, but we only build frontend)
+COPY . .
+
+# Build the frontend only
+RUN cd frontend && trunk build --release
+
+# Stage 4: Backend builder - Build backend with embedded frontend
+FROM chef AS backend-builder
+WORKDIR /app
+
+# Install GStreamer development dependencies (NOT trunk/wasm - backend only)
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -21,12 +37,6 @@ RUN apt-get update && apt-get install -y \
     libgstreamer-plugins-base1.0-dev \
     libgstreamer-plugins-bad1.0-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Install trunk for building the WASM frontend from binary release (match CI version)
-RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
-
-# Add WASM target for frontend compilation
-RUN rustup target add wasm32-unknown-unknown
 
 # Copy recipe and build dependencies (this layer is cached)
 COPY --from=planner /app/recipe.json recipe.json
@@ -38,15 +48,16 @@ RUN cargo chef cook --release --recipe-path recipe.json \
 # Copy entire project source
 COPY . .
 
-# Build the frontend
-RUN mkdir -p backend/dist && cd frontend && trunk build --release
+# Copy the built frontend dist from frontend-builder
+# Note: Trunk.toml puts output in ../backend/dist relative to frontend/
+COPY --from=frontend-builder /app/backend/dist backend/dist
 
 # Build the backend (headless - no native GUI needed in Docker) and MCP server
 ENV RUST_BACKTRACE=1
 RUN cargo build --release --package strom-backend --no-default-features
 RUN cargo build --release --package strom-mcp-server
 
-# Stage 4: Runtime - Minimal runtime image with trixie for newer GStreamer
+# Stage 5: Runtime - Minimal runtime image with trixie for newer GStreamer
 FROM debian:trixie-slim AS runtime
 WORKDIR /app
 
@@ -65,9 +76,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the compiled binaries from builder
-COPY --from=builder /app/target/release/strom-backend /usr/local/bin/strom-backend
-COPY --from=builder /app/target/release/strom-mcp-server /usr/local/bin/strom-mcp-server
+# Copy the compiled binaries from backend-builder
+COPY --from=backend-builder /app/target/release/strom-backend /usr/local/bin/strom-backend
+COPY --from=backend-builder /app/target/release/strom-mcp-server /usr/local/bin/strom-mcp-server
 
 # Set environment variables
 ENV RUST_LOG=info
