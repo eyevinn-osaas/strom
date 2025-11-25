@@ -76,9 +76,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the compiled binaries from backend-builder
-COPY --from=backend-builder /app/target/release/strom-backend /usr/local/bin/strom-backend
-COPY --from=backend-builder /app/target/release/strom-mcp-server /usr/local/bin/strom-mcp-server
+# Copy the compiled binaries from backend-builder to /app
+COPY --from=backend-builder /app/target/release/strom-backend /app/strom-backend
+COPY --from=backend-builder /app/target/release/strom-mcp-server /app/strom-mcp-server
 
 # Set environment variables
 ENV RUST_LOG=info
@@ -91,5 +91,5 @@ RUN mkdir -p /data
 # Expose the server port
 EXPOSE 8080
 
-# Run the server
-CMD ["strom-backend"]
+# Run the server from /app
+CMD ["/app/strom-backend"]

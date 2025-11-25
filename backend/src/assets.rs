@@ -5,17 +5,12 @@ use axum::{
     http::{header, Response, StatusCode, Uri},
     response::IntoResponse,
 };
-use std::sync::OnceLock;
+use rust_embed::RustEmbed;
 
-// Include the generated assets code
-include!(concat!(env!("OUT_DIR"), "/assets.rs"));
-
-// Lazy-initialized asset map
-static ASSETS: OnceLock<std::collections::HashMap<&'static str, EmbeddedAsset>> = OnceLock::new();
-
-fn assets() -> &'static std::collections::HashMap<&'static str, EmbeddedAsset> {
-    ASSETS.get_or_init(get_assets)
-}
+/// Embedded frontend assets
+#[derive(RustEmbed)]
+#[folder = "dist/"]
+pub struct Assets;
 
 /// Serve embedded static files
 pub async fn serve_static(uri: Uri) -> impl IntoResponse {
@@ -28,7 +23,7 @@ pub async fn serve_static(uri: Uri) -> impl IntoResponse {
         path
     };
 
-    match assets().get(path) {
+    match Assets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
 
@@ -40,7 +35,7 @@ pub async fn serve_static(uri: Uri) -> impl IntoResponse {
         }
         None => {
             // If file not found, try to serve index.html for SPA routing
-            if let Some(index) = assets().get("index.html") {
+            if let Some(index) = Assets::get("index.html") {
                 Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "text/html")
