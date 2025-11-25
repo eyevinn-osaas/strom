@@ -7,8 +7,9 @@ use axum::{middleware, routing::get, routing::patch, routing::post, Extension, R
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
-use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
+// Temporarily disabled to remove rust-embed dependency
+// use utoipa::OpenApi;
+// use utoipa_swagger_ui::SwaggerUi;
 
 pub mod api;
 pub mod assets;
@@ -150,12 +151,13 @@ pub async fn create_app_with_state_and_auth(
         .merge(protected_api_router)
         .layer(Extension(auth_config));
 
-    // Build main router with Swagger UI
+    // Build main router
     Router::new()
         .route("/health", get(health))
-        .merge(
-            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::ApiDoc::openapi()),
-        )
+        // Temporarily disabled to remove rust-embed dependency
+        // .merge(
+        //     SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::ApiDoc::openapi()),
+        // )
         .nest("/api", api_router)
         .layer(session_layer)
         .layer(
