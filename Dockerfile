@@ -42,6 +42,7 @@ COPY . .
 RUN mkdir -p backend/dist && cd frontend && trunk build --release
 
 # Build the backend (headless - no native GUI needed in Docker) and MCP server
+ENV RUST_BACKTRACE=1
 RUN cargo build --release --package strom-backend --no-default-features
 RUN cargo build --release --package strom-mcp-server
 
