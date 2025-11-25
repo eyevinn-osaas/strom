@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install trunk for building the WASM frontend from binary release (match CI version)
-RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.5/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
+RUN curl -L https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin
 
 # Add WASM target for frontend compilation
 RUN rustup target add wasm32-unknown-unknown
