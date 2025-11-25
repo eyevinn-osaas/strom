@@ -1,14 +1,8 @@
 # Dockerfile for Strom - Multi-stage build with cargo-chef for optimal caching
 
 # Stage 1: Chef base - Use lukemathwalker's cargo-chef image as base
-FROM lukemathwalker/cargo-chef:latest-rust-bookworm AS chef-base
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
-
-# Upgrade to trixie for newer GStreamer packages
-RUN echo "deb http://deb.debian.org/debian trixie main" > /etc/apt/sources.list.d/trixie.list && \
-    apt-get update
-
-FROM chef-base AS chef
 
 # Stage 2: Planner - Analyze dependencies and create recipe
 FROM chef AS planner
@@ -20,16 +14,12 @@ FROM chef AS builder
 WORKDIR /app
 
 # Install GStreamer development dependencies (including WebRTC plugin)
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
+    pkg-config \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
     libgstreamer-plugins-bad1.0-dev \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
-    gstreamer1.0-libav \
-    gstreamer1.0-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Install trunk for building the WASM frontend from binary release (match CI version)
@@ -40,7 +30,10 @@ RUN rustup target add wasm32-unknown-unknown
 
 # Copy recipe and build dependencies (this layer is cached)
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+# Cook with the same feature flags we'll use for the actual build
+RUN cargo chef cook --release --recipe-path recipe.json \
+    --package strom-backend --no-default-features \
+    --package strom-mcp-server
 
 # Copy entire project source
 COPY . .
@@ -57,6 +50,7 @@ FROM debian:trixie-slim AS runtime
 WORKDIR /app
 
 # Install only GStreamer runtime dependencies
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     libgstreamer1.0-0 \
     libgstreamer-plugins-base1.0-0 \

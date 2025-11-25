@@ -141,20 +141,19 @@ impl StromApp {
 
         // Detect API base URL from browser location
         let api_base_url = {
-            // WASM: Detect if we're in development mode (trunk serve) by checking the window location
             if let Some(window) = web_sys::window() {
-                if let Ok(location) = window.location().host() {
-                    // If we're on port 8080 (trunk serve), connect to backend on port 3000
-                    if location.contains(":8080") {
+                if let Ok(host) = window.location().host() {
+                    let protocol = window
+                        .location()
+                        .protocol()
+                        .unwrap_or_else(|_| "http:".to_string());
+
+                    // Exception: trunk serve runs on :8080, backend on :3000
+                    if host == "localhost:8080" || host == "127.0.0.1:8080" {
                         "http://localhost:3000/api".to_string()
                     } else {
-                        // Otherwise construct absolute URL from current location
-                        // reqwest in WASM requires absolute URLs
-                        let protocol = window
-                            .location()
-                            .protocol()
-                            .unwrap_or_else(|_| "http:".to_string());
-                        format!("{}//{}/api", protocol, location)
+                        // Use current window location (works for Docker, production, etc.)
+                        format!("{}//{}/api", protocol, host)
                     }
                 } else {
                     "http://localhost:3000/api".to_string()
@@ -375,20 +374,20 @@ impl StromApp {
         // WebSocket URL - different logic for WASM vs native
         #[cfg(target_arch = "wasm32")]
         let ws_url = {
-            // WASM: Use the same URL detection logic as the API client
             if let Some(window) = web_sys::window() {
-                if let Ok(location) = window.location().host() {
-                    // If we're on port 8080 (trunk serve), connect to backend on port 3000
-                    if location.contains(":8080") {
+                if let Ok(host) = window.location().host() {
+                    // Exception: trunk serve runs on :8080, backend on :3000
+                    if host == "localhost:8080" || host == "127.0.0.1:8080" {
                         "ws://localhost:3000/api/ws".to_string()
                     } else {
-                        // Otherwise use relative URL (embedded in backend)
-                        // Determine ws:// or wss:// based on current protocol
-                        if window.location().protocol().ok().as_deref() == Some("https:") {
-                            format!("wss://{}/api/ws", location)
-                        } else {
-                            format!("ws://{}/api/ws", location)
-                        }
+                        // Use current window location - ws:// or wss:// based on protocol
+                        let ws_protocol =
+                            if window.location().protocol().ok().as_deref() == Some("https:") {
+                                "wss"
+                            } else {
+                                "ws"
+                            };
+                        format!("{}://{}/api/ws", ws_protocol, host)
                     }
                 } else {
                     "/api/ws".to_string()
