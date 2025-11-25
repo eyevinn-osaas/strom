@@ -36,7 +36,8 @@ utoipa-swagger-ui.workspace = true
 gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-net.workspace = true
-gst-plugin-webrtc.workspace = true
+# Temporarily disabled for faster builds
+# gst-plugin-webrtc.workspace = true
 
 # Error handling
 anyhow = "1.0"
