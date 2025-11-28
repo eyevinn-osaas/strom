@@ -153,7 +153,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
 
         // Set PCR interval to 40ms for proper clock recovery (MPEG-TS standard recommends 40-100ms)
         if mux.has_property("pcr-interval") {
-            mux.set_property("pcr-interval", 40u64);
+            mux.set_property("pcr-interval", 40u32);
         }
 
         // Enable bitrate for CBR-like behavior if available
