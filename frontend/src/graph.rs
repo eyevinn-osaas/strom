@@ -1232,14 +1232,23 @@ impl GraphEditor {
         if let Some(external_pads) = self.get_block_external_pads(block, block_definition) {
             use strom_types::element::MediaType;
 
+            // Calculate node height (same calculation as in get_pad_position for consistency)
+            let pad_count = external_pads.inputs.len().max(external_pads.outputs.len());
+            let base_height = 80.0 + (pad_count.saturating_sub(1) * 30) as f32;
+            let content_height = self
+                .block_content_map
+                .get(&block.id)
+                .map(|info| info.additional_height)
+                .unwrap_or(0.0);
+            let node_height = (base_height + content_height).min(400.0);
+
             // Draw input pads on the left
             let input_count = external_pads.inputs.len();
             for (idx, external_pad) in external_pads.inputs.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
                 let y_offset =
-                    self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom)
-                        * self.zoom;
+                    self.calculate_pad_y_offset(idx, input_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1320,8 +1329,7 @@ impl GraphEditor {
                 // Calculate vertical position using tighter spacing
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
                 let y_offset =
-                    self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom)
-                        * self.zoom;
+                    self.calculate_pad_y_offset(idx, output_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1911,13 +1919,22 @@ impl GraphEditor {
         let external_pads_clone = self.get_block_external_pads(block, definition).cloned();
 
         if let Some(external_pads) = external_pads_clone {
+            // Calculate node height (same calculation as in get_pad_position for consistency)
+            let pad_count = external_pads.inputs.len().max(external_pads.outputs.len());
+            let base_height = 80.0 + (pad_count.saturating_sub(1) * 30) as f32;
+            let content_height = self
+                .block_content_map
+                .get(&block.id)
+                .map(|info| info.additional_height)
+                .unwrap_or(0.0);
+            let node_height = (base_height + content_height).min(400.0);
+
             // Handle input pad interactions
             let input_count = external_pads.inputs.len();
             for (idx, external_pad) in external_pads.inputs.iter().enumerate() {
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
                 let y_offset =
-                    self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom)
-                        * self.zoom;
+                    self.calculate_pad_y_offset(idx, input_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1947,8 +1964,7 @@ impl GraphEditor {
             for (idx, external_pad) in external_pads.outputs.iter().enumerate() {
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
                 let y_offset =
-                    self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom)
-                        * self.zoom;
+                    self.calculate_pad_y_offset(idx, output_count, node_height) * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect =
