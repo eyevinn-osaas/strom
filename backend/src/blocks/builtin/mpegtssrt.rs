@@ -32,12 +32,75 @@ use tracing::info;
 pub struct MpegTsSrtOutputBuilder;
 
 impl BlockBuilder for MpegTsSrtOutputBuilder {
+    fn get_external_pads(
+        &self,
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Option<ExternalPads> {
+        // Get number of video and audio tracks from properties
+        let num_video_tracks = properties
+            .get("num_video_tracks")
+            .and_then(|v| match v {
+                PropertyValue::UInt(u) => Some(*u as usize),
+                PropertyValue::Int(i) => Some(*i as usize),
+                _ => None,
+            })
+            .unwrap_or(1);
+
+        let num_audio_tracks = properties
+            .get("num_audio_tracks")
+            .and_then(|v| match v {
+                PropertyValue::UInt(u) => Some(*u as usize),
+                PropertyValue::Int(i) => Some(*i as usize),
+                _ => None,
+            })
+            .unwrap_or(8);
+
+        // Build dynamic input pads
+        let mut inputs = Vec::new();
+
+        // Add video inputs
+        for i in 0..num_video_tracks {
+            inputs.push(ExternalPad {
+                name: if num_video_tracks == 1 {
+                    "video_in".to_string()
+                } else {
+                    format!("video_in_{}", i)
+                },
+                media_type: MediaType::Video,
+                internal_element_id: if num_video_tracks == 1 {
+                    "video_input".to_string()
+                } else {
+                    format!("video_input_{}", i)
+                },
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        // Add audio inputs
+        for i in 0..num_audio_tracks {
+            inputs.push(ExternalPad {
+                name: format!("audio_in_{}", i),
+                media_type: MediaType::Audio,
+                internal_element_id: format!("audio_input_{}", i),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        Some(ExternalPads {
+            inputs,
+            outputs: vec![], // No outputs
+        })
+    }
+
     fn build(
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
     ) -> Result<BlockBuildResult, BlockBuildError> {
-        info!("📡 Building MPEG-TS/SRT Output block instance: {}", instance_id);
+        info!(
+            "📡 Building MPEG-TS/SRT Output block instance: {}",
+            instance_id
+        );
 
         // Get SRT URI (required)
         let srt_uri = properties
@@ -112,9 +175,24 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             srt_uri, latency, wait_for_connection, auto_reconnect
         );
 
-        // Fixed configuration: 1 video track, 8 audio tracks (all always available)
-        let num_video_tracks = 1;
-        let num_audio_tracks = 8;
+        // Get number of video and audio tracks from properties
+        let num_video_tracks = properties
+            .get("num_video_tracks")
+            .and_then(|v| match v {
+                PropertyValue::UInt(u) => Some(*u as usize),
+                PropertyValue::Int(i) => Some(*i as usize),
+                _ => None,
+            })
+            .unwrap_or(1);
+
+        let num_audio_tracks = properties
+            .get("num_audio_tracks")
+            .and_then(|v| match v {
+                PropertyValue::UInt(u) => Some(*u as usize),
+                PropertyValue::Int(i) => Some(*i as usize),
+                _ => None,
+            })
+            .unwrap_or(8);
 
         // Get video parser type (optional, default h264parse)
         let video_parser_type = properties
@@ -126,10 +204,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             .unwrap_or("h264parse");
 
         let mut internal_links = vec![];
-        let mut elements = vec![
-            (mux_id.clone(), mux),
-            (sink_id.clone(), srtsink),
-        ];
+        let mut elements = vec![(mux_id.clone(), mux), (sink_id.clone(), srtsink)];
 
         let mut next_mux_pad = 0;
 
@@ -175,9 +250,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             let audioresample = gst::ElementFactory::make("audioresample")
                 .name(&audioresample_id)
                 .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("audioresample: {}", e))
-                })?;
+                .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
 
             let encoder = gst::ElementFactory::make("avenc_aac")
                 .name(&encoder_id)
@@ -198,10 +271,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
                 format!("{}:src", audioresample_id),
                 format!("{}:sink", encoder_id),
             ));
-            internal_links.push((
-                format!("{}:src", encoder_id),
-                format!("{}:sink", parser_id),
-            ));
+            internal_links.push((format!("{}:src", encoder_id), format!("{}:sink", parser_id)));
             // Link parser to mpegtsmux request pad
             internal_links.push((
                 format!("{}:src", parser_id),
@@ -244,6 +314,30 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
         description: "Muxes multiple audio/video streams to MPEG Transport Stream and outputs via SRT. Automatically handles video parsing (H.264/H.265/AV1/VP9) and AAC encoding for raw audio inputs. Optimized for UDP streaming with alignment=7.".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
+            ExposedProperty {
+                name: "num_video_tracks".to_string(),
+                label: "Number of Video Tracks".to_string(),
+                description: "Number of video input tracks (0-16)".to_string(),
+                property_type: PropertyType::UInt,
+                default_value: Some(PropertyValue::UInt(1)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "num_video_tracks".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "num_audio_tracks".to_string(),
+                label: "Number of Audio Tracks".to_string(),
+                description: "Number of audio input tracks (0-32)".to_string(),
+                property_type: PropertyType::UInt,
+                default_value: Some(PropertyValue::UInt(8)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "num_audio_tracks".to_string(),
+                    transform: None,
+                },
+            },
             ExposedProperty {
                 name: "srt_uri".to_string(),
                 label: "SRT URI".to_string(),
@@ -324,27 +418,17 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                 },
             },
         ],
+        // External pads are now computed dynamically based on num_video_tracks and num_audio_tracks properties
+        // This is just the default/fallback configuration
         external_pads: ExternalPads {
-            inputs: {
-                let mut pads = vec![
-                    ExternalPad {
-                        name: "video_in".to_string(),
-                        media_type: MediaType::Video,
-                        internal_element_id: "video_input".to_string(),
-                        internal_pad_name: "sink".to_string(),
-                    },
-                ];
-                // Add up to 8 audio input pads
-                for i in 0..8 {
-                    pads.push(ExternalPad {
-                        name: format!("audio_in_{}", i),
-                        media_type: MediaType::Audio,
-                        internal_element_id: format!("audio_input_{}", i),
-                        internal_pad_name: "sink".to_string(),
-                    });
-                }
-                pads
-            },
+            inputs: vec![
+                ExternalPad {
+                    name: "video_in".to_string(),
+                    media_type: MediaType::Video,
+                    internal_element_id: "video_input".to_string(),
+                    internal_pad_name: "sink".to_string(),
+                },
+            ],
             outputs: vec![],
         },
         built_in: true,

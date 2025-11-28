@@ -174,6 +174,7 @@ impl GraphEditor {
             properties: HashMap::new(),
             position: strom_types::block::Position { x: pos.x, y: pos.y },
             runtime_data: None,
+            computed_external_pads: None,
         };
         self.blocks.push(block);
     }
@@ -273,6 +274,22 @@ impl GraphEditor {
     /// Get a block definition by ID.
     pub fn get_block_definition_by_id(&self, definition_id: &str) -> Option<&BlockDefinition> {
         self.block_definition_map.get(definition_id)
+    }
+
+    /// Get the effective external pads for a block instance.
+    /// Uses computed_external_pads if available, otherwise falls back to the static definition pads.
+    fn get_block_external_pads<'a>(
+        &'a self,
+        block: &'a BlockInstance,
+        definition: Option<&'a BlockDefinition>,
+    ) -> Option<&'a strom_types::ExternalPads> {
+        // First try to use computed pads from the block instance
+        if let Some(ref computed_pads) = block.computed_external_pads {
+            return Some(computed_pads);
+        }
+
+        // Fall back to definition's static pads
+        definition.map(|def| &def.external_pads)
     }
 
     /// Get the list of pads to render for an element, expanding request pads into actual instances.
@@ -498,13 +515,9 @@ impl GraphEditor {
 
                 // Calculate height based on number of external pads (min 80, max 400)
                 let block_definition = self.block_definition_map.get(&block.block_definition_id);
-                let pad_count = block_definition
-                    .map(|def| {
-                        def.external_pads
-                            .inputs
-                            .len()
-                            .max(def.external_pads.outputs.len())
-                    })
+                let pad_count = self
+                    .get_block_external_pads(block, block_definition)
+                    .map(|pads| pads.inputs.len().max(pads.outputs.len()))
                     .unwrap_or(1);
 
                 // Base height for block node
@@ -1215,15 +1228,18 @@ impl GraphEditor {
         // Draw external pads (ports) based on block definition
         let port_size = 16.0 * self.zoom;
 
-        if let Some(definition) = self.block_definition_map.get(&block.block_definition_id) {
+        let block_definition = self.block_definition_map.get(&block.block_definition_id);
+        if let Some(external_pads) = self.get_block_external_pads(block, block_definition) {
             use strom_types::element::MediaType;
 
             // Draw input pads on the left
-            let input_count = definition.external_pads.inputs.len();
-            for (idx, external_pad) in definition.external_pads.inputs.iter().enumerate() {
+            let input_count = external_pads.inputs.len();
+            for (idx, external_pad) in external_pads.inputs.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
-                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom) * self.zoom;
+                let y_offset =
+                    self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom)
+                        * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1299,11 +1315,13 @@ impl GraphEditor {
             }
 
             // Draw output pads on the right
-            let output_count = definition.external_pads.outputs.len();
-            for (idx, external_pad) in definition.external_pads.outputs.iter().enumerate() {
+            let output_count = external_pads.outputs.len();
+            for (idx, external_pad) in external_pads.outputs.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
-                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom) * self.zoom;
+                let y_offset =
+                    self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom)
+                        * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1474,13 +1492,9 @@ impl GraphEditor {
             let base_pos = pos2(block.position.x, block.position.y);
             let block_definition = self.block_definition_map.get(&block.block_definition_id);
 
-            if let Some(def) = block_definition {
+            if let Some(external_pads) = self.get_block_external_pads(block, block_definition) {
                 // Calculate node height (same as in show method)
-                let pad_count = def
-                    .external_pads
-                    .inputs
-                    .len()
-                    .max(def.external_pads.outputs.len());
+                let pad_count = external_pads.inputs.len().max(external_pads.outputs.len());
 
                 // Base height for block node
                 let base_height = 80.0 + (pad_count.saturating_sub(1) * 30) as f32;
@@ -1496,25 +1510,20 @@ impl GraphEditor {
 
                 if is_input {
                     // Find the pad in inputs
-                    if let Some(idx) = def
-                        .external_pads
-                        .inputs
-                        .iter()
-                        .position(|p| p.name == pad_name)
+                    if let Some(idx) = external_pads.inputs.iter().position(|p| p.name == pad_name)
                     {
-                        let input_count = def.external_pads.inputs.len();
+                        let input_count = external_pads.inputs.len();
                         let y_offset = self.calculate_pad_y_offset(idx, input_count, node_height);
                         return Some(pos2(base_pos.x, base_pos.y + y_offset));
                     }
                 } else {
                     // Find the pad in outputs
-                    if let Some(idx) = def
-                        .external_pads
+                    if let Some(idx) = external_pads
                         .outputs
                         .iter()
                         .position(|p| p.name == pad_name)
                     {
-                        let output_count = def.external_pads.outputs.len();
+                        let output_count = external_pads.outputs.len();
                         let y_offset = self.calculate_pad_y_offset(idx, output_count, node_height);
                         return Some(pos2(base_pos.x + 200.0, base_pos.y + y_offset));
                     }
@@ -1867,14 +1876,15 @@ impl GraphEditor {
 
         // Try to find as block
         if let Some(block) = self.blocks.iter().find(|b| b.id == element_id) {
-            if let Some(def) = self.block_definition_map.get(&block.block_definition_id) {
+            let block_definition = self.block_definition_map.get(&block.block_definition_id);
+            if let Some(external_pads) = self.get_block_external_pads(block, block_definition) {
                 // Check if it's in outputs
-                if def.external_pads.outputs.iter().any(|p| p.name == pad_name) {
+                if external_pads.outputs.iter().any(|p| p.name == pad_name) {
                     return true;
                 }
 
                 // Check if it's in inputs
-                if def.external_pads.inputs.iter().any(|p| p.name == pad_name) {
+                if external_pads.inputs.iter().any(|p| p.name == pad_name) {
                     return false;
                 }
             }
@@ -1897,12 +1907,17 @@ impl GraphEditor {
 
         let mut any_hovered = false;
 
-        if let Some(def) = definition {
+        // Clone external_pads to avoid borrow checker issues
+        let external_pads_clone = self.get_block_external_pads(block, definition).cloned();
+
+        if let Some(external_pads) = external_pads_clone {
             // Handle input pad interactions
-            let input_count = def.external_pads.inputs.len();
-            for (idx, external_pad) in def.external_pads.inputs.iter().enumerate() {
+            let input_count = external_pads.inputs.len();
+            for (idx, external_pad) in external_pads.inputs.iter().enumerate() {
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
-                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom) * self.zoom;
+                let y_offset =
+                    self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom)
+                        * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1928,10 +1943,12 @@ impl GraphEditor {
             }
 
             // Handle output pad interactions
-            let output_count = def.external_pads.outputs.len();
-            for (idx, external_pad) in def.external_pads.outputs.iter().enumerate() {
+            let output_count = external_pads.outputs.len();
+            for (idx, external_pad) in external_pads.outputs.iter().enumerate() {
                 // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
-                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom) * self.zoom;
+                let y_offset =
+                    self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom)
+                        * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect =

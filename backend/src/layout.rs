@@ -248,6 +248,7 @@ mod tests {
             properties: HashMap::new(),
             position: Position { x: 100.0, y: 100.0 },
             runtime_data: None,
+            computed_external_pads: None,
         });
 
         assert!(!needs_auto_layout(&flow));

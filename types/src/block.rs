@@ -151,6 +151,12 @@ pub struct BlockInstance {
     /// Used for things like generated SDP for AES67 blocks
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub runtime_data: Option<HashMap<String, String>>,
+
+    /// Computed external pads for this instance based on properties
+    /// If None, falls back to the pads from the block definition
+    /// This allows blocks to have dynamic pads based on their configuration
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub computed_external_pads: Option<ExternalPads>,
 }
 
 /// Position in the visual editor

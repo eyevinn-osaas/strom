@@ -134,6 +134,13 @@ pub async fn update_flow(
 
     info!("Updating flow: {} ({})", flow.name, flow.id);
 
+    // Compute external pads for all block instances based on their properties
+    for block in &mut flow.blocks {
+        if let Some(builder) = crate::blocks::builtin::get_builder(&block.block_definition_id) {
+            block.computed_external_pads = builder.get_external_pads(&block.properties);
+        }
+    }
+
     // Apply auto-layout if needed
     if layout::needs_auto_layout(&flow) {
         info!(
