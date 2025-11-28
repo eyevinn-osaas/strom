@@ -3,7 +3,7 @@
 use crate::events::EventBroadcaster;
 use gstreamer as gst;
 use std::collections::HashMap;
-use strom_types::{FlowId, PropertyValue};
+use strom_types::{block::ExternalPads, FlowId, PropertyValue};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -73,4 +73,21 @@ pub trait BlockBuilder: Send + Sync {
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
     ) -> Result<BlockBuildResult, BlockBuildError>;
+
+    /// Compute the external pads for this block instance based on its properties.
+    ///
+    /// This allows blocks to have dynamic pads based on their configuration.
+    /// If None is returned, the block's static definition pads will be used.
+    ///
+    /// # Arguments
+    /// * `properties` - Property values from the block instance
+    ///
+    /// # Returns
+    /// Optional ExternalPads if this block has dynamic pads, None to use static definition pads.
+    fn get_external_pads(
+        &self,
+        _properties: &HashMap<String, PropertyValue>,
+    ) -> Option<ExternalPads> {
+        None
+    }
 }

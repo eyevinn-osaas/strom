@@ -320,6 +320,7 @@ mod tests {
             properties: HashMap::new(),
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
@@ -349,6 +350,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Custom Stream", None, None, None, None);
@@ -367,6 +369,7 @@ mod tests {
             properties: HashMap::new(),
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         // Test with audiotestsrc defaults: 44.1kHz mono
@@ -392,6 +395,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
@@ -416,6 +420,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
@@ -439,6 +444,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Test Stream", None, None, None, None);
@@ -477,6 +483,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(
@@ -532,6 +539,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Unicast Stream", None, None, None, None);
@@ -556,6 +564,7 @@ mod tests {
             properties,
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let sdp = generate_aes67_output_sdp(&block, "Multicast Stream", None, None, None, None);
@@ -692,6 +701,7 @@ mod tests {
             properties: HashMap::new(),
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let flow_props = FlowProperties {
@@ -722,6 +732,7 @@ mod tests {
             properties: HashMap::new(),
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let flow_props = FlowProperties {
@@ -746,6 +757,7 @@ mod tests {
             properties: HashMap::new(),
             position: strom_types::block::Position { x: 0.0, y: 0.0 },
             runtime_data: None,
+            computed_external_pads: None,
         };
 
         let flow_props = FlowProperties {
