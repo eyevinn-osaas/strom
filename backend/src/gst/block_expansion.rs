@@ -3,7 +3,7 @@
 use crate::blocks::builtin;
 use crate::blocks::BusMessageConnectFn;
 use gstreamer as gst;
-use strom_types::{BlockInstance, ExternalPad, Link};
+use strom_types::{BlockInstance, Link};
 use tracing::debug;
 
 use super::PipelineError;
@@ -108,6 +108,9 @@ pub async fn expand_blocks(
 ///
 /// If the pad reference is to a block's external pad, resolve it to the
 /// internal element:pad that it maps to. Otherwise, return as-is.
+///
+/// For blocks with computed_external_pads (dynamic pads based on properties),
+/// uses the computed pads. Otherwise falls back to the static block definition.
 async fn resolve_pad(pad_ref: &str, blocks: &[BlockInstance]) -> Result<String, PipelineError> {
     // Check if this references a block's external pad
     // Format: "block_id:external_pad_name"
@@ -117,45 +120,83 @@ async fn resolve_pad(pad_ref: &str, blocks: &[BlockInstance]) -> Result<String, 
             // Extract external pad name
             let external_pad_name = &pad_ref[block_prefix.len()..];
 
-            // Get block definition to find external pad mapping
-            let definition = crate::blocks::builtin::get_all_builtin_blocks()
-                .into_iter()
-                .find(|b| b.id == block_instance.block_definition_id)
-                .ok_or_else(|| {
-                    PipelineError::InvalidFlow(format!(
-                        "Block definition not found: {}",
-                        block_instance.block_definition_id
-                    ))
-                })?;
-
-            // Find matching external pad in definition
-            let all_pads: Vec<&ExternalPad> = definition
-                .external_pads
-                .inputs
-                .iter()
-                .chain(definition.external_pads.outputs.iter())
-                .collect();
-
-            if let Some(external_pad) = all_pads.iter().find(|p| p.name == external_pad_name) {
-                // Resolve to namespaced internal element:pad
-                let resolved = format!(
-                    "{}:{}:{}",
-                    block_instance.id,
-                    external_pad.internal_element_id,
-                    external_pad.internal_pad_name
-                );
-
+            // Find and resolve the external pad - prefer computed_external_pads if available
+            if let Some(ref computed) = block_instance.computed_external_pads {
+                // Use computed pads for blocks with dynamic pads
                 debug!(
-                    "Resolved block external pad '{}' -> '{}'",
-                    pad_ref, resolved
+                    "Using computed external pads for block {} ({})",
+                    block_instance.id, block_instance.block_definition_id
                 );
 
-                return Ok(resolved);
+                if let Some(external_pad) = computed
+                    .inputs
+                    .iter()
+                    .chain(computed.outputs.iter())
+                    .find(|p| p.name == external_pad_name)
+                {
+                    // Resolve to namespaced internal element:pad
+                    let resolved = format!(
+                        "{}:{}:{}",
+                        block_instance.id,
+                        external_pad.internal_element_id,
+                        external_pad.internal_pad_name
+                    );
+
+                    debug!(
+                        "Resolved block external pad '{}' -> '{}'",
+                        pad_ref, resolved
+                    );
+
+                    return Ok(resolved);
+                } else {
+                    return Err(PipelineError::InvalidFlow(format!(
+                        "External pad '{}' not found in block '{}' (computed pads)",
+                        external_pad_name, block_instance.id
+                    )));
+                }
             } else {
-                return Err(PipelineError::InvalidFlow(format!(
-                    "External pad '{}' not found in block '{}'",
-                    external_pad_name, block_instance.id
-                )));
+                // Fall back to static definition for blocks without computed pads
+                debug!(
+                    "Using static external pads for block {} ({})",
+                    block_instance.id, block_instance.block_definition_id
+                );
+                let definition = crate::blocks::builtin::get_all_builtin_blocks()
+                    .into_iter()
+                    .find(|b| b.id == block_instance.block_definition_id)
+                    .ok_or_else(|| {
+                        PipelineError::InvalidFlow(format!(
+                            "Block definition not found: {}",
+                            block_instance.block_definition_id
+                        ))
+                    })?;
+
+                if let Some(external_pad) = definition
+                    .external_pads
+                    .inputs
+                    .iter()
+                    .chain(definition.external_pads.outputs.iter())
+                    .find(|p| p.name == external_pad_name)
+                {
+                    // Resolve to namespaced internal element:pad
+                    let resolved = format!(
+                        "{}:{}:{}",
+                        block_instance.id,
+                        external_pad.internal_element_id,
+                        external_pad.internal_pad_name
+                    );
+
+                    debug!(
+                        "Resolved block external pad '{}' -> '{}'",
+                        pad_ref, resolved
+                    );
+
+                    return Ok(resolved);
+                } else {
+                    return Err(PipelineError::InvalidFlow(format!(
+                        "External pad '{}' not found in block '{}' (static definition)",
+                        external_pad_name, block_instance.id
+                    )));
+                }
             }
         }
     }

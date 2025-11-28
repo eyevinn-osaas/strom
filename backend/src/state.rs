@@ -344,6 +344,27 @@ impl AppState {
 
         info!("Starting flow: {} ({})", flow.name, id);
 
+        // Compute external pads for all block instances based on their properties
+        // This is critical for blocks with dynamic pads (e.g., MPEG-TS/SRT output with configurable audio tracks)
+        info!(
+            "Computing external pads for {} blocks...",
+            flow.blocks.len()
+        );
+        for block in &mut flow.blocks {
+            if let Some(builder) = crate::blocks::builtin::get_builder(&block.block_definition_id) {
+                block.computed_external_pads = builder.get_external_pads(&block.properties);
+                if let Some(ref pads) = block.computed_external_pads {
+                    info!(
+                        "Block {} ({}) has {} input(s) and {} output(s)",
+                        block.id,
+                        block.block_definition_id,
+                        pads.inputs.len(),
+                        pads.outputs.len()
+                    );
+                }
+            }
+        }
+
         // Create pipeline with event broadcaster and block registry
         info!("Creating PipelineManager (this may block)...");
         let mut manager =
