@@ -1222,7 +1222,8 @@ impl GraphEditor {
             let input_count = definition.external_pads.inputs.len();
             for (idx, external_pad) in definition.external_pads.inputs.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
-                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom) * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1301,7 +1302,8 @@ impl GraphEditor {
             let output_count = definition.external_pads.outputs.len();
             for (idx, external_pad) in definition.external_pads.outputs.iter().enumerate() {
                 // Calculate vertical position using tighter spacing
-                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom) * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect = Rect::from_center_size(pad_center, vec2(port_size, port_size));
@@ -1899,7 +1901,8 @@ impl GraphEditor {
             // Handle input pad interactions
             let input_count = def.external_pads.inputs.len();
             for (idx, external_pad) in def.external_pads.inputs.iter().enumerate() {
-                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let y_offset = self.calculate_pad_y_offset(idx, input_count, rect.height() / self.zoom) * self.zoom;
 
                 let pad_center = pos2(rect.min.x, rect.min.y + y_offset);
                 let pad_rect =
@@ -1927,7 +1930,8 @@ impl GraphEditor {
             // Handle output pad interactions
             let output_count = def.external_pads.outputs.len();
             for (idx, external_pad) in def.external_pads.outputs.iter().enumerate() {
-                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height());
+                // Note: calculate_pad_y_offset returns world-space offset, multiply by zoom for screen space
+                let y_offset = self.calculate_pad_y_offset(idx, output_count, rect.height() / self.zoom) * self.zoom;
 
                 let pad_center = pos2(rect.max.x, rect.min.y + y_offset);
                 let pad_rect =
