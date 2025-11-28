@@ -3168,9 +3168,11 @@ impl eframe::App for StromApp {
                                 {
                                     // Preserve local position
                                     let saved_position = local_block.position;
-                                    // Update runtime_data and properties from backend
+                                    // Update runtime_data, properties, and computed_external_pads from backend
                                     local_block.runtime_data = updated_block.runtime_data.clone();
                                     local_block.properties = updated_block.properties.clone();
+                                    local_block.computed_external_pads =
+                                        updated_block.computed_external_pads.clone();
                                     // Restore local position
                                     local_block.position = saved_position;
                                 }
