@@ -23,6 +23,40 @@ use utoipa;
 use crate::layout;
 use crate::state::AppState;
 
+/// Check if a pad reference is valid (exists on an element or block).
+///
+/// For elements, we just check if the element exists.
+/// For blocks, we check if the full pad reference is in the valid_block_pads set.
+fn is_pad_valid(
+    pad_ref: &str,
+    valid_block_pads: &std::collections::HashSet<String>,
+    element_ids: &std::collections::HashSet<String>,
+) -> bool {
+    // Parse the pad reference (format: "element_id:pad_name")
+    let parts: Vec<&str> = pad_ref.split(':').collect();
+    if parts.len() < 2 {
+        return false;
+    }
+
+    let node_id = parts[0];
+
+    // Check if it's an element (starts with 'e')
+    if node_id.starts_with('e') {
+        // For elements, we just check if the element exists
+        // The actual pad validation happens at pipeline build time
+        return element_ids.contains(node_id);
+    }
+
+    // Check if it's a block (starts with 'b')
+    if node_id.starts_with('b') {
+        // For blocks, check if the full pad reference is valid
+        return valid_block_pads.contains(pad_ref);
+    }
+
+    // Unknown node type
+    false
+}
+
 /// List all flows.
 #[utoipa::path(
     get,
@@ -139,6 +173,48 @@ pub async fn update_flow(
         if let Some(builder) = crate::blocks::builtin::get_builder(&block.block_definition_id) {
             block.computed_external_pads = builder.get_external_pads(&block.properties);
         }
+    }
+
+    // Remove links that reference pads that no longer exist on blocks
+    // This can happen when block properties change (e.g., reducing num_audio_tracks)
+    // We need to collect pad info before calling retain to avoid borrow checker issues
+    let mut valid_block_pads = std::collections::HashSet::new();
+    for block in &flow.blocks {
+        if let Some(ref external_pads) = block.computed_external_pads {
+            for input in &external_pads.inputs {
+                valid_block_pads.insert(format!("{}:{}", block.id, input.name));
+            }
+            for output in &external_pads.outputs {
+                valid_block_pads.insert(format!("{}:{}", block.id, output.name));
+            }
+        }
+    }
+
+    let element_ids: std::collections::HashSet<String> =
+        flow.elements.iter().map(|e| e.id.clone()).collect();
+
+    let initial_link_count = flow.links.len();
+    flow.links.retain(|link| {
+        let from_valid = is_pad_valid(&link.from, &valid_block_pads, &element_ids);
+        let to_valid = is_pad_valid(&link.to, &valid_block_pads, &element_ids);
+
+        if !from_valid || !to_valid {
+            info!(
+                "Removing invalid link: {} -> {} (pad no longer exists)",
+                link.from, link.to
+            );
+            false
+        } else {
+            true
+        }
+    });
+
+    if flow.links.len() < initial_link_count {
+        info!(
+            "Removed {} invalid link(s) from flow '{}'",
+            initial_link_count - flow.links.len(),
+            flow.name
+        );
     }
 
     // Apply auto-layout if needed
