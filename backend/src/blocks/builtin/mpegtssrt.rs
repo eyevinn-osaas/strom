@@ -148,8 +148,20 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("mpegtsmux: {}", e)))?;
 
-        // Set alignment=7 for UDP streaming (7 MPEG-TS packets = 1316 bytes)
+        // Set alignment=7 for UDP streaming (7 MPEG-TS packets = 1316 bytes, fits in typical MTU)
         mux.set_property("alignment", 7i32);
+
+        // Set PCR interval to 40ms for proper clock recovery (MPEG-TS standard recommends 40-100ms)
+        if mux.has_property("pcr-interval") {
+            mux.set_property("pcr-interval", 40u64);
+        }
+
+        // Enable bitrate for CBR-like behavior if available
+        if mux.has_property("bitrate") {
+            mux.set_property("bitrate", 0u64); // 0 = auto-detect from streams
+        }
+
+        info!("📡 MPEG-TS muxer configured: alignment=7, pcr-interval=40ms");
 
         // Create srtsink
         let sink_id = format!("{}:srtsink", instance_id);
@@ -171,7 +183,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         srtsink.set_property("sync", true);
 
         info!(
-            "📡 MPEG-TS/SRT configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, async=false, sync=true",
+            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, async=false, sync=true",
             srt_uri, latency, wait_for_connection, auto_reconnect
         );
 
@@ -208,7 +220,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
 
         let mut next_mux_pad = 0;
 
-        // Create video input chain if requested: video_parser -> mpegtsmux
+        // Create video input chain if requested: video_parser -> capsfilter -> mpegtsmux
         if num_video_tracks > 0 {
             let video_input_id = format!("{}:video_input", instance_id);
             let video_parser = gst::ElementFactory::make(video_parser_type)
@@ -223,14 +235,45 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
                 video_parser.set_property("config-interval", -1i32);
             }
 
-            // Link video parser to mpegtsmux
+            // Add capsfilter to ensure proper stream-format for MPEG-TS
+            // H.264/H.265 need byte-stream with au alignment for mpegtsmux
+            let capsfilter_id = format!("{}:video_caps", instance_id);
+            let capsfilter = gst::ElementFactory::make("capsfilter")
+                .name(&capsfilter_id)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
+
+            // Set caps based on parser type
+            let caps_str = match video_parser_type {
+                "h264parse" => "video/x-h264,stream-format=byte-stream,alignment=au",
+                "h265parse" => "video/x-h265,stream-format=byte-stream,alignment=au",
+                "av1parse" => "video/x-av1,stream-format=obu-stream,alignment=tu",
+                _ => "video/x-raw", // Fallback for other types
+            };
+
+            let caps = caps_str.parse::<gst::Caps>().map_err(|_| {
+                BlockBuildError::InvalidProperty(format!("Invalid caps: {}", caps_str))
+            })?;
+            capsfilter.set_property("caps", &caps);
+
+            info!(
+                "📡 Video parser configured: {} with caps: {}",
+                video_parser_type, caps_str
+            );
+
+            // Link video parser -> capsfilter -> mpegtsmux
             internal_links.push((
                 format!("{}:src", video_input_id),
+                format!("{}:sink", capsfilter_id),
+            ));
+            internal_links.push((
+                format!("{}:src", capsfilter_id),
                 format!("{}:sink_{}", mux_id, next_mux_pad),
             ));
             next_mux_pad += 1;
 
             elements.push((video_input_id.clone(), video_parser));
+            elements.push((capsfilter_id, capsfilter));
         }
 
         // Create audio input chains: audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
