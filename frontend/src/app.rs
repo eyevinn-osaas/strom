@@ -22,6 +22,16 @@ enum ThemePreference {
     Dark,
 }
 
+/// Import format for flow import
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ImportFormat {
+    /// JSON format (full flow definition)
+    #[default]
+    Json,
+    /// gst-launch-1.0 pipeline syntax
+    GstLaunch,
+}
+
 // Cross-platform task spawning
 #[cfg(target_arch = "wasm32")]
 fn spawn_task<F>(future: F)
@@ -123,10 +133,18 @@ pub struct StromApp {
     checking_auth: bool,
     /// Show import flow dialog
     show_import_dialog: bool,
-    /// Buffer for import JSON text
+    /// Import format mode (JSON or gst-launch)
+    import_format: ImportFormat,
+    /// Buffer for import text (JSON or gst-launch pipeline)
     import_json_buffer: String,
     /// Error message for import dialog
     import_error: Option<String>,
+    /// Pending gst-launch export (elements, links, flow_name) - for async processing
+    pending_gst_launch_export: Option<(
+        Vec<strom_types::Element>,
+        Vec<strom_types::element::Link>,
+        String,
+    )>,
     /// Cached latency info for flows (flow_id -> LatencyInfo)
     latency_cache: std::collections::HashMap<String, crate::api::LatencyInfo>,
     /// Last time latency was fetched (for periodic refresh)
@@ -226,8 +244,10 @@ impl StromApp {
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
+            import_format: ImportFormat::default(),
             import_json_buffer: String::new(),
             import_error: None,
+            pending_gst_launch_export: None,
             latency_cache: std::collections::HashMap::new(),
             last_latency_fetch: instant::Instant::now(),
             stats_cache: std::collections::HashMap::new(),
@@ -299,8 +319,10 @@ impl StromApp {
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
+            import_format: ImportFormat::default(),
             import_json_buffer: String::new(),
             import_error: None,
+            pending_gst_launch_export: None,
             latency_cache: std::collections::HashMap::new(),
             last_latency_fetch: instant::Instant::now(),
             stats_cache: std::collections::HashMap::new(),
@@ -1582,50 +1604,89 @@ impl StromApp {
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
                                 ui.add_space(4.0);
-                                if ui.small_button("🗑").on_hover_text("Delete flow").clicked() {
-                                    self.flow_pending_deletion = Some((flow.id, flow.name.clone()));
-                                }
-                                if ui.small_button("📋").on_hover_text("Copy flow").clicked() {
-                                    self.flow_pending_copy = Some(flow.clone());
-                                }
-                                if ui
-                                    .small_button("📤")
-                                    .on_hover_text("Export flow to clipboard")
-                                    .clicked()
-                                {
-                                    // Serialize flow to JSON and copy to clipboard
-                                    match serde_json::to_string_pretty(flow) {
-                                        Ok(json) => {
-                                            ui.ctx().copy_text(json);
-                                            self.status = format!(
-                                                "Flow '{}' exported to clipboard",
-                                                flow.name
-                                            );
-                                        }
-                                        Err(e) => {
-                                            self.error =
-                                                Some(format!("Failed to export flow: {}", e));
-                                        }
+
+                                // Single menu button with dropdown
+                                ui.menu_button("...", |ui| {
+                                    ui.set_min_width(150.0);
+
+                                    // Properties
+                                    if ui.button("⚙  Properties").clicked() {
+                                        self.editing_properties_idx = Some(idx);
+                                        self.properties_name_buffer = flow.name.clone();
+                                        self.properties_description_buffer =
+                                            flow.properties.description.clone().unwrap_or_default();
+                                        self.properties_clock_type_buffer =
+                                            flow.properties.clock_type;
+                                        self.properties_ptp_domain_buffer = flow
+                                            .properties
+                                            .ptp_domain
+                                            .map(|d| d.to_string())
+                                            .unwrap_or_else(|| "0".to_string());
+                                        self.properties_thread_priority_buffer =
+                                            flow.properties.thread_priority;
+                                        ui.close();
                                     }
-                                }
-                                if ui
-                                    .small_button("⚙")
-                                    .on_hover_text("Flow properties")
-                                    .clicked()
-                                {
-                                    self.editing_properties_idx = Some(idx);
-                                    self.properties_name_buffer = flow.name.clone();
-                                    self.properties_description_buffer =
-                                        flow.properties.description.clone().unwrap_or_default();
-                                    self.properties_clock_type_buffer = flow.properties.clock_type;
-                                    self.properties_ptp_domain_buffer = flow
-                                        .properties
-                                        .ptp_domain
-                                        .map(|d| d.to_string())
-                                        .unwrap_or_else(|| "0".to_string());
-                                    self.properties_thread_priority_buffer =
-                                        flow.properties.thread_priority;
-                                }
+
+                                    ui.separator();
+
+                                    // Export as JSON
+                                    if ui.button("📤  Export as JSON").clicked() {
+                                        match serde_json::to_string_pretty(flow) {
+                                            Ok(json) => {
+                                                ui.ctx().copy_text(json);
+                                                self.status = format!(
+                                                    "Flow '{}' exported to clipboard as JSON",
+                                                    flow.name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.error =
+                                                    Some(format!("Failed to export flow: {}", e));
+                                            }
+                                        }
+                                        ui.close();
+                                    }
+
+                                    // Export to gst-launch (only if flow has elements, not blocks)
+                                    let has_only_elements =
+                                        !flow.elements.is_empty() && flow.blocks.is_empty();
+                                    let tooltip = if has_only_elements {
+                                        "Export as gst-launch-1.0 pipeline"
+                                    } else {
+                                        "Only available for flows with elements, not blocks"
+                                    };
+                                    if ui
+                                        .add_enabled(
+                                            has_only_elements,
+                                            egui::Button::new("🖥  Export as gst-launch"),
+                                        )
+                                        .on_hover_text(tooltip)
+                                        .clicked()
+                                        && has_only_elements
+                                    {
+                                        self.pending_gst_launch_export = Some((
+                                            flow.elements.clone(),
+                                            flow.links.clone(),
+                                            flow.name.clone(),
+                                        ));
+                                        ui.close();
+                                    }
+
+                                    ui.separator();
+
+                                    // Copy flow
+                                    if ui.button("📋  Copy").clicked() {
+                                        self.flow_pending_copy = Some(flow.clone());
+                                        ui.close();
+                                    }
+
+                                    // Delete flow
+                                    if ui.button("🗑  Delete").clicked() {
+                                        self.flow_pending_deletion =
+                                            Some((flow.id, flow.name.clone()));
+                                        ui.close();
+                                    }
+                                });
 
                                 // Show clock type indicator (before settings gear)
                                 use strom_types::flow::{ClockSyncStatus, GStreamerClockType};
@@ -2341,23 +2402,87 @@ impl StromApp {
         egui::Window::new("Import Flow")
             .collapsible(false)
             .resizable(true)
-            .default_width(500.0)
-            .default_height(400.0)
+            .default_width(550.0)
+            .default_height(450.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("Paste flow JSON below:");
+                // Format selection tabs
+                ui.horizontal(|ui| {
+                    ui.label("Format:");
+                    ui.add_space(10.0);
+                    if ui
+                        .selectable_label(self.import_format == ImportFormat::Json, "JSON")
+                        .clicked()
+                    {
+                        self.import_format = ImportFormat::Json;
+                        self.import_error = None;
+                    }
+                    if ui
+                        .selectable_label(self.import_format == ImportFormat::GstLaunch, "gst-launch")
+                        .clicked()
+                    {
+                        self.import_format = ImportFormat::GstLaunch;
+                        self.import_error = None;
+                    }
+                });
+
+                ui.add_space(5.0);
+                ui.separator();
                 ui.add_space(5.0);
 
-                // Large text area for JSON input
+                // Format-specific instructions
+                match self.import_format {
+                    ImportFormat::Json => {
+                        ui.label("Paste flow JSON below:");
+                    }
+                    ImportFormat::GstLaunch => {
+                        ui.label("Paste gst-launch-1.0 pipeline below, or click an example:");
+                        ui.add_space(5.0);
+
+                        // Example pipelines in a collapsible section
+                        egui::CollapsingHeader::new("Examples")
+                            .default_open(true)
+                            .show(ui, |ui| {
+                                let examples = [
+                                    ("Test Video", "videotestsrc pattern=ball is-live=true ! videoconvert ! autovideosink"),
+                                    ("Test Audio", "audiotestsrc wave=sine freq=440 is-live=true ! audioconvert ! autoaudiosink"),
+                                    ("Video + Overlay", "videotestsrc is-live=true ! clockoverlay ! videoconvert ! autovideosink"),
+                                    ("Record Video", "videotestsrc num-buffers=300 is-live=true ! x264enc ! mp4mux ! filesink location=test.mp4"),
+                                    ("RTP Stream Send", "videotestsrc is-live=true ! x264enc tune=zerolatency bitrate=500 ! rtph264pay ! udpsink port=5000 host=127.0.0.1"),
+                                    ("RTP Stream Receive", "udpsrc ! application/x-rtp,payload=96 ! rtph264depay ! avdec_h264 ! videoconvert ! autovideosink"),
+                                    ("Record + Display", "videotestsrc is-live=true ! tee name=t t. ! queue ! x264enc ! mp4mux ! filesink location=output.mp4 t. ! queue ! autovideosink"),
+                                    ("AV Mux", "videotestsrc is-live=true ! x264enc ! mp4mux name=mux ! filesink location=av.mp4 audiotestsrc is-live=true ! lamemp3enc ! mux."),
+                                    ("File Playback", "filesrc location=video.mp4 ! decodebin ! videoconvert ! autovideosink"),
+                                    ("Camera", "v4l2src ! videoconvert ! autovideosink"),
+                                ];
+
+                                ui.horizontal_wrapped(|ui| {
+                                    for (name, pipeline) in examples {
+                                        if ui.small_button(name).on_hover_text(pipeline).clicked() {
+                                            self.import_json_buffer = pipeline.to_string();
+                                        }
+                                    }
+                                });
+                            });
+                    }
+                }
+                ui.add_space(5.0);
+
+                // Large text area for input
+                let hint_text = match self.import_format {
+                    ImportFormat::Json => "Paste flow JSON here...",
+                    ImportFormat::GstLaunch => "videotestsrc ! videoconvert ! autovideosink",
+                };
+
                 egui::ScrollArea::vertical()
-                    .max_height(300.0)
+                    .max_height(280.0)
                     .show(ui, |ui| {
                         ui.add(
                             egui::TextEdit::multiline(&mut self.import_json_buffer)
                                 .desired_width(f32::INFINITY)
-                                .desired_rows(15)
+                                .desired_rows(12)
                                 .font(egui::TextStyle::Monospace)
-                                .hint_text("Paste flow JSON here..."),
+                                .hint_text(hint_text),
                         );
                     });
 
@@ -2371,7 +2496,10 @@ impl StromApp {
 
                 ui.horizontal(|ui| {
                     if ui.button("📥 Import").clicked() {
-                        self.import_flow_from_json(ctx);
+                        match self.import_format {
+                            ImportFormat::Json => self.import_flow_from_json(ctx),
+                            ImportFormat::GstLaunch => self.import_flow_from_gst_launch(ctx),
+                        }
                     }
 
                     if ui.button("Cancel").clicked() {
@@ -2462,6 +2590,126 @@ impl StromApp {
                 self.import_error = Some(format!("Invalid JSON: {}", e));
             }
         }
+    }
+
+    /// Import a flow from gst-launch-1.0 syntax.
+    /// Parses the pipeline using the backend's GStreamer parser and creates a new flow.
+    fn import_flow_from_gst_launch(&mut self, ctx: &Context) {
+        let pipeline = self.import_json_buffer.trim();
+        if pipeline.is_empty() {
+            self.import_error = Some("Please enter a gst-launch pipeline".to_string());
+            return;
+        }
+
+        // Strip leading "gst-launch-1.0 " if present
+        let pipeline = pipeline
+            .strip_prefix("gst-launch-1.0 ")
+            .or_else(|| pipeline.strip_prefix("gst-launch "))
+            .unwrap_or(pipeline)
+            .to_string();
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+        let ctx = ctx.clone();
+
+        self.status = "Parsing gst-launch pipeline...".to_string();
+        self.show_import_dialog = false;
+        self.import_json_buffer.clear();
+        self.import_error = None;
+
+        spawn_task(async move {
+            // Step 1: Parse the pipeline using the backend
+            match api.parse_gst_launch(&pipeline).await {
+                Ok(parsed) => {
+                    if parsed.elements.is_empty() {
+                        let _ = tx.send(AppMessage::FlowOperationError(
+                            "No elements found in pipeline".to_string(),
+                        ));
+                        ctx.request_repaint();
+                        return;
+                    }
+
+                    // Step 2: Create a new flow with a name based on first element
+                    // Add timestamp to make each import unique
+                    use std::time::{SystemTime, UNIX_EPOCH};
+                    let timestamp = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs();
+                    let flow_name = format!(
+                        "Imported: {} ({})",
+                        parsed
+                            .elements
+                            .first()
+                            .map(|e| e.element_type.as_str())
+                            .unwrap_or("pipeline"),
+                        timestamp
+                    );
+
+                    let mut new_flow = Flow::new(&flow_name);
+                    new_flow.elements = parsed.elements;
+                    new_flow.links = parsed.links;
+
+                    // Save the original gst-launch syntax in the description
+                    new_flow.properties.description = Some(format!(
+                        "Imported from gst-launch-1.0:\n\n```\n{}\n```",
+                        pipeline
+                    ));
+
+                    // Step 3: Create the flow via API
+                    match api.create_flow(&new_flow).await {
+                        Ok(created_flow) => {
+                            tracing::info!(
+                                "Flow created from gst-launch: {} ({})",
+                                created_flow.name,
+                                created_flow.id
+                            );
+
+                            // Step 4: Update with the parsed content
+                            let mut full_flow = new_flow.clone();
+                            full_flow.id = created_flow.id;
+                            let flow_id = created_flow.id;
+
+                            match api.update_flow(&full_flow).await {
+                                Ok(_) => {
+                                    tracing::info!(
+                                        "Flow imported from gst-launch successfully: {}",
+                                        flow_name
+                                    );
+                                    let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                                        "Flow '{}' imported from gst-launch",
+                                        flow_name
+                                    )));
+                                    let _ = tx.send(AppMessage::FlowCreated(flow_id));
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to update imported flow: {}", e);
+                                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                                        "Failed to import flow: {}",
+                                        e
+                                    )));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create flow from gst-launch: {}", e);
+                            let _ = tx.send(AppMessage::FlowOperationError(format!(
+                                "Failed to create flow: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to parse gst-launch pipeline: {}", e);
+                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                        "Failed to parse pipeline: {}",
+                        e
+                    )));
+                }
+            }
+            ctx.request_repaint();
+        });
     }
 
     /// Regenerate all IDs in a flow (flow ID, element IDs, block IDs) and update links.
@@ -3062,9 +3310,42 @@ impl eframe::App for StromApp {
                     tracing::debug!("Stats not available for flow {}", flow_id);
                     self.stats_cache.remove(&flow_id);
                 }
+                AppMessage::GstLaunchExported {
+                    pipeline,
+                    flow_name,
+                } => {
+                    ctx.copy_text(pipeline);
+                    self.status =
+                        format!("Flow '{}' exported to clipboard as gst-launch", flow_name);
+                }
+                AppMessage::GstLaunchExportError(e) => {
+                    self.error = Some(format!("Failed to export as gst-launch: {}", e));
+                }
                 // SDP messages are handled elsewhere
                 AppMessage::SdpLoaded { .. } | AppMessage::SdpError(_) => {}
             }
+        }
+
+        // Process pending gst-launch export
+        if let Some((elements, links, flow_name)) = self.pending_gst_launch_export.take() {
+            let api = self.api.clone();
+            let tx = self.channels.sender();
+            let ctx = ctx.clone();
+
+            spawn_task(async move {
+                match api.export_gst_launch(&elements, &links).await {
+                    Ok(pipeline) => {
+                        let _ = tx.send(AppMessage::GstLaunchExported {
+                            pipeline,
+                            flow_name,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(AppMessage::GstLaunchExportError(e.to_string()));
+                    }
+                }
+                ctx.request_repaint();
+            });
         }
 
         // Check authentication - if required and not authenticated, don't render
