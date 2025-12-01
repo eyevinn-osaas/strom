@@ -10,9 +10,10 @@
 //! - AV1
 //! - VP9
 //!
-//! The block creates a chain: videoconvert -> encoder -> capsfilter
+//! The block creates a chain: videoconvert -> encoder -> parser -> capsfilter
 //! - videoconvert: Ensures compatible pixel format for the encoder
 //! - encoder: Selected hardware or software encoder
+//! - parser: Codec-specific parser (h264parse, h265parse, etc.) for proper stream formatting
 //! - capsfilter: Sets output caps for proper codec negotiation
 
 use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
@@ -132,6 +133,22 @@ impl BlockBuilder for VideoEncBuilder {
             keyframe_interval,
         );
 
+        // Create parser for the codec (critical for proper MPEG-TS muxing and playback)
+        let parser_name = get_parser_name(codec);
+        let parser_id = format!("{}:parser", instance_id);
+        let parser = gst::ElementFactory::make(parser_name)
+            .name(&parser_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", parser_name, e)))?;
+
+        // Configure parser for streaming (insert SPS/PPS headers periodically)
+        configure_parser(&parser, codec, keyframe_interval);
+
+        info!(
+            "🎞️ Added {} parser for proper stream formatting",
+            parser_name
+        );
+
         // Create capsfilter with codec-specific caps
         let caps_str = get_codec_caps_string(codec);
         let caps = caps_str.parse::<gst::Caps>().map_err(|_| {
@@ -145,18 +162,19 @@ impl BlockBuilder for VideoEncBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
 
         info!(
-            "🎞️ VideoEncoder block created (chain: videoconvert -> {} -> capsfilter [{}])",
-            encoder_name, caps_str
+            "🎞️ VideoEncoder block created (chain: videoconvert -> {} -> {} -> capsfilter [{}])",
+            encoder_name, parser_name, caps_str
         );
 
-        // Chain: videoconvert -> encoder -> capsfilter
+        // Chain: videoconvert -> encoder -> parser -> capsfilter
         let internal_links = vec![
             (
                 format!("{}:src", convert_id),
                 format!("{}:sink", encoder_id),
             ),
+            (format!("{}:src", encoder_id), format!("{}:sink", parser_id)),
             (
-                format!("{}:src", encoder_id),
+                format!("{}:src", parser_id),
                 format!("{}:sink", capsfilter_id),
             ),
         ];
@@ -165,11 +183,55 @@ impl BlockBuilder for VideoEncBuilder {
             elements: vec![
                 (convert_id, videoconvert),
                 (encoder_id, encoder),
+                (parser_id, parser),
                 (capsfilter_id, capsfilter),
             ],
             internal_links,
             bus_message_handler: None,
         })
+    }
+}
+
+/// Get the parser element name for the given codec.
+fn get_parser_name(codec: Codec) -> &'static str {
+    match codec {
+        Codec::H264 => "h264parse",
+        Codec::H265 => "h265parse",
+        Codec::AV1 => "av1parse",
+        Codec::VP9 => "vp9parse",
+    }
+}
+
+/// Configure parser for streaming (insert codec headers periodically).
+fn configure_parser(parser: &gst::Element, codec: Codec, _keyframe_interval: u32) {
+    match codec {
+        Codec::H264 | Codec::H265 => {
+            // For H.264/H.265: Insert SPS/PPS headers frequently for best streaming
+            // config-interval: -1 = only at start, 0 = disabled, >0 = every N seconds
+            //
+            // Best practice for live streaming: Insert at EVERY keyframe (IDR)
+            // - Minimal overhead (SPS/PPS are tiny: ~20-50 bytes)
+            // - Instant stream join at any keyframe
+            // - Better resilience to packet loss
+            // - Proper sync with keyframes
+            //
+            // We set config-interval=1 to insert headers every second, which ensures
+            // headers are present at every keyframe for typical GOP sizes (30-120 frames)
+
+            if parser.has_property("config-interval") {
+                // Set to 1 second for frequent SPS/PPS insertion
+                // This is better than time-based on GOP because:
+                // 1. Viewers can join stream instantly at any keyframe
+                // 2. No waiting for next config interval
+                // 3. Overhead is negligible (~50 bytes per second)
+                parser.set_property("config-interval", 1i32);
+                info!("🎞️ Parser configured: config-interval=1s (SPS/PPS at every keyframe for instant stream join)");
+            }
+        }
+        Codec::AV1 | Codec::VP9 => {
+            // AV1 and VP9 parsers don't need special configuration for headers
+            // They handle sequence headers automatically
+        }
     }
 }
 
@@ -307,8 +369,10 @@ fn get_hardware_encoder_list(codec: Codec) -> Vec<&'static str> {
     match codec {
         Codec::H264 => vec![
             // NVIDIA (best for NVIDIA GPUs)
-            "nvautogpuh264enc", // Auto GPU select mode
-            "nvh264enc",        // CUDA mode
+            // NOTE: nvh264enc is prioritized over nvautogpuh264enc due to keyframe bug in nvautogpu*
+            // nvautogpuh264enc has a bug where it doesn't generate keyframes regardless of gop-size settings
+            "nvh264enc",        // CUDA mode - WORKS correctly for keyframes
+            "nvautogpuh264enc", // Auto GPU select mode - HAS KEYFRAME BUG (doesn't respect gop-size)
             "nvd3d11h264enc",   // Direct3D11 mode (Windows)
             // Intel QSV
             "qsvh264enc",
@@ -408,6 +472,21 @@ fn set_encoder_properties(
             RateControl::CBR => "cbr",
         };
         encoder.set_property_from_str(rc_property, rc_nick);
+
+        // NVENC: Disable adaptive I-frame insertion to respect gop-size
+        if encoder.has_property("i-adapt") {
+            encoder.set_property("i-adapt", false);
+        }
+
+        // NVENC: Enable strict GOP mode for consistent keyframe intervals
+        if encoder.has_property("strict-gop") {
+            encoder.set_property("strict-gop", true);
+        }
+
+        // NVENC: Disable B-frames for simpler GOP structure (helps with keyframe consistency)
+        if encoder.has_property("b-frames") {
+            encoder.set_property("b-frames", 0u32);
+        }
     } else if encoder_name.starts_with("qsv") {
         // Intel QSV: bitrate in kbps
         encoder.set_property("bitrate", bitrate);
