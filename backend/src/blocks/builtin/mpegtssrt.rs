@@ -11,12 +11,13 @@
 //! - SRT with auto-reconnect and configurable latency
 //!
 //! Input handling:
-//! - Video: Expects properly encoded video (e.g., from nvh264enc with byte-stream format)
+//! - Video: Expects properly encoded video in MPEG-TS compatible format (H.264, H.265, or DIRAC only)
+//!   - ⚠️  AV1 and VP9 are NOT supported by MPEG-TS standard (will fail at pipeline setup)
 //! - Audio: Accepts both raw audio (auto-encodes to AAC) or encoded AAC (adds parser)
 //!
 //! Pipeline structure:
 //! ```text
-//! Video (encoded) -> identity (passthrough) -> mpegtsmux -> srtsink
+//! Video (encoded) -> identity -> capsfilter (validate codec) -> mpegtsmux -> srtsink
 //! Audio (raw)     -> audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
 //! Audio (encoded) -> aacparse -> mpegtsmux
 //! ```
@@ -211,25 +212,52 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
 
         let mut next_mux_pad = 0;
 
-        // Create video input chain if requested: identity (passthrough) -> mpegtsmux
-        // No parsing - encoder output goes directly to muxer
+        // Create video input chain if requested: identity -> capsfilter (validate codec) -> mpegtsmux
+        // The capsfilter validates that only MPEG-TS compatible codecs are used
         if num_video_tracks > 0 {
             let video_input_id = format!("{}:video_input", instance_id);
+            let video_capsfilter_id = format!("{}:video_capsfilter", instance_id);
+
             let identity = gst::ElementFactory::make("identity")
                 .name(&video_input_id)
                 .build()
                 .map_err(|e| BlockBuildError::ElementCreation(format!("identity: {}", e)))?;
 
-            info!("📡 Video input: no parser, direct passthrough to mpegtsmux");
+            // Create capsfilter that only allows MPEG-TS compatible video codecs
+            // This gives a clear error message if user tries to use AV1/VP9
+            let caps_str = "video/x-h264; video/x-h265; video/x-dirac";
+            let caps = caps_str.parse::<gst::Caps>().map_err(|_| {
+                BlockBuildError::InvalidConfiguration(format!(
+                    "Failed to create video caps filter: {}",
+                    caps_str
+                ))
+            })?;
 
-            // Link identity -> mpegtsmux directly
+            let video_capsfilter = gst::ElementFactory::make("capsfilter")
+                .name(&video_capsfilter_id)
+                .property("caps", &caps)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("video capsfilter: {}", e))
+                })?;
+
+            info!(
+                "📡 Video input: capsfilter validates MPEG-TS compatible codecs (H.264, H.265, DIRAC only)"
+            );
+
+            // Link: identity -> capsfilter -> mpegtsmux
             internal_links.push((
                 format!("{}:src", video_input_id),
+                format!("{}:sink", video_capsfilter_id),
+            ));
+            internal_links.push((
+                format!("{}:src", video_capsfilter_id),
                 format!("{}:sink_{}", mux_id, next_mux_pad),
             ));
             next_mux_pad += 1;
 
             elements.push((video_input_id.clone(), identity));
+            elements.push((video_capsfilter_id, video_capsfilter));
         }
 
         // Create audio input chains: audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
@@ -310,7 +338,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.mpegtssrt_output".to_string(),
         name: "MPEG-TS/SRT Output".to_string(),
-        description: "Muxes multiple audio/video streams to MPEG Transport Stream and outputs via SRT. Direct passthrough for encoded video (no parsing overhead). Auto-encodes raw audio to AAC. Optimized for UDP streaming with alignment=7.".to_string(),
+        description: "Muxes multiple audio/video streams to MPEG Transport Stream and outputs via SRT. Supports H.264, H.265, and DIRAC video codecs only (AV1 and VP9 are NOT supported by MPEG-TS standard). Auto-encodes raw audio to AAC. Optimized for UDP streaming with alignment=7.".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
