@@ -81,6 +81,8 @@ pub struct PipelineManager {
     block_message_connect_fns: Vec<crate::blocks::BusMessageConnectFn>,
     /// Thread priority state tracker (tracks whether priority was successfully set)
     thread_priority_state: Option<ThreadPriorityState>,
+    /// Cached pipeline state to avoid querying async sinks during initialization
+    cached_state: std::sync::Arc<std::sync::RwLock<PipelineState>>,
 }
 
 impl PipelineManager {
@@ -115,6 +117,7 @@ impl PipelineManager {
             block_message_handlers: Vec::new(),
             block_message_connect_fns: Vec::new(),
             thread_priority_state: None,
+            cached_state: std::sync::Arc::new(std::sync::RwLock::new(PipelineState::Null)),
         };
 
         // Expand blocks into GStreamer elements
@@ -131,12 +134,12 @@ impl PipelineManager {
         info!("Block expansion completed");
 
         // Add regular elements from flow
-        info!(
+        debug!(
             "Adding {} regular elements from flow...",
             flow.elements.len()
         );
         for (idx, element) in flow.elements.iter().enumerate() {
-            info!(
+            debug!(
                 "Adding element {}/{}: {} (type: {})",
                 idx + 1,
                 flow.elements.len(),
@@ -144,17 +147,17 @@ impl PipelineManager {
                 element.element_type
             );
             manager.add_element(element)?;
-            info!("Successfully added element: {}", element.id);
+            debug!("Successfully added element: {}", element.id);
         }
-        info!("All regular elements added");
+        debug!("All regular elements added");
 
         // Add GStreamer elements from expanded blocks
         let block_element_count = expanded.gst_elements.len();
-        info!("Adding {} block elements...", block_element_count);
+        debug!("Adding {} block elements...", block_element_count);
         let mut idx = 0;
         for (element_id, gst_element) in expanded.gst_elements {
             idx += 1;
-            info!(
+            debug!(
                 "Adding block element {}/{}: {}",
                 idx, block_element_count, element_id
             );
@@ -165,19 +168,19 @@ impl PipelineManager {
                 ))
             })?;
             manager.elements.insert(element_id.clone(), gst_element);
-            info!("Successfully added block element: {}", element_id);
+            debug!("Successfully added block element: {}", element_id);
         }
-        info!("All block elements added");
+        debug!("All block elements added");
 
         // Store bus message handler connection functions from blocks
-        info!(
+        debug!(
             "Storing {} bus message handler(s) from blocks",
             expanded.bus_message_handlers.len()
         );
         manager.block_message_connect_fns = expanded.bus_message_handlers;
 
         // Analyze links and auto-insert tee elements where needed
-        info!("Analyzing links and inserting tee elements if needed...");
+        debug!("Analyzing links and inserting tee elements if needed...");
         let processed_links = Self::insert_tees_if_needed(&expanded.links);
         info!(
             "Link analysis complete: {} links, {} tees",
@@ -200,9 +203,9 @@ impl PipelineManager {
         info!("All tee elements created");
 
         // Link elements according to processed links
-        info!("Linking {} elements...", processed_links.links.len());
+        debug!("Linking {} elements...", processed_links.links.len());
         for (idx, link) in processed_links.links.iter().enumerate() {
-            info!(
+            debug!(
                 "Linking {}/{}: {} -> {}",
                 idx + 1,
                 processed_links.links.len(),
@@ -210,31 +213,31 @@ impl PipelineManager {
                 link.to
             );
             if let Err(e) = manager.try_link_elements(link) {
-                info!(
+                debug!(
                     "Could not link immediately: {} - will try when pad becomes available ({})",
                     e, link.from
                 );
                 // Store as pending link
                 manager.pending_links.push(link.clone());
             } else {
-                info!("Successfully linked: {} -> {}", link.from, link.to);
+                debug!("Successfully linked: {} -> {}", link.from, link.to);
             }
         }
-        info!(
+        debug!(
             "Linking phase complete ({} pending links)",
             manager.pending_links.len()
         );
 
         // Set up dynamic pad handlers for all elements that might have dynamic pads
-        info!("Setting up dynamic pad handlers...");
+        debug!("Setting up dynamic pad handlers...");
         manager.setup_dynamic_pad_handlers();
-        info!("Dynamic pad handlers set up");
+        debug!("Dynamic pad handlers set up");
 
         // Apply pad properties now that pads have been created (during linking)
         // Note: Request pads (like audiomixer sink_%u) are created during linking
-        info!("Applying pad properties...");
+        debug!("Applying pad properties...");
         manager.apply_pad_properties();
-        info!("Pad properties applied");
+        debug!("Pad properties applied");
 
         // Note: Bus watch is set up when pipeline starts, not here
         info!("Pipeline created successfully for flow: {}", flow.name);
@@ -287,6 +290,7 @@ impl PipelineManager {
         // Set up main pipeline message handler using connect_message
         let flow_name = self.flow_name.clone();
         let events = self.events.clone();
+        let cached_state = self.cached_state.clone();
 
         let main_handler_id = bus.connect_message(None, move |_bus, msg| {
             use gst::MessageView;
@@ -362,6 +366,16 @@ impl PipelineManager {
                                 new_state,
                                 pending_state
                             );
+
+                            // Update cached pipeline state
+                            let pipeline_state = match new_state {
+                                gst::State::Null => PipelineState::Null,
+                                gst::State::Ready => PipelineState::Ready,
+                                gst::State::Paused => PipelineState::Paused,
+                                gst::State::Playing => PipelineState::Playing,
+                                _ => PipelineState::Null,
+                            };
+                            *cached_state.write().unwrap() = pipeline_state;
                         } else {
                             // Log element state changes at debug level to avoid log spam
                             debug!(
@@ -410,60 +424,39 @@ impl PipelineManager {
 
     /// Add an element to the pipeline.
     fn add_element(&mut self, element_def: &Element) -> Result<(), PipelineError> {
-        info!(
-            "add_element: Creating element {} (type: {})",
+        debug!(
+            "Creating element {} (type: {})",
             element_def.id, element_def.element_type
         );
 
         // Create the element
-        info!(
-            "add_element: Calling ElementFactory::make for {}",
-            element_def.element_type
-        );
         let element = gst::ElementFactory::make(&element_def.element_type)
             .name(&element_def.id)
             .build()
             .map_err(|e| {
-                error!(
-                    "add_element: Failed to create element {}: {}",
-                    element_def.id, e
-                );
+                error!("Failed to create element {}: {}", element_def.id, e);
                 PipelineError::ElementCreation(format!(
                     "{}: {} - {}",
                     element_def.id, element_def.element_type, e
                 ))
             })?;
-        info!(
-            "add_element: Element {} created successfully",
-            element_def.id
-        );
 
         // Set properties
-        info!(
-            "add_element: Setting {} properties for element {}",
-            element_def.properties.len(),
-            element_def.id
-        );
-        for (prop_name, prop_value) in &element_def.properties {
-            info!(
-                "add_element: Setting property {}.{} = {:?}",
-                element_def.id, prop_name, prop_value
-            );
-            self.set_property(&element, &element_def.id, prop_name, prop_value)?;
-            info!(
-                "add_element: Property {}.{} set successfully",
-                element_def.id, prop_name
+        if !element_def.properties.is_empty() {
+            debug!(
+                "Setting {} properties for element {}",
+                element_def.properties.len(),
+                element_def.id
             );
         }
-        info!(
-            "add_element: All properties set for element {}",
-            element_def.id
-        );
+        for (prop_name, prop_value) in &element_def.properties {
+            self.set_property(&element, &element_def.id, prop_name, prop_value)?;
+        }
 
         // Store pad properties for later application (after pads are created)
         if !element_def.pad_properties.is_empty() {
-            info!(
-                "add_element: Storing {} pad properties for element {}",
+            debug!(
+                "Storing {} pad properties for element {}",
                 element_def.pad_properties.len(),
                 element_def.id
             );
@@ -472,34 +465,15 @@ impl PipelineManager {
         }
 
         // Add to pipeline
-        info!(
-            "add_element: Adding element {} to pipeline (this may block)...",
-            element_def.id
-        );
         self.pipeline.add(&element).map_err(|e| {
-            error!(
-                "add_element: Failed to add {} to pipeline: {}",
-                element_def.id, e
-            );
+            error!("Failed to add {} to pipeline: {}", element_def.id, e);
             PipelineError::ElementCreation(format!(
                 "Failed to add {} to pipeline: {}",
                 element_def.id, e
             ))
         })?;
-        info!(
-            "add_element: Element {} added to pipeline successfully",
-            element_def.id
-        );
 
-        info!(
-            "add_element: Inserting {} into elements map",
-            element_def.id
-        );
         self.elements.insert(element_def.id.clone(), element);
-        info!(
-            "add_element: Successfully completed adding element {}",
-            element_def.id
-        );
         Ok(())
     }
 
@@ -714,8 +688,8 @@ impl PipelineManager {
             };
 
             // Try to get sink pad - try static first, then request if not found
-            info!(
-                "Trying to get sink pad '{}' on element '{}'",
+            debug!(
+                "Getting sink pad '{}' on element '{}'",
                 sink_pad_name, to_element
             );
 
@@ -725,7 +699,7 @@ impl PipelineManager {
                 .map(|f| f.name().to_string())
                 .unwrap_or_default();
             if element_type_name == "mpegtsmux" {
-                info!("Detected mpegtsmux - using element-level linking to avoid request_pad deadlock");
+                debug!("Using element-level linking for mpegtsmux");
                 // For mpegtsmux, link directly at element level using the source element
                 // GStreamer will internally handle pad requesting without us having to call request_pad()
                 // We need to link from source element, not from the source pad object
@@ -735,40 +709,28 @@ impl PipelineManager {
                         format!("Failed to auto-link to mpegtsmux: {}", e),
                     ));
                 }
-                info!(
-                    "Successfully auto-linked to mpegtsmux: {} -> {}",
-                    link.from, link.to
-                );
+                debug!("Auto-linked to mpegtsmux: {} -> {}", link.from, link.to);
                 return Ok(());
             }
 
             let sink_pad_obj = if let Some(pad) = sink.static_pad(sink_pad_name) {
-                info!("Found static sink pad: {}", sink_pad_name);
+                debug!("Found static sink pad: {}", sink_pad_name);
                 pad
             } else {
-                info!(
-                    "Sink pad '{}' not static, trying to request it...",
-                    sink_pad_name
-                );
+                debug!("Requesting dynamic sink pad: {}", sink_pad_name);
                 // Pad not static - try to request it
                 // First try request_pad_simple with the exact name
-                info!(
-                    "Calling request_pad_simple('{}') on {} (this may block)...",
-                    sink_pad_name, to_element
-                );
                 if let Some(pad) = sink.request_pad_simple(sink_pad_name) {
-                    info!("Successfully requested sink pad: {}", sink_pad_name);
+                    debug!("Requested sink pad: {}", sink_pad_name);
                     pad
                 } else {
-                    info!("request_pad_simple returned None, trying pad template matching...");
+                    debug!("Trying pad template matching...");
 
                     // If that didn't work, try finding a compatible pad template
                     // This handles cases like "sink_0" needing the "sink_%u" template
                     // IMPORTANT: We get pad templates directly from the element, not from the factory.
                     // Accessing static_pad_templates from the factory can corrupt GStreamer state
                     // for aggregator elements like mpegtsmux (see discovery.rs:533-538).
-
-                    info!("Trying to find matching pad template on element...");
                     // Get pad template list directly from the element (not factory)
                     let element_pad_templates = sink.pad_template_list();
                     debug!(
@@ -1264,10 +1226,22 @@ impl PipelineManager {
             }
         }
 
-        state_change_result
+        let state_change_success = state_change_result
             .map_err(|e| PipelineError::StateChange(format!("Failed to start: {}", e)))?;
 
-        // Wait a moment to get the actual state
+        // For async state changes (like SRT sink), don't query state immediately
+        // The state will change asynchronously and we'll get state-changed messages on the bus
+        if matches!(state_change_success, gst::StateChangeSuccess::Async) {
+            info!(
+                "Pipeline '{}' state change is async, skipping immediate state query to avoid race conditions",
+                self.flow_name
+            );
+            // Update cached state
+            *self.cached_state.write().unwrap() = PipelineState::Playing;
+            return Ok(PipelineState::Playing);
+        }
+
+        // Wait a moment to get the actual state (only for non-async changes)
         info!("Sleeping 100ms to allow state change to complete...");
         std::thread::sleep(std::time::Duration::from_millis(100));
         info!("Querying pipeline state...");
@@ -1311,6 +1285,9 @@ impl PipelineManager {
             _ => PipelineState::Null,
         };
 
+        // Update cached state
+        *self.cached_state.write().unwrap() = actual_state;
+
         Ok(actual_state)
     }
 
@@ -1329,6 +1306,9 @@ impl PipelineManager {
         thread_priority::remove_thread_priority_handler(&self.pipeline);
         self.thread_priority_state = None;
 
+        // Update cached state
+        *self.cached_state.write().unwrap() = PipelineState::Null;
+
         Ok(PipelineState::Null)
     }
 
@@ -1340,20 +1320,18 @@ impl PipelineManager {
             .set_state(gst::State::Paused)
             .map_err(|e| PipelineError::StateChange(format!("Failed to pause: {}", e)))?;
 
+        // Update cached state
+        *self.cached_state.write().unwrap() = PipelineState::Paused;
+
         Ok(PipelineState::Paused)
     }
 
     /// Get the current state of the pipeline.
+    /// Uses cached state to avoid querying async sinks during initialization (prevents SRT crashes).
     pub fn get_state(&self) -> PipelineState {
-        let (_, state, _) = self.pipeline.state(gst::ClockTime::from_seconds(1));
-
-        match state {
-            gst::State::Null => PipelineState::Null,
-            gst::State::Ready => PipelineState::Ready,
-            gst::State::Paused => PipelineState::Paused,
-            gst::State::Playing => PipelineState::Playing,
-            _ => PipelineState::Null,
-        }
+        // Return cached state to avoid querying the pipeline during async state changes
+        // This prevents crashes with SRT sink and other async elements
+        *self.cached_state.read().unwrap()
     }
 
     /// Get the flow ID this pipeline manages.

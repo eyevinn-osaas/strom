@@ -171,17 +171,6 @@ fn main() -> anyhow::Result<()> {
         info!("Starting Strom backend server (headless mode)...");
     }
 
-    // Initialize GStreamer
-    gstreamer::init()?;
-    info!("GStreamer initialized");
-
-    // Register WebRTC plugins
-    gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
-
-    // Start GLib main loop in background thread for bus watch callbacks
-    start_glib_main_loop();
-    info!("GLib main loop started in background thread");
-
     #[cfg(feature = "gui")]
     {
         if gui_enabled {
@@ -254,6 +243,17 @@ fn run_with_gui(
     let (server_started_tx, server_started_rx) = std::sync::mpsc::channel::<u16>();
 
     runtime.spawn(async move {
+        // Initialize GStreamer INSIDE tokio runtime
+        gstreamer::init().expect("Failed to initialize GStreamer");
+        info!("GStreamer initialized");
+
+        // Register WebRTC plugins
+        gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
+
+        // Start GLib main loop in background thread for bus watch callbacks
+        start_glib_main_loop();
+        info!("GLib main loop started in background thread");
+
         // Load configuration from CLI args, env vars, and config files
         let config = Config::from_figment(port, data_dir, flows_path, blocks_path, database_url)
             .expect("Failed to resolve configuration");
@@ -278,13 +278,7 @@ fn run_with_gui(
 
         // GStreamer elements are discovered lazily on first /api/elements request
 
-        // Restart flows that were running before shutdown (unless disabled)
-        if !no_auto_restart {
-            restart_flows(&state).await;
-        } else {
-            info!("Auto-restart disabled by --no-auto-restart flag");
-        }
-
+        // Create the HTTP app BEFORE auto-restart
         let app = create_app_with_state_and_auth(state.clone(), auth_config).await;
 
         // Start server - bind to 0.0.0.0 to be accessible from all interfaces
@@ -307,6 +301,18 @@ fn run_with_gui(
 
         // Notify main thread that server is ready and send the actual port
         server_started_tx.send(actual_port).ok();
+
+        // Restart flows AFTER server binds, on a separate tokio task
+        // This ensures auto-restart runs on a worker thread, not the main thread,
+        // which prevents GStreamer/SRT threading issues during pipeline initialization
+        if !no_auto_restart {
+            let state_for_restart = state.clone();
+            tokio::spawn(async move {
+                restart_flows(&state_for_restart).await;
+            });
+        } else {
+            info!("Auto-restart disabled by --no-auto-restart flag");
+        }
 
         // Run HTTP server with graceful shutdown
         let shutdown_signal = async move {
@@ -366,6 +372,17 @@ async fn run_headless(
     database_url: Option<String>,
     no_auto_restart: bool,
 ) -> anyhow::Result<()> {
+    // Initialize GStreamer INSIDE tokio runtime
+    gstreamer::init()?;
+    info!("GStreamer initialized");
+
+    // Register WebRTC plugins
+    gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
+
+    // Start GLib main loop in background thread for bus watch callbacks
+    start_glib_main_loop();
+    info!("GLib main loop started in background thread");
+
     // Load configuration from CLI args, env vars, and config files
     let config = Config::from_figment(port, data_dir, flows_path, blocks_path, database_url)?;
     info!("Configuration loaded");
@@ -382,13 +399,7 @@ async fn run_headless(
 
     // GStreamer elements are discovered lazily on first /api/elements request
 
-    // Restart flows that were running before shutdown (unless disabled)
-    if !no_auto_restart {
-        restart_flows(&state).await;
-    } else {
-        info!("Auto-restart disabled by --no-auto-restart flag");
-    }
-
+    // Create the HTTP app BEFORE auto-restart, then bind AFTER
     let app = create_app_with_state(state.clone()).await;
 
     // Start server - bind to 0.0.0.0 to be accessible from all interfaces (Docker, network, etc.)
@@ -408,6 +419,18 @@ async fn run_headless(
             std::process::exit(1);
         }
     };
+
+    // Restart flows AFTER server binds, on a separate tokio task
+    // This ensures auto-restart runs on a worker thread, not the main thread,
+    // which prevents GStreamer/SRT threading issues during pipeline initialization
+    if !no_auto_restart {
+        let state_for_restart = state.clone();
+        tokio::spawn(async move {
+            restart_flows(&state_for_restart).await;
+        });
+    } else {
+        info!("Auto-restart disabled by --no-auto-restart flag");
+    }
 
     // Set up graceful shutdown handler
     let shutdown_signal = async move {
@@ -433,26 +456,76 @@ async fn run_headless(
 }
 
 async fn restart_flows(state: &AppState) {
-    info!("Restarting flows that have auto_restart enabled...");
-    let flows = state.get_flows().await;
-    for flow in flows {
-        if flow.properties.auto_restart {
-            info!("Auto-restarting flow: {} ({})", flow.name, flow.id);
-            match state.start_flow(&flow.id).await {
-                Ok(_) => info!("Successfully restarted flow: {}", flow.name),
-                Err(e) => error!("Failed to restart flow {}: {}", flow.name, e),
+    // Ensure SRT plugin is loaded before auto-restart
+    // Manual flow starts work because by that time, plugins have been loaded naturally
+    // We just need to trigger SRT plugin load without full discovery/introspection
+    info!("Pre-loading SRT plugin before auto-restart...");
+    tokio::task::spawn_blocking(|| {
+        use gstreamer as gst;
+
+        // Create and immediately drop a srtsink element to ensure SRT plugin is loaded
+        // This initializes the SRT library without doing full element discovery
+        match gst::ElementFactory::make("srtsink").build() {
+            Ok(element) => {
+                info!("SRT plugin loaded successfully");
+                drop(element);
+            }
+            Err(e) => {
+                error!("Failed to load SRT plugin: {}", e);
             }
         }
+    })
+    .await
+    .expect("SRT plugin loading failed");
+
+    info!("Restarting flows that have auto_restart enabled...");
+    let flows = state.get_flows().await;
+    let mut count = 0;
+    for flow in flows {
+        if flow.properties.auto_restart {
+            count += 1;
+            info!(
+                "Auto-restarting flow {}: {} ({})",
+                count, flow.name, flow.id
+            );
+            match state.start_flow(&flow.id).await {
+                Ok(_) => {
+                    info!("Successfully restarted flow: {}", flow.name);
+                    // Small delay between flow starts to avoid overwhelming GStreamer
+                    // and to give SRT time to initialize properly
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+                Err(e) => {
+                    error!("Failed to restart flow {}: {}", flow.name, e);
+                    // Continue with other flows even if one fails
+                }
+            }
+        }
+    }
+    if count > 0 {
+        info!("Auto-restart complete: {} flow(s) restarted", count);
     }
 }
 
 /// Start GLib main loop in a background thread.
 /// This is required for GStreamer bus watch callbacks to be dispatched.
 fn start_glib_main_loop() {
-    std::thread::spawn(|| {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
         info!("GLib main loop thread started");
         let main_loop = glib::MainLoop::new(None, false);
+
+        // Signal that the main loop is ready
+        tx.send(()).ok();
+
         main_loop.run();
         info!("GLib main loop thread exiting");
     });
+
+    // Wait for confirmation that the GLib main loop thread has started
+    rx.recv().expect("Failed to start GLib main loop");
+    info!("GLib main loop is now running");
 }

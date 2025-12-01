@@ -176,14 +176,11 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         srtsink.set_property("wait-for-connection", wait_for_connection);
         srtsink.set_property("auto-reconnect", auto_reconnect);
 
-        // Set async=false to prevent blocking pipeline state changes
-        srtsink.set_property("async", false);
-
         // Set sync=true for clock-based streaming (drop frames to maintain real-time)
         srtsink.set_property("sync", true);
 
         info!(
-            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, async=false, sync=true",
+            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, sync=true",
             srt_uri, latency, wait_for_connection, auto_reconnect
         );
 
