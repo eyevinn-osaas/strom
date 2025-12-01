@@ -4,19 +4,19 @@
 //! and outputs via SRT (Secure Reliable Transport).
 //!
 //! Features:
-//! - Automatic video parser selection (h264parse, h265parse, av1parse, vp9parse)
-//! - Dynamic AAC encoding for raw audio inputs
-//! - Fixed configuration: 1 video input + 8 audio inputs (all always available)
+//! - Direct passthrough for encoded video (no parsing overhead)
+//! - Automatic AAC encoding for raw audio inputs
+//! - Configurable inputs: 1 video input + 1-32 audio inputs (default: 1 audio)
 //! - Optimized for UDP streaming (alignment=7 on mpegtsmux)
 //! - SRT with auto-reconnect and configurable latency
 //!
 //! Input handling:
-//! - Video: Accepts encoded H.264/H.265/AV1/VP9 (adds appropriate parser)
+//! - Video: Expects properly encoded video (e.g., from nvh264enc with byte-stream format)
 //! - Audio: Accepts both raw audio (auto-encodes to AAC) or encoded AAC (adds parser)
 //!
 //! Pipeline structure:
 //! ```text
-//! Video (encoded) -> videoparse -> mpegtsmux -> srtsink
+//! Video (encoded) -> identity (passthrough) -> mpegtsmux -> srtsink
 //! Audio (raw)     -> audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
 //! Audio (encoded) -> aacparse -> mpegtsmux
 //! ```
@@ -53,7 +53,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
                 PropertyValue::Int(i) => Some(*i as usize),
                 _ => None,
             })
-            .unwrap_or(8);
+            .unwrap_or(1);
 
         // Build dynamic input pads
         let mut inputs = Vec::new();
@@ -179,8 +179,11 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         // Set sync=true for clock-based streaming (drop frames to maintain real-time)
         srtsink.set_property("sync", true);
 
+        // Enable QoS to generate Quality-of-Service events upstream when dropping buffers
+        srtsink.set_property("qos", true);
+
         info!(
-            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, sync=true",
+            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, sync=true, qos=true",
             srt_uri, latency, wait_for_connection, auto_reconnect
         );
 
@@ -201,76 +204,32 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
                 PropertyValue::Int(i) => Some(*i as usize),
                 _ => None,
             })
-            .unwrap_or(8);
-
-        // Get video parser type (optional, default h264parse)
-        let video_parser_type = properties
-            .get("video_parser")
-            .and_then(|v| match v {
-                PropertyValue::String(s) => Some(s.as_str()),
-                _ => None,
-            })
-            .unwrap_or("h264parse");
+            .unwrap_or(1);
 
         let mut internal_links = vec![];
         let mut elements = vec![(mux_id.clone(), mux), (sink_id.clone(), srtsink)];
 
         let mut next_mux_pad = 0;
 
-        // Create video input chain if requested: video_parser -> capsfilter -> mpegtsmux
+        // Create video input chain if requested: identity (passthrough) -> mpegtsmux
+        // No parsing - encoder output goes directly to muxer
         if num_video_tracks > 0 {
             let video_input_id = format!("{}:video_input", instance_id);
-            let video_parser = gst::ElementFactory::make(video_parser_type)
+            let identity = gst::ElementFactory::make("identity")
                 .name(&video_input_id)
                 .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("{}: {}", video_parser_type, e))
-                })?;
+                .map_err(|e| BlockBuildError::ElementCreation(format!("identity: {}", e)))?;
 
-            // Set config-interval=-1 to insert SPS/PPS at regular intervals
-            if video_parser.has_property("config-interval") {
-                video_parser.set_property("config-interval", -1i32);
-            }
+            info!("📡 Video input: no parser, direct passthrough to mpegtsmux");
 
-            // Add capsfilter to ensure proper stream-format for MPEG-TS
-            // H.264/H.265 need byte-stream with au alignment for mpegtsmux
-            let capsfilter_id = format!("{}:video_caps", instance_id);
-            let capsfilter = gst::ElementFactory::make("capsfilter")
-                .name(&capsfilter_id)
-                .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
-
-            // Set caps based on parser type
-            let caps_str = match video_parser_type {
-                "h264parse" => "video/x-h264,stream-format=byte-stream,alignment=au",
-                "h265parse" => "video/x-h265,stream-format=byte-stream,alignment=au",
-                "av1parse" => "video/x-av1,stream-format=obu-stream,alignment=tu",
-                _ => "video/x-raw", // Fallback for other types
-            };
-
-            let caps = caps_str.parse::<gst::Caps>().map_err(|_| {
-                BlockBuildError::InvalidProperty(format!("Invalid caps: {}", caps_str))
-            })?;
-            capsfilter.set_property("caps", &caps);
-
-            info!(
-                "📡 Video parser configured: {} with caps: {}",
-                video_parser_type, caps_str
-            );
-
-            // Link video parser -> capsfilter -> mpegtsmux
+            // Link identity -> mpegtsmux directly
             internal_links.push((
                 format!("{}:src", video_input_id),
-                format!("{}:sink", capsfilter_id),
-            ));
-            internal_links.push((
-                format!("{}:src", capsfilter_id),
                 format!("{}:sink_{}", mux_id, next_mux_pad),
             ));
             next_mux_pad += 1;
 
-            elements.push((video_input_id.clone(), video_parser));
-            elements.push((capsfilter_id, capsfilter));
+            elements.push((video_input_id.clone(), identity));
         }
 
         // Create audio input chains: audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
@@ -351,7 +310,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.mpegtssrt_output".to_string(),
         name: "MPEG-TS/SRT Output".to_string(),
-        description: "Muxes multiple audio/video streams to MPEG Transport Stream and outputs via SRT. Automatically handles video parsing (H.264/H.265/AV1/VP9) and AAC encoding for raw audio inputs. Optimized for UDP streaming with alignment=7.".to_string(),
+        description: "Muxes multiple audio/video streams to MPEG Transport Stream and outputs via SRT. Direct passthrough for encoded video (no parsing overhead). Auto-encodes raw audio to AAC. Optimized for UDP streaming with alignment=7.".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
@@ -371,7 +330,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                 label: "Number of Audio Tracks".to_string(),
                 description: "Number of audio input tracks (0-32)".to_string(),
                 property_type: PropertyType::UInt,
-                default_value: Some(PropertyValue::UInt(8)),
+                default_value: Some(PropertyValue::UInt(1)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "num_audio_tracks".to_string(),
@@ -387,37 +346,6 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "srt_uri".to_string(),
-                    transform: None,
-                },
-            },
-            ExposedProperty {
-                name: "video_parser".to_string(),
-                label: "Video Parser".to_string(),
-                description: "Video parser type to use (h264parse, h265parse, av1parse, vp9parse)".to_string(),
-                property_type: PropertyType::Enum {
-                    values: vec![
-                        EnumValue {
-                            value: "h264parse".to_string(),
-                            label: Some("H.264 Parser".to_string()),
-                        },
-                        EnumValue {
-                            value: "h265parse".to_string(),
-                            label: Some("H.265 Parser".to_string()),
-                        },
-                        EnumValue {
-                            value: "av1parse".to_string(),
-                            label: Some("AV1 Parser".to_string()),
-                        },
-                        EnumValue {
-                            value: "vp9parse".to_string(),
-                            label: Some("VP9 Parser (if available)".to_string()),
-                        },
-                    ],
-                },
-                default_value: Some(PropertyValue::String("h264parse".to_string())),
-                mapping: PropertyMapping {
-                    element_id: "_block".to_string(),
-                    property_name: "video_parser".to_string(),
                     transform: None,
                 },
             },

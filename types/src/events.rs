@@ -71,6 +71,32 @@ pub enum StromEvent {
     },
     /// System monitoring statistics (CPU and GPU)
     SystemStats(SystemStats),
+    /// Quality of Service statistics (aggregated buffer drop info)
+    QoSStats {
+        flow_id: FlowId,
+        /// Block ID if element is inside a block, None if standalone element
+        block_id: Option<String>,
+        /// Element ID (standalone element ID or block ID if element is in block)
+        element_id: String,
+        /// Full GStreamer element name (e.g., "block_id:element_type" or "element_id")
+        element_name: String,
+        /// Internal element type if part of a block (e.g., "videoconvert")
+        internal_element_type: Option<String>,
+        /// Number of QoS events in aggregation period
+        event_count: u64,
+        /// Average proportion (< 1.0 = falling behind)
+        avg_proportion: f64,
+        /// Minimum proportion seen
+        min_proportion: f64,
+        /// Maximum proportion seen
+        max_proportion: f64,
+        /// Average jitter in nanoseconds
+        avg_jitter: i64,
+        /// Total buffers processed
+        total_processed: u64,
+        /// Whether pipeline is falling behind (avg_proportion < 1.0)
+        is_falling_behind: bool,
+    },
 }
 
 impl StromEvent {
@@ -171,6 +197,38 @@ impl StromEvent {
                     (stats.used_memory as f64 / stats.total_memory as f64) * 100.0,
                     stats.gpu_stats.len()
                 )
+            }
+            StromEvent::QoSStats {
+                flow_id,
+                block_id,
+                element_id,
+                internal_element_type,
+                event_count,
+                avg_proportion,
+                is_falling_behind,
+                ..
+            } => {
+                let target = if let Some(block_id) = block_id {
+                    if let Some(elem_type) = internal_element_type {
+                        format!("block {} ({})", block_id, elem_type)
+                    } else {
+                        format!("block {}", block_id)
+                    }
+                } else {
+                    format!("element {}", element_id)
+                };
+
+                if *is_falling_behind {
+                    format!(
+                        "QoS: {} in flow {} falling behind ({} events, avg proportion {:.3})",
+                        target, flow_id, event_count, avg_proportion
+                    )
+                } else {
+                    format!(
+                        "QoS: {} in flow {} OK ({} events, avg proportion {:.3})",
+                        target, flow_id, event_count, avg_proportion
+                    )
+                }
             }
         }
     }

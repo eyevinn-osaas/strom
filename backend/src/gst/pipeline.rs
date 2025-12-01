@@ -8,6 +8,7 @@ use gstreamer::glib;
 use gstreamer::prelude::*;
 use gstreamer_net as gst_net;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use strom_types::flow::ThreadPriorityStatus;
 use strom_types::{Element, Flow, FlowId, Link, PipelineState, PropertyValue, StromEvent};
 use thiserror::Error;
@@ -19,6 +20,82 @@ struct ProcessedLinks {
     links: Vec<Link>,
     /// Map of tee element IDs to their source spec (element:pad they're connected to)
     tees: HashMap<String, String>,
+}
+
+/// Aggregated QoS statistics for a single element.
+#[derive(Debug, Clone)]
+struct ElementQoSStats {
+    event_count: u64,
+    sum_proportion: f64,
+    min_proportion: f64,
+    max_proportion: f64,
+    sum_jitter: i64,
+    total_processed: u64,
+}
+
+impl ElementQoSStats {
+    fn new() -> Self {
+        Self {
+            event_count: 0,
+            sum_proportion: 0.0,
+            min_proportion: f64::MAX,
+            max_proportion: f64::MIN,
+            sum_jitter: 0,
+            total_processed: 0,
+        }
+    }
+
+    fn add_event(&mut self, proportion: f64, jitter: i64, processed: u64) {
+        self.event_count += 1;
+        self.sum_proportion += proportion;
+        self.min_proportion = self.min_proportion.min(proportion);
+        self.max_proportion = self.max_proportion.max(proportion);
+        self.sum_jitter += jitter;
+        self.total_processed = processed; // Keep the latest value
+    }
+
+    fn avg_proportion(&self) -> f64 {
+        if self.event_count > 0 {
+            self.sum_proportion / self.event_count as f64
+        } else {
+            0.0
+        }
+    }
+
+    fn avg_jitter(&self) -> i64 {
+        if self.event_count > 0 {
+            self.sum_jitter / self.event_count as i64
+        } else {
+            0
+        }
+    }
+}
+
+/// QoS statistics aggregator (collects QoS events and broadcasts periodically).
+#[derive(Debug, Clone)]
+struct QoSAggregator {
+    stats: Arc<Mutex<HashMap<String, ElementQoSStats>>>,
+}
+
+impl QoSAggregator {
+    fn new() -> Self {
+        Self {
+            stats: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn add_event(&self, element_name: String, proportion: f64, jitter: i64, processed: u64) {
+        let mut stats = self.stats.lock().unwrap();
+        stats
+            .entry(element_name)
+            .or_insert_with(ElementQoSStats::new)
+            .add_event(proportion, jitter, processed);
+    }
+
+    fn extract_and_reset(&self) -> HashMap<String, ElementQoSStats> {
+        let mut stats = self.stats.lock().unwrap();
+        std::mem::take(&mut *stats)
+    }
 }
 
 #[derive(Error, Debug)]
@@ -83,6 +160,10 @@ pub struct PipelineManager {
     thread_priority_state: Option<ThreadPriorityState>,
     /// Cached pipeline state to avoid querying async sinks during initialization
     cached_state: std::sync::Arc<std::sync::RwLock<PipelineState>>,
+    /// QoS statistics aggregator (collects and periodically broadcasts QoS events)
+    qos_aggregator: QoSAggregator,
+    /// Handle for the periodic QoS stats broadcast task
+    qos_broadcast_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl PipelineManager {
@@ -118,6 +199,8 @@ impl PipelineManager {
             block_message_connect_fns: Vec::new(),
             thread_priority_state: None,
             cached_state: std::sync::Arc::new(std::sync::RwLock::new(PipelineState::Null)),
+            qos_aggregator: QoSAggregator::new(),
+            qos_broadcast_task: None,
         };
 
         // Expand blocks into GStreamer elements
@@ -239,6 +322,11 @@ impl PipelineManager {
         manager.apply_pad_properties();
         debug!("Pad properties applied");
 
+        // Enable QoS on all pads (both with and without user-defined properties)
+        debug!("Enabling QoS on all pads...");
+        manager.enable_qos_on_all_pads();
+        debug!("QoS enabled on all pads");
+
         // Note: Bus watch is set up when pipeline starts, not here
         info!("Pipeline created successfully for flow: {}", flow.name);
         Ok(manager)
@@ -291,6 +379,7 @@ impl PipelineManager {
         let flow_name = self.flow_name.clone();
         let events = self.events.clone();
         let cached_state = self.cached_state.clone();
+        let qos_aggregator = self.qos_aggregator.clone();
 
         let main_handler_id = bus.connect_message(None, move |_bus, msg| {
             use gst::MessageView;
@@ -389,6 +478,25 @@ impl PipelineManager {
                         }
                     }
                 }
+                MessageView::Qos(qos) => {
+                    // Quality of Service message - collect for aggregation and periodic broadcast
+                    if let Some(source_name) = qos.src().map(|s| s.name().to_string()) {
+                        let (jitter, proportion, _quality) = qos.values();
+                        let (_format, processed) = qos.stats();
+
+                        // Extract processed count as u64 from GenericFormattedValue
+                        let processed_count = processed.value() as u64;
+
+                        // Add to aggregator (will be logged and broadcast periodically)
+                        // Note: jitter is already i64 from qos.values()
+                        qos_aggregator.add_event(
+                            source_name,
+                            proportion,
+                            jitter,
+                            processed_count,
+                        );
+                    }
+                }
                 _ => {
                     // Ignore other message types
                 }
@@ -422,6 +530,100 @@ impl PipelineManager {
         }
     }
 
+    /// Start the periodic QoS stats broadcast task.
+    fn start_qos_broadcast_task(&mut self) {
+        // Cancel any existing task first
+        self.stop_qos_broadcast_task();
+
+        let aggregator = self.qos_aggregator.clone();
+        let events = self.events.clone();
+        let flow_id = self.flow_id;
+        let flow_name = self.flow_name.clone();
+
+        // Spawn task that wakes up every 1 second to broadcast aggregated QoS stats
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+
+                // Extract and reset aggregated stats
+                let stats = aggregator.extract_and_reset();
+
+                if !stats.is_empty() {
+                    debug!(
+                        "Broadcasting QoS stats for {} element(s) in flow '{}'",
+                        stats.len(),
+                        flow_name
+                    );
+                }
+
+                // Broadcast stats for each element
+                for (element_name, element_stats) in stats {
+                    let avg_proportion = element_stats.avg_proportion();
+                    let is_falling_behind = avg_proportion < 1.0;
+
+                    // Parse element name to determine if it's part of a block or standalone
+                    // Format: "block_id:element_type" for block elements, "element_id" for standalone
+                    let (block_id, element_id, internal_element_type) =
+                        if element_name.contains(':') {
+                            // Element inside a block
+                            let parts: Vec<&str> = element_name.split(':').collect();
+                            let block_id = parts[0].to_string();
+                            let elem_type = parts.get(1).map(|s| s.to_string());
+                            (Some(block_id.clone()), block_id, elem_type)
+                        } else {
+                            // Standalone element
+                            (None, element_name.clone(), None)
+                        };
+
+                    // Log aggregated stats
+                    if is_falling_behind {
+                        let drop_percentage = (1.0 - avg_proportion) * 100.0;
+                        warn!(
+                            "QoS: '{}' in flow '{}' falling behind {:.1}% ({} events, avg proportion {:.3}, jitter {} ns)",
+                            element_name,
+                            flow_name,
+                            drop_percentage,
+                            element_stats.event_count,
+                            avg_proportion,
+                            element_stats.avg_jitter()
+                        );
+                    } else {
+                        debug!(
+                            "QoS: '{}' in flow '{}' OK ({} events, avg proportion {:.3})",
+                            element_name, flow_name, element_stats.event_count, avg_proportion
+                        );
+                    }
+
+                    // Broadcast QoS event to frontend
+                    events.broadcast(StromEvent::QoSStats {
+                        flow_id,
+                        block_id,
+                        element_id,
+                        element_name: element_name.clone(),
+                        internal_element_type,
+                        event_count: element_stats.event_count,
+                        avg_proportion,
+                        min_proportion: element_stats.min_proportion,
+                        max_proportion: element_stats.max_proportion,
+                        avg_jitter: element_stats.avg_jitter(),
+                        total_processed: element_stats.total_processed,
+                        is_falling_behind,
+                    });
+                }
+            }
+        });
+
+        self.qos_broadcast_task = Some(task);
+    }
+
+    /// Stop the periodic QoS stats broadcast task.
+    fn stop_qos_broadcast_task(&mut self) {
+        if let Some(task) = self.qos_broadcast_task.take() {
+            task.abort();
+        }
+    }
+
     /// Add an element to the pipeline.
     fn add_element(&mut self, element_def: &Element) -> Result<(), PipelineError> {
         debug!(
@@ -440,6 +642,12 @@ impl PipelineManager {
                     element_def.id, element_def.element_type, e
                 ))
             })?;
+
+        // Enable QoS by default if the element supports it (for buffer drop monitoring)
+        if element.has_property("qos") {
+            element.set_property("qos", true);
+            debug!("Enabled QoS on element {}", element_def.id);
+        }
 
         // Set properties
         if !element_def.properties.is_empty() {
@@ -913,6 +1121,22 @@ impl PipelineManager {
         }
     }
 
+    /// Enable QoS on all pads of all elements (for buffer drop monitoring).
+    /// This should be called after all linking is complete.
+    fn enable_qos_on_all_pads(&self) {
+        info!("Enabling QoS on all pads that support it");
+
+        for (element_id, element) in &self.elements {
+            // Iterate over all pads (both src and sink)
+            for pad in element.pads() {
+                if pad.has_property("qos") {
+                    pad.set_property("qos", true);
+                    debug!("Enabled QoS on pad {}:{}", element_id, pad.name());
+                }
+            }
+        }
+    }
+
     /// Apply stored pad properties to pads after they've been created.
     /// This must be called after all linking is complete, since request pads
     /// (like audiomixer sink_%u) don't exist until they're requested during linking.
@@ -948,6 +1172,12 @@ impl PipelineManager {
                     );
                     continue;
                 };
+
+                // Enable QoS by default if the pad supports it (for buffer drop monitoring)
+                if pad.has_property("qos") {
+                    pad.set_property("qos", true);
+                    debug!("Enabled QoS on pad {}:{}", element_id, pad_name);
+                }
 
                 debug!(
                     "Applying {} properties to pad {}:{}",
@@ -1190,6 +1420,11 @@ impl PipelineManager {
         self.setup_bus_watch();
         info!("Bus watch set up");
 
+        // Start QoS aggregation and periodic broadcast task
+        info!("Starting QoS stats aggregation task...");
+        self.start_qos_broadcast_task();
+        info!("QoS stats task started");
+
         // Configure clock before starting
         info!(
             "Configuring clock (type: {:?})...",
@@ -1231,22 +1466,24 @@ impl PipelineManager {
 
         // For async state changes (like SRT sink), don't query state immediately
         // The state will change asynchronously and we'll get state-changed messages on the bus
-        if matches!(state_change_success, gst::StateChangeSuccess::Async) {
+        // Also treat NoPreroll (live sources) as async since they transition on their own timeline
+        if matches!(
+            state_change_success,
+            gst::StateChangeSuccess::Async | gst::StateChangeSuccess::NoPreroll
+        ) {
             info!(
-                "Pipeline '{}' state change is async, skipping immediate state query to avoid race conditions",
+                "Pipeline '{}' state change is async/live, skipping immediate state query to avoid race conditions",
                 self.flow_name
             );
-            // Update cached state
+            // Update cached state - the bus watch will update it when the actual transition happens
             *self.cached_state.write().unwrap() = PipelineState::Playing;
             return Ok(PipelineState::Playing);
         }
 
-        // Wait a moment to get the actual state (only for non-async changes)
-        info!("Sleeping 100ms to allow state change to complete...");
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        info!("Querying pipeline state...");
+        // For synchronous state changes, verify the state was reached
+        info!("Querying pipeline state to verify synchronous state change...");
         let (result, current_state, pending_state) =
-            self.pipeline.state(gst::ClockTime::from_mseconds(100));
+            self.pipeline.state(gst::ClockTime::from_mseconds(500));
         info!(
             "Pipeline '{}' state after start: result={:?}, current={:?}, pending={:?}",
             self.flow_name, result, current_state, pending_state
@@ -1301,6 +1538,9 @@ impl PipelineManager {
 
         // Remove bus watch when stopped to free resources
         self.remove_bus_watch();
+
+        // Stop QoS broadcast task
+        self.stop_qos_broadcast_task();
 
         // Remove thread priority handler
         thread_priority::remove_thread_priority_handler(&self.pipeline);
@@ -2778,6 +3018,7 @@ impl Drop for PipelineManager {
     fn drop(&mut self) {
         debug!("Dropping pipeline for flow: {}", self.flow_name);
         let _ = self.pipeline.set_state(gst::State::Null);
+        self.stop_qos_broadcast_task();
     }
 }
 
