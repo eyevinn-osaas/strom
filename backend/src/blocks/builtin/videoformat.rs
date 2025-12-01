@@ -2,11 +2,13 @@
 //!
 //! This block provides a simple way to set common video properties:
 //! - Resolution (width/height) - enforced by caps
-//! - Framerate - enforced by caps
+//! - Framerate - enforced by caps (NOTE: videorate temporarily removed, framerate not enforced)
 //! - Color format (pixel format) - enforced by caps
 //!
-//! All properties are optional. The block always creates a fixed chain of elements:
-//! videoscale -> videorate -> videoconvert -> capsfilter
+//! All properties are optional. The block creates a fixed chain of elements:
+//! videoscale -> videoconvert -> capsfilter
+//!
+//! TEMPORARY: videorate element removed to avoid frame duplication issues.
 //!
 //! Only the capsfilter caps are set based on which properties are specified.
 //! Unspecified properties allow passthrough - elements will not modify those aspects.
@@ -87,7 +89,6 @@ impl BlockBuilder for VideoFormatBuilder {
         // Always create all elements for consistent external pad references
         // Elements will just pass through if their respective properties aren't set
         let scale_id = format!("{}:videoscale", instance_id);
-        let rate_id = format!("{}:videorate", instance_id);
         let convert_id = format!("{}:videoconvert", instance_id);
         let capsfilter_id = format!("{}:capsfilter", instance_id);
 
@@ -96,10 +97,11 @@ impl BlockBuilder for VideoFormatBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("videoscale: {}", e)))?;
 
-        let videorate = gst::ElementFactory::make("videorate")
-            .name(&rate_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("videorate: {}", e)))?;
+        // TEMPORARY: videorate removed to avoid frame duplication issues
+        // let videorate = gst::ElementFactory::make("videorate")
+        //     .name(&rate_id)
+        //     .build()
+        //     .map_err(|e| BlockBuildError::ElementCreation(format!("videorate: {}", e)))?;
 
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .name(&convert_id)
@@ -117,12 +119,11 @@ impl BlockBuilder for VideoFormatBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
 
-        info!("🎬 VideoFormat block created (chain: videoscale -> videorate -> videoconvert -> capsfilter)");
+        info!("🎬 VideoFormat block created (chain: videoscale -> videoconvert -> capsfilter) [videorate TEMPORARILY REMOVED]");
 
-        // Chain: videoscale -> videorate -> videoconvert -> capsfilter
+        // Chain: videoscale -> videoconvert -> capsfilter (videorate temporarily removed)
         let internal_links = vec![
-            (format!("{}:src", scale_id), format!("{}:sink", rate_id)),
-            (format!("{}:src", rate_id), format!("{}:sink", convert_id)),
+            (format!("{}:src", scale_id), format!("{}:sink", convert_id)),
             (
                 format!("{}:src", convert_id),
                 format!("{}:sink", capsfilter_id),
@@ -132,7 +133,6 @@ impl BlockBuilder for VideoFormatBuilder {
         Ok(BlockBuildResult {
             elements: vec![
                 (scale_id, videoscale),
-                (rate_id, videorate),
                 (convert_id, videoconvert),
                 (capsfilter_id, capsfilter),
             ],
