@@ -34,30 +34,32 @@
 Install Strom with a single command:
 
 ```bash
-# Interactive install (DEFAULT) - shows configuration menu
+# Interactive install (RECOMMENDED) - shows configuration menu
 bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
 
-# Automated install (for CI/CD) - skips menu, uses defaults
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
+# Quick install - auto-detects piped mode, skips menu
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
 
 # Automated with minimal GStreamer
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true GSTREAMER_INSTALL_TYPE=minimal bash
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | GSTREAMER_INSTALL_TYPE=minimal bash
 
 # Automated binary only (skip dependencies)
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
 ```
 
-**Default behavior (interactive mode):**
+**Interactive mode (recommended):**
+- Use: `bash <(curl -sSL ...)`
 - Shows configuration menu to customize installation
 - Choose binary (strom or strom-mcp-server)
 - Select GStreamer type (minimal or full)
 - Configure version and install location
 - Human-friendly with clear defaults
 
-**Automated mode (`AUTO_INSTALL=true`):**
-- Skips interactive menu
+**Automated mode (quick install):**
+- Use: `curl -sSL ... | bash`
+- Auto-detects piped stdin and skips menu
 - Uses defaults or environment variables
-- Perfect for CI/CD and scripts
+- Perfect for quick installs, CI/CD, and scripts
 
 The script will:
 - Detect your OS and architecture automatically
