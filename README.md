@@ -34,24 +34,30 @@
 Install Strom with a single command:
 
 ```bash
-# Interactive install - configure settings before installation
+# Interactive install (DEFAULT) - shows configuration menu
 bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
 
-# Non-interactive install with all dependencies (default - includes GStreamer + Graphviz)
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
+# Automated install (for CI/CD) - skips menu, uses defaults
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
 
-# Install with minimal GStreamer (smaller install, fewer plugins)
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | GSTREAMER_INSTALL_TYPE=minimal bash
+# Automated with minimal GStreamer
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true GSTREAMER_INSTALL_TYPE=minimal bash
 
-# Install binary only (skip dependencies)
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
-
-# Install MCP server with dependencies
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | INSTALL_MCP_SERVER=true bash
-
-# Custom install directory
-curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | INSTALL_DIR=~/.local/bin bash
+# Automated binary only (skip dependencies)
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
 ```
+
+**Default behavior (interactive mode):**
+- Shows configuration menu to customize installation
+- Choose binary (strom or strom-mcp-server)
+- Select GStreamer type (minimal or full)
+- Configure version and install location
+- Human-friendly with clear defaults
+
+**Automated mode (`AUTO_INSTALL=true`):**
+- Skips interactive menu
+- Uses defaults or environment variables
+- Perfect for CI/CD and scripts
 
 The script will:
 - Detect your OS and architecture automatically
@@ -60,11 +66,14 @@ The script will:
 - Install GStreamer (full or minimal) - **required for Strom to work**
 - Install Graphviz - **required for pipeline debug graphs**
 
-**Installation Options:**
+**Environment Variables:**
+- `AUTO_INSTALL=true` - Skip interactive menu (default: false)
 - `GSTREAMER_INSTALL_TYPE=minimal` - Core GStreamer + base/good plugins only
 - `GSTREAMER_INSTALL_TYPE=full` - All plugins including bad/ugly/libav + WebRTC support (libnice) (default)
 - `SKIP_GSTREAMER=true` - Skip GStreamer (not recommended)
 - `SKIP_GRAPHVIZ=true` - Skip Graphviz (debug graphs won't work)
+- `INSTALL_DIR=/custom/path` - Custom installation directory
+- `VERSION=v0.2.5` - Install specific version
 
 After installation, run `strom` and open `http://localhost:8080` in your browser.
 
