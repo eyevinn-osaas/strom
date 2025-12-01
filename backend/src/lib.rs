@@ -46,13 +46,9 @@ pub async fn create_app_with_state_and_auth(
     state: AppState,
     auth_config: auth::AuthConfig,
 ) -> Router {
-    // Initialize GStreamer (idempotent - OK if already initialized)
-    if let Err(e) = gstreamer::init() {
-        tracing::warn!(
-            "GStreamer initialization warning (may already be initialized): {}",
-            e
-        );
-    }
+    // Note: GStreamer is already initialized in main.rs before this is called.
+    // DO NOT call gst::init() here - it can corrupt internal state if pipelines
+    // are already running (e.g., during auto-restart at startup).
 
     let auth_config = Arc::new(auth_config);
 

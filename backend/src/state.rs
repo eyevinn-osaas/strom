@@ -93,8 +93,21 @@ impl AppState {
     pub async fn load_from_storage(&self) -> anyhow::Result<()> {
         info!("Loading flows from storage...");
         match self.inner.storage.load_all().await {
-            Ok(flows) => {
+            Ok(mut flows) => {
                 let count = flows.len();
+
+                // Reset all flow states to None on server restart since pipelines aren't running
+                // This prevents showing stale "Playing" states from before the server stopped
+                for flow in flows.values_mut() {
+                    if flow.state.is_some() {
+                        info!(
+                            "Resetting state for flow '{}' from {:?} to None (server restart)",
+                            flow.name, flow.state
+                        );
+                        flow.state = None;
+                    }
+                }
+
                 let mut state_flows = self.inner.flows.write().await;
                 *state_flows = flows;
                 info!("Loaded {} flows from storage", count);
@@ -138,6 +151,16 @@ impl AppState {
         Ok(())
     }
 
+    /// Compute external pads for all blocks in a flow based on their properties.
+    /// This is needed for blocks with dynamic pads (e.g., MPEG-TS/SRT with configurable tracks).
+    fn compute_flow_external_pads(flow: &mut Flow) {
+        for block in &mut flow.blocks {
+            if let Some(builder) = crate::blocks::builtin::get_builder(&block.block_definition_id) {
+                block.computed_external_pads = builder.get_external_pads(&block.properties);
+            }
+        }
+    }
+
     /// Get all flows.
     pub async fn get_flows(&self) -> Vec<Flow> {
         let flows = self.inner.flows.read().await;
@@ -153,6 +176,8 @@ impl AppState {
                     flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
                     flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
                 }
+                // Compute external pads for dynamic blocks
+                Self::compute_flow_external_pads(&mut flow);
                 flow
             })
             .collect()
@@ -171,6 +196,8 @@ impl AppState {
                 flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
                 flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
             }
+            // Compute external pads for dynamic blocks
+            Self::compute_flow_external_pads(&mut flow);
             flow
         })
     }
