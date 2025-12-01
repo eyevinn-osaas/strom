@@ -492,13 +492,13 @@ fn test_build_video_encoder_block() {
         Ok(block_result) => {
             assert_eq!(
                 block_result.elements.len(),
-                3,
-                "Should create 3 elements (videoconvert, encoder, capsfilter)"
+                4,
+                "Should create 4 elements (videoconvert, encoder, parser, capsfilter)"
             );
             assert_eq!(
                 block_result.internal_links.len(),
-                2,
-                "Should create 2 internal links"
+                3,
+                "Should create 3 internal links"
             );
             println!("✓ Video encoder block built successfully");
 
@@ -506,6 +506,7 @@ fn test_build_video_encoder_block() {
             let element_ids: Vec<_> = block_result.elements.iter().map(|(id, _)| id).collect();
             assert!(element_ids.iter().any(|id| id.contains("videoconvert")));
             assert!(element_ids.iter().any(|id| id.contains("encoder")));
+            assert!(element_ids.iter().any(|id| id.contains("parser")));
             assert!(element_ids.iter().any(|id| id.contains("capsfilter")));
         }
         Err(e) => {
