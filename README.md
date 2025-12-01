@@ -34,7 +34,10 @@
 Install Strom with a single command:
 
 ```bash
-# Install Strom with all dependencies (default - includes GStreamer + Graphviz)
+# Interactive install - configure settings before installation
+bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
+
+# Non-interactive install with all dependencies (default - includes GStreamer + Graphviz)
 curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
 
 # Install with minimal GStreamer (smaller install, fewer plugins)
