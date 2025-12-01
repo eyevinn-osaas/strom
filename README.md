@@ -29,7 +29,43 @@
 
 ## Quick Start
 
-### Option 1: Using Pre-built Binaries (Fastest)
+### Option 1: One-liner Install (Recommended)
+
+Install Strom with a single command:
+
+```bash
+# Install Strom with all dependencies (default - includes GStreamer + Graphviz)
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
+
+# Install with minimal GStreamer (smaller install, fewer plugins)
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | GSTREAMER_INSTALL_TYPE=minimal bash
+
+# Install binary only (skip dependencies)
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
+
+# Install MCP server with dependencies
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | INSTALL_MCP_SERVER=true bash
+
+# Custom install directory
+curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | INSTALL_DIR=~/.local/bin bash
+```
+
+The script will:
+- Detect your OS and architecture automatically
+- Download the latest release from GitHub
+- Install to `/usr/local/bin` (or `~/.local/bin` if no sudo)
+- Install GStreamer (full or minimal) - **required for Strom to work**
+- Install Graphviz - **required for pipeline debug graphs**
+
+**Installation Options:**
+- `GSTREAMER_INSTALL_TYPE=minimal` - Core GStreamer + base/good plugins only
+- `GSTREAMER_INSTALL_TYPE=full` - All plugins including bad/ugly/libav + WebRTC support (libnice) (default)
+- `SKIP_GSTREAMER=true` - Skip GStreamer (not recommended)
+- `SKIP_GRAPHVIZ=true` - Skip Graphviz (debug graphs won't work)
+
+After installation, run `strom` and open `http://localhost:8080` in your browser.
+
+### Option 2: Using Pre-built Binaries
 
 Download the latest release for your platform from [GitHub Releases](https://github.com/Eyevinn/strom/releases):
 
@@ -48,7 +84,7 @@ chmod +x strom-v*-linux-x86_64
 
 Open your browser to `http://localhost:8080` to access the web UI.
 
-### Option 2: Using Docker (Recommended for Testing)
+### Option 3: Using Docker (Recommended for Testing)
 
 ```bash
 # Pull and run the latest version
@@ -62,7 +98,7 @@ docker run -p 8080:8080 -v $(pwd)/data:/data strom
 
 Access the web UI at `http://localhost:8080`
 
-### Option 3: Building from Source
+### Option 4: Building from Source
 
 #### Prerequisites
 
