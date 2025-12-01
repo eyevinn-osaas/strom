@@ -3,6 +3,10 @@
 # Strom Installer Script
 #
 # Usage:
+#   # Interactive mode (recommended):
+#   bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
+#
+#   # Non-interactive mode:
 #   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
 #
 # Options (set as environment variables):
@@ -42,6 +46,9 @@ BINARY_NAME="${INSTALL_MCP_SERVER:+strom-mcp-server}"
 BINARY_NAME="${BINARY_NAME:-strom}"
 VERSION="${VERSION:-latest}"
 GSTREAMER_INSTALL_TYPE="${GSTREAMER_INSTALL_TYPE:-full}"
+SKIP_GSTREAMER="${SKIP_GSTREAMER:-false}"
+SKIP_GRAPHVIZ="${SKIP_GRAPHVIZ:-false}"
+INSTALL_DIR="${INSTALL_DIR:-}"
 
 # Helper functions
 log_info() {
@@ -58,6 +65,20 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}Error:${NC} $1" >&2
+}
+
+# Run command with sudo only if not root
+run_elevated() {
+    if [ "$(id -u)" -eq 0 ]; then
+        # Already root, run directly
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        # Not root, use sudo
+        sudo "$@"
+    else
+        log_error "Not running as root and sudo not available"
+        exit 1
+    fi
 }
 
 detect_os() {
@@ -154,13 +175,9 @@ install_binary() {
     if [ -w "$install_dir" ]; then
         mv "$tmp_file" "$dest"
         chmod +x "$dest"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo mv "$tmp_file" "$dest"
-        sudo chmod +x "$dest"
     else
-        log_error "No write access to $install_dir and sudo not available"
-        rm -f "$tmp_file"
-        exit 1
+        run_elevated mv "$tmp_file" "$dest"
+        run_elevated chmod +x "$dest"
     fi
 
     log_success "Installed $binary_name to $dest"
@@ -175,7 +192,7 @@ install_gstreamer() {
     case "$os" in
         linux)
             if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update
+                run_elevated apt-get update
 
                 # Minimal: core libraries + basic plugins
                 local packages=(
@@ -203,7 +220,7 @@ install_gstreamer() {
                     )
                 fi
 
-                sudo apt-get install -y "${packages[@]}"
+                run_elevated apt-get install -y "${packages[@]}"
                 log_success "GStreamer installed successfully"
             elif command -v dnf >/dev/null 2>&1; then
                 local packages=(
@@ -220,7 +237,7 @@ install_gstreamer() {
                     )
                 fi
 
-                sudo dnf install -y "${packages[@]}"
+                run_elevated dnf install -y "${packages[@]}"
                 log_success "GStreamer installed successfully"
             elif command -v pacman >/dev/null 2>&1; then
                 local packages=(
@@ -238,7 +255,7 @@ install_gstreamer() {
                     )
                 fi
 
-                sudo pacman -S --noconfirm "${packages[@]}"
+                run_elevated pacman -S --noconfirm "${packages[@]}"
                 log_success "GStreamer installed successfully"
             else
                 log_warning "Unsupported package manager. Please install GStreamer manually."
@@ -275,14 +292,14 @@ install_graphviz() {
     case "$os" in
         linux)
             if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get update
-                sudo apt-get install -y graphviz
+                run_elevated apt-get update
+                run_elevated apt-get install -y graphviz
                 log_success "Graphviz installed successfully"
             elif command -v dnf >/dev/null 2>&1; then
-                sudo dnf install -y graphviz
+                run_elevated dnf install -y graphviz
                 log_success "Graphviz installed successfully"
             elif command -v pacman >/dev/null 2>&1; then
-                sudo pacman -S --noconfirm graphviz
+                run_elevated pacman -S --noconfirm graphviz
                 log_success "Graphviz installed successfully"
             else
                 log_warning "Unsupported package manager. Please install Graphviz manually."
@@ -315,6 +332,124 @@ check_path() {
     fi
 }
 
+is_interactive() {
+    # Check if stdin is a terminal and we're not being piped from curl
+    [ -t 0 ] && [ -t 1 ]
+}
+
+show_config_menu() {
+    if ! is_interactive; then
+        return
+    fi
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  Strom Installation Configuration"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Current settings:"
+    echo ""
+    echo "  1. Binary:           ${GREEN}${BINARY_NAME}${NC}"
+    echo "  2. Version:          ${GREEN}${VERSION}${NC}"
+    echo "  3. Install GStreamer: ${GREEN}$([ "$SKIP_GSTREAMER" = "false" ] && echo "Yes" || echo "No")${NC}"
+    echo "  4. GStreamer Type:   ${GREEN}${GSTREAMER_INSTALL_TYPE}${NC} (minimal/full)"
+    echo "  5. Install Graphviz: ${GREEN}$([ "$SKIP_GRAPHVIZ" = "false" ] && echo "Yes" || echo "No")${NC}"
+    if [ -n "$INSTALL_DIR" ]; then
+        echo "  6. Install Directory: ${GREEN}${INSTALL_DIR}${NC}"
+    else
+        echo "  6. Install Directory: ${GREEN}auto (/usr/local/bin or ~/.local/bin)${NC}"
+    fi
+    echo ""
+    echo "  ${GREEN}c${NC}. Continue with these settings"
+    echo "  ${GREEN}q${NC}. Quit"
+    echo ""
+    echo -n "Enter option to change (or 'c' to continue): "
+
+    read -r choice
+
+    case "$choice" in
+        1)
+            echo ""
+            echo "Select binary to install:"
+            echo "  1. strom (main application)"
+            echo "  2. strom-mcp-server (MCP server)"
+            echo -n "Choice [1-2]: "
+            read -r bin_choice
+            case "$bin_choice" in
+                1) BINARY_NAME="strom" ;;
+                2) BINARY_NAME="strom-mcp-server" ;;
+                *) log_warning "Invalid choice, keeping current setting" ;;
+            esac
+            show_config_menu
+            ;;
+        2)
+            echo ""
+            echo -n "Enter version (or 'latest'): "
+            read -r ver
+            VERSION="${ver:-latest}"
+            show_config_menu
+            ;;
+        3)
+            echo ""
+            echo "Install GStreamer? (Required for Strom to work)"
+            echo -n "Choice [y/N]: "
+            read -r gst_choice
+            case "$gst_choice" in
+                [Yy]*) SKIP_GSTREAMER="false" ;;
+                [Nn]*) SKIP_GSTREAMER="true" ;;
+                *) log_warning "Invalid choice, keeping current setting" ;;
+            esac
+            show_config_menu
+            ;;
+        4)
+            echo ""
+            echo "Select GStreamer installation type:"
+            echo "  1. minimal - Core + base/good plugins (~200MB)"
+            echo "  2. full - All plugins + WebRTC support (~500MB)"
+            echo -n "Choice [1-2]: "
+            read -r type_choice
+            case "$type_choice" in
+                1) GSTREAMER_INSTALL_TYPE="minimal" ;;
+                2) GSTREAMER_INSTALL_TYPE="full" ;;
+                *) log_warning "Invalid choice, keeping current setting" ;;
+            esac
+            show_config_menu
+            ;;
+        5)
+            echo ""
+            echo "Install Graphviz? (Required for debug graphs)"
+            echo -n "Choice [y/N]: "
+            read -r gv_choice
+            case "$gv_choice" in
+                [Yy]*) SKIP_GRAPHVIZ="false" ;;
+                [Nn]*) SKIP_GRAPHVIZ="true" ;;
+                *) log_warning "Invalid choice, keeping current setting" ;;
+            esac
+            show_config_menu
+            ;;
+        6)
+            echo ""
+            echo -n "Enter install directory (or leave empty for auto): "
+            read -r dir
+            INSTALL_DIR="$dir"
+            show_config_menu
+            ;;
+        [Cc]*)
+            echo ""
+            log_info "Proceeding with installation..."
+            ;;
+        [Qq]*)
+            echo ""
+            log_info "Installation cancelled."
+            exit 0
+            ;;
+        *)
+            log_warning "Invalid option"
+            show_config_menu
+            ;;
+    esac
+}
+
 main() {
     log_info "Strom Installer"
     echo ""
@@ -323,6 +458,9 @@ main() {
     local os=$(detect_os)
     local arch=$(detect_arch)
     log_info "Detected: $os-$arch"
+
+    # Show interactive configuration menu if running in a terminal
+    show_config_menu
 
     # Get version
     if [ "$VERSION" = "latest" ]; then
