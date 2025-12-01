@@ -197,7 +197,7 @@ install_gstreamer() {
     case "$os" in
         linux)
             if command -v apt-get >/dev/null 2>&1; then
-                run_elevated apt-get update
+                run_elevated env DEBIAN_FRONTEND=noninteractive apt-get update
 
                 # Minimal: core libraries + basic plugins
                 local packages=(
@@ -225,7 +225,7 @@ install_gstreamer() {
                     )
                 fi
 
-                run_elevated apt-get install -y "${packages[@]}"
+                run_elevated env DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
                 log_success "GStreamer installed successfully"
             elif command -v dnf >/dev/null 2>&1; then
                 local packages=(
@@ -297,8 +297,8 @@ install_graphviz() {
     case "$os" in
         linux)
             if command -v apt-get >/dev/null 2>&1; then
-                run_elevated apt-get update
-                run_elevated apt-get install -y graphviz
+                run_elevated env DEBIAN_FRONTEND=noninteractive apt-get update
+                run_elevated env DEBIAN_FRONTEND=noninteractive apt-get install -y graphviz
                 log_success "Graphviz installed successfully"
             elif command -v dnf >/dev/null 2>&1; then
                 run_elevated dnf install -y graphviz
