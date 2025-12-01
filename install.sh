@@ -3,17 +3,14 @@
 # Strom Installer Script
 #
 # Usage:
-#   # Interactive mode (RECOMMENDED for humans):
-#   bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
-#   # Shows configuration menu before installation
-#
-#   # Automated mode (for CI/CD or quick install):
+#   # Interactive mode (for humans):
 #   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
-#   # Auto-detects piped stdin and skips menu, uses defaults
+#   # Shows configuration menu before installation
+#   # Or: bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
 #
-#   # Explicit automated mode:
+#   # Automated mode (for CI/CD):
 #   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
-#   # Same as above, explicitly set
+#   # Skips menu, uses defaults or environment variables
 #
 # Options (set as environment variables):
 #   AUTO_INSTALL             - Skip interactive menu (default: false, menu shown by default)
@@ -26,7 +23,7 @@
 #
 # Examples:
 #   # Interactive install (shows menu) - DEFAULT
-#   bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
+#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
 #
 #   # Automated install (CI/CD, skips menu)
 #   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
@@ -347,16 +344,6 @@ show_config_menu() {
         return
     fi
 
-    # Auto-enable AUTO_INSTALL if stdin is not a terminal (piped from curl)
-    if [ ! -t 0 ]; then
-        log_warning "Stdin is not a terminal (script is piped)"
-        log_info "Automatically enabling AUTO_INSTALL mode..."
-        log_info "For interactive mode, use: bash <(curl -sSL ...)"
-        echo ""
-        AUTO_INSTALL="true"
-        return
-    fi
-
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  Strom Installation Configuration"
@@ -380,7 +367,7 @@ show_config_menu() {
     echo ""
     echo -n "Enter option to change (or 'c' to continue): "
 
-    read -r choice
+    read -r choice </dev/tty
 
     case "$choice" in
         1)
@@ -389,7 +376,7 @@ show_config_menu() {
             echo "  1. strom (main application)"
             echo "  2. strom-mcp-server (MCP server)"
             echo -n "Choice [1-2]: "
-            read -r bin_choice
+            read -r bin_choice </dev/tty
             case "$bin_choice" in
                 1) BINARY_NAME="strom" ;;
                 2) BINARY_NAME="strom-mcp-server" ;;
@@ -400,7 +387,7 @@ show_config_menu() {
         2)
             echo ""
             echo -n "Enter version (or 'latest'): "
-            read -r ver
+            read -r ver </dev/tty
             VERSION="${ver:-latest}"
             show_config_menu
             ;;
@@ -408,7 +395,7 @@ show_config_menu() {
             echo ""
             echo "Install GStreamer? (Required for Strom to work)"
             echo -n "Choice [y/N]: "
-            read -r gst_choice
+            read -r gst_choice </dev/tty
             case "$gst_choice" in
                 [Yy]*) SKIP_GSTREAMER="false" ;;
                 [Nn]*) SKIP_GSTREAMER="true" ;;
@@ -422,7 +409,7 @@ show_config_menu() {
             echo "  1. minimal - Core + base/good plugins (~200MB)"
             echo "  2. full - All plugins + WebRTC support (~500MB)"
             echo -n "Choice [1-2]: "
-            read -r type_choice
+            read -r type_choice </dev/tty
             case "$type_choice" in
                 1) GSTREAMER_INSTALL_TYPE="minimal" ;;
                 2) GSTREAMER_INSTALL_TYPE="full" ;;
@@ -434,7 +421,7 @@ show_config_menu() {
             echo ""
             echo "Install Graphviz? (Required for debug graphs)"
             echo -n "Choice [y/N]: "
-            read -r gv_choice
+            read -r gv_choice </dev/tty
             case "$gv_choice" in
                 [Yy]*) SKIP_GRAPHVIZ="false" ;;
                 [Nn]*) SKIP_GRAPHVIZ="true" ;;
@@ -445,7 +432,7 @@ show_config_menu() {
         6)
             echo ""
             echo -n "Enter install directory (or leave empty for auto): "
-            read -r dir
+            read -r dir </dev/tty
             INSTALL_DIR="$dir"
             show_config_menu
             ;;
