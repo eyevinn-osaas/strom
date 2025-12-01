@@ -3,13 +3,16 @@
 # Strom Installer Script
 #
 # Usage:
-#   # Interactive mode (recommended):
+#   # Interactive mode (default, for humans):
 #   bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
+#   # Shows configuration menu before installation
 #
-#   # Non-interactive mode:
-#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
+#   # Automated mode (for CI/CD):
+#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
+#   # Skips menu, uses defaults or environment variables
 #
 # Options (set as environment variables):
+#   AUTO_INSTALL             - Skip interactive menu (default: false, menu shown by default)
 #   INSTALL_DIR              - Installation directory (default: /usr/local/bin or ~/.local/bin)
 #   SKIP_GSTREAMER           - Skip GStreamer installation (default: false, GStreamer installs by default)
 #   GSTREAMER_INSTALL_TYPE   - GStreamer install type: "minimal" or "full" (default: full)
@@ -18,17 +21,17 @@
 #   VERSION                  - Specific version to install (default: latest)
 #
 # Examples:
-#   # Install strom with all dependencies (default behavior)
-#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
+#   # Interactive install (shows menu) - DEFAULT
+#   bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
 #
-#   # Install with minimal GStreamer
-#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | GSTREAMER_INSTALL_TYPE=minimal bash
+#   # Automated install (CI/CD, skips menu)
+#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
 #
-#   # Skip dependencies (binary only)
-#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
+#   # Automated with minimal GStreamer
+#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true GSTREAMER_INSTALL_TYPE=minimal bash
 #
-#   # Install MCP server with dependencies
-#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | INSTALL_MCP_SERVER=true bash
+#   # Automated binary only (skip dependencies)
+#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true SKIP_GSTREAMER=true SKIP_GRAPHVIZ=true bash
 #
 
 set -euo pipefail
@@ -49,6 +52,7 @@ GSTREAMER_INSTALL_TYPE="${GSTREAMER_INSTALL_TYPE:-full}"
 SKIP_GSTREAMER="${SKIP_GSTREAMER:-false}"
 SKIP_GRAPHVIZ="${SKIP_GRAPHVIZ:-false}"
 INSTALL_DIR="${INSTALL_DIR:-}"
+AUTO_INSTALL="${AUTO_INSTALL:-false}"
 
 # Helper functions
 log_info() {
@@ -332,13 +336,10 @@ check_path() {
     fi
 }
 
-is_interactive() {
-    # Check if stdin is a terminal and we're not being piped from curl
-    [ -t 0 ] && [ -t 1 ]
-}
-
 show_config_menu() {
-    if ! is_interactive; then
+    # Skip menu if AUTO_INSTALL is set (for automation)
+    if [ "$AUTO_INSTALL" = "true" ]; then
+        log_info "Auto-install mode enabled, skipping configuration menu..."
         return
     fi
 
