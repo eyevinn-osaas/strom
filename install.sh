@@ -3,13 +3,17 @@
 # Strom Installer Script
 #
 # Usage:
-#   # Interactive mode (default, for humans):
+#   # Interactive mode (RECOMMENDED for humans):
 #   bash <(curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh)
 #   # Shows configuration menu before installation
 #
-#   # Automated mode (for CI/CD):
+#   # Automated mode (for CI/CD or quick install):
+#   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | bash
+#   # Auto-detects piped stdin and skips menu, uses defaults
+#
+#   # Explicit automated mode:
 #   curl -sSL https://raw.githubusercontent.com/Eyevinn/strom/main/install.sh | AUTO_INSTALL=true bash
-#   # Skips menu, uses defaults or environment variables
+#   # Same as above, explicitly set
 #
 # Options (set as environment variables):
 #   AUTO_INSTALL             - Skip interactive menu (default: false, menu shown by default)
@@ -340,6 +344,16 @@ show_config_menu() {
     # Skip menu if AUTO_INSTALL is set (for automation)
     if [ "$AUTO_INSTALL" = "true" ]; then
         log_info "Auto-install mode enabled, skipping configuration menu..."
+        return
+    fi
+
+    # Auto-enable AUTO_INSTALL if stdin is not a terminal (piped from curl)
+    if [ ! -t 0 ]; then
+        log_warning "Stdin is not a terminal (script is piped)"
+        log_info "Automatically enabling AUTO_INSTALL mode..."
+        log_info "For interactive mode, use: bash <(curl -sSL ...)"
+        echo ""
+        AUTO_INSTALL="true"
         return
     fi
 
