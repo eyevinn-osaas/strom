@@ -350,19 +350,19 @@ show_config_menu() {
     echo ""
     echo "Current settings:"
     echo ""
-    echo "  1. Binary:           ${GREEN}${BINARY_NAME}${NC}"
-    echo "  2. Version:          ${GREEN}${VERSION}${NC}"
-    echo "  3. Install GStreamer: ${GREEN}$([ "$SKIP_GSTREAMER" = "false" ] && echo "Yes" || echo "No")${NC}"
-    echo "  4. GStreamer Type:   ${GREEN}${GSTREAMER_INSTALL_TYPE}${NC} (minimal/full)"
-    echo "  5. Install Graphviz: ${GREEN}$([ "$SKIP_GRAPHVIZ" = "false" ] && echo "Yes" || echo "No")${NC}"
+    echo -e "  1. Binary:            ${GREEN}${BINARY_NAME}${NC}"
+    echo -e "  2. Version:           ${GREEN}${VERSION}${NC}"
+    echo -e "  3. Install GStreamer: ${GREEN}$([ "$SKIP_GSTREAMER" = "false" ] && echo "Yes" || echo "No")${NC}"
+    echo -e "  4. GStreamer Type:    ${GREEN}${GSTREAMER_INSTALL_TYPE}${NC} (minimal/full)"
+    echo -e "  5. Install Graphviz:  ${GREEN}$([ "$SKIP_GRAPHVIZ" = "false" ] && echo "Yes" || echo "No")${NC}"
     if [ -n "$INSTALL_DIR" ]; then
-        echo "  6. Install Directory: ${GREEN}${INSTALL_DIR}${NC}"
+        echo -e "  6. Install Directory: ${GREEN}${INSTALL_DIR}${NC}"
     else
-        echo "  6. Install Directory: ${GREEN}auto (/usr/local/bin or ~/.local/bin)${NC}"
+        echo -e "  6. Install Directory: ${GREEN}auto (/usr/local/bin or ~/.local/bin)${NC}"
     fi
     echo ""
-    echo "  ${GREEN}c${NC}. Continue with these settings"
-    echo "  ${GREEN}q${NC}. Quit"
+    echo -e "  ${GREEN}c${NC}. Continue with these settings"
+    echo -e "  ${GREEN}q${NC}. Quit"
     echo ""
     echo -n "Enter option to change (or 'c' to continue): "
 
