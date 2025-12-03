@@ -26,7 +26,7 @@ use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
-use strom_types::{block::*, PropertyValue, *};
+use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
 use tracing::info;
 
 /// MPEG-TS/SRT Output block builder.
@@ -197,7 +197,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         //
         // Solution for transcoding (encode-as-fast-as-possible):
         // - sync=false: Don't try to maintain real-time clock synchronization
-        // - qos=false: Don't send QoS events based on impossible timestamps
+        // - qos=true: Enable QoS events so sink can report back pressure to upstream
         // - Buffers are pushed as fast as they're produced
         //
         // When you WOULD want sync=true:
@@ -208,10 +208,10 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         // See also: notes.txt "QoS/SYNC ISSUE IN TRANSCODING PIPELINES"
         // Fixed: 2025-12-01
         srtsink.set_property("sync", false);
-        srtsink.set_property("qos", false);
+        srtsink.set_property("qos", true);
 
         info!(
-            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, sync=false, qos=false (transcoding mode)",
+            "📡 SRT sink configured: uri={}, latency={}ms, wait={}, auto-reconnect={}, sync=false, qos=true",
             srt_uri, latency, wait_for_connection, auto_reconnect
         );
 
@@ -274,12 +274,12 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
 
             // Link: identity -> capsfilter -> mpegtsmux
             internal_links.push((
-                format!("{}:src", video_input_id),
-                format!("{}:sink", video_capsfilter_id),
+                ElementPadRef::pad(&video_input_id, "src"),
+                ElementPadRef::pad(&video_capsfilter_id, "sink"),
             ));
             internal_links.push((
-                format!("{}:src", video_capsfilter_id),
-                format!("{}:sink_{}", mux_id, next_mux_pad),
+                ElementPadRef::pad(&video_capsfilter_id, "src"),
+                ElementPadRef::pad(&mux_id, format!("sink_{}", next_mux_pad)),
             ));
             next_mux_pad += 1;
 
@@ -318,18 +318,21 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
 
             // Chain: audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
             internal_links.push((
-                format!("{}:src", audio_input_id),
-                format!("{}:sink", audioresample_id),
+                ElementPadRef::pad(&audio_input_id, "src"),
+                ElementPadRef::pad(&audioresample_id, "sink"),
             ));
             internal_links.push((
-                format!("{}:src", audioresample_id),
-                format!("{}:sink", encoder_id),
+                ElementPadRef::pad(&audioresample_id, "src"),
+                ElementPadRef::pad(&encoder_id, "sink"),
             ));
-            internal_links.push((format!("{}:src", encoder_id), format!("{}:sink", parser_id)));
+            internal_links.push((
+                ElementPadRef::pad(&encoder_id, "src"),
+                ElementPadRef::pad(&parser_id, "sink"),
+            ));
             // Link parser to mpegtsmux request pad
             internal_links.push((
-                format!("{}:src", parser_id),
-                format!("{}:sink_{}", mux_id, next_mux_pad),
+                ElementPadRef::pad(&parser_id, "src"),
+                ElementPadRef::pad(&mux_id, format!("sink_{}", next_mux_pad)),
             ));
             next_mux_pad += 1;
 
@@ -340,7 +343,10 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         }
 
         // Link mux to sink
-        internal_links.push((format!("{}:src", mux_id), format!("{}:sink", sink_id)));
+        internal_links.push((
+            ElementPadRef::pad(&mux_id, "src"),
+            ElementPadRef::pad(&sink_id, "sink"),
+        ));
 
         info!(
             "📡 Created MPEG-TS/SRT block with {} video track(s) and {} audio chain(s)",
@@ -351,6 +357,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             elements,
             internal_links,
             bus_message_handler: None,
+            pad_properties: HashMap::new(),
         })
     }
 }
