@@ -96,6 +96,69 @@ pub enum ClockSyncStatus {
     Unknown,
 }
 
+/// PTP clock information (IEEE 1588).
+///
+/// Contains detailed information about the PTP clock state including
+/// grandmaster and master clock identities, and synchronization statistics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PtpInfo {
+    /// PTP domain currently in use by the running pipeline (0-255)
+    pub domain: u8,
+    /// Whether the clock is synchronized with a PTP master
+    pub synced: bool,
+    /// Grandmaster clock ID (EUI-64 format as hex string, e.g., "00:11:22:FF:FE:33:44:55")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grandmaster_clock_id: Option<String>,
+    /// Master clock ID (EUI-64 format as hex string)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_clock_id: Option<String>,
+    /// True if configured domain differs from running domain (restart needed)
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart_needed: bool,
+    /// PTP synchronization statistics (updated periodically)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<PtpStats>,
+}
+
+/// PTP clock synchronization statistics.
+///
+/// Contains measurements from PTP clock synchronization including
+/// path delay, clock offset, and estimation quality.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PtpStats {
+    /// Mean path delay to master clock in nanoseconds
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mean_path_delay_ns: Option<u64>,
+    /// Clock offset/discontinuity in nanoseconds (positive = local clock ahead)
+    /// This is the correction being applied to keep clocks synchronized
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_offset_ns: Option<i64>,
+    /// R-squared value of clock estimation regression (0.0-1.0, higher is better)
+    /// Values close to 1.0 indicate stable, accurate synchronization
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r_squared: Option<f64>,
+    /// Clock rate ratio (local clock speed relative to PTP master)
+    /// 1.0 means clocks run at same speed, <1.0 means local is slower
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_rate: Option<f64>,
+    /// Timestamp of last statistics update (Unix timestamp in seconds)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update: Option<u64>,
+}
+
+impl PtpInfo {
+    /// Format a u64 clock ID as EUI-64 hex string (XX:XX:XX:FF:FE:XX:XX:XX format)
+    pub fn format_clock_id(id: u64) -> String {
+        let bytes = id.to_be_bytes();
+        format!(
+            "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]
+        )
+    }
+}
+
 impl GStreamerClockType {
     /// Get the human-readable label for this clock type (for UI dropdowns).
     /// Acronyms are capitalized (PTP, NTP).
@@ -144,6 +207,10 @@ pub struct FlowProperties {
     /// Clock synchronization status (updated by backend for running pipelines)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_sync_status: Option<ClockSyncStatus>,
+
+    /// PTP clock information (updated by backend when clock_type is PTP)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ptp_info: Option<PtpInfo>,
 
     /// Thread priority for GStreamer streaming threads
     /// Default is High (elevated but not realtime)
