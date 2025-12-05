@@ -16,7 +16,10 @@
 use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use std::collections::HashMap;
-use strom_types::{block::*, element::ElementPadRef, EnumValue, PropertyValue, *};
+use strom_types::{
+    block::*, common_video_resolution_enum_values, element::ElementPadRef, EnumValue,
+    PropertyValue, *,
+};
 use tracing::info;
 
 /// Video Format block builder.
@@ -164,20 +167,7 @@ fn videoformat_definition() -> BlockDefinition {
                 label: "Resolution".to_string(),
                 description: "Video resolution - creates videoscale element. Leave empty to pass through.".to_string(),
                 property_type: PropertyType::Enum {
-                    values: vec![
-                        EnumValue { value: "".to_string(), label: Some("-".to_string()) },
-                        EnumValue { value: "7680x4320".to_string(), label: Some("8K UHD (7680x4320)".to_string()) },
-                        EnumValue { value: "4096x2160".to_string(), label: Some("4K DCI (4096x2160)".to_string()) },
-                        EnumValue { value: "3840x2160".to_string(), label: Some("4K UHD (3840x2160)".to_string()) },
-                        EnumValue { value: "2560x1440".to_string(), label: Some("QHD / 1440p (2560x1440)".to_string()) },
-                        EnumValue { value: "1920x1080".to_string(), label: Some("Full HD (1920x1080)".to_string()) },
-                        EnumValue { value: "1600x900".to_string(), label: Some("HD+ (1600x900)".to_string()) },
-                        EnumValue { value: "1280x720".to_string(), label: Some("HD (1280x720)".to_string()) },
-                        EnumValue { value: "720x576".to_string(), label: Some("PAL SD (720x576)".to_string()) },
-                        EnumValue { value: "720x480".to_string(), label: Some("NTSC SD (720x480)".to_string()) },
-                        EnumValue { value: "640x480".to_string(), label: Some("VGA (640x480)".to_string()) },
-                        EnumValue { value: "320x240".to_string(), label: Some("QVGA (320x240)".to_string()) },
-                    ],
+                    values: common_video_resolution_enum_values(true), // include empty "-" option
                 },
                 default_value: Some(PropertyValue::String("".to_string())),
                 mapping: PropertyMapping {
