@@ -3732,26 +3732,18 @@ impl eframe::App for StromApp {
 
                 // Find the block
                 if let Some(block) = flow.blocks.iter().find(|b| b.id == block_id) {
-                    // Extract properties
-                    let output_width = block
+                    // Extract resolution from output_resolution property
+                    // Default to 1920x1080 (Full HD) if not set or can't be parsed
+                    let (output_width, output_height) = block
                         .properties
-                        .get("output_width")
+                        .get("output_resolution")
                         .and_then(|v| match v {
-                            strom_types::PropertyValue::UInt(u) => Some(*u as u32),
-                            strom_types::PropertyValue::Int(i) if *i > 0 => Some(*i as u32),
+                            strom_types::PropertyValue::String(s) if !s.is_empty() => {
+                                strom_types::parse_resolution_string(s)
+                            }
                             _ => None,
                         })
-                        .unwrap_or(1920);
-
-                    let output_height = block
-                        .properties
-                        .get("output_height")
-                        .and_then(|v| match v {
-                            strom_types::PropertyValue::UInt(u) => Some(*u as u32),
-                            strom_types::PropertyValue::Int(i) if *i > 0 => Some(*i as u32),
-                            _ => None,
-                        })
-                        .unwrap_or(1080);
+                        .unwrap_or((1920, 1080));
 
                     let num_inputs = block
                         .properties
