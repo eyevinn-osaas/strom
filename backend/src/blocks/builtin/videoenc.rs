@@ -374,6 +374,8 @@ fn get_hardware_encoder_list(codec: Codec) -> Vec<&'static str> {
             "vah264lpenc", // Low power variant
             // AMD AMF (Windows)
             "amfh264enc",
+            // V4L2 (Raspberry Pi, embedded Linux)
+            "v4l2h264enc",
         ],
         Codec::H265 => vec![
             // NVIDIA
@@ -387,6 +389,8 @@ fn get_hardware_encoder_list(codec: Codec) -> Vec<&'static str> {
             "vah265lpenc",
             // AMD AMF
             "amfh265enc",
+            // V4L2 (Raspberry Pi 4+, embedded Linux)
+            "v4l2h265enc",
         ],
         Codec::AV1 => vec![
             // NVIDIA
@@ -501,6 +505,25 @@ fn set_encoder_properties(
         if encoder.has_property("usage") {
             // Note: AMF usage might be a string enum - this may fail, but won't crash
             encoder.set_property("usage", usage);
+        }
+    } else if encoder_name.starts_with("v4l2") {
+        // V4L2 encoders (Raspberry Pi, embedded Linux)
+        // V4L2 encoders use extra-controls structure for bitrate
+        // The bitrate is in bits per second (not kbps)
+        let bitrate_bps = bitrate * 1000;
+
+        // Try to set extra-controls with video_bitrate
+        // This is the standard way for V4L2 stateful encoders
+        if encoder.has_property("extra-controls") {
+            // Create a GStreamer structure with the video bitrate
+            let controls = gst::Structure::builder("extra-controls")
+                .field("video_bitrate", bitrate_bps)
+                .build();
+            encoder.set_property("extra-controls", &controls);
+            info!(
+                "🎞️ V4L2 encoder: set video_bitrate={} bps via extra-controls",
+                bitrate_bps
+            );
         }
     } else if encoder_name == "svtav1enc" {
         // SVT-AV1: target-bitrate in kbps
