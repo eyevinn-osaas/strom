@@ -4,7 +4,7 @@ use egui::{pos2, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui,
 use std::collections::HashMap;
 use strom_types::{
     element::{ElementInfo, PadInfo},
-    BlockDefinition, BlockInstance, Element, ElementId, Link,
+    BlockDefinition, BlockInstance, Element, ElementId, Link, MediaType,
 };
 use uuid::Uuid;
 
@@ -24,6 +24,9 @@ pub struct GraphEditor {
     block_definition_map: HashMap<String, BlockDefinition>,
     /// Dynamic content info per block (block_id -> content info)
     block_content_map: HashMap<String, BlockContentInfo>,
+    /// Runtime dynamic pads from the backend (element_id -> pad_name -> tee_name)
+    /// These are pads created at runtime (e.g., by decodebin) that weren't in the original flow.
+    runtime_dynamic_pads: HashMap<String, HashMap<String, String>>,
     /// Currently selected element ID
     pub selected: Option<ElementId>,
     /// Element being dragged
@@ -90,6 +93,7 @@ impl Default for GraphEditor {
             element_info_map: HashMap::new(),
             block_definition_map: HashMap::new(),
             block_content_map: HashMap::new(),
+            runtime_dynamic_pads: HashMap::new(),
             selected: None,
             dragging: None,
             pan_offset: Vec2::ZERO,
@@ -184,11 +188,16 @@ impl GraphEditor {
     /// Remove the currently selected element or block.
     pub fn remove_selected(&mut self) {
         if let Some(id) = &self.selected {
-            // Check if it's an element (starts with 'e') or block (starts with 'b')
-            if id.starts_with('e') {
+            // Check if it's an element or block by looking for it in the respective lists
+            // (Note: we can't just check id.starts_with('e') because gst-launch imports
+            // create IDs like "filesrc_0", "decodebin_1" that don't start with 'e')
+            let is_element = self.elements.iter().any(|e| &e.id == id);
+            let is_block = self.blocks.iter().any(|b| &b.id == id);
+
+            if is_element {
                 // Remove element
                 self.elements.retain(|e| &e.id != id);
-            } else if id.starts_with('b') {
+            } else if is_block {
                 // Remove block
                 self.blocks.retain(|b| &b.id != id);
             }
@@ -255,6 +264,18 @@ impl GraphEditor {
         self.block_content_map.clear();
     }
 
+    /// Set runtime dynamic pads for the current flow.
+    /// These are pads created at runtime by elements like decodebin that aren't in the flow definition.
+    /// The map is element_id -> (pad_name -> tee_name).
+    pub fn set_runtime_dynamic_pads(&mut self, pads: HashMap<String, HashMap<String, String>>) {
+        self.runtime_dynamic_pads = pads;
+    }
+
+    /// Clear runtime dynamic pads (e.g., when flow stops or changes).
+    pub fn clear_runtime_dynamic_pads(&mut self) {
+        self.runtime_dynamic_pads.clear();
+    }
+
     /// Get the currently selected block instance.
     pub fn get_selected_block(&self) -> Option<&BlockInstance> {
         self.selected
@@ -296,14 +317,24 @@ impl GraphEditor {
 
     /// Get the list of pads to render for an element, expanding request pads into actual instances.
     /// For request pads, this returns all connected instances plus one empty pad.
+    /// Also renders pads from links when element_info doesn't have pad information
+    /// (e.g., for elements with Sometimes pads like decodebin).
     fn get_pads_to_render(
         &self,
         element: &Element,
         element_info: Option<&ElementInfo>,
     ) -> (Vec<PadToRender>, Vec<PadToRender>) {
         let Some(info) = element_info else {
-            return (Vec::new(), Vec::new());
+            // No element info - fall back to rendering pads from links
+            return self.get_pads_from_links(element);
         };
+
+        // If element info has no pads defined, fall back to rendering pads from links
+        // This handles elements with Sometimes pads (like decodebin) where discovery
+        // returns empty pad lists because the pads don't exist until runtime.
+        if info.sink_pads.is_empty() && info.src_pads.is_empty() {
+            return self.get_pads_from_links(element);
+        }
 
         let mut sink_pads_to_render = Vec::new();
         let mut src_pads_to_render = Vec::new();
@@ -1835,6 +1866,47 @@ impl GraphEditor {
         let mut result: Vec<String> = pads.into_iter().collect();
         result.sort();
         result
+    }
+
+    /// Get pads to render from link data when element discovery doesn't provide pad info.
+    /// This is used for elements with Sometimes pads (like decodebin) where pads
+    /// don't exist until runtime.
+    fn get_pads_from_links(&self, element: &Element) -> (Vec<PadToRender>, Vec<PadToRender>) {
+        let sink_pads = self.get_actual_input_pads(&element.id);
+        let mut src_pads = self.get_actual_output_pads(&element.id);
+
+        // Add runtime dynamic pads that aren't already in the list
+        // These are pads created by elements like decodebin that don't have links defined
+        if let Some(dynamic_pads) = self.runtime_dynamic_pads.get(&element.id) {
+            for pad_name in dynamic_pads.keys() {
+                if !src_pads.contains(pad_name) {
+                    src_pads.push(pad_name.clone());
+                }
+            }
+            src_pads.sort();
+        }
+
+        let sink_pads_to_render: Vec<PadToRender> = sink_pads
+            .into_iter()
+            .map(|name| PadToRender {
+                name: name.clone(),
+                template_name: name,
+                media_type: MediaType::Generic,
+                is_empty: false,
+            })
+            .collect();
+
+        let src_pads_to_render: Vec<PadToRender> = src_pads
+            .into_iter()
+            .map(|name| PadToRender {
+                name: name.clone(),
+                template_name: name,
+                media_type: MediaType::Generic,
+                is_empty: false,
+            })
+            .collect();
+
+        (sink_pads_to_render, src_pads_to_render)
     }
 
     /// Select element and switch to appropriate property tab when clicking a pad.
