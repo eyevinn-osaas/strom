@@ -42,11 +42,12 @@ fn is_pad_valid(
 
     let node_id = parts[0];
 
-    // Check if it's an element (starts with 'e')
-    if node_id.starts_with('e') {
+    // Check if it's an element by looking it up in element_ids
+    // (Don't rely on ID prefix - gst-launch imports use element_type as ID prefix like "videotestsrc_0")
+    if element_ids.contains(node_id) {
         // For elements, we just check if the element exists
         // The actual pad validation happens at pipeline build time
-        return element_ids.contains(node_id);
+        return true;
     }
 
     // Check if it's a block (starts with 'b')
@@ -1008,4 +1009,181 @@ pub async fn get_flow_stats(
         blocks: stats.block_stats,
         collected_at: stats.collected_at,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    // ========================================================================
+    // is_pad_valid() tests - prevent regression of gst-launch import bug
+    // ========================================================================
+
+    /// Helper to create element_ids set from a slice
+    fn element_ids(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Helper to create valid_block_pads set from a slice
+    fn block_pads(pads: &[&str]) -> HashSet<String> {
+        pads.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Helper to create blocks_with_computed_pads set from a slice
+    fn computed_blocks(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_is_pad_valid_ui_created_element() {
+        // UI-created elements have IDs starting with 'e' like "e1234abcd..."
+        let elements = element_ids(&["e1234567890abcdef"]);
+        let blocks = block_pads(&[]);
+        let computed = computed_blocks(&[]);
+
+        assert!(
+            is_pad_valid("e1234567890abcdef:src", &blocks, &elements, &computed),
+            "UI-created element pads should be valid"
+        );
+        assert!(
+            is_pad_valid("e1234567890abcdef:sink", &blocks, &elements, &computed),
+            "UI-created element sink pads should be valid"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_gst_launch_imported_element() {
+        // gst-launch imported elements have IDs like "videotestsrc_0", "videoconvert_1"
+        // This was the bug - these were incorrectly rejected because they don't start with 'e'
+        let elements = element_ids(&["videotestsrc_0", "videoconvert_1", "autovideosink_2"]);
+        let blocks = block_pads(&[]);
+        let computed = computed_blocks(&[]);
+
+        assert!(
+            is_pad_valid("videotestsrc_0:src", &blocks, &elements, &computed),
+            "gst-launch imported element pads should be valid"
+        );
+        assert!(
+            is_pad_valid("videoconvert_1:sink", &blocks, &elements, &computed),
+            "gst-launch imported element sink pads should be valid"
+        );
+        assert!(
+            is_pad_valid("autovideosink_2:sink", &blocks, &elements, &computed),
+            "gst-launch imported sink element pads should be valid"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_user_named_element() {
+        // Users can name elements anything, e.g., "mysource", "output"
+        let elements = element_ids(&["mysource", "myfilter", "output"]);
+        let blocks = block_pads(&[]);
+        let computed = computed_blocks(&[]);
+
+        assert!(
+            is_pad_valid("mysource:src", &blocks, &elements, &computed),
+            "User-named element pads should be valid"
+        );
+        assert!(
+            is_pad_valid("output:sink", &blocks, &elements, &computed),
+            "User-named sink pads should be valid"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_block_with_computed_pads() {
+        // Blocks have IDs starting with 'b' and computed external pads
+        let elements = element_ids(&[]);
+        let blocks = block_pads(&[
+            "b1234:audio_in",
+            "b1234:audio_out",
+            "b5678:video_in",
+            "b5678:video_out",
+        ]);
+        let computed = computed_blocks(&["b1234", "b5678"]);
+
+        assert!(
+            is_pad_valid("b1234:audio_in", &blocks, &elements, &computed),
+            "Block with computed pads - valid pad should work"
+        );
+        assert!(
+            is_pad_valid("b5678:video_out", &blocks, &elements, &computed),
+            "Block with computed pads - valid output should work"
+        );
+        assert!(
+            !is_pad_valid("b1234:nonexistent", &blocks, &elements, &computed),
+            "Block with computed pads - invalid pad should fail"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_block_without_computed_pads() {
+        // Blocks without computed pads use static definitions - assume valid
+        let elements = element_ids(&[]);
+        let blocks = block_pads(&[]);
+        let computed = computed_blocks(&[]); // b9999 not in computed set
+
+        assert!(
+            is_pad_valid("b9999:any_pad", &blocks, &elements, &computed),
+            "Block without computed pads should be assumed valid"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_nonexistent_element() {
+        let elements = element_ids(&["elem1"]);
+        let blocks = block_pads(&[]);
+        let computed = computed_blocks(&[]);
+
+        assert!(
+            !is_pad_valid("nonexistent:src", &blocks, &elements, &computed),
+            "Non-existent element should be invalid"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_malformed_pad_ref() {
+        let elements = element_ids(&["elem1"]);
+        let blocks = block_pads(&[]);
+        let computed = computed_blocks(&[]);
+
+        assert!(
+            !is_pad_valid("no_colon", &blocks, &elements, &computed),
+            "Pad ref without colon should be invalid"
+        );
+        assert!(
+            !is_pad_valid("", &blocks, &elements, &computed),
+            "Empty pad ref should be invalid"
+        );
+    }
+
+    #[test]
+    fn test_is_pad_valid_mixed_elements_and_blocks() {
+        // Realistic scenario with both UI elements and blocks
+        let elements = element_ids(&["e123", "videotestsrc_0"]);
+        let blocks = block_pads(&["b456:audio_in", "b456:audio_out"]);
+        let computed = computed_blocks(&["b456"]);
+
+        // Elements
+        assert!(is_pad_valid("e123:src", &blocks, &elements, &computed));
+        assert!(is_pad_valid(
+            "videotestsrc_0:src",
+            &blocks,
+            &elements,
+            &computed
+        ));
+
+        // Blocks
+        assert!(is_pad_valid("b456:audio_in", &blocks, &elements, &computed));
+        assert!(!is_pad_valid(
+            "b456:nonexistent",
+            &blocks,
+            &elements,
+            &computed
+        ));
+
+        // Invalid
+        assert!(!is_pad_valid("unknown:src", &blocks, &elements, &computed));
+    }
 }
