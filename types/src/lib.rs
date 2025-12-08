@@ -18,8 +18,9 @@ pub mod system_monitor;
 
 // Re-export commonly used types
 pub use block::{
-    BlockDefinition, BlockInstance, BlockListResponse, BlockResponse, CreateBlockRequest,
-    EnumValue, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
+    common_video_resolution_enum_values, parse_resolution_string, BlockDefinition, BlockInstance,
+    BlockListResponse, BlockResponse, CreateBlockRequest, EnumValue, ExposedProperty, ExternalPad,
+    ExternalPads, PropertyMapping, PropertyType, COMMON_VIDEO_RESOLUTIONS,
 };
 pub use element::{Element, ElementId, Link, MediaType, PropertyValue};
 pub use events::StromEvent;

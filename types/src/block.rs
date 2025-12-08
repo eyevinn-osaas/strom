@@ -225,3 +225,57 @@ pub struct BlockListResponse {
 pub struct BlockCategoriesResponse {
     pub categories: Vec<String>,
 }
+
+/// Common video resolutions for use in block property dropdowns.
+/// Ordered from largest to smallest.
+pub const COMMON_VIDEO_RESOLUTIONS: &[(&str, &str)] = &[
+    ("7680x4320", "8K UHD (7680x4320)"),
+    ("4096x2160", "4K DCI (4096x2160)"),
+    ("3840x2160", "4K UHD (3840x2160)"),
+    ("2560x1440", "QHD / 1440p (2560x1440)"),
+    ("1920x1080", "Full HD (1920x1080)"),
+    ("1600x900", "HD+ (1600x900)"),
+    ("1280x720", "HD (1280x720)"),
+    ("720x576", "PAL SD (720x576)"),
+    ("720x480", "NTSC SD (720x480)"),
+    ("640x480", "VGA (640x480)"),
+    ("640x360", "nHD (640x360)"),
+    ("320x240", "QVGA (320x240)"),
+];
+
+/// Get common video resolutions as EnumValue list for block properties.
+/// Set `include_empty` to true to add an empty "-" option at the start.
+pub fn common_video_resolution_enum_values(include_empty: bool) -> Vec<EnumValue> {
+    let mut values = Vec::new();
+
+    if include_empty {
+        values.push(EnumValue {
+            value: String::new(),
+            label: Some("-".to_string()),
+        });
+    }
+
+    for (value, label) in COMMON_VIDEO_RESOLUTIONS {
+        values.push(EnumValue {
+            value: (*value).to_string(),
+            label: Some((*label).to_string()),
+        });
+    }
+
+    values
+}
+
+/// Parse a resolution string like "1920x1080" into (width, height).
+/// Returns None if parsing fails.
+pub fn parse_resolution_string(s: &str) -> Option<(u32, u32)> {
+    if s.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = s.split('x').collect();
+    if parts.len() == 2 {
+        if let (Ok(w), Ok(h)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
+            return Some((w, h));
+        }
+    }
+    None
+}
