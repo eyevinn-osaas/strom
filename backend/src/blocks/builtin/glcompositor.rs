@@ -19,7 +19,10 @@ use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
-use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
+use strom_types::{
+    block::*, common_video_resolution_enum_values, element::ElementPadRef, parse_resolution_string,
+    PropertyValue, *,
+};
 use tracing::info;
 
 /// OpenGL Video Compositor block builder.
@@ -87,8 +90,7 @@ impl BlockBuilder for GLCompositorBuilder {
 
         // Parse properties
         let num_inputs = parse_num_inputs(properties);
-        let output_width = parse_output_width(properties);
-        let output_height = parse_output_height(properties);
+        let (output_width, output_height) = parse_output_resolution(properties);
         let background = parse_background(properties);
 
         // Get gl_output property (default false = include gldownload for compatibility)
@@ -430,30 +432,18 @@ fn parse_num_inputs(properties: &HashMap<String, PropertyValue>) -> usize {
         .clamp(1, 16)
 }
 
-/// Parse output width from properties.
-fn parse_output_width(properties: &HashMap<String, PropertyValue>) -> u32 {
-    properties
-        .get("output_width")
-        .and_then(|v| match v {
-            PropertyValue::UInt(u) => Some(*u as u32),
-            PropertyValue::Int(i) if *i > 0 => Some(*i as u32),
-            _ => None,
-        })
-        .unwrap_or(1920)
-        .clamp(1, 7680) // Max 8K width
-}
+/// Parse output resolution from properties.
+/// Returns (width, height), defaulting to 1920x1080 (Full HD) if not set.
+fn parse_output_resolution(properties: &HashMap<String, PropertyValue>) -> (u32, u32) {
+    // Try to parse output_resolution string (e.g., "1920x1080")
+    if let Some(PropertyValue::String(res)) = properties.get("output_resolution") {
+        if let Some((w, h)) = parse_resolution_string(res) {
+            return (w.clamp(1, 7680), h.clamp(1, 4320));
+        }
+    }
 
-/// Parse output height from properties.
-fn parse_output_height(properties: &HashMap<String, PropertyValue>) -> u32 {
-    properties
-        .get("output_height")
-        .and_then(|v| match v {
-            PropertyValue::UInt(u) => Some(*u as u32),
-            PropertyValue::Int(i) if *i > 0 => Some(*i as u32),
-            _ => None,
-        })
-        .unwrap_or(1080)
-        .clamp(1, 4320) // Max 8K height
+    // Default to Full HD
+    (1920, 1080)
 }
 
 /// Parse background type from properties.
@@ -543,26 +533,16 @@ fn glcompositor_definition() -> BlockDefinition {
                 },
             },
             ExposedProperty {
-                name: "output_width".to_string(),
-                label: "Output Width".to_string(),
-                description: "Width of the output canvas in pixels (1-7680)".to_string(),
-                property_type: PropertyType::UInt,
-                default_value: Some(PropertyValue::UInt(1920)),
-                mapping: PropertyMapping {
-                    element_id: "_block".to_string(),
-                    property_name: "output_width".to_string(),
-                    transform: None,
+                name: "output_resolution".to_string(),
+                label: "Output Resolution".to_string(),
+                description: "Output canvas resolution.".to_string(),
+                property_type: PropertyType::Enum {
+                    values: common_video_resolution_enum_values(false),
                 },
-            },
-            ExposedProperty {
-                name: "output_height".to_string(),
-                label: "Output Height".to_string(),
-                description: "Height of the output canvas in pixels (1-4320)".to_string(),
-                property_type: PropertyType::UInt,
-                default_value: Some(PropertyValue::UInt(1080)),
+                default_value: Some(PropertyValue::String("1920x1080".to_string())),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
-                    property_name: "output_height".to_string(),
+                    property_name: "output_resolution".to_string(),
                     transform: None,
                 },
             },
