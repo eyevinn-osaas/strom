@@ -1,0 +1,9 @@
+#!/bin/bash
+
+# Remove STROM_DATABASE_URL if it's set to an empty string
+if [ "${STROM_DATABASE_URL}" = "" ]; then
+    unset STROM_DATABASE_URL
+fi
+
+# Execute the command passed to the container
+exec "$@"

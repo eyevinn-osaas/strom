@@ -156,6 +156,7 @@ RUN apt-get update && apt-get install -y \
 # Copy the compiled binaries from backend-builder to /app
 COPY --from=backend-builder /app/target/release/strom /app/strom
 COPY --from=backend-builder /app/target/release/strom-mcp-server /app/strom-mcp-server
+COPY --from=backend-builder --chmod=755 /app/osc-entrypoint /app/osc-entrypoint.sh
 
 # Set environment variables
 ENV RUST_LOG=info
@@ -167,6 +168,8 @@ RUN mkdir -p /data
 
 # Expose the server port
 EXPOSE 8080
+
+ENTRYPOINT [ "/app/osc-entrypoint.sh" ]
 
 # Run the server from /app
 CMD ["/app/strom"]
