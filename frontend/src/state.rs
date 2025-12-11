@@ -111,6 +111,15 @@ pub enum AppMessage {
 
     /// Available inter channels loaded from API
     AvailableChannelsLoaded(Vec<strom_types::api::AvailableOutput>),
+
+    /// Discovered streams loaded from API
+    DiscoveredStreamsLoaded(Vec<crate::discovery::DiscoveredStream>),
+    /// Announced streams loaded from API
+    AnnouncedStreamsLoaded(Vec<crate::discovery::AnnouncedStream>),
+    /// SDP loaded for a discovered stream
+    StreamSdpLoaded { stream_id: String, sdp: String },
+    /// SDP loaded from stream picker (for updating AES67 Input block)
+    StreamPickerSdpLoaded { block_id: String, sdp: String },
 }
 
 /// WebSocket connection state.
