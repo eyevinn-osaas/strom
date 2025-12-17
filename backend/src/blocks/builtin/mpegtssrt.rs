@@ -4,30 +4,39 @@
 //! and outputs via SRT (Secure Reliable Transport).
 //!
 //! Features:
-//! - Direct passthrough for encoded video (no parsing overhead)
-//! - Automatic AAC encoding for raw audio inputs
+//! - Dynamic parser insertion for video (h264parse/h265parse with config-interval=1)
+//! - Dynamic audio chain: supports raw audio (encodes to AAC) and all encoded formats
 //! - Configurable inputs: 1 video input + 1-32 audio inputs (default: 1 audio)
 //! - Optimized for UDP streaming (alignment=7 on mpegtsmux)
 //! - SRT with auto-reconnect and configurable latency
 //!
 //! Input handling:
-//! - Video: Expects properly encoded video in MPEG-TS compatible format (H.264, H.265, or DIRAC only)
-//!   - ⚠️  AV1 and VP9 are NOT supported by MPEG-TS standard (will fail at pipeline setup)
-//! - Audio: Accepts both raw audio (auto-encodes to AAC) or encoded AAC (adds parser)
+//! - Video: Dynamically detects codec (H.264, H.265) and inserts appropriate parser
+//!   - Parser uses config-interval=1 for SPS/PPS insertion at every keyframe
+//!   - ⚠️  AV1 and VP9 are NOT supported by MPEG-TS standard
+//! - Audio: Dynamically detects format and inserts appropriate chain
+//!   - Raw audio (audio/x-raw): audioconvert -> audioresample -> avenc_aac -> aacparse
+//!   - AAC (audio/mpeg mpegversion=2/4): aacparse
+//!   - MP3 (audio/mpeg mpegversion=1): mpegaudioparse
+//!   - AC3 (audio/x-ac3): ac3parse
+//!   - DTS (audio/x-dts): dcaparse
+//!   - Opus (audio/x-opus): opusparse
 //!
 //! Pipeline structure:
 //! ```text
-//! Video (encoded) -> identity -> capsfilter (validate codec) -> mpegtsmux -> srtsink
-//! Audio (raw)     -> audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
-//! Audio (encoded) -> aacparse -> mpegtsmux
+//! Video (encoded) -> identity -> [dynamic: h264parse/h265parse] -> mpegtsmux -> srtsink
+//! Audio (raw)     -> identity -> [dynamic: audioconvert -> audioresample -> avenc_aac -> aacparse] -> mpegtsmux
+//! Audio (encoded) -> identity -> [dynamic: parser based on codec] -> mpegtsmux
 //! ```
 
 use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
-use tracing::info;
+use tracing::{debug, error, info, warn};
 
 /// MPEG-TS/SRT Output block builder.
 pub struct MpegTsSrtOutputBuilder;
@@ -256,111 +265,399 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             .unwrap_or(1);
 
         let mut internal_links = vec![];
+
+        // Get weak reference to mux BEFORE moving it into elements (for dynamic linking in pad probe)
+        let mux_weak = mux.downgrade();
+
         let mut elements = vec![(mux_id.clone(), mux), (sink_id.clone(), srtsink)];
 
-        let mut next_mux_pad = 0;
-
-        // Create video input chain if requested: identity -> capsfilter (validate codec) -> mpegtsmux
-        // The capsfilter validates that only MPEG-TS compatible codecs are used
+        // Create video input chain if requested
+        // Video linking is DYNAMIC - we don't link to mpegtsmux at construction time.
+        // Instead, we use a pad probe to detect the codec and insert the appropriate parser.
+        // This prevents mpegtsmux's byte-stream requirement from propagating upstream.
         if num_video_tracks > 0 {
             let video_input_id = format!("{}:video_input", instance_id);
-            let video_capsfilter_id = format!("{}:video_capsfilter", instance_id);
 
-            let identity = gst::ElementFactory::make("identity")
+            let video_input = gst::ElementFactory::make("identity")
                 .name(&video_input_id)
                 .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("identity: {}", e)))?;
+                .map_err(|e| BlockBuildError::ElementCreation(format!("video identity: {}", e)))?;
 
-            // Create capsfilter that only allows MPEG-TS compatible video codecs
-            // This gives a clear error message if user tries to use AV1/VP9
-            let caps_str = "video/x-h264; video/x-h265; video/x-dirac";
-            let caps = caps_str.parse::<gst::Caps>().map_err(|_| {
-                BlockBuildError::InvalidConfiguration(format!(
-                    "Failed to create video caps filter: {}",
-                    caps_str
-                ))
-            })?;
+            // Setup dynamic parser insertion via pad probe on the identity's src pad
+            // When we receive caps, we'll create the appropriate parser and link to mpegtsmux
+            let mux_weak_clone = mux_weak.clone();
+            let instance_id_clone = instance_id.to_string();
+            let parser_inserted = Arc::new(AtomicBool::new(false));
 
-            let video_capsfilter = gst::ElementFactory::make("capsfilter")
-                .name(&video_capsfilter_id)
-                .property("caps", &caps)
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("video capsfilter: {}", e))
-                })?;
+            if let Some(src_pad) = video_input.static_pad("src") {
+                src_pad.add_probe(
+                    gst::PadProbeType::EVENT_DOWNSTREAM,
+                    move |pad, info| {
+                        // Only process CAPS events
+                        let event = match &info.data {
+                            Some(gst::PadProbeData::Event(event)) => event,
+                            _ => return gst::PadProbeReturn::Ok,
+                        };
+
+                        if event.type_() != gst::EventType::Caps {
+                            return gst::PadProbeReturn::Ok;
+                        }
+
+                        // Only insert parser once
+                        if parser_inserted.swap(true, Ordering::SeqCst) {
+                            return gst::PadProbeReturn::Ok;
+                        }
+
+                        // Get the caps from the event
+                        let caps = match event.view() {
+                            gst::EventView::Caps(caps_event) => caps_event.caps().to_owned(),
+                            _ => return gst::PadProbeReturn::Ok,
+                        };
+
+                        let structure = match caps.structure(0) {
+                            Some(s) => s,
+                            None => {
+                                error!("MPEGTSSRT {}: No structure in video caps", instance_id_clone);
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        let caps_name = structure.name().to_string();
+                        debug!(
+                            "MPEGTSSRT {}: Video caps detected: {}",
+                            instance_id_clone, caps_name
+                        );
+
+                        // Determine which parser to use based on codec
+                        let (parser_factory, parser_name) = if caps_name == "video/x-h264" {
+                            ("h264parse", "h264parse")
+                        } else if caps_name == "video/x-h265" {
+                            ("h265parse", "h265parse")
+                        } else {
+                            warn!(
+                                "MPEGTSSRT {}: Unsupported video codec: {} (only H.264 and H.265 supported)",
+                                instance_id_clone, caps_name
+                            );
+                            return gst::PadProbeReturn::Ok;
+                        };
+
+                        // Get the elements we need
+                        let mux = match mux_weak_clone.upgrade() {
+                            Some(m) => m,
+                            None => {
+                                error!("MPEGTSSRT {}: mux element no longer exists", instance_id_clone);
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        // Get the pipeline (parent of mux)
+                        let pipeline = match mux.parent() {
+                            Some(p) => p,
+                            None => {
+                                error!("MPEGTSSRT {}: mux has no parent", instance_id_clone);
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        let bin = match pipeline.downcast::<gst::Bin>() {
+                            Ok(b) => b,
+                            Err(_) => {
+                                error!("MPEGTSSRT {}: parent is not a Bin", instance_id_clone);
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        // Create the parser with config-interval=1 for SPS/PPS insertion
+                        let parser_element_name = format!("{}:video_parser", instance_id_clone);
+                        let parser = match gst::ElementFactory::make(parser_factory)
+                            .name(&parser_element_name)
+                            .property("config-interval", 1i32)
+                            .build()
+                        {
+                            Ok(p) => p,
+                            Err(e) => {
+                                error!(
+                                    "MPEGTSSRT {}: Failed to create {}: {}",
+                                    instance_id_clone, parser_factory, e
+                                );
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        info!(
+                            "MPEGTSSRT {}: Inserting {} with config-interval=1 for video stream",
+                            instance_id_clone, parser_name
+                        );
+
+                        // Add parser to bin
+                        if let Err(e) = bin.add(&parser) {
+                            error!("MPEGTSSRT {}: Failed to add parser to bin: {}", instance_id_clone, e);
+                            return gst::PadProbeReturn::Ok;
+                        }
+
+                        // Sync state with parent
+                        if let Err(e) = parser.sync_state_with_parent() {
+                            error!("MPEGTSSRT {}: Failed to sync parser state: {}", instance_id_clone, e);
+                            return gst::PadProbeReturn::Ok;
+                        }
+
+                        // Get pads
+                        let parser_sink = match parser.static_pad("sink") {
+                            Some(p) => p,
+                            None => {
+                                error!("MPEGTSSRT {}: Parser has no sink pad", instance_id_clone);
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        let parser_src = match parser.static_pad("src") {
+                            Some(p) => p,
+                            None => {
+                                error!("MPEGTSSRT {}: Parser has no src pad", instance_id_clone);
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        // Request a sink pad from mpegtsmux using the pad template
+                        // This lets mpegtsmux assign the appropriate PID automatically
+                        let pad_template = match mux.pad_template("sink_%d") {
+                            Some(t) => t,
+                            None => {
+                                error!(
+                                    "MPEGTSSRT {}: mpegtsmux has no sink_%d pad template",
+                                    instance_id_clone
+                                );
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        let mux_sink = match mux.request_pad(&pad_template, None, None) {
+                            Some(p) => p,
+                            None => {
+                                error!(
+                                    "MPEGTSSRT {}: Failed to request pad from mpegtsmux",
+                                    instance_id_clone
+                                );
+                                return gst::PadProbeReturn::Ok;
+                            }
+                        };
+
+                        // Link: identity src -> parser sink
+                        if let Err(e) = pad.link(&parser_sink) {
+                            error!(
+                                "MPEGTSSRT {}: Failed to link identity to parser: {:?}",
+                                instance_id_clone, e
+                            );
+                            return gst::PadProbeReturn::Ok;
+                        }
+
+                        // Link: parser src -> mpegtsmux sink
+                        if let Err(e) = parser_src.link(&mux_sink) {
+                            error!(
+                                "MPEGTSSRT {}: Failed to link parser to mux: {:?}",
+                                instance_id_clone, e
+                            );
+                            return gst::PadProbeReturn::Ok;
+                        }
+
+                        info!(
+                            "MPEGTSSRT {}: Video chain linked: identity -> {} -> mpegtsmux ({})",
+                            instance_id_clone, parser_name, mux_sink.name()
+                        );
+
+                        gst::PadProbeReturn::Ok
+                    },
+                );
+            }
 
             info!(
-                "📡 Video input: capsfilter validates MPEG-TS compatible codecs (H.264, H.265, DIRAC only)"
+                "📡 Video input: dynamic parser insertion enabled (H.264/H.265 with config-interval=1)"
             );
 
-            // Link: identity -> capsfilter -> mpegtsmux
-            internal_links.push((
-                ElementPadRef::pad(&video_input_id, "src"),
-                ElementPadRef::pad(&video_capsfilter_id, "sink"),
-            ));
-            internal_links.push((
-                ElementPadRef::pad(&video_capsfilter_id, "src"),
-                ElementPadRef::pad(&mux_id, format!("sink_{}", next_mux_pad)),
-            ));
-            next_mux_pad += 1;
-
-            elements.push((video_input_id.clone(), identity));
-            elements.push((video_capsfilter_id, video_capsfilter));
+            // NOTE: No internal_links for video - linking happens dynamically in the pad probe
+            elements.push((video_input_id.clone(), video_input));
         }
 
-        // Create audio input chains: audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
-        // This chain handles both raw audio (encodes to AAC) and already-encoded AAC (passes through)
+        // Create audio input chains with DYNAMIC linking (similar to video)
+        // Audio linking is DYNAMIC - we don't link to mpegtsmux at construction time.
+        // Instead, we use a pad probe to detect the audio format and insert the appropriate chain.
+        //
+        // Supported audio formats:
+        // - audio/x-raw -> audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
+        // - audio/mpeg (AAC, mpegversion 2/4) -> aacparse -> mpegtsmux
+        // - audio/mpeg (MP3, mpegversion 1) -> mpegaudioparse -> mpegtsmux
+        // - audio/x-ac3 -> ac3parse -> mpegtsmux
+        // - audio/x-dts -> dcaparse -> mpegtsmux
+        // - audio/x-opus -> opusparse -> mpegtsmux
         for i in 0..num_audio_tracks {
             let audio_input_id = format!("{}:audio_input_{}", instance_id, i);
-            let audioresample_id = format!("{}:audio_resample_{}", instance_id, i);
-            let encoder_id = format!("{}:audio_encoder_{}", instance_id, i);
-            let parser_id = format!("{}:audio_parser_{}", instance_id, i);
 
-            // audioconvert is the entry point (audio_input_N)
-            let audioconvert = gst::ElementFactory::make("audioconvert")
+            let audio_input = gst::ElementFactory::make("identity")
                 .name(&audio_input_id)
                 .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+                .map_err(|e| BlockBuildError::ElementCreation(format!("audio identity: {}", e)))?;
 
-            let audioresample = gst::ElementFactory::make("audioresample")
-                .name(&audioresample_id)
-                .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+            // Setup dynamic audio chain insertion via pad probe on the identity's src pad
+            let mux_weak_clone = mux_weak.clone();
+            let instance_id_clone = instance_id.to_string();
+            let audio_chain_inserted = Arc::new(AtomicBool::new(false));
+            let track_index = i;
 
-            let encoder = gst::ElementFactory::make("avenc_aac")
-                .name(&encoder_id)
-                .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("avenc_aac: {}", e)))?;
+            if let Some(src_pad) = audio_input.static_pad("src") {
+                src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |pad, info| {
+                    // Only process CAPS events
+                    let event = match &info.data {
+                        Some(gst::PadProbeData::Event(event)) => event,
+                        _ => return gst::PadProbeReturn::Ok,
+                    };
 
-            let parser = gst::ElementFactory::make("aacparse")
-                .name(&parser_id)
-                .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("aacparse: {}", e)))?;
+                    if event.type_() != gst::EventType::Caps {
+                        return gst::PadProbeReturn::Ok;
+                    }
 
-            // Chain: audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux
-            internal_links.push((
-                ElementPadRef::pad(&audio_input_id, "src"),
-                ElementPadRef::pad(&audioresample_id, "sink"),
-            ));
-            internal_links.push((
-                ElementPadRef::pad(&audioresample_id, "src"),
-                ElementPadRef::pad(&encoder_id, "sink"),
-            ));
-            internal_links.push((
-                ElementPadRef::pad(&encoder_id, "src"),
-                ElementPadRef::pad(&parser_id, "sink"),
-            ));
-            // Link parser to mpegtsmux request pad
-            internal_links.push((
-                ElementPadRef::pad(&parser_id, "src"),
-                ElementPadRef::pad(&mux_id, format!("sink_{}", next_mux_pad)),
-            ));
-            next_mux_pad += 1;
+                    // Only insert chain once
+                    if audio_chain_inserted.swap(true, Ordering::SeqCst) {
+                        return gst::PadProbeReturn::Ok;
+                    }
 
-            elements.push((audio_input_id, audioconvert));
-            elements.push((audioresample_id, audioresample));
-            elements.push((encoder_id, encoder));
-            elements.push((parser_id, parser));
+                    // Get the caps from the event
+                    let caps = match event.view() {
+                        gst::EventView::Caps(caps_event) => caps_event.caps().to_owned(),
+                        _ => return gst::PadProbeReturn::Ok,
+                    };
+
+                    let structure = match caps.structure(0) {
+                        Some(s) => s,
+                        None => {
+                            error!(
+                                "MPEGTSSRT {}: No structure in audio caps (track {})",
+                                instance_id_clone, track_index
+                            );
+                            return gst::PadProbeReturn::Ok;
+                        }
+                    };
+
+                    let caps_name = structure.name().to_string();
+                    debug!(
+                        "MPEGTSSRT {}: Audio caps detected (track {}): {}",
+                        instance_id_clone, track_index, caps_name
+                    );
+
+                    // Get the mux element
+                    let mux = match mux_weak_clone.upgrade() {
+                        Some(m) => m,
+                        None => {
+                            error!(
+                                "MPEGTSSRT {}: mux element no longer exists",
+                                instance_id_clone
+                            );
+                            return gst::PadProbeReturn::Ok;
+                        }
+                    };
+
+                    // Get the pipeline (parent of mux)
+                    let pipeline = match mux.parent() {
+                        Some(p) => p,
+                        None => {
+                            error!("MPEGTSSRT {}: mux has no parent", instance_id_clone);
+                            return gst::PadProbeReturn::Ok;
+                        }
+                    };
+
+                    let bin = match pipeline.downcast::<gst::Bin>() {
+                        Ok(b) => b,
+                        Err(_) => {
+                            error!("MPEGTSSRT {}: parent is not a Bin", instance_id_clone);
+                            return gst::PadProbeReturn::Ok;
+                        }
+                    };
+
+                    // Determine what audio chain to build based on caps
+                    let result = if caps_name == "audio/x-raw" {
+                        // Raw audio: need to encode to AAC
+                        build_raw_audio_chain(&bin, &mux, pad, &instance_id_clone, track_index)
+                    } else if caps_name == "audio/mpeg" {
+                        // AAC or MP3 - check mpegversion
+                        let mpegversion = structure.get::<i32>("mpegversion").unwrap_or(4);
+                        if mpegversion == 1 {
+                            // MP3
+                            build_encoded_audio_chain(
+                                &bin,
+                                &mux,
+                                pad,
+                                &instance_id_clone,
+                                track_index,
+                                "mpegaudioparse",
+                                "MP3",
+                            )
+                        } else {
+                            // AAC (mpegversion 2 or 4)
+                            build_encoded_audio_chain(
+                                &bin,
+                                &mux,
+                                pad,
+                                &instance_id_clone,
+                                track_index,
+                                "aacparse",
+                                "AAC",
+                            )
+                        }
+                    } else if caps_name == "audio/x-ac3" {
+                        build_encoded_audio_chain(
+                            &bin,
+                            &mux,
+                            pad,
+                            &instance_id_clone,
+                            track_index,
+                            "ac3parse",
+                            "AC3",
+                        )
+                    } else if caps_name == "audio/x-dts" {
+                        build_encoded_audio_chain(
+                            &bin,
+                            &mux,
+                            pad,
+                            &instance_id_clone,
+                            track_index,
+                            "dcaparse",
+                            "DTS",
+                        )
+                    } else if caps_name == "audio/x-opus" {
+                        build_encoded_audio_chain(
+                            &bin,
+                            &mux,
+                            pad,
+                            &instance_id_clone,
+                            track_index,
+                            "opusparse",
+                            "Opus",
+                        )
+                    } else {
+                        error!(
+                            "MPEGTSSRT {}: Unsupported audio format: {} (track {})",
+                            instance_id_clone, caps_name, track_index
+                        );
+                        return gst::PadProbeReturn::Ok;
+                    };
+
+                    if let Err(e) = result {
+                        error!(
+                            "MPEGTSSRT {}: Failed to build audio chain (track {}): {}",
+                            instance_id_clone, track_index, e
+                        );
+                    }
+
+                    gst::PadProbeReturn::Ok
+                });
+            }
+
+            info!(
+                "📡 Audio input {}: dynamic chain insertion enabled (raw->AAC, AAC, MP3, AC3, DTS, Opus)",
+                i
+            );
+
+            // NOTE: No internal_links for audio - linking happens dynamically in the pad probe
+            elements.push((audio_input_id, audio_input));
         }
 
         // Link mux to sink
@@ -381,6 +678,154 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             pad_properties: HashMap::new(),
         })
     }
+}
+
+/// Build audio chain for raw audio input: audioconvert -> audioresample -> avenc_aac -> aacparse -> mux
+fn build_raw_audio_chain(
+    bin: &gst::Bin,
+    mux: &gst::Element,
+    identity_src_pad: &gst::Pad,
+    instance_id: &str,
+    track_index: usize,
+) -> Result<(), String> {
+    // Create elements
+    let audioconvert_name = format!("{}:audio_convert_{}", instance_id, track_index);
+    let audioresample_name = format!("{}:audio_resample_{}", instance_id, track_index);
+    let encoder_name = format!("{}:audio_encoder_{}", instance_id, track_index);
+    let parser_name = format!("{}:audio_parser_{}", instance_id, track_index);
+
+    let audioconvert = gst::ElementFactory::make("audioconvert")
+        .name(&audioconvert_name)
+        .build()
+        .map_err(|e| format!("audioconvert: {}", e))?;
+
+    let audioresample = gst::ElementFactory::make("audioresample")
+        .name(&audioresample_name)
+        .build()
+        .map_err(|e| format!("audioresample: {}", e))?;
+
+    let encoder = gst::ElementFactory::make("avenc_aac")
+        .name(&encoder_name)
+        .build()
+        .map_err(|e| format!("avenc_aac: {}", e))?;
+
+    let parser = gst::ElementFactory::make("aacparse")
+        .name(&parser_name)
+        .build()
+        .map_err(|e| format!("aacparse: {}", e))?;
+
+    // Add elements to bin
+    bin.add_many([&audioconvert, &audioresample, &encoder, &parser])
+        .map_err(|e| format!("add elements: {}", e))?;
+
+    // Sync state
+    audioconvert
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync audioconvert: {}", e))?;
+    audioresample
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync audioresample: {}", e))?;
+    encoder
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync encoder: {}", e))?;
+    parser
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync parser: {}", e))?;
+
+    // Get pads
+    let audioconvert_sink = audioconvert
+        .static_pad("sink")
+        .ok_or("audioconvert has no sink pad")?;
+    let parser_src = parser.static_pad("src").ok_or("parser has no src pad")?;
+
+    // Request mux pad
+    let pad_template = mux
+        .pad_template("sink_%d")
+        .ok_or("mpegtsmux has no sink_%d pad template")?;
+    let mux_sink = mux
+        .request_pad(&pad_template, None, None)
+        .ok_or("failed to request pad from mpegtsmux")?;
+
+    // Link chain
+    identity_src_pad
+        .link(&audioconvert_sink)
+        .map_err(|e| format!("link identity -> audioconvert: {:?}", e))?;
+    audioconvert
+        .link(&audioresample)
+        .map_err(|e| format!("link audioconvert -> audioresample: {}", e))?;
+    audioresample
+        .link(&encoder)
+        .map_err(|e| format!("link audioresample -> encoder: {}", e))?;
+    encoder
+        .link(&parser)
+        .map_err(|e| format!("link encoder -> parser: {}", e))?;
+    parser_src
+        .link(&mux_sink)
+        .map_err(|e| format!("link parser -> mux: {:?}", e))?;
+
+    info!(
+        "MPEGTSSRT {}: Audio chain linked (track {}): identity -> audioconvert -> audioresample -> avenc_aac -> aacparse -> mpegtsmux ({})",
+        instance_id, track_index, mux_sink.name()
+    );
+
+    Ok(())
+}
+
+/// Build audio chain for already-encoded audio: parser -> mux
+fn build_encoded_audio_chain(
+    bin: &gst::Bin,
+    mux: &gst::Element,
+    identity_src_pad: &gst::Pad,
+    instance_id: &str,
+    track_index: usize,
+    parser_factory: &str,
+    codec_name: &str,
+) -> Result<(), String> {
+    let parser_name = format!("{}:audio_parser_{}", instance_id, track_index);
+
+    let parser = gst::ElementFactory::make(parser_factory)
+        .name(&parser_name)
+        .build()
+        .map_err(|e| format!("{}: {}", parser_factory, e))?;
+
+    // Add parser to bin
+    bin.add(&parser).map_err(|e| format!("add parser: {}", e))?;
+
+    // Sync state
+    parser
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync parser: {}", e))?;
+
+    // Get pads
+    let parser_sink = parser.static_pad("sink").ok_or("parser has no sink pad")?;
+    let parser_src = parser.static_pad("src").ok_or("parser has no src pad")?;
+
+    // Request mux pad
+    let pad_template = mux
+        .pad_template("sink_%d")
+        .ok_or("mpegtsmux has no sink_%d pad template")?;
+    let mux_sink = mux
+        .request_pad(&pad_template, None, None)
+        .ok_or("failed to request pad from mpegtsmux")?;
+
+    // Link chain
+    identity_src_pad
+        .link(&parser_sink)
+        .map_err(|e| format!("link identity -> parser: {:?}", e))?;
+    parser_src
+        .link(&mux_sink)
+        .map_err(|e| format!("link parser -> mux: {:?}", e))?;
+
+    info!(
+        "MPEGTSSRT {}: Audio chain linked (track {}): identity -> {} ({}) -> mpegtsmux ({})",
+        instance_id,
+        track_index,
+        parser_factory,
+        codec_name,
+        mux_sink.name()
+    );
+
+    Ok(())
 }
 
 /// Get metadata for MPEG-TS/SRT output blocks (for UI/API).

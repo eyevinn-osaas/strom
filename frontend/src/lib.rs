@@ -14,6 +14,8 @@ mod discovery;
 mod graph;
 mod list_navigator;
 mod login;
+mod media;
+mod mediaplayer;
 mod meter;
 mod palette;
 mod properties;
