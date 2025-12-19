@@ -113,6 +113,115 @@ detect_arch() {
     echo "$arch"
 }
 
+# Check if GStreamer packages are installed (no sudo required)
+# Returns 0 if core GStreamer packages are present
+is_gstreamer_installed() {
+    local os=$1
+    local install_type=${2:-full}
+
+    case "$os" in
+        linux)
+            if command -v dpkg-query >/dev/null 2>&1; then
+                # Debian/Ubuntu: check core packages
+                local required_packages=(
+                    libgstreamer1.0-dev
+                    libgstreamer-plugins-base1.0-dev
+                    gstreamer1.0-plugins-base
+                    gstreamer1.0-plugins-good
+                )
+                if [ "$install_type" = "full" ]; then
+                    required_packages+=(
+                        gstreamer1.0-plugins-bad
+                        gstreamer1.0-plugins-ugly
+                    )
+                fi
+                for pkg in "${required_packages[@]}"; do
+                    if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+                        return 1
+                    fi
+                done
+                return 0
+            elif command -v rpm >/dev/null 2>&1; then
+                # Fedora/RHEL
+                local required_packages=(gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good)
+                if [ "$install_type" = "full" ]; then
+                    required_packages+=(gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free)
+                fi
+                for pkg in "${required_packages[@]}"; do
+                    if ! rpm -q "$pkg" >/dev/null 2>&1; then
+                        return 1
+                    fi
+                done
+                return 0
+            elif command -v pacman >/dev/null 2>&1; then
+                # Arch
+                local required_packages=(gstreamer gst-plugins-base gst-plugins-good)
+                if [ "$install_type" = "full" ]; then
+                    required_packages+=(gst-plugins-bad gst-plugins-ugly)
+                fi
+                for pkg in "${required_packages[@]}"; do
+                    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
+                        return 1
+                    fi
+                done
+                return 0
+            fi
+            ;;
+        macos)
+            if command -v brew >/dev/null 2>&1; then
+                local required_packages=(gstreamer gst-plugins-base gst-plugins-good)
+                if [ "$install_type" = "full" ]; then
+                    required_packages+=(gst-plugins-bad gst-plugins-ugly)
+                fi
+                for pkg in "${required_packages[@]}"; do
+                    if ! brew list "$pkg" >/dev/null 2>&1; then
+                        return 1
+                    fi
+                done
+                return 0
+            fi
+            ;;
+    esac
+    # Can't determine, assume not installed
+    return 1
+}
+
+# Check if Graphviz package is installed (no sudo required)
+is_graphviz_installed() {
+    local os=$1
+
+    case "$os" in
+        linux)
+            if command -v dpkg-query >/dev/null 2>&1; then
+                dpkg-query -W -f='${Status}' graphviz 2>/dev/null | grep -q "install ok installed"
+                return $?
+            elif command -v rpm >/dev/null 2>&1; then
+                rpm -q graphviz >/dev/null 2>&1
+                return $?
+            elif command -v pacman >/dev/null 2>&1; then
+                pacman -Qi graphviz >/dev/null 2>&1
+                return $?
+            fi
+            ;;
+        macos)
+            if command -v brew >/dev/null 2>&1; then
+                brew list graphviz >/dev/null 2>&1
+                return $?
+            fi
+            ;;
+    esac
+    return 1
+}
+
+# Check if strom is already installed (no sudo required)
+is_strom_installed() {
+    local binary_name=$1
+    if command -v "$binary_name" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 get_latest_version() {
     log_info "Fetching latest version..."
     local version
@@ -349,13 +458,28 @@ show_config_menu() {
     echo "  Strom Installation Configuration"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
+    # Detect what's already installed
+    local os=$(detect_os)
+    local gst_status=""
+    local gv_status=""
+    local strom_status=""
+    if is_gstreamer_installed "$os" "$GSTREAMER_INSTALL_TYPE"; then
+        gst_status=" ${BLUE}(already installed)${NC}"
+    fi
+    if is_graphviz_installed "$os"; then
+        gv_status=" ${BLUE}(already installed)${NC}"
+    fi
+    if is_strom_installed "$BINARY_NAME"; then
+        strom_status=" ${BLUE}(will update)${NC}"
+    fi
+
     echo "Current settings:"
     echo ""
-    echo -e "  1. Binary:            ${GREEN}${BINARY_NAME}${NC}"
+    echo -e "  1. Binary:            ${GREEN}${BINARY_NAME}${NC}${strom_status}"
     echo -e "  2. Version:           ${GREEN}${VERSION}${NC}"
-    echo -e "  3. Install GStreamer: ${GREEN}$([ "$SKIP_GSTREAMER" = "false" ] && echo "Yes" || echo "No")${NC}"
+    echo -e "  3. Install GStreamer: ${GREEN}$([ "$SKIP_GSTREAMER" = "false" ] && echo "Yes" || echo "No")${NC}${gst_status}"
     echo -e "  4. GStreamer Type:    ${GREEN}${GSTREAMER_INSTALL_TYPE}${NC} (minimal/full)"
-    echo -e "  5. Install Graphviz:  ${GREEN}$([ "$SKIP_GRAPHVIZ" = "false" ] && echo "Yes" || echo "No")${NC}"
+    echo -e "  5. Install Graphviz:  ${GREEN}$([ "$SKIP_GRAPHVIZ" = "false" ] && echo "Yes" || echo "No")${NC}${gv_status}"
     if [ -n "$INSTALL_DIR" ]; then
         echo -e "  6. Install Directory: ${GREEN}${INSTALL_DIR}${NC}"
     else
@@ -470,15 +594,23 @@ main() {
     fi
     log_info "Version: $VERSION"
 
-    # Install dependencies (default: install both)
+    # Install dependencies (default: install both, but skip if already installed)
     if [ "${SKIP_GSTREAMER:-false}" != "true" ]; then
-        install_gstreamer "$os" "$GSTREAMER_INSTALL_TYPE"
+        if is_gstreamer_installed "$os" "$GSTREAMER_INSTALL_TYPE"; then
+            log_success "GStreamer packages already installed, skipping"
+        else
+            install_gstreamer "$os" "$GSTREAMER_INSTALL_TYPE"
+        fi
     else
         log_warning "Skipping GStreamer installation (Strom requires GStreamer to run)"
     fi
 
     if [ "${SKIP_GRAPHVIZ:-false}" != "true" ]; then
-        install_graphviz "$os"
+        if is_graphviz_installed "$os"; then
+            log_success "Graphviz already installed, skipping"
+        else
+            install_graphviz "$os"
+        fi
     else
         log_info "Skipping Graphviz installation"
     fi
