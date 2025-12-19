@@ -1,6 +1,22 @@
 /// Version and build information embedded at compile time
+use chrono::{DateTime, Local};
 use serde::Serialize;
+use std::sync::OnceLock;
+use sysinfo::System;
 use utoipa::ToSchema;
+
+/// Global process startup time - initialized once when the Strom process starts
+static PROCESS_STARTUP_TIME: OnceLock<DateTime<Local>> = OnceLock::new();
+
+/// Initialize the process startup time. Should be called once at process startup.
+pub fn init_process_startup_time() {
+    PROCESS_STARTUP_TIME.get_or_init(Local::now);
+}
+
+/// Get the process startup time (returns current time if not initialized)
+pub fn get_process_startup_time() -> DateTime<Local> {
+    *PROCESS_STARTUP_TIME.get_or_init(Local::now)
+}
 
 /// Build and version information
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -23,6 +39,12 @@ pub struct VersionInfo {
     pub os_info: String,
     /// Whether running inside a Docker container
     pub in_docker: bool,
+    /// When the Strom server process was started (ISO 8601 format with timezone)
+    /// This is the process uptime, not the system uptime
+    pub process_started_at: String,
+    /// When the system was booted (ISO 8601 format with timezone)
+    /// Cross-platform via sysinfo crate
+    pub system_boot_time: String,
 }
 
 impl VersionInfo {
@@ -42,6 +64,11 @@ impl VersionInfo {
         // Check if running in Docker
         let in_docker = Self::is_in_docker();
 
+        // Calculate system boot time from uptime (cross-platform via sysinfo)
+        let uptime_seconds = System::uptime() as i64;
+        let boot_time = Local::now() - chrono::Duration::seconds(uptime_seconds);
+        let system_boot_time = boot_time.to_rfc3339();
+
         Self {
             version: env!("CARGO_PKG_VERSION"),
             git_hash: env!("GIT_HASH"),
@@ -52,6 +79,8 @@ impl VersionInfo {
             gstreamer_version,
             os_info,
             in_docker,
+            process_started_at: get_process_startup_time().to_rfc3339(),
+            system_boot_time,
         }
     }
 
