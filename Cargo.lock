@@ -5108,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "strom"
-version = "0.3.2"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5162,7 +5162,7 @@ dependencies = [
 
 [[package]]
 name = "strom-frontend"
-version = "0.3.2"
+version = "0.3.4"
 dependencies = [
  "chrono",
  "console_error_panic_hook",
@@ -5191,7 +5191,7 @@ dependencies = [
 
 [[package]]
 name = "strom-mcp-server"
-version = "0.3.2"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "reqwest",
@@ -5205,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "strom-types"
-version = "0.3.2"
+version = "0.3.4"
 dependencies = [
  "serde",
  "serde_json",
