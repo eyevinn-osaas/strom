@@ -89,6 +89,7 @@ impl BlockBuilder for NDIVideoInputBuilder {
 
         // Create elements with namespaced IDs
         let ndisrc_id = format!("{}:ndisrc", instance_id);
+        let demux_id = format!("{}:ndisrcdemux", instance_id);
         let videoconvert_id = format!("{}:videoconvert", instance_id);
         let capsfilter_id = format!("{}:capsfilter", instance_id);
 
@@ -110,6 +111,11 @@ impl BlockBuilder for NDIVideoInputBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("ndisrc: {}", e)))?;
 
+        let demux = gst::ElementFactory::make("ndisrcdemux")
+            .name(&demux_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("ndisrcdemux: {}", e)))?;
+
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .name(&videoconvert_id)
             .build()
@@ -128,10 +134,14 @@ impl BlockBuilder for NDIVideoInputBuilder {
             ndi_name, url_address, bandwidth, timeout_ms
         );
 
-        // Chain: ndisrc -> videoconvert -> capsfilter
+        // Chain: ndisrc -> ndisrcdemux -> videoconvert -> capsfilter
         let internal_links = vec![
             (
-                ElementPadRef::pad(&ndisrc_id, "video"),
+                ElementPadRef::pad(&ndisrc_id, "src"),
+                ElementPadRef::pad(&demux_id, "sink"),
+            ),
+            (
+                ElementPadRef::pad(&demux_id, "video"),
                 ElementPadRef::pad(&videoconvert_id, "sink"),
             ),
             (
@@ -143,6 +153,7 @@ impl BlockBuilder for NDIVideoInputBuilder {
         Ok(BlockBuildResult {
             elements: vec![
                 (ndisrc_id, ndisrc),
+                (demux_id, demux),
                 (videoconvert_id, videoconvert),
                 (capsfilter_id, capsfilter),
             ],
@@ -210,6 +221,7 @@ impl BlockBuilder for NDIAudioInputBuilder {
 
         // Create elements with namespaced IDs
         let ndisrc_id = format!("{}:ndisrc", instance_id);
+        let demux_id = format!("{}:ndisrcdemux", instance_id);
         let audioconvert_id = format!("{}:audioconvert", instance_id);
         let audioresample_id = format!("{}:audioresample", instance_id);
         let capsfilter_id = format!("{}:capsfilter", instance_id);
@@ -231,6 +243,11 @@ impl BlockBuilder for NDIAudioInputBuilder {
         let ndisrc = ndisrc_builder
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("ndisrc: {}", e)))?;
+
+        let demux = gst::ElementFactory::make("ndisrcdemux")
+            .name(&demux_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("ndisrcdemux: {}", e)))?;
 
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .name(&audioconvert_id)
@@ -255,10 +272,14 @@ impl BlockBuilder for NDIAudioInputBuilder {
             ndi_name, url_address, bandwidth, timeout_ms
         );
 
-        // Chain: ndisrc -> audioconvert -> audioresample -> capsfilter
+        // Chain: ndisrc -> ndisrcdemux -> audioconvert -> audioresample -> capsfilter
         let internal_links = vec![
             (
-                ElementPadRef::pad(&ndisrc_id, "audio"),
+                ElementPadRef::pad(&ndisrc_id, "src"),
+                ElementPadRef::pad(&demux_id, "sink"),
+            ),
+            (
+                ElementPadRef::pad(&demux_id, "audio"),
                 ElementPadRef::pad(&audioconvert_id, "sink"),
             ),
             (
@@ -274,6 +295,7 @@ impl BlockBuilder for NDIAudioInputBuilder {
         Ok(BlockBuildResult {
             elements: vec![
                 (ndisrc_id, ndisrc),
+                (demux_id, demux),
                 (audioconvert_id, audioconvert),
                 (audioresample_id, audioresample),
                 (capsfilter_id, capsfilter),
@@ -325,7 +347,7 @@ impl BlockBuilder for NDIVideoOutputBuilder {
         // Chain: videoconvert -> ndisink
         let internal_links = vec![(
             ElementPadRef::pad(&videoconvert_id, "src"),
-            ElementPadRef::pad(&ndisink_id, "video"),
+            ElementPadRef::pad(&ndisink_id, "sink"),
         )];
 
         Ok(BlockBuildResult {
@@ -388,7 +410,7 @@ impl BlockBuilder for NDIAudioOutputBuilder {
             ),
             (
                 ElementPadRef::pad(&audioresample_id, "src"),
-                ElementPadRef::pad(&ndisink_id, "audio"),
+                ElementPadRef::pad(&ndisink_id, "sink"),
             ),
         ];
 
