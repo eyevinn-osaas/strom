@@ -94,7 +94,7 @@ network-interface = "2.0"
 reqwest.workspace = true
 
 # Terminal UI for test harness
-crossterm = "0.28"
+crossterm = "0.29"
 
 # SAP/AES67 discovery
 socket2 = "0.6"      # Multicast socket options
