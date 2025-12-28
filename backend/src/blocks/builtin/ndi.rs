@@ -206,14 +206,18 @@ impl BlockBuilder for NDIInputBuilder {
                 let videoconvert = gst::ElementFactory::make("videoconvert")
                     .name(&videoconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                    })?;
 
                 let video_caps = gst::Caps::builder("video/x-raw").build();
                 let videocaps = gst::ElementFactory::make("capsfilter")
                     .name(&videocaps_id)
                     .property("caps", &video_caps)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("videocapsfilter: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("videocapsfilter: {}", e))
+                    })?;
 
                 // Audio path
                 let audioconvert_id = format!("{}:audioconvert", instance_id);
@@ -223,19 +227,25 @@ impl BlockBuilder for NDIInputBuilder {
                 let audioconvert = gst::ElementFactory::make("audioconvert")
                     .name(&audioconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioconvert: {}", e))
+                    })?;
 
                 let audioresample = gst::ElementFactory::make("audioresample")
                     .name(&audioresample_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioresample: {}", e))
+                    })?;
 
                 let audio_caps = gst::Caps::builder("audio/x-raw").build();
                 let audiocaps = gst::ElementFactory::make("capsfilter")
                     .name(&audiocaps_id)
                     .property("caps", &audio_caps)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audiocapsfilter: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audiocapsfilter: {}", e))
+                    })?;
 
                 elements.extend(vec![
                     (videoconvert_id.clone(), videoconvert),
@@ -268,7 +278,10 @@ impl BlockBuilder for NDIInputBuilder {
                     ),
                 ]);
 
-                info!("NDI Input (combined) configured: ndi_name={}, bandwidth={}", ndi_name, bandwidth);
+                info!(
+                    "NDI Input (combined) configured: ndi_name={}, bandwidth={}",
+                    ndi_name, bandwidth
+                );
             }
             "video" => {
                 let videoconvert_id = format!("{}:videoconvert", instance_id);
@@ -277,7 +290,9 @@ impl BlockBuilder for NDIInputBuilder {
                 let videoconvert = gst::ElementFactory::make("videoconvert")
                     .name(&videoconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                    })?;
 
                 let caps = gst::Caps::builder("video/x-raw").build();
                 let capsfilter = gst::ElementFactory::make("capsfilter")
@@ -302,7 +317,10 @@ impl BlockBuilder for NDIInputBuilder {
                     ),
                 ]);
 
-                info!("NDI Input (video) configured: ndi_name={}, bandwidth={}", ndi_name, bandwidth);
+                info!(
+                    "NDI Input (video) configured: ndi_name={}, bandwidth={}",
+                    ndi_name, bandwidth
+                );
             }
             "audio" => {
                 let audioconvert_id = format!("{}:audioconvert", instance_id);
@@ -312,12 +330,16 @@ impl BlockBuilder for NDIInputBuilder {
                 let audioconvert = gst::ElementFactory::make("audioconvert")
                     .name(&audioconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioconvert: {}", e))
+                    })?;
 
                 let audioresample = gst::ElementFactory::make("audioresample")
                     .name(&audioresample_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioresample: {}", e))
+                    })?;
 
                 let caps = gst::Caps::builder("audio/x-raw").build();
                 let capsfilter = gst::ElementFactory::make("capsfilter")
@@ -347,7 +369,10 @@ impl BlockBuilder for NDIInputBuilder {
                     ),
                 ]);
 
-                info!("NDI Input (audio) configured: ndi_name={}, bandwidth={}", ndi_name, bandwidth);
+                info!(
+                    "NDI Input (audio) configured: ndi_name={}, bandwidth={}",
+                    ndi_name, bandwidth
+                );
             }
             _ => {
                 return Err(BlockBuildError::ElementCreation(format!(
@@ -453,7 +478,9 @@ impl BlockBuilder for NDIOutputBuilder {
                 let videoconvert = gst::ElementFactory::make("videoconvert")
                     .name(&videoconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                    })?;
 
                 // Audio path
                 let audioconvert_id = format!("{}:audioconvert", instance_id);
@@ -462,12 +489,16 @@ impl BlockBuilder for NDIOutputBuilder {
                 let audioconvert = gst::ElementFactory::make("audioconvert")
                     .name(&audioconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioconvert: {}", e))
+                    })?;
 
                 let audioresample = gst::ElementFactory::make("audioresample")
                     .name(&audioresample_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioresample: {}", e))
+                    })?;
 
                 // Combiner and sink
                 let combiner_id = format!("{}:ndisinkcombiner", instance_id);
@@ -476,11 +507,15 @@ impl BlockBuilder for NDIOutputBuilder {
                 let combiner = gst::ElementFactory::make("ndisinkcombiner")
                     .name(&combiner_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("ndisinkcombiner: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("ndisinkcombiner: {}", e))
+                    })?;
 
                 // Request the audio pad (it's an "on request" pad)
                 let audio_pad = combiner.request_pad_simple("audio").ok_or_else(|| {
-                    BlockBuildError::ElementCreation("Failed to request audio pad on ndisinkcombiner".to_string())
+                    BlockBuildError::ElementCreation(
+                        "Failed to request audio pad on ndisinkcombiner".to_string(),
+                    )
                 })?;
                 let audio_pad_name = audio_pad.name().to_string();
 
@@ -526,7 +561,9 @@ impl BlockBuilder for NDIOutputBuilder {
                 let videoconvert = gst::ElementFactory::make("videoconvert")
                     .name(&videoconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                    })?;
 
                 let ndisink = gst::ElementFactory::make("ndisink")
                     .name(&ndisink_id)
@@ -554,12 +591,16 @@ impl BlockBuilder for NDIOutputBuilder {
                 let audioconvert = gst::ElementFactory::make("audioconvert")
                     .name(&audioconvert_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioconvert: {}", e))
+                    })?;
 
                 let audioresample = gst::ElementFactory::make("audioresample")
                     .name(&audioresample_id)
                     .build()
-                    .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioresample: {}", e))
+                    })?;
 
                 let ndisink = gst::ElementFactory::make("ndisink")
                     .name(&ndisink_id)
