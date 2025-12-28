@@ -427,8 +427,31 @@ impl BlockBuilder for NDIAudioOutputBuilder {
     }
 }
 
+/// Check if NDI GStreamer plugins are available
+fn is_ndi_available() -> bool {
+    use gst::prelude::*;
+
+    // Check if the NDI plugin is registered
+    let registry = gst::Registry::get();
+
+    // Check for both ndisrc and ndisink elements
+    let has_ndisrc = registry.find_feature("ndisrc", gst::ElementFactory::static_type()).is_some();
+    let has_ndisink = registry.find_feature("ndisink", gst::ElementFactory::static_type()).is_some();
+    let has_ndisrcdemux = registry.find_feature("ndisrcdemux", gst::ElementFactory::static_type()).is_some();
+
+    has_ndisrc && has_ndisink && has_ndisrcdemux
+}
+
 /// Get metadata for NDI blocks (for UI/API).
+/// Only returns blocks if NDI plugins are available.
+/// Note: Block builders are always registered so existing flows remain valid.
 pub fn get_blocks() -> Vec<BlockDefinition> {
+    if !is_ndi_available() {
+        info!("NDI GStreamer plugins not available - hiding NDI blocks from palette");
+        return vec![];
+    }
+
+    info!("NDI GStreamer plugins detected - enabling NDI blocks");
     vec![
         ndi_video_input_definition(),
         ndi_audio_input_definition(),
