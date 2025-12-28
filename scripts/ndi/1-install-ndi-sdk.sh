@@ -108,8 +108,10 @@ if [ -f "$INSTALLER_SCRIPT" ]; then
     chmod +x "$INSTALLER_SCRIPT"
 
     # The installer script extracts files to a directory
-    log_info "Running NDI SDK installer (will extract files)..."
-    yes | "./$INSTALLER_SCRIPT" || true
+    log_info "Running NDI SDK installer..."
+    log_warning "You will be asked to accept the NDI SDK license agreement"
+    echo ""
+    "./$INSTALLER_SCRIPT" || true
 
     # The installer creates a directory
     SDK_DIR="NDI SDK for Linux"
