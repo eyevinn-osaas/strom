@@ -158,31 +158,55 @@ This will remove:
 
 ## Testing NDI Blocks in Strom
 
-After installation, you can test the NDI blocks in Strom:
+After installation, you can test the NDI blocks in Strom. Strom provides two unified NDI blocks with configurable modes:
 
-### Video Output Test
+**Block Modes:**
+- `combined` (default) - Handles both audio and video in a single block
+- `video` - Video-only streaming
+- `audio` - Audio-only streaming
+
+### Combined Audio+Video Test (Most Common)
 1. Start Strom: `cargo run --release`
 2. Open `http://localhost:8080`
-3. Create a flow:
+3. Create a sender flow:
    - Add `videotestsrc` element
-   - Add "NDI Video Output" block
-   - Connect them
-   - Set NDI stream name
+   - Add `audiotestsrc` element
+   - Add "NDI Output" block
+   - Set mode to "combined" (default)
+   - Set NDI stream name (e.g., "My Stream")
+   - Connect videotestsrc → NDI Output video_in
+   - Connect audiotestsrc → NDI Output audio_in
    - Click "Start"
-4. Receive the stream using `./5-test-ndi-input.sh`
-
-### Video Input Test
-1. Start a test sender: `./4-test-ndi-output.sh`
-2. In Strom, create a flow:
-   - Add "NDI Video Input" block
-   - Set NDI source name to "Strom-Test-Output"
+4. Create a receiver flow:
+   - Add "NDI Input" block
+   - Set mode to "combined" (default)
+   - Set NDI source name to "HOSTNAME (My Stream)" (use your actual hostname)
    - Add `autovideosink` element
-   - Connect and start
+   - Add `autoaudiosink` element
+   - Connect NDI Input video_out → autovideosink
+   - Connect NDI Input audio_out → autoaudiosink
+   - Click "Start"
 
-### Audio Test
-Similar to video, but use:
-- "NDI Audio Output" block with `audiotestsrc`
-- "NDI Audio Input" block with `autoaudiosink`
+### Video-Only Test
+1. Add "NDI Output" block, set mode to "video"
+   - Only `video_in` pad will be available
+   - Connect videotestsrc → video_in
+2. Add "NDI Input" block, set mode to "video"
+   - Only `video_out` pad will be available
+   - Connect video_out → autovideosink
+
+### Audio-Only Test
+1. Add "NDI Output" block, set mode to "audio"
+   - Only `audio_in` pad will be available
+   - Connect audiotestsrc → audio_in
+2. Add "NDI Input" block, set mode to "audio"
+   - Only `audio_out` pad will be available
+   - Connect audio_out → autoaudiosink
+
+### Using Test Scripts
+Alternatively, use the test scripts:
+- Sender: `./4-test-ndi-output.sh` (creates "Strom-Test-Output" stream)
+- Receiver: `./5-test-ndi-input.sh` (prompts for source selection)
 
 ## Troubleshooting
 
