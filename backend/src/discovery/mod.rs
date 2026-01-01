@@ -728,7 +728,7 @@ impl DiscoveryService {
 
     /// Run the mDNS listener loop.
     async fn run_mdns_listener(
-        receiver: flume::Receiver<ServiceEvent>,
+        receiver: mdns_sd::Receiver<ServiceEvent>,
         inner: Arc<DiscoveryServiceInner>,
         mut shutdown: broadcast::Receiver<()>,
     ) {
