@@ -4,7 +4,7 @@
 //! mDNS/Bonjour/Zeroconf on the local network.
 
 use anyhow::Result;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use mdns_sd::{Receiver, ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -34,7 +34,7 @@ impl MdnsDiscovery {
     ///
     /// # Arguments
     /// * `service_type` - The service type to browse (e.g., "_rtsp._tcp.local.")
-    pub fn browse(&self, service_type: &str) -> Result<flume::Receiver<ServiceEvent>> {
+    pub fn browse(&self, service_type: &str) -> Result<Receiver<ServiceEvent>> {
         info!("Starting mDNS browse for {}", service_type);
         let receiver = self.daemon.browse(service_type)?;
         Ok(receiver)
