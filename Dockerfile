@@ -180,6 +180,9 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
 COPY --from=backend-builder /app/target/release/strom /app/strom
 COPY --from=backend-builder /app/target/release/strom-mcp-server /app/strom-mcp-server
 
+# Copy setup scripts for optional host/container configuration (NDI, NVIDIA, etc.)
+COPY scripts/setup /app/scripts/setup
+
 # Set environment variables
 ENV RUST_LOG=info
 ENV STROM_PORT=8080
