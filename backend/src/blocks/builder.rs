@@ -2,6 +2,7 @@
 
 use crate::events::EventBroadcaster;
 use gstreamer as gst;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use strom_types::{block::ExternalPads, element::ElementPadRef, FlowId, PropertyValue};
 use thiserror::Error;
@@ -40,6 +41,54 @@ pub type BusMessageConnectFn = Box<
 #[deprecated(note = "Use BusMessageConnectFn instead")]
 pub type BusWatchSetupFn = BusMessageConnectFn;
 
+/// WHEP endpoint registration info.
+#[derive(Debug, Clone)]
+pub struct WhepEndpointInfo {
+    /// The block instance ID that owns this endpoint
+    pub block_id: String,
+    /// The endpoint ID (user-configurable or auto-generated UUID)
+    pub endpoint_id: String,
+    /// The internal localhost port where whepserversink is listening
+    pub internal_port: u16,
+}
+
+/// Context provided to block builders during build.
+///
+/// Contains methods for blocks to register services, endpoints, or other
+/// resources that need to be set up after the pipeline is created.
+/// This allows blocks to interact with the broader system without
+/// coupling BlockBuildResult to specific block types.
+#[derive(Default)]
+pub struct BlockBuildContext {
+    /// WHEP endpoints queued for registration
+    whep_endpoints: RefCell<Vec<WhepEndpointInfo>>,
+}
+
+impl BlockBuildContext {
+    /// Create a new empty build context.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a WHEP endpoint (called by WHEP Output blocks during build).
+    ///
+    /// The endpoint will be registered with the WhepRegistry after the pipeline starts.
+    pub fn register_whep_endpoint(&self, block_id: &str, endpoint_id: &str, port: u16) {
+        self.whep_endpoints.borrow_mut().push(WhepEndpointInfo {
+            block_id: block_id.to_string(),
+            endpoint_id: endpoint_id.to_string(),
+            internal_port: port,
+        });
+    }
+
+    /// Take all queued WHEP endpoint registrations.
+    ///
+    /// Called after block expansion to process the registrations.
+    pub fn take_whep_endpoints(&self) -> Vec<WhepEndpointInfo> {
+        self.whep_endpoints.borrow_mut().drain(..).collect()
+    }
+}
+
 /// Result of building a block - contains GStreamer elements with namespaced IDs and link specifications.
 pub struct BlockBuildResult {
     /// GStreamer elements with their namespaced IDs (format: "block_instance_id:internal_element_id")
@@ -69,6 +118,7 @@ pub trait BlockBuilder: Send + Sync {
     /// # Arguments
     /// * `instance_id` - Unique ID for this block instance (used for namespacing)
     /// * `properties` - Property values from the block instance
+    /// * `ctx` - Build context for registering services (WHEP endpoints, etc.)
     ///
     /// # Returns
     /// A vector of (element_id, gst::Element) tuples where element_id is already namespaced.
@@ -76,6 +126,7 @@ pub trait BlockBuilder: Send + Sync {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError>;
 
     /// Compute the external pads for this block instance based on its properties.

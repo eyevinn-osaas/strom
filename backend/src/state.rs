@@ -8,6 +8,7 @@ use crate::ptp_monitor::PtpMonitor;
 use crate::sharing::ChannelRegistry;
 use crate::storage::{JsonFileStorage, Storage};
 use crate::system_monitor::SystemMonitor;
+use crate::whep_registry::WhepRegistry;
 use chrono::Local;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,6 +49,8 @@ struct AppStateInner {
     ptp_monitor: PtpMonitor,
     /// Media files directory path
     media_path: PathBuf,
+    /// WHEP endpoint registry (maps endpoint IDs to internal ports)
+    whep_registry: WhepRegistry,
 }
 
 impl AppState {
@@ -72,8 +75,14 @@ impl AppState {
                 discovery: DiscoveryService::new(events),
                 ptp_monitor: PtpMonitor::new(),
                 media_path: media_path.into(),
+                whep_registry: WhepRegistry::new(),
             }),
         }
+    }
+
+    /// Get the WHEP endpoint registry.
+    pub fn whep_registry(&self) -> &WhepRegistry {
+        &self.inner.whep_registry
     }
 
     /// Get the event broadcaster.
@@ -524,6 +533,25 @@ impl AppState {
             .and_then(|info| info.grandmaster_clock_id)
             .map(|id| crate::blocks::sdp::convert_clock_id_to_sdp_format(&id));
 
+        // Collect and register WHEP endpoints from blocks
+        let whep_endpoints: Vec<(String, String)> = if let Some(manager) = pipelines_guard.get(id) {
+            let mut endpoints = Vec::new();
+            for whep_info in manager.whep_endpoints() {
+                info!(
+                    "Registering WHEP endpoint '{}' (block {}) on port {}",
+                    whep_info.endpoint_id, whep_info.block_id, whep_info.internal_port
+                );
+                self.inner
+                    .whep_registry
+                    .register(whep_info.endpoint_id.clone(), whep_info.internal_port)
+                    .await;
+                endpoints.push((whep_info.block_id.clone(), whep_info.endpoint_id.clone()));
+            }
+            endpoints
+        } else {
+            Vec::new()
+        };
+
         // Drop the pipelines guard - we don't need it anymore
         drop(pipelines_guard);
 
@@ -630,6 +658,28 @@ impl AppState {
                     .announce_stream(*id, &block.id, &sdp)
                     .await;
             }
+
+            // Store endpoint_id in runtime_data for WHEP output blocks
+            if block.block_definition_id == "builtin.whep_output" {
+                if let Some((_, endpoint_id)) =
+                    whep_endpoints.iter().find(|(bid, _)| bid == &block.id)
+                {
+                    info!(
+                        "Storing WHEP endpoint_id '{}' for block {} in runtime_data",
+                        endpoint_id, block.id
+                    );
+
+                    // Initialize runtime_data if needed
+                    if block.runtime_data.is_none() {
+                        block.runtime_data = Some(std::collections::HashMap::new());
+                    }
+
+                    // Store endpoint_id
+                    if let Some(runtime_data) = &mut block.runtime_data {
+                        runtime_data.insert("whep_endpoint_id".to_string(), endpoint_id.clone());
+                    }
+                }
+            }
         }
 
         // Register channels for InterOutput blocks
@@ -721,6 +771,18 @@ impl AppState {
             warn!("No active pipeline for flow: {}", id);
             return Ok(PipelineState::Null);
         };
+
+        // Unregister WHEP endpoints before stopping
+        for whep_info in manager.whep_endpoints() {
+            info!(
+                "Unregistering WHEP endpoint '{}' (block {})",
+                whep_info.endpoint_id, whep_info.block_id
+            );
+            self.inner
+                .whep_registry
+                .unregister(&whep_info.endpoint_id)
+                .await;
+        }
 
         // Stop the pipeline
         let state = manager.stop()?;

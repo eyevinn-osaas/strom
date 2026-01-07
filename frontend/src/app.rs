@@ -3077,6 +3077,16 @@ impl StromApp {
 
                             download_file(&filename, &playlist_content, "application/xspf+xml");
                         }
+
+                        // Handle WHEP player request (for WHEP Output)
+                        if let Some(whep_endpoint) = result.whep_player_url {
+                            // Build the player URL with the WHEP endpoint as a query parameter
+                            let player_url = format!(
+                                "/api/whep-player?endpoint={}",
+                                urlencoding::encode(&whep_endpoint)
+                            );
+                            ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                        }
                     } else {
                         ui.label("Block definition not found");
                     }

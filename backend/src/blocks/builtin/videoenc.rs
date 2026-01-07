@@ -16,7 +16,7 @@
 //! - parser: Codec-specific parser (h264parse, h265parse, etc.) for proper stream formatting
 //! - capsfilter: Sets output caps for proper codec negotiation
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -54,6 +54,7 @@ impl BlockBuilder for VideoEncBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎞️ Building VideoEncoder block instance: {}", instance_id);
 

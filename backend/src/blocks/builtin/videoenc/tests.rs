@@ -527,7 +527,8 @@ fn test_build_video_encoder_block() {
     );
     properties.insert("bitrate".to_string(), PropertyValue::UInt(5000));
 
-    let result = builder.build("test_block", &properties);
+    let ctx = BlockBuildContext::new();
+    let result = builder.build("test_block", &properties, &ctx);
 
     match result {
         Ok(block_result) => {
@@ -579,7 +580,8 @@ fn test_block_encoder_preference() {
         PropertyValue::String("software".to_string()),
     );
 
-    let result = builder.build("test_software", &properties);
+    let ctx = BlockBuildContext::new();
+    let result = builder.build("test_software", &properties, &ctx);
     assert!(
         result.is_ok(),
         "Should successfully build with software preference"

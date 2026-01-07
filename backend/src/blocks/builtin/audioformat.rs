@@ -15,7 +15,7 @@
 //! Only the capsfilter caps are set based on which properties are specified.
 //! Unspecified properties allow passthrough - elements will not modify those aspects.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use std::collections::HashMap;
 use strom_types::{block::*, element::ElementPadRef, EnumValue, PropertyValue, *};
@@ -29,6 +29,7 @@ impl BlockBuilder for AudioFormatBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎵 Building AudioFormat block instance: {}", instance_id);
 

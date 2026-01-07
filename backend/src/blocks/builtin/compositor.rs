@@ -17,7 +17,7 @@
 //! GPU backend chain: queue -> glupload -> glcolorconvert -> glvideomixerelement -> gldownload -> capsfilter
 //! CPU backend chain: queue -> videoconvert -> compositor -> capsfilter
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -115,6 +115,7 @@ impl BlockBuilder for CompositorBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎬 Building Compositor block instance: {}", instance_id);
 

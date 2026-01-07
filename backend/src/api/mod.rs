@@ -11,3 +11,4 @@ pub mod mediaplayer;
 pub mod network;
 pub mod version;
 pub mod websocket;
+pub mod whep_player;
