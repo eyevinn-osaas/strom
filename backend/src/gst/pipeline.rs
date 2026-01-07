@@ -176,6 +176,8 @@ pub struct PipelineManager {
     /// Maps element_id -> {pad_name -> tee_element_name}
     /// These tees have allow-not-linked=true so unlinked streams don't block the pipeline
     dynamic_pad_tees: std::sync::Arc<std::sync::RwLock<HashMap<String, HashMap<String, String>>>>,
+    /// WHEP endpoints registered by blocks
+    whep_endpoints: Vec<crate::blocks::WhepEndpointInfo>,
 }
 
 impl PipelineManager {
@@ -217,6 +219,7 @@ impl PipelineManager {
             ptp_stats: std::sync::Arc::new(std::sync::RwLock::new(None)),
             ptp_stats_callback: None,
             dynamic_pad_tees: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
+            whep_endpoints: Vec::new(),
         };
 
         // Expand blocks into GStreamer elements
@@ -296,6 +299,15 @@ impl PipelineManager {
             }
         }
         manager.pad_properties.extend(expanded.pad_properties);
+
+        // Store WHEP endpoints from blocks
+        if !expanded.whep_endpoints.is_empty() {
+            info!(
+                "Storing {} WHEP endpoint(s) from blocks",
+                expanded.whep_endpoints.len()
+            );
+        }
+        manager.whep_endpoints = expanded.whep_endpoints;
 
         // Analyze links and auto-insert tee elements where needed
         let all_links = expanded.links;
@@ -2012,6 +2024,11 @@ impl PipelineManager {
     /// Get the underlying GStreamer pipeline (for debugging).
     pub fn pipeline(&self) -> &gst::Pipeline {
         &self.pipeline
+    }
+
+    /// Get WHEP endpoints registered by blocks in this pipeline.
+    pub fn whep_endpoints(&self) -> &[crate::blocks::WhepEndpointInfo] {
+        &self.whep_endpoints
     }
 
     /// Generate a DOT graph of the pipeline for debugging.

@@ -30,6 +30,9 @@ serde_json.workspace = true
 # Date/time
 chrono = "0.4"
 
+# URL encoding
+urlencoding = "2.1"
+
 # Logging
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -44,7 +47,7 @@ utoipa-swagger-ui.workspace = true
 gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-net.workspace = true
-# gst-plugin-webrtc.workspace = true
+gst-plugin-webrtc.workspace = true
 gst-plugin-webrtchttp.workspace = true
 gst-plugin-inter.workspace = true
 

@@ -1,6 +1,6 @@
 //! Audio meter block using GStreamer level element.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use crate::events::EventBroadcaster;
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -16,6 +16,7 @@ impl BlockBuilder for MeterBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         tracing::info!("📊 Building Meter block instance: {}", instance_id);
 

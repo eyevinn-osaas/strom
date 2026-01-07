@@ -1,7 +1,7 @@
 //! Block expansion logic - converts block instances to GStreamer elements using BlockBuilder trait.
 
 use crate::blocks::builtin;
-use crate::blocks::BusMessageConnectFn;
+use crate::blocks::{BlockBuildContext, BusMessageConnectFn, WhepEndpointInfo};
 use gstreamer as gst;
 use strom_types::{BlockInstance, Link};
 use tracing::{debug, info};
@@ -21,6 +21,8 @@ pub struct ExpandedPipeline {
     pub bus_message_handlers: Vec<BusMessageConnectFn>,
     /// Pad properties from blocks (element_id -> pad_name -> property_name -> value)
     pub pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
+    /// WHEP endpoints registered by blocks
+    pub whep_endpoints: Vec<WhepEndpointInfo>,
 }
 
 /// Expand block instances into GStreamer elements using BlockBuilder trait.
@@ -42,6 +44,9 @@ pub async fn expand_blocks(
     let mut bus_message_handlers = Vec::new();
     let mut all_pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>> =
         HashMap::new();
+
+    // Create build context for blocks to register services
+    let ctx = BlockBuildContext::new();
 
     debug!("Expanding {} block instance(s)", blocks.len());
 
@@ -73,7 +78,7 @@ pub async fn expand_blocks(
 
         // Call the builder to create GStreamer elements
         let build_result = builder
-            .build(&block_instance.id, &properties)
+            .build(&block_instance.id, &properties, &ctx)
             .map_err(|e| {
                 PipelineError::InvalidFlow(format!(
                     "Failed to build block {}: {}",
@@ -126,12 +131,24 @@ pub async fn expand_blocks(
         all_links.push(Link { from, to });
     }
 
+    // Collect WHEP endpoints from context
+    let whep_endpoints = ctx.take_whep_endpoints();
+    if !whep_endpoints.is_empty() {
+        for ep in &whep_endpoints {
+            info!(
+                "Block {} registered WHEP endpoint: endpoint_id='{}', port={}",
+                ep.block_id, ep.endpoint_id, ep.internal_port
+            );
+        }
+    }
+
     debug!(
-        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties",
+        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties, {} WHEP endpoints",
         gst_elements.len(),
         all_links.len(),
         bus_message_handlers.len(),
-        all_pad_properties.len()
+        all_pad_properties.len(),
+        whep_endpoints.len()
     );
 
     Ok(ExpandedPipeline {
@@ -139,6 +156,7 @@ pub async fn expand_blocks(
         links: all_links,
         bus_message_handlers,
         pad_properties: all_pad_properties,
+        whep_endpoints,
     })
 }
 

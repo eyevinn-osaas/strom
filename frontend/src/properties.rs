@@ -17,6 +17,8 @@ pub struct BlockInspectorResult {
     pub browse_streams_requested: bool,
     /// VLC playlist download requested (for MPEG-TS/SRT blocks) - contains (srt_uri, latency_ms)
     pub vlc_playlist_requested: Option<(String, i32)>,
+    /// WHEP player URL to open (for WHEP Output blocks)
+    pub whep_player_url: Option<String>,
 }
 
 /// Property inspector panel.
@@ -401,6 +403,41 @@ impl PropertyInspector {
                         .unwrap_or(125);
 
                 result.vlc_playlist_requested = Some((srt_uri, latency));
+            }
+
+            // Open WHEP Player button for WHEP Output blocks
+            if definition.id == "builtin.whep_output" {
+                // Get endpoint_id from runtime_data (set when flow starts)
+                // or from properties if user configured it
+                let endpoint_id = block
+                    .runtime_data
+                    .as_ref()
+                    .and_then(|rd| rd.get("whep_endpoint_id").cloned())
+                    .or_else(|| {
+                        block.properties.get("endpoint_id").and_then(|v| match v {
+                            PropertyValue::String(s) if !s.is_empty() => Some(s.clone()),
+                            _ => None,
+                        })
+                    });
+
+                if let Some(endpoint_id) = endpoint_id {
+                    if ui
+                        .button("🎧 Open Audio Player")
+                        .on_hover_text("Open WHEP audio player in browser")
+                        .clicked()
+                    {
+                        // Use the new endpoint_id-based proxy URL
+                        let whep_endpoint = format!("/api/whep/{}/endpoint", endpoint_id);
+                        result.whep_player_url = Some(whep_endpoint);
+                    }
+                } else {
+                    // Flow not running, show disabled button with tooltip
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.button("🎧 Open Audio Player")
+                            .on_hover_text("Start the flow to enable audio player")
+                            .on_disabled_hover_text("Start the flow to enable audio player");
+                    });
+                }
             }
 
             ui.separator();

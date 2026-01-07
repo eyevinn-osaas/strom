@@ -37,6 +37,7 @@ pub mod stats;
 pub mod storage;
 pub mod system_monitor;
 pub mod version;
+pub mod whep_registry;
 
 use state::AppState;
 
@@ -206,6 +207,32 @@ pub async fn create_app_with_state_and_auth(
         .route("/login", post(auth::login_handler))
         .route("/logout", post(auth::logout_handler))
         .route("/auth/status", get(auth::auth_status_handler))
+        // WHEP player page (serves HTML)
+        .route("/whep-player", get(api::whep_player::whep_player))
+        // WHEP proxy
+        .route("/whep-proxy", post(api::whep_player::whep_proxy))
+        .route("/whep-proxy", delete(api::whep_player::whep_proxy_delete))
+        .route(
+            "/whep-proxy",
+            axum::routing::options(api::whep_player::whep_proxy_options),
+        )
+        // WHEP endpoint proxy (new endpoint_id-based routing via WhepRegistry)
+        .route(
+            "/whep/{endpoint_id}/endpoint",
+            post(api::whep_player::whep_endpoint_proxy),
+        )
+        .route(
+            "/whep/{endpoint_id}/endpoint",
+            axum::routing::options(api::whep_player::whep_endpoint_proxy_options),
+        )
+        .route(
+            "/whep/{endpoint_id}/resource/{resource_id}",
+            delete(api::whep_player::whep_resource_proxy_delete),
+        )
+        .route(
+            "/whep/{endpoint_id}/resource/{resource_id}",
+            axum::routing::options(api::whep_player::whep_resource_proxy_options),
+        )
         // MCP Streamable HTTP endpoint (has its own session management)
         .route("/mcp", post(api::mcp::mcp_post))
         .route("/mcp", get(api::mcp::mcp_get))

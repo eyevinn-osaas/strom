@@ -4,7 +4,7 @@
 //! Uses the gst-plugin-ndi GStreamer plugin for NDI integration.
 //! Requires the NDI SDK from NewTek/Vizrt to be installed.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -107,6 +107,7 @@ impl BlockBuilder for NDIInputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("Building NDI Input block: {}", instance_id);
 
@@ -447,6 +448,7 @@ impl BlockBuilder for NDIOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("Building NDI Output block: {}", instance_id);
 

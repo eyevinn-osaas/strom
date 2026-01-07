@@ -3,7 +3,9 @@
 //! Uses uridecodebin for file decoding or parsebin for passthrough of encoded streams.
 //! Supports play, pause, seek, and playlist navigation.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder, BusMessageConnectFn};
+use crate::blocks::{
+    BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, BusMessageConnectFn,
+};
 use crate::events::EventBroadcaster;
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -399,6 +401,7 @@ impl BlockBuilder for MediaPlayerBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("Building Media Player block instance: {}", instance_id);
 

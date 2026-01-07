@@ -15,7 +15,7 @@
 //!
 //! The block creates a chain: glupload -> glcolorconvert (per input) -> glvideomixerelement -> gldownload -> capsfilter
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -85,6 +85,7 @@ impl BlockBuilder for GLCompositorBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎬 Building GLCompositor block instance: {}", instance_id);
 
