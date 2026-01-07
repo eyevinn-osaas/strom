@@ -3,14 +3,24 @@
 //! Maps endpoint IDs to internal localhost ports for WHEP Output blocks.
 //! The axum proxy uses this to route requests to the correct whepserversink instance.
 
+use crate::blocks::WhepStreamMode;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Information about a registered WHEP endpoint.
+#[derive(Debug, Clone)]
+pub struct WhepEndpointEntry {
+    /// Internal localhost port where whepserversink is listening
+    pub port: u16,
+    /// Stream mode (audio, video, or both)
+    pub mode: WhepStreamMode,
+}
+
 /// Registry mapping endpoint IDs to internal ports.
 #[derive(Debug, Clone, Default)]
 pub struct WhepRegistry {
-    inner: Arc<RwLock<HashMap<String, u16>>>,
+    inner: Arc<RwLock<HashMap<String, WhepEndpointEntry>>>,
 }
 
 impl WhepRegistry {
@@ -21,10 +31,10 @@ impl WhepRegistry {
         }
     }
 
-    /// Register an endpoint with its internal port.
-    pub async fn register(&self, endpoint_id: String, port: u16) {
+    /// Register an endpoint with its internal port and stream mode.
+    pub async fn register(&self, endpoint_id: String, port: u16, mode: WhepStreamMode) {
         let mut map = self.inner.write().await;
-        map.insert(endpoint_id, port);
+        map.insert(endpoint_id, WhepEndpointEntry { port, mode });
     }
 
     /// Unregister an endpoint.
@@ -36,7 +46,13 @@ impl WhepRegistry {
     /// Look up the internal port for an endpoint ID.
     pub async fn get_port(&self, endpoint_id: &str) -> Option<u16> {
         let map = self.inner.read().await;
-        map.get(endpoint_id).copied()
+        map.get(endpoint_id).map(|e| e.port)
+    }
+
+    /// Look up endpoint info (port and mode) for an endpoint ID.
+    pub async fn get(&self, endpoint_id: &str) -> Option<WhepEndpointEntry> {
+        let map = self.inner.read().await;
+        map.get(endpoint_id).cloned()
     }
 
     /// Check if an endpoint ID is already registered.
@@ -45,9 +61,9 @@ impl WhepRegistry {
         map.contains_key(endpoint_id)
     }
 
-    /// Get all registered endpoints (for debugging).
-    pub async fn list_all(&self) -> Vec<(String, u16)> {
+    /// Get all registered endpoints with their info.
+    pub async fn list_all(&self) -> Vec<(String, WhepEndpointEntry)> {
         let map = self.inner.read().await;
-        map.iter().map(|(k, v)| (k.clone(), *v)).collect()
+        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 }

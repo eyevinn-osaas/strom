@@ -9,7 +9,9 @@
 //!
 //! Handles dynamic pad creation by linking new audio streams to a liveadder mixer.
 
-use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{
+    BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, WhepStreamMode,
+};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -35,6 +37,45 @@ impl BlockBuilder for WHEPOutputBuilder {
     ) -> Result<BlockBuildResult, BlockBuildError> {
         debug!("Building WHEP Output block instance: {}", instance_id);
         build_whepserversink(instance_id, properties, ctx)
+    }
+
+    fn get_external_pads(
+        &self,
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Option<ExternalPads> {
+        // Get mode from properties
+        let mode = properties
+            .get("mode")
+            .and_then(|v| match v {
+                PropertyValue::String(s) => Some(WhepStreamMode::parse(s)),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let mut inputs = Vec::new();
+
+        if mode.has_audio() {
+            inputs.push(ExternalPad {
+                name: "audio_in".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "audioconvert".to_string(),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        if mode.has_video() {
+            inputs.push(ExternalPad {
+                name: "video_in".to_string(),
+                media_type: MediaType::Video,
+                internal_element_id: "videoconvert".to_string(),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        Some(ExternalPads {
+            inputs,
+            outputs: vec![],
+        })
     }
 }
 
@@ -639,6 +680,17 @@ fn build_whepserversink(
 ) -> Result<BlockBuildResult, BlockBuildError> {
     info!("Building WHEP Output using whepserversink (server mode)");
 
+    // Get mode (audio, video, or audio_video)
+    let mode = properties
+        .get("mode")
+        .and_then(|v| match v {
+            PropertyValue::String(s) => Some(WhepStreamMode::parse(s)),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    info!("WHEP Output mode: {:?}", mode);
+
     // Get endpoint_id (user-configurable, defaults to UUID)
     let endpoint_id = properties
         .get("endpoint_id")
@@ -689,24 +741,9 @@ fn build_whepserversink(
         })
         .unwrap_or_else(|| "stun://stun.l.google.com:19302".to_string());
 
-    // Create namespaced element IDs
-    let audioconvert_id = format!("{}:audioconvert", instance_id);
-    let audioresample_id = format!("{}:audioresample", instance_id);
-    let whepserversink_id = format!("{}:whepserversink", instance_id);
-
-    // Create audio processing elements
-    let audioconvert = gst::ElementFactory::make("audioconvert")
-        .name(&audioconvert_id)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
-
-    let audioresample = gst::ElementFactory::make("audioresample")
-        .name(&audioresample_id)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
-
     // Create whepserversink element
     // This is based on webrtcsink and handles encoding internally
+    let whepserversink_id = format!("{}:whepserversink", instance_id);
     let whepserversink = gst::ElementFactory::make("whepserversink")
         .name(&whepserversink_id)
         .build()
@@ -715,42 +752,83 @@ fn build_whepserversink(
     // Set STUN server property
     whepserversink.set_property("stun-server", &stun_server);
 
-    // Disable video codecs by setting video-caps to empty
-    whepserversink.set_property("video-caps", gst::Caps::new_empty());
-
     // Access the signaller child and set its properties
     // Bind to localhost only - axum will proxy external requests
     let signaller = whepserversink.property::<gst::glib::Object>("signaller");
     let host_addr = format!("http://127.0.0.1:{}", internal_port);
     signaller.set_property("host-addr", &host_addr);
 
-    info!(
-        "WHEP Output configured: endpoint_id='{}', internal_host={}, stun={}",
-        endpoint_id, host_addr, stun_server
-    );
+    // Disable video/audio caps based on mode
+    if !mode.has_video() {
+        whepserversink.set_property("video-caps", gst::Caps::new_empty());
+    }
+    if !mode.has_audio() {
+        whepserversink.set_property("audio-caps", gst::Caps::new_empty());
+    }
 
-    // Internal links: audioconvert -> audioresample -> whepserversink (audio_0 request pad)
-    // whepserversink handles encoding internally like whipclientsink
-    let internal_links = vec![
-        (
+    let mut elements: Vec<(String, gst::Element)> = Vec::new();
+    let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
+
+    // Create audio processing elements if mode includes audio
+    if mode.has_audio() {
+        let audioconvert_id = format!("{}:audioconvert", instance_id);
+        let audioresample_id = format!("{}:audioresample", instance_id);
+
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .name(&audioconvert_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+
+        let audioresample = gst::ElementFactory::make("audioresample")
+            .name(&audioresample_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+
+        // Audio links: audioconvert -> audioresample -> whepserversink (audio_0 request pad)
+        internal_links.push((
             ElementPadRef::pad(&audioconvert_id, "src"),
             ElementPadRef::pad(&audioresample_id, "sink"),
-        ),
-        (
+        ));
+        internal_links.push((
             ElementPadRef::pad(&audioresample_id, "src"),
             ElementPadRef::pad(&whepserversink_id, "audio_0"),
-        ),
-    ];
+        ));
+
+        elements.push((audioconvert_id, audioconvert));
+        elements.push((audioresample_id, audioresample));
+    }
+
+    // Create video processing elements if mode includes video
+    if mode.has_video() {
+        let videoconvert_id = format!("{}:videoconvert", instance_id);
+
+        let videoconvert = gst::ElementFactory::make("videoconvert")
+            .name(&videoconvert_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+
+        // Video link: videoconvert -> whepserversink (video_0 request pad)
+        internal_links.push((
+            ElementPadRef::pad(&videoconvert_id, "src"),
+            ElementPadRef::pad(&whepserversink_id, "video_0"),
+        ));
+
+        elements.push((videoconvert_id, videoconvert));
+    }
+
+    // Add whepserversink last (after audio/video processing elements)
+    elements.push((whepserversink_id.clone(), whepserversink));
+
+    info!(
+        "WHEP Output configured: endpoint_id='{}', internal_host={}, stun={}, mode={:?}",
+        endpoint_id, host_addr, stun_server, mode
+    );
 
     // Register WHEP endpoint with the build context
-    ctx.register_whep_endpoint(instance_id, &endpoint_id, internal_port);
+    ctx.register_whep_endpoint(instance_id, &endpoint_id, internal_port, mode);
 
     Ok(BlockBuildResult {
-        elements: vec![
-            (audioconvert_id, audioconvert),
-            (audioresample_id, audioresample),
-            (whepserversink_id, whepserversink),
-        ],
+        elements,
         internal_links,
         bus_message_handler: None,
         pad_properties: HashMap::new(),
@@ -1263,13 +1341,40 @@ fn whep_output_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.whep_output".to_string(),
         name: "WHEP Output".to_string(),
-        description: "Hosts a WHEP server endpoint. Clients can connect via WHEP to receive the WebRTC stream. Access at /api/whep/{endpoint_id}/endpoint".to_string(),
+        description: "Hosts a WHEP server endpoint. Clients can connect via WHEP to receive the WebRTC stream. Access at /api/whep/{endpoint_id}".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
+                name: "mode".to_string(),
+                label: "Stream Mode".to_string(),
+                description: "What media to stream: audio only, video only, or both".to_string(),
+                property_type: PropertyType::Enum {
+                    values: vec![
+                        EnumValue {
+                            value: "audio".to_string(),
+                            label: Some("Audio Only".to_string()),
+                        },
+                        EnumValue {
+                            value: "video".to_string(),
+                            label: Some("Video Only".to_string()),
+                        },
+                        EnumValue {
+                            value: "audio_video".to_string(),
+                            label: Some("Audio + Video".to_string()),
+                        },
+                    ],
+                },
+                default_value: Some(PropertyValue::String("audio".to_string())),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "mode".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
                 name: "endpoint_id".to_string(),
                 label: "Endpoint ID".to_string(),
-                description: "Unique identifier for this WHEP endpoint. Leave empty to auto-generate a UUID. Access at /api/whep/{endpoint_id}/endpoint".to_string(),
+                description: "Unique identifier for this WHEP endpoint. Leave empty to auto-generate a UUID. Access at /api/whep/{endpoint_id}".to_string(),
                 property_type: PropertyType::String,
                 default_value: Some(PropertyValue::String("".to_string())),
                 mapping: PropertyMapping {
@@ -1293,6 +1398,8 @@ fn whep_output_definition() -> BlockDefinition {
                 },
             },
         ],
+        // Note: external_pads here are the static defaults. The actual pads are
+        // determined dynamically by WHEPOutputBuilder::get_external_pads() based on mode.
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
                 name: "audio_in".to_string(),

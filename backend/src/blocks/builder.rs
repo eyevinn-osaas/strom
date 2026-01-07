@@ -41,6 +41,44 @@ pub type BusMessageConnectFn = Box<
 #[deprecated(note = "Use BusMessageConnectFn instead")]
 pub type BusWatchSetupFn = BusMessageConnectFn;
 
+/// Stream mode for WHEP endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhepStreamMode {
+    /// Audio only
+    #[default]
+    Audio,
+    /// Video only
+    Video,
+    /// Both audio and video
+    AudioVideo,
+}
+
+impl WhepStreamMode {
+    pub fn has_audio(&self) -> bool {
+        matches!(self, WhepStreamMode::Audio | WhepStreamMode::AudioVideo)
+    }
+
+    pub fn has_video(&self) -> bool {
+        matches!(self, WhepStreamMode::Video | WhepStreamMode::AudioVideo)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            WhepStreamMode::Audio => "audio",
+            WhepStreamMode::Video => "video",
+            WhepStreamMode::AudioVideo => "audio_video",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "video" => WhepStreamMode::Video,
+            "audio_video" => WhepStreamMode::AudioVideo,
+            _ => WhepStreamMode::Audio,
+        }
+    }
+}
+
 /// WHEP endpoint registration info.
 #[derive(Debug, Clone)]
 pub struct WhepEndpointInfo {
@@ -50,6 +88,8 @@ pub struct WhepEndpointInfo {
     pub endpoint_id: String,
     /// The internal localhost port where whepserversink is listening
     pub internal_port: u16,
+    /// Stream mode (audio, video, or both)
+    pub mode: WhepStreamMode,
 }
 
 /// Context provided to block builders during build.
@@ -73,11 +113,18 @@ impl BlockBuildContext {
     /// Register a WHEP endpoint (called by WHEP Output blocks during build).
     ///
     /// The endpoint will be registered with the WhepRegistry after the pipeline starts.
-    pub fn register_whep_endpoint(&self, block_id: &str, endpoint_id: &str, port: u16) {
+    pub fn register_whep_endpoint(
+        &self,
+        block_id: &str,
+        endpoint_id: &str,
+        port: u16,
+        mode: WhepStreamMode,
+    ) {
         self.whep_endpoints.borrow_mut().push(WhepEndpointInfo {
             block_id: block_id.to_string(),
             endpoint_id: endpoint_id.to_string(),
             internal_port: port,
+            mode,
         });
     }
 
