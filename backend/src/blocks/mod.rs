@@ -8,6 +8,6 @@ pub mod storage;
 
 pub use builder::{
     BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, BusMessageConnectFn,
-    WhepEndpointInfo,
+    WhepEndpointInfo, WhepStreamMode,
 };
 pub use registry::BlockRegistry;

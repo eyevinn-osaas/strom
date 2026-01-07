@@ -158,7 +158,7 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             align-items: center;
         }}
         .container {{
-            max-width: 500px;
+            max-width: 800px;
             width: 100%;
             background: rgba(255,255,255,0.05);
             border-radius: 16px;
@@ -245,12 +245,35 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
         .status.disconnected {{
             border-left: 4px solid #6b7280;
         }}
+        .media-container {{
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }}
+        .video-wrapper {{
+            width: 100%;
+            max-width: 720px;
+            aspect-ratio: 16/9;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            display: none;
+        }}
+        .video-wrapper.active {{
+            display: block;
+        }}
+        #video {{
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }}
         .audio-indicator {{
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 4px;
-            margin-top: 20px;
             height: 40px;
         }}
         .audio-bar {{
@@ -310,12 +333,17 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             <button class="disconnect-btn" id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
         </div>
 
-        <div class="audio-indicator inactive" id="audioIndicator">
-            <div class="audio-bar"></div>
-            <div class="audio-bar"></div>
-            <div class="audio-bar"></div>
-            <div class="audio-bar"></div>
-            <div class="audio-bar"></div>
+        <div class="media-container">
+            <div class="video-wrapper" id="videoWrapper">
+                <video id="video" autoplay muted playsinline></video>
+            </div>
+            <div class="audio-indicator inactive" id="audioIndicator">
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+                <div class="audio-bar"></div>
+            </div>
         </div>
 
         <div class="status disconnected" id="status">Not connected</div>
@@ -328,6 +356,8 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
     <script>
         let peerConnection = null;
         let resourceUrl = null;
+        let hasVideo = false;
+        let hasAudio = false;
 
         function log(message, type = '') {{
             const logEl = document.getElementById('log');
@@ -350,6 +380,15 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
                 indicator.classList.remove('inactive');
             }} else {{
                 indicator.classList.add('inactive');
+            }}
+        }}
+
+        function setVideoActive(active) {{
+            const wrapper = document.getElementById('videoWrapper');
+            if (active) {{
+                wrapper.classList.add('active');
+            }} else {{
+                wrapper.classList.remove('active');
             }}
         }}
 
@@ -378,6 +417,8 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             document.getElementById('connectBtn').disabled = true;
             setStatus('Connecting...', 'connecting');
             log('Connecting to ' + endpoint);
+            hasVideo = false;
+            hasAudio = false;
 
             try {{
                 // Create peer connection
@@ -389,28 +430,40 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
                 peerConnection.ontrack = (event) => {{
                     log('Received track: ' + event.track.kind, 'success');
                     if (event.track.kind === 'audio') {{
+                        hasAudio = true;
                         const audio = document.getElementById('audio');
                         audio.srcObject = event.streams[0];
                         setAudioActive(true);
+                    }} else if (event.track.kind === 'video') {{
+                        hasVideo = true;
+                        const video = document.getElementById('video');
+                        video.srcObject = event.streams[0];
+                        setVideoActive(true);
+                        // Try to unmute video after user gesture
+                        video.muted = false;
                     }}
+                    updateStatusText();
                 }};
 
                 // Log ICE connection state changes
                 peerConnection.oniceconnectionstatechange = () => {{
                     log('ICE state: ' + peerConnection.iceConnectionState);
                     if (peerConnection.iceConnectionState === 'connected') {{
-                        setStatus('Connected - Playing audio', 'connected');
+                        updateStatusText();
                     }} else if (peerConnection.iceConnectionState === 'failed') {{
                         setStatus('Connection failed', 'error');
                         setAudioActive(false);
+                        setVideoActive(false);
                     }} else if (peerConnection.iceConnectionState === 'disconnected') {{
                         setStatus('Disconnected', 'disconnected');
                         setAudioActive(false);
+                        setVideoActive(false);
                     }}
                 }};
 
-                // Add transceiver for receiving audio
+                // Add transceivers for receiving audio and video
                 peerConnection.addTransceiver('audio', {{ direction: 'recvonly' }});
+                peerConnection.addTransceiver('video', {{ direction: 'recvonly' }});
 
                 // Create offer
                 const offer = await peerConnection.createOffer();
@@ -465,7 +518,7 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
                 log('Set remote description');
 
                 document.getElementById('disconnectBtn').disabled = false;
-                setStatus('Connected - Waiting for audio...', 'connected');
+                setStatus('Connected - Waiting for media...', 'connected');
 
             }} catch (error) {{
                 log('Error: ' + error.message, 'error');
@@ -474,6 +527,19 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
                 if (peerConnection) {{
                     peerConnection.close();
                     peerConnection = null;
+                }}
+            }}
+        }}
+
+        function updateStatusText() {{
+            if (peerConnection && peerConnection.iceConnectionState === 'connected') {{
+                let mediaTypes = [];
+                if (hasAudio) mediaTypes.push('audio');
+                if (hasVideo) mediaTypes.push('video');
+                if (mediaTypes.length > 0) {{
+                    setStatus('Connected - Playing ' + mediaTypes.join(' + '), 'connected');
+                }} else {{
+                    setStatus('Connected - Waiting for media...', 'connected');
                 }}
             }}
         }}
@@ -497,13 +563,18 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             }}
 
             resourceUrl = null;
+            hasVideo = false;
+            hasAudio = false;
             setAudioActive(false);
+            setVideoActive(false);
             setStatus('Disconnected', 'disconnected');
             document.getElementById('connectBtn').disabled = false;
             document.getElementById('disconnectBtn').disabled = true;
 
             const audio = document.getElementById('audio');
             audio.srcObject = null;
+            const video = document.getElementById('video');
+            video.srcObject = null;
 
             log('Disconnected', 'success');
         }}
@@ -676,4 +747,554 @@ pub async fn whep_resource_proxy_options() -> Response {
         .header(header::ACCESS_CONTROL_MAX_AGE, "86400")
         .body(Body::empty())
         .unwrap()
+}
+
+// ============================================================================
+// WHEP Streams List API
+// ============================================================================
+
+/// Response structure for a WHEP stream.
+#[derive(serde::Serialize)]
+pub struct WhepStreamInfo {
+    /// The endpoint ID
+    pub endpoint_id: String,
+    /// Stream mode: "audio", "video", or "audio_video"
+    pub mode: String,
+    /// Whether audio is included
+    pub has_audio: bool,
+    /// Whether video is included
+    pub has_video: bool,
+}
+
+/// Response structure for the streams list endpoint.
+#[derive(serde::Serialize)]
+pub struct WhepStreamsResponse {
+    pub streams: Vec<WhepStreamInfo>,
+}
+
+/// GET /api/whep-streams - List all active WHEP streams.
+pub async fn list_whep_streams(State(state): State<AppState>) -> axum::Json<WhepStreamsResponse> {
+    let endpoints = state.whep_registry().list_all().await;
+
+    let streams = endpoints
+        .into_iter()
+        .map(|(endpoint_id, entry)| WhepStreamInfo {
+            endpoint_id,
+            mode: entry.mode.as_str().to_string(),
+            has_audio: entry.mode.has_audio(),
+            has_video: entry.mode.has_video(),
+        })
+        .collect();
+
+    axum::Json(WhepStreamsResponse { streams })
+}
+
+/// GET /api/whep-streams-page - Serve an HTML page listing all active WHEP streams with mini-players.
+pub async fn whep_streams_page() -> impl IntoResponse {
+    let html = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WHEP Streams - Strom</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #eee;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 14px;
+        }
+        .streams-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .stream-card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .stream-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        .stream-header {
+            padding: 15px;
+            background: rgba(0,0,0,0.2);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .stream-id {
+            font-weight: 600;
+            font-size: 14px;
+            word-break: break-all;
+        }
+        .stream-mode {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: rgba(74, 158, 255, 0.2);
+            color: #4a9eff;
+        }
+        .stream-content {
+            padding: 15px;
+        }
+        .video-container {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 15px;
+            display: none;
+        }
+        .video-container.active {
+            display: block;
+        }
+        .video-container video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .audio-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            height: 30px;
+            margin-bottom: 15px;
+        }
+        .audio-bar {
+            width: 4px;
+            height: 15px;
+            background: #4a9eff;
+            border-radius: 2px;
+            animation: audio-wave 0.5s ease-in-out infinite;
+        }
+        .audio-bar:nth-child(1) { animation-delay: 0s; }
+        .audio-bar:nth-child(2) { animation-delay: 0.1s; }
+        .audio-bar:nth-child(3) { animation-delay: 0.2s; }
+        .audio-bar:nth-child(4) { animation-delay: 0.3s; }
+        .audio-bar:nth-child(5) { animation-delay: 0.4s; }
+        @keyframes audio-wave {
+            0%, 100% { height: 8px; }
+            50% { height: 20px; }
+        }
+        .audio-indicator.inactive .audio-bar {
+            animation: none;
+            height: 8px;
+            background: #6b7280;
+        }
+        .stream-status {
+            font-size: 12px;
+            padding: 8px;
+            border-radius: 6px;
+            background: rgba(0,0,0,0.2);
+            text-align: center;
+            margin-bottom: 15px;
+        }
+        .stream-status.connected {
+            border-left: 3px solid #4ade80;
+        }
+        .stream-status.connecting {
+            border-left: 3px solid #facc15;
+        }
+        .stream-status.disconnected {
+            border-left: 3px solid #6b7280;
+        }
+        .stream-status.error {
+            border-left: 3px solid #f87171;
+        }
+        .stream-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .stream-actions button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .stream-actions button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .connect-btn {
+            background: linear-gradient(135deg, #4a9eff 0%, #2d7dd2 100%);
+            color: white;
+        }
+        .connect-btn:hover:not(:disabled) {
+            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+        }
+        .disconnect-btn {
+            background: linear-gradient(135deg, #ff4a4a 0%, #d22d2d 100%);
+            color: white;
+        }
+        .open-btn {
+            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+            color: white;
+        }
+        .no-streams {
+            text-align: center;
+            padding: 60px 20px;
+            color: #888;
+        }
+        .no-streams-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .refresh-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #4a9eff 0%, #2d7dd2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .refresh-btn:hover {
+            box-shadow: 0 6px 16px rgba(74, 158, 255, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📡 WHEP Streams</h1>
+        <div class="subtitle">Active streams from Strom flows</div>
+    </div>
+
+    <div class="streams-grid" id="streamsGrid">
+        <div class="no-streams" id="noStreams">
+            <div class="no-streams-icon">📡</div>
+            <div>No active WHEP streams</div>
+            <div style="margin-top: 10px; font-size: 12px;">Start a flow with a WHEP Output block to see streams here</div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadStreams()">🔄 Refresh</button>
+
+    <script>
+        const streamConnections = new Map();
+
+        async function loadStreams() {
+            try {
+                const response = await fetch('/api/whep-streams');
+                const data = await response.json();
+                renderStreams(data.streams);
+            } catch (error) {
+                console.error('Failed to load streams:', error);
+            }
+        }
+
+        function renderStreams(streams) {
+            const grid = document.getElementById('streamsGrid');
+            const noStreams = document.getElementById('noStreams');
+
+            // Clean up connections for streams that no longer exist
+            for (const [id, conn] of streamConnections) {
+                if (!streams.find(s => s.endpoint_id === id)) {
+                    if (conn.peerConnection) {
+                        conn.peerConnection.close();
+                    }
+                    streamConnections.delete(id);
+                }
+            }
+
+            if (streams.length === 0) {
+                noStreams.style.display = 'block';
+                // Remove all stream cards but keep noStreams
+                const cards = grid.querySelectorAll('.stream-card');
+                cards.forEach(card => card.remove());
+                return;
+            }
+
+            noStreams.style.display = 'none';
+
+            // Update or create stream cards
+            streams.forEach(stream => {
+                let card = document.getElementById('card-' + stream.endpoint_id);
+                if (!card) {
+                    card = createStreamCard(stream);
+                    grid.appendChild(card);
+                }
+            });
+
+            // Remove cards for streams that no longer exist
+            const cards = grid.querySelectorAll('.stream-card');
+            cards.forEach(card => {
+                const id = card.id.replace('card-', '');
+                if (!streams.find(s => s.endpoint_id === id)) {
+                    card.remove();
+                }
+            });
+        }
+
+        function createStreamCard(stream) {
+            const card = document.createElement('div');
+            card.className = 'stream-card';
+            card.id = 'card-' + stream.endpoint_id;
+
+            const modeLabel = stream.mode === 'audio_video' ? 'Audio + Video' :
+                             stream.mode === 'video' ? 'Video' : 'Audio';
+
+            card.innerHTML = `
+                <div class="stream-header">
+                    <div class="stream-id">${escapeHtml(stream.endpoint_id)}</div>
+                    <div class="stream-mode">${modeLabel}</div>
+                </div>
+                <div class="stream-content">
+                    <div class="video-container" id="video-${stream.endpoint_id}">
+                        <video autoplay muted playsinline></video>
+                    </div>
+                    <div class="audio-indicator inactive" id="audio-${stream.endpoint_id}">
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                        <div class="audio-bar"></div>
+                    </div>
+                    <div class="stream-status disconnected" id="status-${stream.endpoint_id}">Not connected</div>
+                    <div class="stream-actions">
+                        <button class="connect-btn" id="connect-${stream.endpoint_id}" onclick="connectStream('${stream.endpoint_id}')">▶ Play</button>
+                        <button class="disconnect-btn" id="disconnect-${stream.endpoint_id}" onclick="disconnectStream('${stream.endpoint_id}')" disabled>⏹ Stop</button>
+                        <button class="open-btn" onclick="openPlayer('${stream.endpoint_id}')">↗</button>
+                    </div>
+                </div>
+                <audio id="audio-elem-${stream.endpoint_id}" autoplay></audio>
+            `;
+
+            return card;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function openPlayer(endpointId) {
+            const url = '/api/whep-player?endpoint=' + encodeURIComponent('/api/whep/' + endpointId);
+            window.open(url, '_blank');
+        }
+
+        function setStreamStatus(endpointId, message, state) {
+            const el = document.getElementById('status-' + endpointId);
+            if (el) {
+                el.textContent = message;
+                el.className = 'stream-status ' + state;
+            }
+        }
+
+        function setAudioActive(endpointId, active) {
+            const el = document.getElementById('audio-' + endpointId);
+            if (el) {
+                if (active) {
+                    el.classList.remove('inactive');
+                } else {
+                    el.classList.add('inactive');
+                }
+            }
+        }
+
+        function setVideoActive(endpointId, active) {
+            const el = document.getElementById('video-' + endpointId);
+            if (el) {
+                if (active) {
+                    el.classList.add('active');
+                } else {
+                    el.classList.remove('active');
+                }
+            }
+        }
+
+        async function connectStream(endpointId) {
+            const connectBtn = document.getElementById('connect-' + endpointId);
+            const disconnectBtn = document.getElementById('disconnect-' + endpointId);
+
+            connectBtn.disabled = true;
+            setStreamStatus(endpointId, 'Connecting...', 'connecting');
+
+            try {
+                const peerConnection = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                });
+
+                let hasAudio = false;
+                let hasVideo = false;
+
+                peerConnection.ontrack = (event) => {
+                    if (event.track.kind === 'audio') {
+                        hasAudio = true;
+                        const audio = document.getElementById('audio-elem-' + endpointId);
+                        audio.srcObject = event.streams[0];
+                        setAudioActive(endpointId, true);
+                    } else if (event.track.kind === 'video') {
+                        hasVideo = true;
+                        const videoContainer = document.getElementById('video-' + endpointId);
+                        const video = videoContainer.querySelector('video');
+                        video.srcObject = event.streams[0];
+                        setVideoActive(endpointId, true);
+                    }
+                    updateStreamStatus(endpointId, hasAudio, hasVideo, peerConnection);
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    if (peerConnection.iceConnectionState === 'connected') {
+                        updateStreamStatus(endpointId, hasAudio, hasVideo, peerConnection);
+                    } else if (peerConnection.iceConnectionState === 'failed') {
+                        setStreamStatus(endpointId, 'Connection failed', 'error');
+                        setAudioActive(endpointId, false);
+                        setVideoActive(endpointId, false);
+                    } else if (peerConnection.iceConnectionState === 'disconnected') {
+                        setStreamStatus(endpointId, 'Disconnected', 'disconnected');
+                        setAudioActive(endpointId, false);
+                        setVideoActive(endpointId, false);
+                    }
+                };
+
+                peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+                peerConnection.addTransceiver('video', { direction: 'recvonly' });
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                await new Promise((resolve) => {
+                    if (peerConnection.iceGatheringState === 'complete') {
+                        resolve();
+                    } else {
+                        const timeout = setTimeout(resolve, 2000);
+                        peerConnection.onicegatheringstatechange = () => {
+                            if (peerConnection.iceGatheringState === 'complete') {
+                                clearTimeout(timeout);
+                                resolve();
+                            }
+                        };
+                    }
+                });
+
+                const response = await fetch('/api/whep/' + endpointId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: peerConnection.localDescription.sdp,
+                });
+
+                if (!response.ok) {
+                    throw new Error('WHEP request failed: ' + response.status);
+                }
+
+                const resourceUrl = response.headers.get('Location');
+                const answerSdp = await response.text();
+
+                await peerConnection.setRemoteDescription({
+                    type: 'answer',
+                    sdp: answerSdp,
+                });
+
+                streamConnections.set(endpointId, {
+                    peerConnection,
+                    resourceUrl,
+                    hasAudio,
+                    hasVideo
+                });
+
+                disconnectBtn.disabled = false;
+                setStreamStatus(endpointId, 'Connected - Waiting for media...', 'connected');
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                setStreamStatus(endpointId, 'Error: ' + error.message, 'error');
+                connectBtn.disabled = false;
+            }
+        }
+
+        function updateStreamStatus(endpointId, hasAudio, hasVideo, peerConnection) {
+            if (peerConnection && peerConnection.iceConnectionState === 'connected') {
+                let mediaTypes = [];
+                if (hasAudio) mediaTypes.push('audio');
+                if (hasVideo) mediaTypes.push('video');
+                if (mediaTypes.length > 0) {
+                    setStreamStatus(endpointId, 'Playing ' + mediaTypes.join(' + '), 'connected');
+                } else {
+                    setStreamStatus(endpointId, 'Connected - Waiting for media...', 'connected');
+                }
+            }
+        }
+
+        async function disconnectStream(endpointId) {
+            const conn = streamConnections.get(endpointId);
+            if (conn) {
+                if (conn.resourceUrl) {
+                    try {
+                        await fetch(conn.resourceUrl, { method: 'DELETE' });
+                    } catch (e) {
+                        console.error('Failed to DELETE resource:', e);
+                    }
+                }
+                if (conn.peerConnection) {
+                    conn.peerConnection.close();
+                }
+                streamConnections.delete(endpointId);
+            }
+
+            setAudioActive(endpointId, false);
+            setVideoActive(endpointId, false);
+            setStreamStatus(endpointId, 'Disconnected', 'disconnected');
+
+            const audio = document.getElementById('audio-elem-' + endpointId);
+            if (audio) audio.srcObject = null;
+
+            const videoContainer = document.getElementById('video-' + endpointId);
+            if (videoContainer) {
+                const video = videoContainer.querySelector('video');
+                if (video) video.srcObject = null;
+            }
+
+            const connectBtn = document.getElementById('connect-' + endpointId);
+            const disconnectBtn = document.getElementById('disconnect-' + endpointId);
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+        }
+
+        // Initial load
+        loadStreams();
+
+        // Auto-refresh every 5 seconds
+        setInterval(loadStreams, 5000);
+    </script>
+</body>
+</html>
+"##;
+
+    Html(html)
 }

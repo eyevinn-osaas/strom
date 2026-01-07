@@ -216,6 +216,12 @@ pub async fn create_app_with_state_and_auth(
             "/whep-proxy",
             axum::routing::options(api::whep_player::whep_proxy_options),
         )
+        // WHEP streams list API and page
+        .route("/whep-streams", get(api::whep_player::list_whep_streams))
+        .route(
+            "/whep-streams-page",
+            get(api::whep_player::whep_streams_page),
+        )
         // WHEP endpoint proxy (endpoint_id-based routing via WhepRegistry)
         // External: /api/whep/{endpoint_id} -> Internal: localhost:{port}/whep/endpoint
         .route(

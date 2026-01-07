@@ -538,12 +538,19 @@ impl AppState {
             let mut endpoints = Vec::new();
             for whep_info in manager.whep_endpoints() {
                 info!(
-                    "Registering WHEP endpoint '{}' (block {}) on port {}",
-                    whep_info.endpoint_id, whep_info.block_id, whep_info.internal_port
+                    "Registering WHEP endpoint '{}' (block {}) on port {} mode={:?}",
+                    whep_info.endpoint_id,
+                    whep_info.block_id,
+                    whep_info.internal_port,
+                    whep_info.mode
                 );
                 self.inner
                     .whep_registry
-                    .register(whep_info.endpoint_id.clone(), whep_info.internal_port)
+                    .register(
+                        whep_info.endpoint_id.clone(),
+                        whep_info.internal_port,
+                        whep_info.mode,
+                    )
                     .await;
                 endpoints.push((whep_info.block_id.clone(), whep_info.endpoint_id.clone()));
             }
