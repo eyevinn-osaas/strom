@@ -141,7 +141,7 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WHEP Audio Player - Strom</title>
+    <title>WHEP Player - Strom</title>
     <style>
         * {{
             box-sizing: border-box;
@@ -298,7 +298,7 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
 </head>
 <body>
     <div class="container">
-        <h1>WHEP Audio Player</h1>
+        <h1>WHEP Player</h1>
 
         <div class="form-group">
             <label for="endpoint">WHEP Endpoint URL</label>
@@ -529,7 +529,7 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
 // New endpoint_id-based WHEP proxy (uses WhepRegistry)
 // ============================================================================
 
-/// Proxy POST requests to /api/whep/{endpoint_id}/endpoint
+/// Proxy POST requests to /api/whep/{endpoint_id}
 /// Looks up the internal port from WhepRegistry and forwards to localhost:{port}/whep/endpoint
 pub async fn whep_endpoint_proxy(
     State(state): State<AppState>,
@@ -654,7 +654,7 @@ pub async fn whep_resource_proxy_delete(
     }
 }
 
-/// Handle OPTIONS preflight for /api/whep/{endpoint_id}/endpoint
+/// Handle OPTIONS preflight for /api/whep/{endpoint_id}
 pub async fn whep_endpoint_proxy_options() -> Response {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
