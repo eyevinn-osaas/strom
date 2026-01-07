@@ -3079,13 +3079,16 @@ impl StromApp {
                         }
 
                         // Handle WHEP player request (for WHEP Output)
-                        if let Some(whep_endpoint) = result.whep_player_url {
-                            // Build the player URL with the WHEP endpoint as a query parameter
-                            let player_url = format!(
-                                "/api/whep-player?endpoint={}",
-                                urlencoding::encode(&whep_endpoint)
-                            );
+                        if let Some(endpoint_id) = result.whep_player_url {
+                            let player_url = self.api.get_whep_player_url(&endpoint_id);
                             ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                        }
+
+                        // Handle copy WHEP URL to clipboard
+                        if let Some(endpoint_id) = result.copy_whep_url_requested {
+                            let player_url = self.api.get_whep_player_url(&endpoint_id);
+                            ctx.copy_text(player_url);
+                            self.status = "Player URL copied to clipboard".to_string();
                         }
                     } else {
                         ui.label("Block definition not found");

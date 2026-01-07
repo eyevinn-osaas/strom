@@ -17,8 +17,10 @@ pub struct BlockInspectorResult {
     pub browse_streams_requested: bool,
     /// VLC playlist download requested (for MPEG-TS/SRT blocks) - contains (srt_uri, latency_ms)
     pub vlc_playlist_requested: Option<(String, i32)>,
-    /// WHEP player URL to open (for WHEP Output blocks)
+    /// WHEP player endpoint_id (for WHEP Output blocks) - used to construct full player URL
     pub whep_player_url: Option<String>,
+    /// Copy WHEP player URL to clipboard - contains endpoint_id
+    pub copy_whep_url_requested: Option<String>,
 }
 
 /// Property inspector panel.
@@ -421,21 +423,28 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
-                    if ui
-                        .button("🎧 Open Audio Player")
-                        .on_hover_text("Open WHEP audio player in browser")
-                        .clicked()
-                    {
-                        // Use the new endpoint_id-based proxy URL
-                        let whep_endpoint = format!("/api/whep/{}/endpoint", endpoint_id);
-                        result.whep_player_url = Some(whep_endpoint);
-                    }
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("▶ Open Player")
+                            .on_hover_text("Open WHEP player in browser")
+                            .clicked()
+                        {
+                            result.whep_player_url = Some(endpoint_id.clone());
+                        }
+                        if ui
+                            .button("📋 Copy URL")
+                            .on_hover_text("Copy player URL to clipboard")
+                            .clicked()
+                        {
+                            result.copy_whep_url_requested = Some(endpoint_id.clone());
+                        }
+                    });
                 } else {
                     // Flow not running, show disabled button with tooltip
                     ui.add_enabled_ui(false, |ui| {
-                        ui.button("🎧 Open Audio Player")
-                            .on_hover_text("Start the flow to enable audio player")
-                            .on_disabled_hover_text("Start the flow to enable audio player");
+                        ui.button("▶ Open Player")
+                            .on_hover_text("Start the flow to enable player")
+                            .on_disabled_hover_text("Start the flow to enable player");
                     });
                 }
             }
