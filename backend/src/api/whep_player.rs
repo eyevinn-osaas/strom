@@ -335,7 +335,7 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
 
         <div class="media-container">
             <div class="video-wrapper" id="videoWrapper">
-                <video id="video" autoplay muted playsinline></video>
+                <video id="video" autoplay muted playsinline controls></video>
             </div>
             <div class="audio-indicator inactive" id="audioIndicator">
                 <div class="audio-bar"></div>
@@ -1075,7 +1075,7 @@ pub async fn whep_streams_page() -> impl IntoResponse {
                 </div>
                 <div class="stream-content">
                     <div class="video-container" id="video-${stream.endpoint_id}">
-                        <video autoplay muted playsinline></video>
+                        <video autoplay muted playsinline controls></video>
                     </div>
                     <div class="audio-indicator inactive" id="audio-${stream.endpoint_id}">
                         <div class="audio-bar"></div>
