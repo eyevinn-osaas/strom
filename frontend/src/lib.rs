@@ -41,7 +41,7 @@ pub fn run_native_gui(port: u16) -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("Strom - GStreamer Flow Engine"),
+            .with_title("Strom"),
         ..Default::default()
     };
 
@@ -70,7 +70,7 @@ pub fn run_native_gui_with_shutdown(
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("Strom - GStreamer Flow Engine"),
+            .with_title("Strom"),
         ..Default::default()
     };
 
