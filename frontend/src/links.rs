@@ -37,7 +37,7 @@ impl LinksPage {
                         // Combined streams player
                         ui.horizontal(|ui| {
                             ui.label("All Streams Player:");
-                            let streams_url = format!("{}/api/whep-streams-page", server_base);
+                            let streams_url = format!("{}/player/whep-streams", server_base);
                             if ui.link(&streams_url).clicked() {
                                 ctx.open_url(egui::OpenUrl::new_tab(&streams_url));
                             }
@@ -61,7 +61,7 @@ impl LinksPage {
                         // Individual player base URL
                         ui.horizontal(|ui| {
                             ui.label("Single Stream Player:");
-                            let player_base = format!("{}/api/whep-player", server_base);
+                            let player_base = format!("{}/player/whep", server_base);
                             ui.label(egui::RichText::new(&player_base).monospace());
                             if ui.button("Copy").clicked() {
                                 ctx.copy_text(player_base);
@@ -71,7 +71,7 @@ impl LinksPage {
                         ui.add_space(4.0);
                         ui.label(
                             egui::RichText::new(
-                                "Use with ?endpoint=/api/whep/<endpoint_id> parameter.\n\
+                                "Use with ?endpoint=/whep/<endpoint_id> parameter.\n\
                                  Individual player URLs are available from WHEP Output block properties.",
                             )
                             .weak(),

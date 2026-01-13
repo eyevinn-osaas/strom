@@ -435,10 +435,10 @@ impl ApiClient {
     pub fn get_whep_player_url(&self, endpoint_id: &str) -> String {
         // base_url is like "http://localhost:8080/api", we need "http://localhost:8080"
         let server_base = self.base_url.trim_end_matches("/api");
-        // Clean external path - proxy handles internal /whep/endpoint translation
-        let whep_endpoint = format!("/api/whep/{}", endpoint_id);
+        // WHEP endpoint path (proxy at /whep/{endpoint_id})
+        let whep_endpoint = format!("/whep/{}", endpoint_id);
         format!(
-            "{}/api/whep-player?endpoint={}",
+            "{}/player/whep?endpoint={}",
             server_base,
             urlencoding::encode(&whep_endpoint)
         )
