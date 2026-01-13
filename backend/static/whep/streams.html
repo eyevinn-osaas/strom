@@ -8,9 +8,13 @@
 </head>
 <body>
     <div class="header">
-        <h1>WHEP Streams</h1>
+        <h1>WHEP Streams at <span id="hostAddress"></span></h1>
         <div class="subtitle">Active streams from Strom flows</div>
     </div>
+    <script>
+        document.getElementById('hostAddress').textContent = location.host;
+        document.title = 'WHEP Streams | Strom | ' + location.host;
+    </script>
 
     <div class="streams-grid" id="streamsGrid">
         <div class="no-streams" id="noStreams">
