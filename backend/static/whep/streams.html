@@ -57,6 +57,9 @@
 
             noStreams.style.display = 'none';
 
+            // Sort streams by endpoint_id
+            streams.sort((a, b) => a.endpoint_id.localeCompare(b.endpoint_id));
+
             streams.forEach(stream => {
                 let card = document.getElementById('card-' + stream.endpoint_id);
                 if (!card) {

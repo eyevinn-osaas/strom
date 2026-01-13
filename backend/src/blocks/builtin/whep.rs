@@ -758,25 +758,13 @@ fn build_whepserversink(
     let host_addr = format!("http://127.0.0.1:{}", internal_port);
     signaller.set_property("host-addr", &host_addr);
 
-    // Configure video/audio caps based on mode.
-    // The video-caps property controls what codecs webrtcsink will OFFER to clients.
-    // If we're receiving pre-encoded H.264, we MUST only offer H.264, otherwise
-    // webrtcsink will try to negotiate VP8/VP9 and fail to transcode.
-    if mode.has_video() {
-        // Only offer H.264 - this is the codec we expect from upstream
-        // This prevents webrtcsink from trying to negotiate VP8/VP9/AV1 which would
-        // require transcoding from H.264 (which it can't do)
-        let video_caps = gst::Caps::builder("video/x-h264").build();
-        info!(
-            "WHEP Output: Setting video-caps to H.264 only: {:?}",
-            video_caps
-        );
-        whepserversink.set_property("video-caps", &video_caps);
-    } else {
-        whepserversink.set_property("video-caps", gst::Caps::new_empty());
-    }
+    // Configure audio/video caps based on mode.
+    // Video caps will be set dynamically when we detect the input codec.
     if !mode.has_audio() {
         whepserversink.set_property("audio-caps", gst::Caps::new_empty());
+    }
+    if !mode.has_video() {
+        whepserversink.set_property("video-caps", gst::Caps::new_empty());
     }
 
     // WORKAROUND #1: Relax transceiver codec-preferences BEFORE SDP offer is processed.
@@ -993,15 +981,89 @@ fn build_whepserversink(
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("video_queue: {}", e)))?;
 
-        // Skip h264parse/capsfilter - feed directly to whepserversink.
-        // webrtcsink handles codec discovery internally. Adding our own h264parse
+        // Dynamic video codec detection: Add a pad probe to detect input codec
+        // and set video-caps on whepserversink before discovery runs.
+        // This allows the WHEP block to work with any codec (H264, H265, VP8, VP9, AV1, raw).
+        let whepserversink_weak = whepserversink.downgrade();
+        let caps_set = Arc::new(AtomicBool::new(false));
+        let caps_set_clone = caps_set.clone();
+
+        let video_queue_sink = video_queue.static_pad("sink").expect("queue has sink pad");
+        video_queue_sink.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+            // Only process CAPS events, and only once
+            if caps_set_clone.load(Ordering::SeqCst) {
+                return gst::PadProbeReturn::Pass;
+            }
+
+            if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                if event.type_() == gst::EventType::Caps {
+                    if let gst::EventView::Caps(caps_event) = event.view() {
+                        let caps = caps_event.caps();
+                        if let Some(structure) = caps.structure(0) {
+                            let codec_name = structure.name().as_str();
+
+                            // Map input caps to webrtc-compatible caps
+                            // For pre-encoded video, restrict to that codec only
+                            // For raw video, don't set video-caps (let webrtcsink use defaults)
+                            let video_caps: Option<gst::Caps> = match codec_name {
+                                "video/x-h264" => {
+                                    info!("WHEP Output: Detected H.264 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-h264").build())
+                                }
+                                "video/x-h265" => {
+                                    info!("WHEP Output: Detected H.265 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-h265").build())
+                                }
+                                "video/x-vp8" => {
+                                    info!("WHEP Output: Detected VP8 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-vp8").build())
+                                }
+                                "video/x-vp9" => {
+                                    info!("WHEP Output: Detected VP9 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-vp9").build())
+                                }
+                                "video/x-av1" => {
+                                    info!("WHEP Output: Detected AV1 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-av1").build())
+                                }
+                                "video/x-raw" => {
+                                    // Raw video - let webrtcsink encode with default codecs
+                                    info!(
+                                        "WHEP Output: Detected raw video input, using default video-caps"
+                                    );
+                                    None
+                                }
+                                _ => {
+                                    warn!(
+                                        "WHEP Output: Unknown video codec '{}', using default",
+                                        codec_name
+                                    );
+                                    None
+                                }
+                            };
+
+                            if let Some(caps) = video_caps {
+                                if let Some(whepserversink) = whepserversink_weak.upgrade() {
+                                    whepserversink.set_property("video-caps", &caps);
+                                }
+                            }
+                            caps_set_clone.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+            gst::PadProbeReturn::Pass
+        });
+
+        // Skip additional parsing - feed directly to whepserversink.
+        // webrtcsink handles codec discovery internally. Adding our own parser
         // caused issues because webrtcsink's internal discovery pipeline creates
-        // another h264parse that converts AVC->byte-stream, losing codec_data.
+        // its own parser that converts stream format, losing codec_data.
         //
-        // For pre-encoded H.264, we rely on:
-        // 1. Upstream h264parse (in VideoEncoder block) with config-interval=1
-        // 2. webrtcsink's video-caps set to H.264-only (preventing VP8/VP9 negotiation)
-        info!("WHEP Output: Passing H.264 directly to whepserversink (no additional parsing)");
+        // For pre-encoded video, we rely on:
+        // 1. Upstream parser (in VideoEncoder block) with config-interval=1 for H.264
+        // 2. Dynamic video-caps detection (probe above sets caps based on input codec)
+        info!("WHEP Output: Passing video directly to whepserversink (no additional parsing)");
 
         // Add a pad probe to normalize H.264 caps before they reach webrtcsink.
         // h264parse progressively adds fields (coded-picture-structure, chroma-format,
