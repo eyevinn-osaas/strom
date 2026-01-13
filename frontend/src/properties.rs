@@ -324,6 +324,12 @@ impl PropertyInspector {
         let mut result = BlockInspectorResult::default();
 
         ui.push_id(&block_id, |ui| {
+            // Delete button at top, away from action buttons
+            if ui.button("🗑 Delete Block").clicked() {
+                result.delete_requested = true;
+            }
+            ui.separator();
+
             // Block name (read-only)
             ui.horizontal(|ui| {
                 ui.label("Block:");
@@ -345,13 +351,23 @@ impl PropertyInspector {
                 });
             }
 
-            ui.separator();
+            // Check if this block type has action buttons
+            let has_action_buttons = matches!(
+                definition.id.as_str(),
+                "builtin.aes67_input"
+                    | "builtin.glcompositor"
+                    | "builtin.compositor"
+                    | "builtin.media_player"
+                    | "builtin.mpegtssrt_output"
+                    | "builtin.whep_output"
+            );
 
-            // Delete button
-            if ui.button("🗑 Delete Block").clicked() {
-                result.delete_requested = true;
+            // Only show separator before action buttons if there are any
+            if has_action_buttons {
+                ui.separator();
             }
 
+            // Block-specific action buttons
             // Browse Streams button for AES67 Input blocks
             if definition.id == "builtin.aes67_input"
                 && ui
@@ -383,26 +399,26 @@ impl PropertyInspector {
                     .on_hover_text("Download XSPF playlist and open in VLC")
                     .clicked()
             {
-                    // Get SRT URI from block properties or default
-                    let srt_uri = block
-                        .properties
-                        .get("srt_uri")
-                        .and_then(|v| match v {
-                            PropertyValue::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| "srt://:5000?mode=listener".to_string());
+                // Get SRT URI from block properties or default
+                let srt_uri = block
+                    .properties
+                    .get("srt_uri")
+                    .and_then(|v| match v {
+                        PropertyValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "srt://:5000?mode=listener".to_string());
 
-                    // Get latency from block properties or default (125ms)
-                    let latency = block
-                        .properties
-                        .get("latency")
-                        .and_then(|v| match v {
-                            PropertyValue::Int(i) => Some(*i as i32),
-                            PropertyValue::UInt(u) => Some(*u as i32),
-                            _ => None,
-                        })
-                        .unwrap_or(125);
+                // Get latency from block properties or default (125ms)
+                let latency = block
+                    .properties
+                    .get("latency")
+                    .and_then(|v| match v {
+                        PropertyValue::Int(i) => Some(*i as i32),
+                        PropertyValue::UInt(u) => Some(*u as i32),
+                        _ => None,
+                    })
+                    .unwrap_or(125);
 
                 result.vlc_playlist_requested = Some((srt_uri, latency));
             }
@@ -449,8 +465,9 @@ impl PropertyInspector {
                 }
             }
 
+            // Separator before properties section
+            // (also serves as separator after action buttons if there were any)
             ui.separator();
-
             ui.label("💡 Only modified properties are saved");
 
             ScrollArea::both()
