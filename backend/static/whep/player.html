@@ -28,16 +28,21 @@
             <button class="disconnect-btn" id="disconnectBtn" style="flex: 1;" onclick="doDisconnect()" disabled>Disconnect</button>
         </div>
 
-        <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%;">
             <div class="video-container" id="videoContainer" style="max-width: 720px;">
                 <video id="video" autoplay muted playsinline controls></video>
             </div>
-            <div class="audio-indicator inactive" id="audioIndicator">
+            <div class="audio-indicator" id="audioIndicator">
                 <div class="audio-bar"></div>
                 <div class="audio-bar"></div>
                 <div class="audio-bar"></div>
                 <div class="audio-bar"></div>
                 <div class="audio-bar"></div>
+            </div>
+            <div class="audio-controls" id="audioControls" style="width: 100%; max-width: 400px;">
+                <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="Toggle mute">&#128266;</button>
+                <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="100" oninput="setVolume(this.value)">
+                <span class="volume-label" id="volumeLabel">100%</span>
             </div>
         </div>
 
@@ -75,7 +80,6 @@
             connection = new WhepConnection(endpoint, {
                 onAudioTrack: (stream) => {
                     document.getElementById('audio').srcObject = stream;
-                    setElementClass('audioIndicator', 'inactive', false);
                 },
                 onVideoTrack: (stream) => {
                     document.getElementById('video').srcObject = stream;
@@ -93,6 +97,10 @@
                     if (mediaTypes.length > 0) {
                         setStatus('status', 'Connected - Playing ' + mediaTypes.join(' + '), 'connected');
                     }
+                    // Show audio indicator and controls only for audio-only streams (no video)
+                    const isAudioOnly = hasAudio && !hasVideo;
+                    setElementClass('audioIndicator', 'active', isAudioOnly);
+                    setElementClass('audioControls', 'active', isAudioOnly);
                 },
                 onError: (msg) => {
                     log('Error: ' + msg, 'error');
@@ -101,7 +109,8 @@
                 },
                 onDisconnected: () => {
                     setStatus('status', 'Disconnected', 'disconnected');
-                    setElementClass('audioIndicator', 'inactive', true);
+                    setElementClass('audioIndicator', 'active', false);
+                    setElementClass('audioControls', 'active', false);
                     setElementClass('videoContainer', 'active', false);
                     document.getElementById('audio').srcObject = null;
                     document.getElementById('video').srcObject = null;
@@ -146,6 +155,35 @@
             navigator.clipboard.writeText(fullUrl).then(() => {
                 log('Copied URL to clipboard', 'success');
             });
+        }
+
+        function toggleMute() {
+            const audio = document.getElementById('audio');
+            const muteBtn = document.getElementById('muteBtn');
+            audio.muted = !audio.muted;
+            if (audio.muted) {
+                muteBtn.innerHTML = '&#128263;'; // Muted speaker
+                muteBtn.classList.add('muted');
+            } else {
+                muteBtn.innerHTML = '&#128266;'; // Speaker with sound
+                muteBtn.classList.remove('muted');
+            }
+        }
+
+        function setVolume(value) {
+            const audio = document.getElementById('audio');
+            const volumeLabel = document.getElementById('volumeLabel');
+            const muteBtn = document.getElementById('muteBtn');
+            audio.volume = value / 100;
+            volumeLabel.textContent = value + '%';
+            // Update mute button state based on volume
+            if (value == 0) {
+                muteBtn.innerHTML = '&#128263;';
+                muteBtn.classList.add('muted');
+            } else if (!audio.muted) {
+                muteBtn.innerHTML = '&#128266;';
+                muteBtn.classList.remove('muted');
+            }
         }
 
         // Update full URL when endpoint changes
