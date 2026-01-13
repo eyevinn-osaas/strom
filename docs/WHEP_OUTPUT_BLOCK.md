@@ -560,15 +560,44 @@ grep -i "did not find compatible" /tmp/gst-whep.log
 - [Blocks Implementation Guide](BLOCKS_IMPLEMENTATION.md)
 - [Video Encoder Block](VIDEO_ENCODER_BLOCK.md) - For encoding video before WHEP output
 
+## Supported Codecs
+
+The WHEP block dynamically detects the input video codec and configures webrtcsink accordingly.
+
+### Video Codecs
+
+| Codec | Pre-encoded | Raw (webrtcsink encodes) | Browser Support | Notes |
+|-------|-------------|--------------------------|-----------------|-------|
+| H.264 | ✅ Working | ✅ Working | ✅ All browsers | Best compatibility |
+| VP8 | ✅ Should work | ✅ Working | ✅ All browsers | |
+| VP9 | ⚠️ Issues | ✅ Working | ✅ Most browsers | Pre-encoded may have issues |
+| H.265 | ❌ Not working | N/A | ❌ Limited | Chrome/Firefox don't support HEVC WebRTC |
+| AV1 | ❌ Not working | N/A | ⚠️ New browsers | Missing `rtpav1pay` element |
+
+### Audio Codecs
+
+| Codec | Status | Notes |
+|-------|--------|-------|
+| Opus | ✅ Working | Default WebRTC audio codec |
+
+### Codec Detection
+
+The block automatically detects input codec via a pad probe:
+- **Pre-encoded video** (H.264, VP8, VP9, etc.): Sets `video-caps` to match input codec
+- **Raw video**: Leaves `video-caps` unset, webrtcsink encodes with default codecs
+
 ## Changelog
 
 ### v0.3.8
 
-**H.264 Profile Matching Fix**
+**Dynamic Codec Detection & H.264 Profile Fix**
+- Dynamic video codec detection via pad probe (no hardcoded H.264)
 - Added `consumer-added` signal handler to relax transceiver codec-preferences
+- Added `payloader-setup` signal handler to relax capsfilter profile matching
 - Fix: Browsers can now connect to pre-encoded H.264 streams regardless of profile-level-id
-- Added H.264 codec preference in whep.js to avoid VP8/VP9 mismatch
-- Removed audio transceiver from whep.js (video-only for now)
+- Restored audio transceiver in whep.js (both audio+video supported)
+- Audio indicator now shows for all streams with audio (not just audio-only)
+- Streams page sorted alphabetically by endpoint_id
 - Comprehensive documentation of the profile matching issue
 
 ### v0.3.7
