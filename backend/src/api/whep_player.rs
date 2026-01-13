@@ -1,9 +1,10 @@
-//! WHEP Player - serves a simple web page to connect to WHEP endpoints and play audio.
-//! Also provides a proxy endpoint to avoid CORS issues when connecting to local WHEP servers.
+//! WHEP Player - serves a simple web page to connect to WHEP endpoints and play media.
 //!
-//! Two proxy modes:
-//! 1. /api/whep-proxy?endpoint=... - legacy, direct URL proxy
-//! 2. /api/whep/{endpoint_id}/... - new, uses WhepRegistry to look up internal port
+//! Provides:
+//! - `/api/whep-player` - HTML page for playing a single WHEP stream
+//! - `/api/whep-streams-page` - HTML page listing all active WHEP streams with mini-players
+//! - `/api/whep-streams` - JSON API listing all active WHEP endpoints
+//! - `/api/whep/{endpoint_id}` - Proxy to internal WHEP servers (uses WhepRegistry)
 
 use axum::{
     body::Body,
@@ -17,121 +18,14 @@ use crate::state::AppState;
 
 #[derive(Deserialize)]
 pub struct WhepPlayerQuery {
-    /// The WHEP endpoint URL to connect to
+    /// The WHEP endpoint URL to connect to (e.g., /api/whep/my-stream)
     endpoint: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct WhepProxyQuery {
-    /// The target WHEP endpoint URL
-    endpoint: String,
-}
-
-/// Proxy WHEP requests to avoid CORS issues.
-/// POST /api/whep-proxy?endpoint=http://localhost:8190
-pub async fn whep_proxy(
-    Query(params): Query<WhepProxyQuery>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
-    let client = reqwest::Client::new();
-
-    // Forward the request to the WHEP endpoint
-    let mut request = client.post(&params.endpoint);
-
-    // Forward content-type header
-    if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
-        if let Ok(ct) = content_type.to_str() {
-            request = request.header(header::CONTENT_TYPE, ct);
-        }
-    }
-
-    request = request.body(body);
-
-    match request.send().await {
-        Ok(response) => {
-            let status = response.status();
-
-            // Get Location header for resource URL
-            let location = response
-                .headers()
-                .get(header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-
-            let body_bytes = response.bytes().await.unwrap_or_default();
-
-            let mut builder = Response::builder()
-                .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK))
-                .header(header::CONTENT_TYPE, "application/sdp")
-                // Add CORS headers
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(
-                    header::ACCESS_CONTROL_ALLOW_METHODS,
-                    "POST, DELETE, OPTIONS",
-                )
-                .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type")
-                .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "Location");
-
-            if let Some(loc) = location {
-                // Rewrite location to go through our proxy
-                let proxy_location = format!(
-                    "/api/whep-proxy?endpoint={}",
-                    urlencoding::encode(&format!("{}{}", params.endpoint, loc))
-                );
-                builder = builder.header(header::LOCATION, proxy_location);
-            }
-
-            builder.body(Body::from(body_bytes)).unwrap()
-        }
-        Err(e) => Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .body(Body::from(format!("Proxy error: {}", e)))
-            .unwrap(),
-    }
-}
-
-/// Handle DELETE requests for WHEP resource cleanup
-pub async fn whep_proxy_delete(Query(params): Query<WhepProxyQuery>) -> Response {
-    let client = reqwest::Client::new();
-
-    match client.delete(&params.endpoint).send().await {
-        Ok(response) => {
-            let status = response.status();
-            Response::builder()
-                .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK))
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(Body::empty())
-                .unwrap()
-        }
-        Err(e) => Response::builder()
-            .status(StatusCode::BAD_GATEWAY)
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .body(Body::from(format!("Proxy error: {}", e)))
-            .unwrap(),
-    }
-}
-
-/// Handle OPTIONS preflight requests for CORS
-pub async fn whep_proxy_options() -> Response {
-    Response::builder()
-        .status(StatusCode::NO_CONTENT)
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(
-            header::ACCESS_CONTROL_ALLOW_METHODS,
-            "POST, DELETE, OPTIONS",
-        )
-        .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type")
-        .header(header::ACCESS_CONTROL_MAX_AGE, "86400")
-        .body(Body::empty())
-        .unwrap()
 }
 
 /// Serve the WHEP player HTML page.
 ///
 /// Query parameters:
-/// - `endpoint`: The WHEP endpoint URL (e.g., `http://localhost:8190`)
+/// - `endpoint`: The WHEP endpoint path (e.g., `/api/whep/my-stream`)
 pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResponse {
     let endpoint = params.endpoint.unwrap_or_default();
 
@@ -400,21 +294,6 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             }}
         }}
 
-        // Check if endpoint is a local (same-origin) or external URL
-        function isLocalEndpoint(endpoint) {{
-            return endpoint.startsWith('/api/whep/');
-        }}
-
-        // Get the URL to use for WHEP requests
-        // Local endpoints (from strom's WHEP Output blocks) can be used directly
-        // External endpoints need to go through the proxy to avoid CORS issues
-        function getWhepUrl(whepEndpoint) {{
-            if (isLocalEndpoint(whepEndpoint)) {{
-                return whepEndpoint; // Same-origin, no proxy needed
-            }}
-            return '/api/whep-proxy?endpoint=' + encodeURIComponent(whepEndpoint);
-        }}
-
         async function connect() {{
             const endpoint = document.getElementById('endpoint').value.trim();
             if (!endpoint) {{
@@ -494,10 +373,9 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
                 }});
                 log('ICE gathering complete');
 
-                // Send offer (via proxy for external endpoints, directly for local)
-                const whepUrl = getWhepUrl(endpoint);
-                log('Sending offer to ' + (isLocalEndpoint(endpoint) ? 'local' : 'proxied') + ' endpoint...');
-                const response = await fetch(whepUrl, {{
+                // Send offer to WHEP endpoint
+                log('Sending offer to endpoint...');
+                const response = await fetch(endpoint, {{
                     method: 'POST',
                     headers: {{
                         'Content-Type': 'application/sdp',
