@@ -155,9 +155,10 @@
                     if (mediaTypes.length > 0) {
                         setStatus('status-' + endpointId, 'Playing ' + mediaTypes.join(' + '), 'connected');
                     }
-                    // Show audio indicator and controls only for audio-only streams (no video)
+                    // Show audio indicator if stream has audio (regardless of video)
+                    // Show audio controls only for audio-only streams (video has its own controls)
                     const isAudioOnly = hasAudio && !hasVideo;
-                    setElementClass('audio-' + endpointId, 'active', isAudioOnly);
+                    setElementClass('audio-' + endpointId, 'active', hasAudio);
                     setElementClass('audio-controls-' + endpointId, 'active', isAudioOnly);
                 },
                 onError: (msg) => {
