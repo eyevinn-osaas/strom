@@ -209,13 +209,6 @@ pub async fn create_app_with_state_and_auth(
         .route("/auth/status", get(auth::auth_status_handler))
         // WHEP player page (serves HTML)
         .route("/whep-player", get(api::whep_player::whep_player))
-        // WHEP proxy
-        .route("/whep-proxy", post(api::whep_player::whep_proxy))
-        .route("/whep-proxy", delete(api::whep_player::whep_proxy_delete))
-        .route(
-            "/whep-proxy",
-            axum::routing::options(api::whep_player::whep_proxy_options),
-        )
         // WHEP streams list API and page
         .route("/whep-streams", get(api::whep_player::list_whep_streams))
         .route(
