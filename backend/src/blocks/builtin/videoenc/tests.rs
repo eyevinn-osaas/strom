@@ -221,9 +221,10 @@ fn test_encoder_selection_with_fallback() {
 
 #[test]
 fn test_get_codec_caps_string() {
+    // H.264 uses constrained-baseline profile for maximum WebRTC/browser compatibility
     assert_eq!(
         get_codec_caps_string(Codec::H264),
-        "video/x-h264,stream-format=byte-stream,alignment=au"
+        "video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline"
     );
     assert_eq!(
         get_codec_caps_string(Codec::H265),
