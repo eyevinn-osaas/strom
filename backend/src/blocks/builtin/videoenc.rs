@@ -695,7 +695,13 @@ fn map_quality_preset_vp9enc(quality_preset: &str) -> i32 {
 /// Get codec-specific caps string for capsfilter.
 fn get_codec_caps_string(codec: Codec) -> String {
     match codec {
-        Codec::H264 => "video/x-h264,stream-format=byte-stream,alignment=au".to_string(),
+        // H.264: Use constrained-baseline profile for WebRTC compatibility
+        // Browsers typically only support constrained-baseline, main, and high profiles
+        // NOT high-4:4:4, high-10, or other exotic profiles
+        Codec::H264 => {
+            "video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline"
+                .to_string()
+        }
         Codec::H265 => "video/x-h265,stream-format=byte-stream,alignment=au".to_string(),
         Codec::AV1 => "video/x-av1".to_string(),
         Codec::VP9 => "video/x-vp9".to_string(),
