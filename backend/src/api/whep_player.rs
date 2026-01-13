@@ -147,9 +147,9 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             box-sizing: border-box;
         }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
+            font-family: monospace, 'Courier New', Courier;
+            background: #1b1b1b;
+            color: #b4b4b4;
             min-height: 100vh;
             margin: 0;
             padding: 20px;
@@ -160,104 +160,111 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
         .container {{
             max-width: 800px;
             width: 100%;
-            background: rgba(255,255,255,0.05);
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            background: #2b2b2b;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
+            padding: 24px;
         }}
         h1 {{
-            margin: 0 0 20px 0;
-            font-size: 24px;
+            margin: 0 0 16px 0;
+            font-size: 18px;
+            font-weight: normal;
             text-align: center;
+            color: #e0e0e0;
         }}
         .form-group {{
-            margin-bottom: 20px;
+            margin-bottom: 16px;
         }}
         label {{
             display: block;
-            margin-bottom: 8px;
-            font-size: 14px;
-            color: #aaa;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: #888;
         }}
         input {{
             width: 100%;
-            padding: 12px;
-            border: 1px solid #444;
-            border-radius: 8px;
-            background: rgba(0,0,0,0.3);
-            color: #fff;
-            font-size: 14px;
+            padding: 8px 10px;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
+            background: #1b1b1b;
+            color: #e0e0e0;
+            font-family: monospace;
+            font-size: 13px;
         }}
         input:focus {{
             outline: none;
-            border-color: #4a9eff;
+            border-color: #5588cc;
         }}
         .buttons {{
             display: flex;
-            gap: 10px;
+            gap: 8px;
         }}
         button {{
             flex: 1;
-            padding: 14px 20px;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 600;
+            padding: 8px 16px;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
+            font-family: monospace;
+            font-size: 13px;
             cursor: pointer;
-            transition: all 0.2s;
+            background: #3d3d3d;
+            color: #e0e0e0;
+        }}
+        button:hover:not(:disabled) {{
+            background: #4a4a4a;
         }}
         button:disabled {{
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
         }}
         .connect-btn {{
-            background: linear-gradient(135deg, #4a9eff 0%, #2d7dd2 100%);
-            color: white;
+            background: #2d5a8a;
+            border-color: #3d6a9a;
         }}
         .connect-btn:hover:not(:disabled) {{
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(74, 158, 255, 0.4);
+            background: #3d6a9a;
         }}
         .disconnect-btn {{
-            background: linear-gradient(135deg, #ff4a4a 0%, #d22d2d 100%);
-            color: white;
+            background: #8a3d3d;
+            border-color: #9a4d4d;
         }}
         .disconnect-btn:hover:not(:disabled) {{
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(255, 74, 74, 0.4);
+            background: #9a4d4d;
         }}
         .status {{
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 8px;
-            background: rgba(0,0,0,0.2);
-            font-size: 14px;
+            margin-top: 16px;
+            padding: 10px 12px;
+            border-radius: 2px;
+            background: #252525;
+            border: 1px solid #3d3d3d;
+            font-size: 13px;
         }}
         .status.connected {{
-            border-left: 4px solid #4ade80;
+            border-left: 3px solid #5a8a5a;
         }}
         .status.connecting {{
-            border-left: 4px solid #facc15;
+            border-left: 3px solid #8a8a5a;
         }}
         .status.error {{
-            border-left: 4px solid #f87171;
+            border-left: 3px solid #8a5a5a;
         }}
         .status.disconnected {{
-            border-left: 4px solid #6b7280;
+            border-left: 3px solid #5a5a5a;
         }}
         .media-container {{
-            margin-top: 20px;
+            margin-top: 16px;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 15px;
+            gap: 12px;
         }}
         .video-wrapper {{
             width: 100%;
             max-width: 720px;
             aspect-ratio: 16/9;
             background: #000;
-            border-radius: 8px;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
             overflow: hidden;
             display: none;
         }}
@@ -273,14 +280,14 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 4px;
-            height: 40px;
+            gap: 3px;
+            height: 32px;
         }}
         .audio-bar {{
-            width: 6px;
-            height: 20px;
-            background: #4a9eff;
-            border-radius: 3px;
+            width: 4px;
+            height: 16px;
+            background: #5588cc;
+            border-radius: 1px;
             animation: audio-wave 0.5s ease-in-out infinite;
         }}
         .audio-bar:nth-child(1) {{ animation-delay: 0s; }}
@@ -289,33 +296,34 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
         .audio-bar:nth-child(4) {{ animation-delay: 0.3s; }}
         .audio-bar:nth-child(5) {{ animation-delay: 0.4s; }}
         @keyframes audio-wave {{
-            0%, 100% {{ height: 10px; }}
-            50% {{ height: 30px; }}
+            0%, 100% {{ height: 8px; }}
+            50% {{ height: 24px; }}
         }}
         .audio-indicator.inactive .audio-bar {{
             animation: none;
-            height: 10px;
-            background: #6b7280;
+            height: 8px;
+            background: #4a4a4a;
         }}
         .log {{
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 8px;
-            background: rgba(0,0,0,0.3);
+            margin-top: 16px;
+            padding: 10px 12px;
+            border-radius: 2px;
+            background: #1b1b1b;
+            border: 1px solid #3d3d3d;
             font-family: monospace;
-            font-size: 12px;
-            max-height: 200px;
+            font-size: 11px;
+            max-height: 180px;
             overflow-y: auto;
         }}
         .log-entry {{
-            margin: 4px 0;
-            color: #888;
+            margin: 3px 0;
+            color: #777;
         }}
         .log-entry.error {{
-            color: #f87171;
+            color: #cc7777;
         }}
         .log-entry.success {{
-            color: #4ade80;
+            color: #77aa77;
         }}
     </style>
 </head>
@@ -802,72 +810,74 @@ pub async fn whep_streams_page() -> impl IntoResponse {
             box-sizing: border-box;
         }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
+            font-family: monospace, 'Courier New', Courier;
+            background: #1b1b1b;
+            color: #b4b4b4;
             min-height: 100vh;
             margin: 0;
             padding: 20px;
         }
         .header {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 24px;
         }
         h1 {
-            margin: 0 0 10px 0;
-            font-size: 28px;
+            margin: 0 0 8px 0;
+            font-size: 18px;
+            font-weight: normal;
+            color: #e0e0e0;
         }
         .subtitle {
-            color: #888;
-            font-size: 14px;
+            color: #777;
+            font-size: 12px;
         }
         .streams-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
             max-width: 1400px;
             margin: 0 auto;
         }
         .stream-card {
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
+            background: #2b2b2b;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
             overflow: hidden;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
-            transition: transform 0.2s, box-shadow 0.2s;
         }
         .stream-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            border-color: #4a4a4a;
         }
         .stream-header {
-            padding: 15px;
-            background: rgba(0,0,0,0.2);
+            padding: 12px;
+            background: #252525;
+            border-bottom: 1px solid #3d3d3d;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
         .stream-id {
-            font-weight: 600;
-            font-size: 14px;
+            font-size: 12px;
             word-break: break-all;
+            color: #e0e0e0;
         }
         .stream-mode {
-            font-size: 12px;
-            padding: 4px 8px;
-            border-radius: 4px;
-            background: rgba(74, 158, 255, 0.2);
-            color: #4a9eff;
+            font-size: 11px;
+            padding: 3px 6px;
+            border-radius: 2px;
+            background: #2d5a8a;
+            color: #b4c8e0;
         }
         .stream-content {
-            padding: 15px;
+            padding: 12px;
         }
         .video-container {
             width: 100%;
             aspect-ratio: 16/9;
             background: #000;
-            border-radius: 8px;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
             overflow: hidden;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             display: none;
         }
         .video-container.active {
@@ -883,14 +893,14 @@ pub async fn whep_streams_page() -> impl IntoResponse {
             align-items: center;
             justify-content: center;
             gap: 3px;
-            height: 30px;
-            margin-bottom: 15px;
+            height: 24px;
+            margin-bottom: 12px;
         }
         .audio-bar {
             width: 4px;
-            height: 15px;
-            background: #4a9eff;
-            border-radius: 2px;
+            height: 12px;
+            background: #5588cc;
+            border-radius: 1px;
             animation: audio-wave 0.5s ease-in-out infinite;
         }
         .audio-bar:nth-child(1) { animation-delay: 0s; }
@@ -899,110 +909,121 @@ pub async fn whep_streams_page() -> impl IntoResponse {
         .audio-bar:nth-child(4) { animation-delay: 0.3s; }
         .audio-bar:nth-child(5) { animation-delay: 0.4s; }
         @keyframes audio-wave {
-            0%, 100% { height: 8px; }
-            50% { height: 20px; }
+            0%, 100% { height: 6px; }
+            50% { height: 18px; }
         }
         .audio-indicator.inactive .audio-bar {
             animation: none;
-            height: 8px;
-            background: #6b7280;
+            height: 6px;
+            background: #4a4a4a;
         }
         .stream-status {
-            font-size: 12px;
-            padding: 8px;
-            border-radius: 6px;
-            background: rgba(0,0,0,0.2);
+            font-size: 11px;
+            padding: 6px 8px;
+            border-radius: 2px;
+            background: #252525;
+            border: 1px solid #3d3d3d;
             text-align: center;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
         }
         .stream-status.connected {
-            border-left: 3px solid #4ade80;
+            border-left: 3px solid #5a8a5a;
         }
         .stream-status.connecting {
-            border-left: 3px solid #facc15;
+            border-left: 3px solid #8a8a5a;
         }
         .stream-status.disconnected {
-            border-left: 3px solid #6b7280;
+            border-left: 3px solid #5a5a5a;
         }
         .stream-status.error {
-            border-left: 3px solid #f87171;
+            border-left: 3px solid #8a5a5a;
         }
         .stream-actions {
             display: flex;
-            gap: 10px;
+            gap: 6px;
         }
         .stream-actions button {
             flex: 1;
-            padding: 10px;
-            border: none;
-            border-radius: 6px;
-            font-size: 13px;
-            font-weight: 600;
+            padding: 6px 10px;
+            border: 1px solid #3d3d3d;
+            border-radius: 2px;
+            font-family: monospace;
+            font-size: 12px;
             cursor: pointer;
-            transition: all 0.2s;
+            background: #3d3d3d;
+            color: #e0e0e0;
+        }
+        .stream-actions button:hover:not(:disabled) {
+            background: #4a4a4a;
         }
         .stream-actions button:disabled {
-            opacity: 0.5;
+            opacity: 0.4;
             cursor: not-allowed;
         }
         .connect-btn {
-            background: linear-gradient(135deg, #4a9eff 0%, #2d7dd2 100%);
-            color: white;
+            background: #2d5a8a;
+            border-color: #3d6a9a;
         }
         .connect-btn:hover:not(:disabled) {
-            box-shadow: 0 2px 8px rgba(74, 158, 255, 0.4);
+            background: #3d6a9a;
         }
         .disconnect-btn {
-            background: linear-gradient(135deg, #ff4a4a 0%, #d22d2d 100%);
-            color: white;
+            background: #8a3d3d;
+            border-color: #9a4d4d;
+        }
+        .disconnect-btn:hover:not(:disabled) {
+            background: #9a4d4d;
         }
         .open-btn {
-            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
-            color: white;
+            background: #4a5a4a;
+            border-color: #5a6a5a;
+        }
+        .open-btn:hover:not(:disabled) {
+            background: #5a6a5a;
         }
         .no-streams {
             text-align: center;
-            padding: 60px 20px;
-            color: #888;
+            padding: 48px 16px;
+            color: #777;
         }
         .no-streams-icon {
-            font-size: 48px;
-            margin-bottom: 15px;
+            font-size: 32px;
+            margin-bottom: 12px;
+            opacity: 0.6;
         }
         .refresh-btn {
             position: fixed;
-            bottom: 20px;
-            right: 20px;
-            padding: 12px 20px;
-            background: linear-gradient(135deg, #4a9eff 0%, #2d7dd2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
+            bottom: 16px;
+            right: 16px;
+            padding: 8px 16px;
+            background: #2d5a8a;
+            color: #e0e0e0;
+            border: 1px solid #3d6a9a;
+            border-radius: 2px;
+            font-family: monospace;
+            font-size: 12px;
             cursor: pointer;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
         }
         .refresh-btn:hover {
-            box-shadow: 0 6px 16px rgba(74, 158, 255, 0.4);
+            background: #3d6a9a;
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>📡 WHEP Streams</h1>
+        <h1>WHEP Streams</h1>
         <div class="subtitle">Active streams from Strom flows</div>
     </div>
 
     <div class="streams-grid" id="streamsGrid">
         <div class="no-streams" id="noStreams">
-            <div class="no-streams-icon">📡</div>
+            <div class="no-streams-icon">--</div>
             <div>No active WHEP streams</div>
-            <div style="margin-top: 10px; font-size: 12px;">Start a flow with a WHEP Output block to see streams here</div>
+            <div style="margin-top: 8px; font-size: 11px;">Start a flow with a WHEP Output block to see streams here</div>
         </div>
     </div>
 
-    <button class="refresh-btn" onclick="loadStreams()">🔄 Refresh</button>
+    <button class="refresh-btn" onclick="loadStreams()">Refresh</button>
 
     <script>
         const streamConnections = new Map();
