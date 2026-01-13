@@ -52,21 +52,9 @@ class WhepConnection {
                 }
             };
 
-            // Only create video transceiver - audio can be added later if needed
-            // This avoids issues with webrtcbin when the server only has video
-            const videoTransceiver = this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
-
-            // Prioritize H.264 codecs to match whepserversink's output
-            // This avoids issues where VP8/VP9 are listed first and cause codec mismatch
-            if (videoTransceiver.setCodecPreferences) {
-                const capabilities = RTCRtpReceiver.getCapabilities('video');
-                if (capabilities) {
-                    // Sort codecs to put H264 first, then other codecs
-                    const h264Codecs = capabilities.codecs.filter(c => c.mimeType === 'video/H264');
-                    const otherCodecs = capabilities.codecs.filter(c => c.mimeType !== 'video/H264');
-                    videoTransceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
-                }
-            }
+            // Create both audio and video transceivers - server decides what to send
+            this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+            this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
 
             const offer = await this.peerConnection.createOffer();
             await this.peerConnection.setLocalDescription(offer);
