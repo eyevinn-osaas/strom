@@ -520,6 +520,14 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             <input type="text" id="endpoint" placeholder="/whep/my-stream" value="{endpoint}">
         </div>
 
+        <div class="form-group" id="fullUrlGroup" style="display: none;">
+            <label>Full WHEP URL (for external players)</label>
+            <div style="display: flex; gap: 8px;">
+                <input type="text" id="fullUrl" readonly style="flex: 1; background: #252525; cursor: text;">
+                <button onclick="copyFullUrl()" style="white-space: nowrap;">Copy URL</button>
+            </div>
+        </div>
+
         <div style="display: flex; gap: 8px; margin-bottom: 16px;">
             <button class="connect-btn" id="connectBtn" style="flex: 1;" onclick="doConnect()">Connect</button>
             <button class="disconnect-btn" id="disconnectBtn" style="flex: 1;" onclick="doDisconnect()" disabled>Disconnect</button>
@@ -625,8 +633,32 @@ pub async fn whep_player(Query(params): Query<WhepPlayerQuery>) -> impl IntoResp
             log('Disconnected', 'success');
         }}
 
+        function updateFullUrl() {{
+            const endpoint = document.getElementById('endpoint').value.trim();
+            const fullUrlGroup = document.getElementById('fullUrlGroup');
+            const fullUrlInput = document.getElementById('fullUrl');
+            if (endpoint) {{
+                const fullUrl = window.location.protocol + '//' + window.location.host + endpoint;
+                fullUrlInput.value = fullUrl;
+                fullUrlGroup.style.display = 'block';
+            }} else {{
+                fullUrlGroup.style.display = 'none';
+            }}
+        }}
+
+        function copyFullUrl() {{
+            const fullUrl = document.getElementById('fullUrl').value;
+            navigator.clipboard.writeText(fullUrl).then(() => {{
+                log('Copied URL to clipboard', 'success');
+            }});
+        }}
+
+        // Update full URL when endpoint changes
+        document.getElementById('endpoint').addEventListener('input', updateFullUrl);
+
         // Auto-connect if endpoint is provided
         window.onload = () => {{
+            updateFullUrl();
             const endpoint = document.getElementById('endpoint').value;
             if (endpoint) {{
                 setTimeout(doConnect, 500);
@@ -728,6 +760,8 @@ pub async fn whep_streams_page() -> impl IntoResponse {
             const modeLabel = stream.mode === 'audio_video' ? 'Audio + Video' :
                              stream.mode === 'video' ? 'Video' : 'Audio';
 
+            const fullWhepUrl = window.location.protocol + '//' + window.location.host + '/whep/' + stream.endpoint_id;
+
             card.innerHTML = `
                 <div class="stream-header">
                     <div class="stream-id">${escapeHtml(stream.endpoint_id)}</div>
@@ -741,6 +775,10 @@ pub async fn whep_streams_page() -> impl IntoResponse {
                         ${createAudioIndicator()}
                     </div>
                     <div class="status disconnected stream-status" id="status-${stream.endpoint_id}">Not connected</div>
+                    <div style="margin: 8px 0; display: flex; gap: 6px;">
+                        <input type="text" value="${fullWhepUrl}" readonly style="flex: 1; font-size: 11px; padding: 4px 6px; background: #252525; cursor: text;">
+                        <button onclick="copyUrl('${stream.endpoint_id}')" style="padding: 4px 8px; font-size: 11px;">Copy</button>
+                    </div>
                     <div class="stream-actions">
                         <button class="connect-btn" id="connect-${stream.endpoint_id}" onclick="connectStream('${stream.endpoint_id}')">Play</button>
                         <button class="disconnect-btn" id="disconnect-${stream.endpoint_id}" onclick="disconnectStream('${stream.endpoint_id}')" disabled>Stop</button>
@@ -756,6 +794,11 @@ pub async fn whep_streams_page() -> impl IntoResponse {
         function openPlayer(endpointId) {
             const url = '/player/whep?endpoint=' + encodeURIComponent('/whep/' + endpointId);
             window.open(url, '_blank');
+        }
+
+        function copyUrl(endpointId) {
+            const fullUrl = window.location.protocol + '//' + window.location.host + '/whep/' + endpointId;
+            navigator.clipboard.writeText(fullUrl);
         }
 
         function connectStream(endpointId) {
