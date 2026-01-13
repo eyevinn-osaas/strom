@@ -221,16 +221,13 @@ fn test_encoder_selection_with_fallback() {
 
 #[test]
 fn test_get_codec_caps_string() {
-    // H.264 uses AVC format with baseline profile for WebRTC compatibility
-    // This allows downstream elements like whepserversink to extract SPS/PPS from caps
-    // We use baseline (not constrained-baseline) to match browser SDP offers exactly
     assert_eq!(
         get_codec_caps_string(Codec::H264),
-        "video/x-h264,stream-format=avc,alignment=au,profile=baseline"
+        "video/x-h264,alignment=au"
     );
     assert_eq!(
         get_codec_caps_string(Codec::H265),
-        "video/x-h265,stream-format=byte-stream,alignment=au"
+        "video/x-h265,alignment=au"
     );
     assert_eq!(get_codec_caps_string(Codec::AV1), "video/x-av1");
     assert_eq!(get_codec_caps_string(Codec::VP9), "video/x-vp9");
