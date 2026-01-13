@@ -341,6 +341,7 @@ For production use:
 **Possible causes:**
 1. Codec not supported (use H.264 constrained-baseline for maximum compatibility)
 2. Caps negotiation issue
+3. H.264 profile mismatch (see "H.264 Profile Matching" section below)
 
 **Debug:**
 ```bash
@@ -389,6 +390,169 @@ impl BlockBuilder for WhepOutputBuilder {
 
 The context collects registrations during build, and `AppState` processes them when the flow starts.
 
+## H.264 Profile Matching (Technical Deep-Dive)
+
+When streaming pre-encoded H.264 video to browsers via WHEP, there's a complex profile matching issue that can cause connections to fail silently (ICE connects but no media flows).
+
+### The Problem
+
+**Root Cause:** webrtcbin (GStreamer's WebRTC element) performs strict string matching on H.264 profile parameters during SDP negotiation.
+
+**Timeline of a failed connection:**
+
+1. Browser creates SDP offer with `profile=baseline` or `profile-level-id=42e01f`
+2. whepserversink runs codec discovery with encoder output `profile-level-id=42c015`
+3. webrtcbin's `_create_answer_task` compares these caps
+4. Strict matching fails (even though both are constrained-baseline compatible!)
+5. Transceiver direction set to `inactive` instead of `sendonly`
+6. SDP answer has inactive transceivers → no media flows
+7. ICE connection succeeds but video never appears
+
+**Logs indicating this issue:**
+```
+did not find compatible transceiver for offer caps application/x-rtp...profile=(string)baseline...will only receive
+transceiver <webrtctransceiver0> direction change from none to inactive
+```
+
+### Understanding H.264 Profile-Level-ID
+
+The `profile-level-id` is a 6-character hex string encoding three bytes:
+
+```
+42 c0 15
+│  │  └── Level (2.1 = 720p30)
+│  └───── Constraint flags (c0 = constrained-baseline)
+└──────── Profile IDC (42 = Baseline profile)
+```
+
+**Common values:**
+| profile-level-id | Meaning |
+|-----------------|---------|
+| `42e01f` | Constrained Baseline Level 3.1 (browser default) |
+| `42c015` | Constrained Baseline Level 2.1 (typical encoder output) |
+| `42001f` | Baseline Level 3.1 (no constraints) |
+
+All `42xxxx` values are baseline-compatible, but webrtcbin doesn't know this!
+
+### The Solution (Implemented)
+
+We use two workarounds in `backend/src/blocks/builtin/whep.rs`:
+
+#### Workaround #1: Relax Transceiver Codec-Preferences
+
+Connect to `consumer-added` signal (fires BEFORE SDP offer is processed):
+
+```rust
+whepserversink.connect("consumer-added", false, |values| {
+    let webrtcbin = values[2].get::<gst::Element>().unwrap();
+
+    // Access transceivers through sink pads
+    for pad in webrtcbin.sink_pads() {
+        if let Ok(transceiver) = pad.property_value("transceiver").get::<glib::Object>() {
+            let codec_prefs: gst::Caps = transceiver.property("codec-preferences");
+
+            // Remove profile constraints
+            let mut new_caps = gst::Caps::new_empty();
+            for structure in codec_prefs.iter() {
+                let mut s = structure.to_owned();
+                s.remove_field("profile-level-id");
+                s.remove_field("profile");
+                new_caps.get_mut().unwrap().append_structure(s);
+            }
+            transceiver.set_property("codec-preferences", &new_caps);
+        }
+    }
+    None
+});
+```
+
+**Why this works:** By removing profile constraints BEFORE webrtcbin processes the offer, the caps matching becomes more permissive and transceivers are set to `sendonly` correctly.
+
+#### Workaround #2: Relax Capsfilter in Discovery Pipeline
+
+Connect to `payloader-setup` signal:
+
+```rust
+whepserversink.connect("payloader-setup", false, |values| {
+    let payloader = values[3].get::<gst::Element>().unwrap();
+
+    // Find downstream capsfilter and remove profile constraints
+    if let Some(capsfilter) = payloader.static_pad("src")
+        .and_then(|p| p.peer())
+        .and_then(|p| p.parent_element()) {
+        // ... remove profile-level-id and profile fields
+    }
+    None
+});
+```
+
+**Why this is needed:** The discovery pipeline runs separately and also has strict profile matching in its capsfilters.
+
+### Signal Timing (Critical!)
+
+Understanding when signals fire is crucial:
+
+```
+Browser POSTs SDP offer
+    │
+    ▼
+session-requested (signaller)
+    │
+    ▼
+consumer-pipeline-created ← Pipeline created, webrtcbin not yet
+    │
+    ▼
+webrtcsink adds webrtcbin, creates transceivers, sets codec-preferences
+    │
+    ▼
+consumer-added ← ⭐ OUR HANDLER RUNS HERE (transceivers exist, offer not processed)
+    │
+    ▼
+webrtcbin.set_remote_description(offer) ← Offer processed with relaxed prefs
+    │
+    ▼
+payloader-setup ← Pipeline elements connected
+    │
+    ▼
+SDP answer created and sent
+```
+
+### Browser-Side Considerations
+
+The browser's WebRTC implementation also affects compatibility:
+
+**whep.js codec preference:**
+```javascript
+// Prioritize H.264 codecs to match whepserversink's output
+if (videoTransceiver.setCodecPreferences) {
+    const capabilities = RTCRtpReceiver.getCapabilities('video');
+    const h264Codecs = capabilities.codecs.filter(c => c.mimeType === 'video/H264');
+    const otherCodecs = capabilities.codecs.filter(c => c.mimeType !== 'video/H264');
+    videoTransceiver.setCodecPreferences([...h264Codecs, ...otherCodecs]);
+}
+```
+
+**Why needed:** Without this, browsers may list VP8/VP9 first in their SDP offer, causing payload type mismatch errors (`No codec for payload 96`).
+
+### Debugging Profile Issues
+
+```bash
+# Enable detailed webrtc logging
+GST_DEBUG=webrtcbin:6,webrtcsink:5 GST_DEBUG_FILE=/tmp/gst-whep.log cargo run
+
+# Look for these patterns:
+grep -i "profile" /tmp/gst-whep.log
+grep -i "transceiver.*direction" /tmp/gst-whep.log
+grep -i "did not find compatible" /tmp/gst-whep.log
+```
+
+### Alternative Approaches (Not Implemented)
+
+1. **Modify browser SDP before sending:** Hacky, fragile
+2. **Custom signaller:** Too much work for this issue
+3. **Force encoder profile:** Limits encoder choice
+4. **Upstream fix to webrtcbin:** Would be ideal but requires GStreamer patch
+
 ## Related Documentation
 
 - [WHEP Protocol Spec](https://datatracker.ietf.org/doc/draft-ietf-wish-whep/)
@@ -397,6 +561,15 @@ The context collects registrations during build, and `AppState` processes them w
 - [Video Encoder Block](VIDEO_ENCODER_BLOCK.md) - For encoding video before WHEP output
 
 ## Changelog
+
+### v0.3.8
+
+**H.264 Profile Matching Fix**
+- Added `consumer-added` signal handler to relax transceiver codec-preferences
+- Fix: Browsers can now connect to pre-encoded H.264 streams regardless of profile-level-id
+- Added H.264 codec preference in whep.js to avoid VP8/VP9 mismatch
+- Removed audio transceiver from whep.js (video-only for now)
+- Comprehensive documentation of the profile matching issue
 
 ### v0.3.7
 

@@ -230,12 +230,67 @@ pub async fn whep_endpoint_proxy_options() -> Response {
         .unwrap()
 }
 
+/// Proxy PATCH requests to /whep/{endpoint_id}/resource/{resource_id} for ICE candidates
+pub async fn whep_resource_proxy_patch(
+    State(state): State<AppState>,
+    Path((endpoint_id, resource_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let port = match state.whep_registry().get_port(&endpoint_id).await {
+        Some(p) => p,
+        None => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(format!(
+                    "WHEP endpoint '{}' not found",
+                    endpoint_id
+                )))
+                .unwrap();
+        }
+    };
+
+    let target_url = format!("http://127.0.0.1:{}/whep/resource/{}", port, resource_id);
+    let client = reqwest::Client::new();
+
+    let mut request = client.patch(&target_url);
+
+    // Forward content-type header (typically application/trickle-ice-sdpfrag)
+    if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
+        if let Ok(ct) = content_type.to_str() {
+            request = request.header(header::CONTENT_TYPE, ct);
+        }
+    }
+
+    request = request.body(body);
+
+    match request.send().await {
+        Ok(response) => {
+            let status = response.status();
+            Response::builder()
+                .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::NO_CONTENT))
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::empty())
+                .unwrap()
+        }
+        Err(e) => Response::builder()
+            .status(StatusCode::BAD_GATEWAY)
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(format!("Proxy error: {}", e)))
+            .unwrap(),
+    }
+}
+
 /// Handle OPTIONS preflight for /whep/{endpoint_id}/resource/{resource_id}
 pub async fn whep_resource_proxy_options() -> Response {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::ACCESS_CONTROL_ALLOW_METHODS, "DELETE, OPTIONS")
+        .header(
+            header::ACCESS_CONTROL_ALLOW_METHODS,
+            "PATCH, DELETE, OPTIONS",
+        )
         .header(header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type")
         .header(header::ACCESS_CONTROL_MAX_AGE, "86400")
         .body(Body::empty())

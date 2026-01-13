@@ -235,6 +235,10 @@ pub async fn create_app_with_state_and_auth(
         )
         .route(
             "/{endpoint_id}/resource/{resource_id}",
+            patch(api::whep_player::whep_resource_proxy_patch),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
             axum::routing::options(api::whep_player::whep_resource_proxy_options),
         )
         .with_state(state.clone());
