@@ -15,6 +15,7 @@
 - **SAP/AES67 Discovery** - Browse and monitor network audio streams via SAP announcements
 - **PTP Clock Monitoring** - View PTP synchronization status and statistics per domain
 - **Media File Browser** - Manage media files for playlist playback
+- **Links Page** - Quick access to WHEP player pages and stream URLs
 - **System Monitoring** - Real-time CPU, memory, and GPU usage graphs in the topbar
 - **Authentication** - Secure with session login or API keys (optional)
 - **Auto-restart** - Pipelines survive server restarts
@@ -419,6 +420,7 @@ Create reusable components from element groups:
 **Outputs:**
 - **AES67 Output** - Sends AES67/Ravenna audio via RTP multicast with SDP generation
 - **WHIP Output** - Sends audio via WebRTC WHIP protocol
+- **WHEP Output** - Serves audio/video streams via WebRTC WHEP with built-in player pages
 - **MPEG-TS/SRT Output** - Muxes audio/video to MPEG Transport Stream over SRT
 - **DeckLink Video/Audio Output** - Outputs to Blackmagic DeckLink SDI/HDMI cards
 - **Inter Output** - Publishes streams for other flows to consume
@@ -434,7 +436,7 @@ Create reusable components from element groups:
 
 Custom blocks can also be created via JSON or API.
 
-See `docs/BLOCKS_IMPLEMENTATION.md` and `docs/VIDEO_ENCODER_BLOCK.md` for details.
+See `docs/BLOCKS_IMPLEMENTATION.md`, `docs/VIDEO_ENCODER_BLOCK.md`, and `docs/WHEP_OUTPUT_BLOCK.md` for details.
 
 ## MCP Integration
 
