@@ -695,13 +695,17 @@ fn map_quality_preset_vp9enc(quality_preset: &str) -> i32 {
 /// Get codec-specific caps string for capsfilter.
 fn get_codec_caps_string(codec: Codec) -> String {
     match codec {
-        // H.264: Use constrained-baseline profile for WebRTC compatibility
-        // Browsers typically only support constrained-baseline, main, and high profiles
-        // NOT high-4:4:4, high-10, or other exotic profiles
-        Codec::H264 => {
-            "video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline"
-                .to_string()
-        }
+        // H.264: Use AVC format with baseline profile for WebRTC compatibility
+        // AVC format stores SPS/PPS in caps as codec_data, which is critical for:
+        // - WebRTC (whepserversink/webrtcsink) discovery pipeline to work with pre-encoded video
+        // - Downstream elements to extract codec parameters without parsing bitstream
+        //
+        // NOTE: We use "baseline" (not "constrained-baseline") because:
+        // - Browsers send "profile=baseline" in their SDP offers
+        // - webrtcsink does strict profile matching during session discovery
+        // - If we output constrained-baseline but browser requests baseline, negotiation fails
+        // - baseline is compatible with constrained-baseline decoders
+        Codec::H264 => "video/x-h264,stream-format=avc,alignment=au,profile=baseline".to_string(),
         Codec::H265 => "video/x-h265,stream-format=byte-stream,alignment=au".to_string(),
         Codec::AV1 => "video/x-av1".to_string(),
         Codec::VP9 => "video/x-vp9".to_string(),

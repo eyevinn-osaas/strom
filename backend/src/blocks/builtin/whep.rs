@@ -758,22 +758,19 @@ fn build_whepserversink(
     let host_addr = format!("http://127.0.0.1:{}", internal_port);
     signaller.set_property("host-addr", &host_addr);
 
-    /*
-    // Configure video/audio caps based on mode
-    // For video: use ANY caps to let whepserversink handle all formats
-    // whepserversink will encode raw video internally, or passthrough encoded video
+    // Configure video/audio caps based on mode.
+    // The video-caps property controls what codecs webrtcsink will OFFER to clients.
+    // If we're receiving pre-encoded H.264, we MUST only offer H.264, otherwise
+    // webrtcsink will try to negotiate VP8/VP9 and fail to transcode.
     if mode.has_video() {
-        // Use ANY caps - webrtcsink will do codec discovery and handle appropriately
-        //whepserversink.set_property("video-caps", gst::Caps::new_any());
-
-        let video_caps = gst::Caps::builder_full()
-            //.structure(gst::Structure::new_empty("video/x-raw"))
-            .structure(gst::Structure::new_empty("video/x-h264"))
-            //.structure(gst::Structure::new_empty("video/x-vp8"))
-            //.structure(gst::Structure::new_empty("video/x-vp9"))
-            //.structure(gst::Structure::new_empty("video/x-av1"))
-            .build();
-
+        // Only offer H.264 - this is the codec we expect from upstream
+        // This prevents webrtcsink from trying to negotiate VP8/VP9/AV1 which would
+        // require transcoding from H.264 (which it can't do)
+        let video_caps = gst::Caps::builder("video/x-h264").build();
+        info!(
+            "WHEP Output: Setting video-caps to H.264 only: {:?}",
+            video_caps
+        );
         whepserversink.set_property("video-caps", &video_caps);
     } else {
         whepserversink.set_property("video-caps", gst::Caps::new_empty());
@@ -781,7 +778,179 @@ fn build_whepserversink(
     if !mode.has_audio() {
         whepserversink.set_property("audio-caps", gst::Caps::new_empty());
     }
-    */
+
+    // WORKAROUND #1: Relax transceiver codec-preferences BEFORE SDP offer is processed.
+    //
+    // Problem: webrtcbin does strict caps matching on transceiver codec-preferences.
+    // Browser offers profile=baseline, but transceivers have profile-level-id=42c015.
+    // webrtcbin doesn't know these are compatible, so transceivers go inactive.
+    //
+    // Solution: Connect to consumer-added signal (fires BEFORE SDP offer is processed).
+    // Modify all video transceivers' codec-preferences to remove profile constraints.
+    whepserversink.connect("consumer-added", false, |values| {
+        let consumer_id = values[1].get::<String>().unwrap_or_default();
+        let webrtcbin = values[2].get::<gst::Element>().unwrap();
+
+        info!(
+            "WHEP Output: consumer-added for {}, modifying transceiver codec-preferences",
+            consumer_id
+        );
+
+        // Access transceivers through webrtcbin's sink pads
+        // Each sink pad has a "transceiver" property pointing to the associated transceiver
+        let mut transceiver_count = 0;
+        for pad in webrtcbin.sink_pads() {
+            let pad_name = pad.name();
+
+            // Check if this pad has a transceiver property
+            if !pad.has_property("transceiver") {
+                continue;
+            }
+
+            // Get transceiver property from the pad as a generic Object
+            let transceiver_value = pad.property_value("transceiver");
+            let transceiver = match transceiver_value.get::<gst::glib::Object>() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            transceiver_count += 1;
+
+            // Check if transceiver has codec-preferences property
+            if !transceiver.has_property("codec-preferences") {
+                info!(
+                    "WHEP Output: Transceiver for pad {} has no codec-preferences property",
+                    pad_name
+                );
+                continue;
+            }
+
+            // Get current codec-preferences
+            let codec_prefs_value = transceiver.property_value("codec-preferences");
+            let codec_prefs = match codec_prefs_value.get::<gst::Caps>() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if codec_prefs.is_empty() {
+                info!(
+                    "WHEP Output: Transceiver for pad {} has empty codec-preferences",
+                    pad_name
+                );
+                continue;
+            }
+
+            info!(
+                "WHEP Output: Transceiver for pad {} codec-preferences: {:?}",
+                pad_name, codec_prefs
+            );
+
+            // Check if this transceiver has profile constraints that need relaxing
+            let mut needs_modification = false;
+            for i in 0..codec_prefs.size() {
+                if let Some(s) = codec_prefs.structure(i) {
+                    if s.has_field("profile-level-id") || s.has_field("profile") {
+                        needs_modification = true;
+                        break;
+                    }
+                }
+            }
+
+            if needs_modification {
+                // Create new caps without profile constraints
+                let mut new_caps = gst::Caps::new_empty();
+                for i in 0..codec_prefs.size() {
+                    if let Some(structure) = codec_prefs.structure(i) {
+                        let mut new_structure = structure.to_owned();
+                        new_structure.remove_field("profile-level-id");
+                        new_structure.remove_field("profile");
+                        new_caps.get_mut().unwrap().append_structure(new_structure);
+                    }
+                }
+                info!(
+                    "WHEP Output: Relaxing transceiver for pad {} codec-preferences: {:?} -> {:?}",
+                    pad_name, codec_prefs, new_caps
+                );
+                transceiver.set_property("codec-preferences", &new_caps);
+            }
+        }
+
+        info!(
+            "WHEP Output: Processed {} transceivers for consumer {}",
+            transceiver_count, consumer_id
+        );
+
+        None
+    });
+
+    // WORKAROUND #2: Relax strict H.264 profile-level-id matching in capsfilters.
+    //
+    // Problem: Browsers send profile-level-id=42e01f (Constrained Baseline + Extended constraint).
+    // Our encoder produces 42c0xx (Constrained Baseline without Extended constraint).
+    // Both are codec-compatible, but webrtcsink does strict string matching on profile-level-id
+    // in the capsfilter it creates during discovery, causing a 30-second timeout.
+    //
+    // Solution: Connect to payloader-setup signal. Find the downstream capsfilter (pay_filter)
+    // and remove the profile-level-id constraint.
+    whepserversink.connect("payloader-setup", false, |values| {
+        // values[0] = self, values[1] = consumer_id, values[2] = pad_name, values[3] = payloader
+        let consumer_id = values[1].get::<String>().unwrap_or_default();
+        let payloader = values[3].get::<gst::Element>().unwrap();
+
+        // Always relax profile matching - both for discovery and real consumer sessions.
+        // This allows browsers requesting profile-level-id=42e01f to connect to streams
+        // encoded with profile-level-id=42c015 (both are constrained-baseline compatible).
+        // Find the downstream capsfilter by traversing from payloader's src pad
+        if let Some(src_pad) = payloader.static_pad("src") {
+            if let Some(peer_pad) = src_pad.peer() {
+                if let Some(capsfilter) = peer_pad.parent_element() {
+                    // Verify it's a capsfilter
+                    if capsfilter
+                        .factory()
+                        .map(|f| f.name().as_str() == "capsfilter")
+                        .unwrap_or(false)
+                    {
+                        let caps: gst::Caps = capsfilter.property("caps");
+                        // Check if caps contain profile constraints (H.264 RTP caps)
+                        // Browsers may send profile-level-id, profile, or both
+                        if let Some(s) = caps.structure(0) {
+                            if s.has_field("profile-level-id") || s.has_field("profile") {
+                                // Create new caps without profile constraints
+                                let mut new_caps = gst::Caps::new_empty();
+                                for i in 0..caps.size() {
+                                    if let Some(structure) = caps.structure(i) {
+                                        let mut new_structure: gst::Structure =
+                                            structure.to_owned();
+                                        new_structure.remove_field("profile-level-id");
+                                        new_structure.remove_field("profile");
+                                        new_caps
+                                            .get_mut()
+                                            .unwrap()
+                                            .append_structure(new_structure);
+                                    }
+                                }
+                                info!(
+                                    "WHEP Output: Relaxing capsfilter profile matching for {}: {:?} -> {:?}",
+                                    consumer_id, caps, new_caps
+                                );
+                                capsfilter.set_property("caps", &new_caps);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Return false to let default handler run as well
+        Some(false.to_value())
+    });
+
+    // NOTE: Pre-encoded H.264 has a known limitation with webrtcsink:
+    // webrtcsink runs codec discovery for each client, creating a fresh h264parse
+    // that needs SPS/PPS from a keyframe. If discovery starts mid-GOP, it times out.
+    // Workarounds:
+    // 1. Use shorter GOP (30 frames / 1 second recommended for WebRTC)
+    // 2. Feed raw video and let webrtcsink encode internally
+    // 3. Use webrtcbin directly for full control
 
     let mut elements: Vec<(String, gst::Element)> = Vec::new();
     let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
@@ -824,13 +993,23 @@ fn build_whepserversink(
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("video_queue: {}", e)))?;
 
+        // Skip h264parse/capsfilter - feed directly to whepserversink.
+        // webrtcsink handles codec discovery internally. Adding our own h264parse
+        // caused issues because webrtcsink's internal discovery pipeline creates
+        // another h264parse that converts AVC->byte-stream, losing codec_data.
+        //
+        // For pre-encoded H.264, we rely on:
+        // 1. Upstream h264parse (in VideoEncoder block) with config-interval=1
+        // 2. webrtcsink's video-caps set to H.264-only (preventing VP8/VP9 negotiation)
+        info!("WHEP Output: Passing H.264 directly to whepserversink (no additional parsing)");
+
         // Add a pad probe to normalize H.264 caps before they reach webrtcsink.
         // h264parse progressively adds fields (coded-picture-structure, chroma-format,
         // bit-depth-luma, bit-depth-chroma) as it parses the stream. webrtcsink's
         // input_caps_change_allowed() doesn't account for these and rejects them as "renegotiation".
         // This probe removes those fields from CAPS events to prevent false renegotiation errors.
-        let src_pad = video_queue.static_pad("src").expect("queue has src pad");
-        src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+        let queue_src_pad = video_queue.static_pad("src").expect("queue has src pad");
+        queue_src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
             if let Some(gst::PadProbeData::Event(ref event)) = info.data {
                 if event.type_() == gst::EventType::Caps {
                     if let gst::EventView::Caps(caps_event) = event.view() {
