@@ -1,4 +1,4 @@
-//! Embedded static assets for the frontend.
+//! Embedded static assets for the frontend and WHEP player.
 
 use axum::{
     body::Body,
@@ -7,10 +7,15 @@ use axum::{
 };
 use rust_embed::RustEmbed;
 
-/// Embedded frontend assets
+/// Embedded frontend assets (WASM app)
 #[derive(RustEmbed)]
 #[folder = "dist/"]
 pub struct Assets;
+
+/// Embedded WHEP player assets (CSS, JS, HTML templates)
+#[derive(RustEmbed)]
+#[folder = "static/whep/"]
+pub struct WhepAssets;
 
 /// Serve embedded static files
 pub async fn serve_static(uri: Uri) -> impl IntoResponse {

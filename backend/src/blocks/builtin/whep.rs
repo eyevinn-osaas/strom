@@ -67,7 +67,7 @@ impl BlockBuilder for WHEPOutputBuilder {
             inputs.push(ExternalPad {
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
-                internal_element_id: "videoconvert".to_string(),
+                internal_element_id: "video_queue".to_string(),
                 internal_pad_name: "sink".to_string(),
             });
         }
@@ -758,13 +758,30 @@ fn build_whepserversink(
     let host_addr = format!("http://127.0.0.1:{}", internal_port);
     signaller.set_property("host-addr", &host_addr);
 
-    // Disable video/audio caps based on mode
-    if !mode.has_video() {
+    /*
+    // Configure video/audio caps based on mode
+    // For video: use ANY caps to let whepserversink handle all formats
+    // whepserversink will encode raw video internally, or passthrough encoded video
+    if mode.has_video() {
+        // Use ANY caps - webrtcsink will do codec discovery and handle appropriately
+        //whepserversink.set_property("video-caps", gst::Caps::new_any());
+
+        let video_caps = gst::Caps::builder_full()
+            //.structure(gst::Structure::new_empty("video/x-raw"))
+            .structure(gst::Structure::new_empty("video/x-h264"))
+            //.structure(gst::Structure::new_empty("video/x-vp8"))
+            //.structure(gst::Structure::new_empty("video/x-vp9"))
+            //.structure(gst::Structure::new_empty("video/x-av1"))
+            .build();
+
+        whepserversink.set_property("video-caps", &video_caps);
+    } else {
         whepserversink.set_property("video-caps", gst::Caps::new_empty());
     }
     if !mode.has_audio() {
         whepserversink.set_property("audio-caps", gst::Caps::new_empty());
     }
+    */
 
     let mut elements: Vec<(String, gst::Element)> = Vec::new();
     let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
@@ -798,22 +815,58 @@ fn build_whepserversink(
         elements.push((audioresample_id, audioresample));
     }
 
-    // Create video processing elements if mode includes video
+    // Create video queue and link to whepserversink if mode includes video
     if mode.has_video() {
-        let videoconvert_id = format!("{}:videoconvert", instance_id);
+        let video_queue_id = format!("{}:video_queue", instance_id);
 
-        let videoconvert = gst::ElementFactory::make("videoconvert")
-            .name(&videoconvert_id)
+        let video_queue = gst::ElementFactory::make("queue")
+            .name(&video_queue_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+            .map_err(|e| BlockBuildError::ElementCreation(format!("video_queue: {}", e)))?;
 
-        // Video link: videoconvert -> whepserversink (video_0 request pad)
+        // Add a pad probe to normalize H.264 caps before they reach webrtcsink.
+        // h264parse progressively adds fields (coded-picture-structure, chroma-format,
+        // bit-depth-luma, bit-depth-chroma) as it parses the stream. webrtcsink's
+        // input_caps_change_allowed() doesn't account for these and rejects them as "renegotiation".
+        // This probe removes those fields from CAPS events to prevent false renegotiation errors.
+        let src_pad = video_queue.static_pad("src").expect("queue has src pad");
+        src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+            if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                if event.type_() == gst::EventType::Caps {
+                    if let gst::EventView::Caps(caps_event) = event.view() {
+                        let caps = caps_event.caps();
+                        if let Some(structure) = caps.structure(0) {
+                            if structure.name() == "video/x-h264"
+                                || structure.name() == "video/x-h265"
+                            {
+                                // Create new caps without h264parse/h265parse-specific fields
+                                let mut new_caps = caps.copy();
+                                if let Some(s) = new_caps.make_mut().structure_mut(0) {
+                                    s.remove_fields([
+                                        "coded-picture-structure",
+                                        "chroma-format",
+                                        "bit-depth-luma",
+                                        "bit-depth-chroma",
+                                    ]);
+                                }
+                                // Replace the event with one containing cleaned caps
+                                let new_event = gst::event::Caps::new(&new_caps);
+                                info.data = Some(gst::PadProbeData::Event(new_event));
+                            }
+                        }
+                    }
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+
+        // Video link: queue -> whepserversink (video_0 request pad)
         internal_links.push((
-            ElementPadRef::pad(&videoconvert_id, "src"),
+            ElementPadRef::pad(&video_queue_id, "src"),
             ElementPadRef::pad(&whepserversink_id, "video_0"),
         ));
 
-        elements.push((videoconvert_id, videoconvert));
+        elements.push((video_queue_id, video_queue));
     }
 
     // Add whepserversink last (after audio/video processing elements)
