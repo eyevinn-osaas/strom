@@ -8,7 +8,7 @@
 </head>
 <body style="display: flex; flex-direction: column; align-items: center;">
     <div class="container">
-        <h1 style="text-align: center;">WHEP Player</h1>
+        <h1 style="text-align: center;">WHEP Player at <span id="hostAddress"></span></h1>
 
         <div class="form-group">
             <label for="endpoint">WHEP Endpoint URL</label>
@@ -192,6 +192,8 @@
 
         // Auto-connect if endpoint is provided
         window.onload = () => {
+            document.getElementById('hostAddress').textContent = location.host;
+            document.title = 'WHEP Player | Strom | ' + location.host;
             updateFullUrl();
             const endpoint = document.getElementById('endpoint').value;
             if (endpoint) {
