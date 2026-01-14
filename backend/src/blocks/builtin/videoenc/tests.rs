@@ -223,11 +223,11 @@ fn test_encoder_selection_with_fallback() {
 fn test_get_codec_caps_string() {
     assert_eq!(
         get_codec_caps_string(Codec::H264),
-        "video/x-h264,stream-format=byte-stream,alignment=au"
+        "video/x-h264,alignment=au"
     );
     assert_eq!(
         get_codec_caps_string(Codec::H265),
-        "video/x-h265,stream-format=byte-stream,alignment=au"
+        "video/x-h265,alignment=au"
     );
     assert_eq!(get_codec_caps_string(Codec::AV1), "video/x-av1");
     assert_eq!(get_codec_caps_string(Codec::VP9), "video/x-vp9");
@@ -527,7 +527,8 @@ fn test_build_video_encoder_block() {
     );
     properties.insert("bitrate".to_string(), PropertyValue::UInt(5000));
 
-    let result = builder.build("test_block", &properties);
+    let ctx = BlockBuildContext::new();
+    let result = builder.build("test_block", &properties, &ctx);
 
     match result {
         Ok(block_result) => {
@@ -579,7 +580,8 @@ fn test_block_encoder_preference() {
         PropertyValue::String("software".to_string()),
     );
 
-    let result = builder.build("test_software", &properties);
+    let ctx = BlockBuildContext::new();
+    let result = builder.build("test_software", &properties, &ctx);
     assert!(
         result.is_ok(),
         "Should successfully build with software preference"

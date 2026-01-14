@@ -4,7 +4,7 @@
 //! - `whipclientsink` (new): Uses signaller interface, handles encoding internally
 //! - `whipsink` (legacy): Simpler implementation, requires pre-encoded RTP input
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -19,6 +19,7 @@ impl BlockBuilder for WHIPOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         debug!("Building WHIP Output block instance: {}", instance_id);
 

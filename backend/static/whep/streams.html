@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WHEP Streams - Strom</title>
+    <link rel="stylesheet" href="/static/whep.css">
+</head>
+<body>
+    <div class="header">
+        <h1>WHEP Streams at <span id="hostAddress"></span></h1>
+        <div class="subtitle">Active streams from Strom flows</div>
+    </div>
+    <script>
+        document.getElementById('hostAddress').textContent = location.host;
+        document.title = 'WHEP Streams | Strom | ' + location.host;
+    </script>
+
+    <div class="streams-grid" id="streamsGrid">
+        <div class="no-streams" id="noStreams">
+            <div class="no-streams-icon">--</div>
+            <div>No active WHEP streams</div>
+            <div style="margin-top: 8px; font-size: 11px;">Start a flow with a WHEP Output block to see streams here</div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadStreams()">Refresh</button>
+
+    <script src="/static/whep.js"></script>
+    <script>
+        const streamConnections = new Map();
+
+        async function loadStreams() {
+            try {
+                const response = await fetch('/api/whep-streams');
+                const data = await response.json();
+                renderStreams(data.streams);
+            } catch (error) {
+                console.error('Failed to load streams:', error);
+            }
+        }
+
+        function renderStreams(streams) {
+            const grid = document.getElementById('streamsGrid');
+            const noStreams = document.getElementById('noStreams');
+
+            // Clean up connections for streams that no longer exist
+            for (const [id, conn] of streamConnections) {
+                if (!streams.find(s => s.endpoint_id === id)) {
+                    conn.close();
+                    streamConnections.delete(id);
+                }
+            }
+
+            if (streams.length === 0) {
+                noStreams.style.display = 'block';
+                const cards = grid.querySelectorAll('.stream-card');
+                cards.forEach(card => card.remove());
+                return;
+            }
+
+            noStreams.style.display = 'none';
+
+            // Sort streams by endpoint_id
+            streams.sort((a, b) => a.endpoint_id.localeCompare(b.endpoint_id));
+
+            streams.forEach(stream => {
+                let card = document.getElementById('card-' + stream.endpoint_id);
+                if (!card) {
+                    card = createStreamCard(stream);
+                    grid.appendChild(card);
+                }
+            });
+
+            const cards = grid.querySelectorAll('.stream-card');
+            cards.forEach(card => {
+                const id = card.id.replace('card-', '');
+                if (!streams.find(s => s.endpoint_id === id)) {
+                    card.remove();
+                }
+            });
+        }
+
+        function createStreamCard(stream) {
+            const card = document.createElement('div');
+            card.className = 'stream-card';
+            card.id = 'card-' + stream.endpoint_id;
+
+            const modeLabel = stream.mode === 'audio_video' ? 'Audio + Video' :
+                             stream.mode === 'video' ? 'Video' : 'Audio';
+
+            const fullWhepUrl = window.location.protocol + '//' + window.location.host + '/whep/' + stream.endpoint_id;
+
+            card.innerHTML = `
+                <div class="stream-header">
+                    <div class="stream-id">${escapeHtml(stream.endpoint_id)}</div>
+                    <div class="stream-mode">${modeLabel}</div>
+                </div>
+                <div class="stream-content">
+                    <div class="video-container" id="video-${stream.endpoint_id}">
+                        <video autoplay muted playsinline controls></video>
+                    </div>
+                    <div class="audio-indicator" id="audio-${stream.endpoint_id}" style="margin-bottom: 8px;">
+                        ${createAudioIndicator()}
+                    </div>
+                    <div class="audio-controls" id="audio-controls-${stream.endpoint_id}" style="margin-bottom: 12px;">
+                        <button class="mute-btn" id="mute-${stream.endpoint_id}" onclick="toggleMute('${stream.endpoint_id}')" title="Toggle mute">&#128266;</button>
+                        <input type="range" class="volume-slider" id="volume-${stream.endpoint_id}" min="0" max="100" value="100" oninput="setVolume('${stream.endpoint_id}', this.value)">
+                        <span class="volume-label" id="volume-label-${stream.endpoint_id}">100%</span>
+                    </div>
+                    <div class="status disconnected stream-status" id="status-${stream.endpoint_id}">Not connected</div>
+                    <div style="margin: 8px 0; display: flex; gap: 6px;">
+                        <input type="text" value="${fullWhepUrl}" readonly style="flex: 1; font-size: 11px; padding: 4px 6px; background: #252525; cursor: text;">
+                        <button onclick="copyUrl('${stream.endpoint_id}')" style="padding: 4px 8px; font-size: 11px;">Copy</button>
+                    </div>
+                    <div class="stream-actions">
+                        <button class="connect-btn" id="connect-${stream.endpoint_id}" onclick="connectStream('${stream.endpoint_id}')">Play</button>
+                        <button class="disconnect-btn" id="disconnect-${stream.endpoint_id}" onclick="disconnectStream('${stream.endpoint_id}')" disabled>Stop</button>
+                        <button class="open-btn" onclick="openPlayer('${stream.endpoint_id}')">Open</button>
+                    </div>
+                </div>
+                <audio id="audio-elem-${stream.endpoint_id}" autoplay></audio>
+            `;
+
+            return card;
+        }
+
+        function openPlayer(endpointId) {
+            const url = '/player/whep?endpoint=' + encodeURIComponent('/whep/' + endpointId);
+            window.open(url, '_blank');
+        }
+
+        function copyUrl(endpointId) {
+            const fullUrl = window.location.protocol + '//' + window.location.host + '/whep/' + endpointId;
+            navigator.clipboard.writeText(fullUrl);
+        }
+
+        function connectStream(endpointId) {
+            const connectBtn = document.getElementById('connect-' + endpointId);
+            const disconnectBtn = document.getElementById('disconnect-' + endpointId);
+
+            connectBtn.disabled = true;
+            setStatus('status-' + endpointId, 'Connecting...', 'connecting');
+
+            const connection = new WhepConnection('/whep/' + endpointId, {
+                onAudioTrack: (stream) => {
+                    document.getElementById('audio-elem-' + endpointId).srcObject = stream;
+                },
+                onVideoTrack: (stream) => {
+                    const container = document.getElementById('video-' + endpointId);
+                    container.querySelector('video').srcObject = stream;
+                    setElementClass('video-' + endpointId, 'active', true);
+                },
+                onConnected: () => {
+                    disconnectBtn.disabled = false;
+                    setStatus('status-' + endpointId, 'Connected - Waiting...', 'connected');
+                },
+                onMediaStatus: (hasAudio, hasVideo) => {
+                    let mediaTypes = [];
+                    if (hasAudio) mediaTypes.push('audio');
+                    if (hasVideo) mediaTypes.push('video');
+                    if (mediaTypes.length > 0) {
+                        setStatus('status-' + endpointId, 'Playing ' + mediaTypes.join(' + '), 'connected');
+                    }
+                    // Show audio indicator if stream has audio (regardless of video)
+                    // Show audio controls only for audio-only streams (video has its own controls)
+                    const isAudioOnly = hasAudio && !hasVideo;
+                    setElementClass('audio-' + endpointId, 'active', hasAudio);
+                    setElementClass('audio-controls-' + endpointId, 'active', isAudioOnly);
+                },
+                onError: (msg) => {
+                    setStatus('status-' + endpointId, 'Error: ' + msg, 'error');
+                    connectBtn.disabled = false;
+                },
+                onDisconnected: () => {
+                    setStatus('status-' + endpointId, 'Disconnected', 'disconnected');
+                    setElementClass('audio-' + endpointId, 'active', false);
+                    setElementClass('audio-controls-' + endpointId, 'active', false);
+                    setElementClass('video-' + endpointId, 'active', false);
+                    document.getElementById('audio-elem-' + endpointId).srcObject = null;
+                    const container = document.getElementById('video-' + endpointId);
+                    if (container) container.querySelector('video').srcObject = null;
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                }
+            });
+
+            streamConnections.set(endpointId, connection);
+            connection.connect();
+        }
+
+        function disconnectStream(endpointId) {
+            const conn = streamConnections.get(endpointId);
+            if (conn) {
+                conn.disconnect();
+                streamConnections.delete(endpointId);
+            }
+        }
+
+        function toggleMute(endpointId) {
+            const audio = document.getElementById('audio-elem-' + endpointId);
+            const muteBtn = document.getElementById('mute-' + endpointId);
+            audio.muted = !audio.muted;
+            if (audio.muted) {
+                muteBtn.innerHTML = '&#128263;';
+                muteBtn.classList.add('muted');
+            } else {
+                muteBtn.innerHTML = '&#128266;';
+                muteBtn.classList.remove('muted');
+            }
+        }
+
+        function setVolume(endpointId, value) {
+            const audio = document.getElementById('audio-elem-' + endpointId);
+            const volumeLabel = document.getElementById('volume-label-' + endpointId);
+            const muteBtn = document.getElementById('mute-' + endpointId);
+            audio.volume = value / 100;
+            volumeLabel.textContent = value + '%';
+            if (value == 0) {
+                muteBtn.innerHTML = '&#128263;';
+                muteBtn.classList.add('muted');
+            } else if (!audio.muted) {
+                muteBtn.innerHTML = '&#128266;';
+                muteBtn.classList.remove('muted');
+            }
+        }
+
+        // Initial load
+        loadStreams();
+
+        // Auto-refresh every 5 seconds
+        setInterval(loadStreams, 5000);
+    </script>
+</body>
+</html>

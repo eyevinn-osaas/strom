@@ -3,7 +3,7 @@
 //! Provides separate video and audio input/output blocks for Blackmagic DeckLink cards.
 //! Uses GStreamer's DeckLink plugin (gst-plugins-bad) for hardware integration.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use std::collections::HashMap;
 use strom_types::{block::*, element::ElementPadRef, EnumValue, PropertyValue, *};
@@ -17,6 +17,7 @@ impl BlockBuilder for DeckLinkVideoInputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("📹 Building DeckLink Video Input block: {}", instance_id);
 
@@ -110,6 +111,7 @@ impl BlockBuilder for DeckLinkAudioInputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎵 Building DeckLink Audio Input block: {}", instance_id);
 
@@ -216,6 +218,7 @@ impl BlockBuilder for DeckLinkVideoOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("📹 Building DeckLink Video Output block: {}", instance_id);
 
@@ -281,6 +284,7 @@ impl BlockBuilder for DeckLinkAudioOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎵 Building DeckLink Audio Output block: {}", instance_id);
 

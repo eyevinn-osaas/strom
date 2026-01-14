@@ -20,6 +20,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../frontend/Trunk.toml");
     // Also rerun if dist directory changes (manual builds)
     println!("cargo:rerun-if-changed=dist");
+    // Rerun if static assets change (WHEP player, etc.)
+    println!("cargo:rerun-if-changed=static");
     // Rerun if .git/HEAD changes (new commits)
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs");

@@ -1,28 +1,90 @@
-//! WHEP (WebRTC-HTTP Egress Protocol) input block builder.
+//! WHEP (WebRTC-HTTP Egress Protocol) block builders.
 //!
-//! Supports two GStreamer implementations:
+//! WHEP Input - Receives streams from external WHEP servers:
 //! - `whepclientsrc` (new): Uses signaller interface
 //! - `whepsrc` (stable): Simpler implementation with direct properties
 //!
+//! WHEP Output - Hosts a WHEP server for clients to connect and receive streams:
+//! - `whepserversink`: Hosts HTTP endpoint, clients connect via WHEP to receive
+//!
 //! Handles dynamic pad creation by linking new audio streams to a liveadder mixer.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{
+    BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, WhepStreamMode,
+};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
+use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 /// WHEP Input block builder.
 pub struct WHEPInputBuilder;
+
+/// WHEP Output block builder (hosts WHEP server).
+pub struct WHEPOutputBuilder;
+
+impl BlockBuilder for WHEPOutputBuilder {
+    fn build(
+        &self,
+        instance_id: &str,
+        properties: &HashMap<String, PropertyValue>,
+        ctx: &BlockBuildContext,
+    ) -> Result<BlockBuildResult, BlockBuildError> {
+        debug!("Building WHEP Output block instance: {}", instance_id);
+        build_whepserversink(instance_id, properties, ctx)
+    }
+
+    fn get_external_pads(
+        &self,
+        properties: &HashMap<String, PropertyValue>,
+    ) -> Option<ExternalPads> {
+        // Get mode from properties
+        let mode = properties
+            .get("mode")
+            .and_then(|v| match v {
+                PropertyValue::String(s) => Some(WhepStreamMode::parse(s)),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let mut inputs = Vec::new();
+
+        if mode.has_audio() {
+            inputs.push(ExternalPad {
+                name: "audio_in".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "audioconvert".to_string(),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        if mode.has_video() {
+            inputs.push(ExternalPad {
+                name: "video_in".to_string(),
+                media_type: MediaType::Video,
+                internal_element_id: "video_queue".to_string(),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        Some(ExternalPads {
+            inputs,
+            outputs: vec![],
+        })
+    }
+}
 
 impl BlockBuilder for WHEPInputBuilder {
     fn build(
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         debug!("Building WHEP Input block instance: {}", instance_id);
 
@@ -601,6 +663,472 @@ fn build_whepclientsrc(
     })
 }
 
+/// Build WHEP Output using whepserversink (hosts HTTP server for WHEP clients).
+///
+/// This element creates an HTTP server that WHEP clients can connect to
+/// in order to receive the WebRTC stream.
+///
+/// whepserversink is based on webrtcsink and handles encoding internally.
+/// It uses request pads (audio_0, video_0) similar to whipclientsink.
+///
+/// The server binds to localhost on an auto-assigned free port.
+/// Axum proxies requests from /api/whep/{endpoint_id}/... to the internal port.
+fn build_whepserversink(
+    instance_id: &str,
+    properties: &HashMap<String, PropertyValue>,
+    ctx: &BlockBuildContext,
+) -> Result<BlockBuildResult, BlockBuildError> {
+    info!("Building WHEP Output using whepserversink (server mode)");
+
+    // Get mode (audio, video, or audio_video)
+    let mode = properties
+        .get("mode")
+        .and_then(|v| match v {
+            PropertyValue::String(s) => Some(WhepStreamMode::parse(s)),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    info!("WHEP Output mode: {:?}", mode);
+
+    // Get endpoint_id (user-configurable, defaults to UUID)
+    let endpoint_id = properties
+        .get("endpoint_id")
+        .and_then(|v| {
+            if let PropertyValue::String(s) = v {
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.clone())
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // Find a free port by binding to port 0
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
+        BlockBuildError::InvalidConfiguration(format!("Failed to find free port: {}", e))
+    })?;
+    let internal_port = listener
+        .local_addr()
+        .map_err(|e| {
+            BlockBuildError::InvalidConfiguration(format!("Failed to get local address: {}", e))
+        })?
+        .port();
+    // Drop the listener to free the port for whepserversink
+    drop(listener);
+
+    info!(
+        "WHEP Output: Found free port {} for endpoint_id '{}'",
+        internal_port, endpoint_id
+    );
+
+    // Get STUN server (optional)
+    let stun_server = properties
+        .get("stun_server")
+        .and_then(|v| {
+            if let PropertyValue::String(s) = v {
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s.clone())
+                }
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "stun://stun.l.google.com:19302".to_string());
+
+    // Create whepserversink element
+    // This is based on webrtcsink and handles encoding internally
+    let whepserversink_id = format!("{}:whepserversink", instance_id);
+    let whepserversink = gst::ElementFactory::make("whepserversink")
+        .name(&whepserversink_id)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("whepserversink: {}", e)))?;
+
+    // Set STUN server property
+    whepserversink.set_property("stun-server", &stun_server);
+
+    // Access the signaller child and set its properties
+    // Bind to localhost only - axum will proxy external requests
+    let signaller = whepserversink.property::<gst::glib::Object>("signaller");
+    let host_addr = format!("http://127.0.0.1:{}", internal_port);
+    signaller.set_property("host-addr", &host_addr);
+
+    // Configure audio/video caps based on mode.
+    // Video caps will be set dynamically when we detect the input codec.
+    if !mode.has_audio() {
+        whepserversink.set_property("audio-caps", gst::Caps::new_empty());
+    }
+    if !mode.has_video() {
+        whepserversink.set_property("video-caps", gst::Caps::new_empty());
+    }
+
+    // WORKAROUND #1: Relax transceiver codec-preferences BEFORE SDP offer is processed.
+    //
+    // Problem: webrtcbin does strict caps matching on transceiver codec-preferences.
+    // Browser offers profile=baseline, but transceivers have profile-level-id=42c015.
+    // webrtcbin doesn't know these are compatible, so transceivers go inactive.
+    //
+    // Solution: Connect to consumer-added signal (fires BEFORE SDP offer is processed).
+    // Modify all video transceivers' codec-preferences to remove profile constraints.
+    whepserversink.connect("consumer-added", false, |values| {
+        let consumer_id = values[1].get::<String>().unwrap_or_default();
+        let webrtcbin = values[2].get::<gst::Element>().unwrap();
+
+        info!(
+            "WHEP Output: consumer-added for {}, modifying transceiver codec-preferences",
+            consumer_id
+        );
+
+        // Access transceivers through webrtcbin's sink pads
+        // Each sink pad has a "transceiver" property pointing to the associated transceiver
+        let mut transceiver_count = 0;
+        for pad in webrtcbin.sink_pads() {
+            let pad_name = pad.name();
+
+            // Check if this pad has a transceiver property
+            if !pad.has_property("transceiver") {
+                continue;
+            }
+
+            // Get transceiver property from the pad as a generic Object
+            let transceiver_value = pad.property_value("transceiver");
+            let transceiver = match transceiver_value.get::<gst::glib::Object>() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            transceiver_count += 1;
+
+            // Check if transceiver has codec-preferences property
+            if !transceiver.has_property("codec-preferences") {
+                info!(
+                    "WHEP Output: Transceiver for pad {} has no codec-preferences property",
+                    pad_name
+                );
+                continue;
+            }
+
+            // Get current codec-preferences
+            let codec_prefs_value = transceiver.property_value("codec-preferences");
+            let codec_prefs = match codec_prefs_value.get::<gst::Caps>() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if codec_prefs.is_empty() {
+                info!(
+                    "WHEP Output: Transceiver for pad {} has empty codec-preferences",
+                    pad_name
+                );
+                continue;
+            }
+
+            info!(
+                "WHEP Output: Transceiver for pad {} codec-preferences: {:?}",
+                pad_name, codec_prefs
+            );
+
+            // Check if this transceiver has profile constraints that need relaxing
+            let mut needs_modification = false;
+            for i in 0..codec_prefs.size() {
+                if let Some(s) = codec_prefs.structure(i) {
+                    if s.has_field("profile-level-id") || s.has_field("profile") {
+                        needs_modification = true;
+                        break;
+                    }
+                }
+            }
+
+            if needs_modification {
+                // Create new caps without profile constraints
+                let mut new_caps = gst::Caps::new_empty();
+                for i in 0..codec_prefs.size() {
+                    if let Some(structure) = codec_prefs.structure(i) {
+                        let mut new_structure = structure.to_owned();
+                        new_structure.remove_field("profile-level-id");
+                        new_structure.remove_field("profile");
+                        new_caps.get_mut().unwrap().append_structure(new_structure);
+                    }
+                }
+                info!(
+                    "WHEP Output: Relaxing transceiver for pad {} codec-preferences: {:?} -> {:?}",
+                    pad_name, codec_prefs, new_caps
+                );
+                transceiver.set_property("codec-preferences", &new_caps);
+            }
+        }
+
+        info!(
+            "WHEP Output: Processed {} transceivers for consumer {}",
+            transceiver_count, consumer_id
+        );
+
+        None
+    });
+
+    // WORKAROUND #2: Relax strict H.264 profile-level-id matching in capsfilters.
+    //
+    // Problem: Browsers send profile-level-id=42e01f (Constrained Baseline + Extended constraint).
+    // Our encoder produces 42c0xx (Constrained Baseline without Extended constraint).
+    // Both are codec-compatible, but webrtcsink does strict string matching on profile-level-id
+    // in the capsfilter it creates during discovery, causing a 30-second timeout.
+    //
+    // Solution: Connect to payloader-setup signal. Find the downstream capsfilter (pay_filter)
+    // and remove the profile-level-id constraint.
+    whepserversink.connect("payloader-setup", false, |values| {
+        // values[0] = self, values[1] = consumer_id, values[2] = pad_name, values[3] = payloader
+        let consumer_id = values[1].get::<String>().unwrap_or_default();
+        let payloader = values[3].get::<gst::Element>().unwrap();
+
+        // Always relax profile matching - both for discovery and real consumer sessions.
+        // This allows browsers requesting profile-level-id=42e01f to connect to streams
+        // encoded with profile-level-id=42c015 (both are constrained-baseline compatible).
+        // Find the downstream capsfilter by traversing from payloader's src pad
+        if let Some(src_pad) = payloader.static_pad("src") {
+            if let Some(peer_pad) = src_pad.peer() {
+                if let Some(capsfilter) = peer_pad.parent_element() {
+                    // Verify it's a capsfilter
+                    if capsfilter
+                        .factory()
+                        .map(|f| f.name().as_str() == "capsfilter")
+                        .unwrap_or(false)
+                    {
+                        let caps: gst::Caps = capsfilter.property("caps");
+                        // Check if caps contain profile constraints (H.264 RTP caps)
+                        // Browsers may send profile-level-id, profile, or both
+                        if let Some(s) = caps.structure(0) {
+                            if s.has_field("profile-level-id") || s.has_field("profile") {
+                                // Create new caps without profile constraints
+                                let mut new_caps = gst::Caps::new_empty();
+                                for i in 0..caps.size() {
+                                    if let Some(structure) = caps.structure(i) {
+                                        let mut new_structure: gst::Structure =
+                                            structure.to_owned();
+                                        new_structure.remove_field("profile-level-id");
+                                        new_structure.remove_field("profile");
+                                        new_caps
+                                            .get_mut()
+                                            .unwrap()
+                                            .append_structure(new_structure);
+                                    }
+                                }
+                                info!(
+                                    "WHEP Output: Relaxing capsfilter profile matching for {}: {:?} -> {:?}",
+                                    consumer_id, caps, new_caps
+                                );
+                                capsfilter.set_property("caps", &new_caps);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Return false to let default handler run as well
+        Some(false.to_value())
+    });
+
+    // NOTE: Pre-encoded H.264 has a known limitation with webrtcsink:
+    // webrtcsink runs codec discovery for each client, creating a fresh h264parse
+    // that needs SPS/PPS from a keyframe. If discovery starts mid-GOP, it times out.
+    // Workarounds:
+    // 1. Use shorter GOP (30 frames / 1 second recommended for WebRTC)
+    // 2. Feed raw video and let webrtcsink encode internally
+    // 3. Use webrtcbin directly for full control
+
+    let mut elements: Vec<(String, gst::Element)> = Vec::new();
+    let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
+
+    // Create audio processing elements if mode includes audio
+    if mode.has_audio() {
+        let audioconvert_id = format!("{}:audioconvert", instance_id);
+        let audioresample_id = format!("{}:audioresample", instance_id);
+
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .name(&audioconvert_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+
+        let audioresample = gst::ElementFactory::make("audioresample")
+            .name(&audioresample_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+
+        // Audio links: audioconvert -> audioresample -> whepserversink (audio_0 request pad)
+        internal_links.push((
+            ElementPadRef::pad(&audioconvert_id, "src"),
+            ElementPadRef::pad(&audioresample_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&audioresample_id, "src"),
+            ElementPadRef::pad(&whepserversink_id, "audio_0"),
+        ));
+
+        elements.push((audioconvert_id, audioconvert));
+        elements.push((audioresample_id, audioresample));
+    }
+
+    // Create video queue and link to whepserversink if mode includes video
+    if mode.has_video() {
+        let video_queue_id = format!("{}:video_queue", instance_id);
+
+        let video_queue = gst::ElementFactory::make("queue")
+            .name(&video_queue_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("video_queue: {}", e)))?;
+
+        // Dynamic video codec detection: Add a pad probe to detect input codec
+        // and set video-caps on whepserversink before discovery runs.
+        // This allows the WHEP block to work with any codec (H264, H265, VP8, VP9, AV1, raw).
+        let whepserversink_weak = whepserversink.downgrade();
+        let caps_set = Arc::new(AtomicBool::new(false));
+        let caps_set_clone = caps_set.clone();
+
+        let video_queue_sink = video_queue.static_pad("sink").expect("queue has sink pad");
+        video_queue_sink.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+            // Only process CAPS events, and only once
+            if caps_set_clone.load(Ordering::SeqCst) {
+                return gst::PadProbeReturn::Pass;
+            }
+
+            if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                if event.type_() == gst::EventType::Caps {
+                    if let gst::EventView::Caps(caps_event) = event.view() {
+                        let caps = caps_event.caps();
+                        if let Some(structure) = caps.structure(0) {
+                            let codec_name = structure.name().as_str();
+
+                            // Map input caps to webrtc-compatible caps
+                            // For pre-encoded video, restrict to that codec only
+                            // For raw video, don't set video-caps (let webrtcsink use defaults)
+                            let video_caps: Option<gst::Caps> = match codec_name {
+                                "video/x-h264" => {
+                                    info!("WHEP Output: Detected H.264 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-h264").build())
+                                }
+                                "video/x-h265" => {
+                                    info!("WHEP Output: Detected H.265 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-h265").build())
+                                }
+                                "video/x-vp8" => {
+                                    info!("WHEP Output: Detected VP8 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-vp8").build())
+                                }
+                                "video/x-vp9" => {
+                                    info!("WHEP Output: Detected VP9 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-vp9").build())
+                                }
+                                "video/x-av1" => {
+                                    info!("WHEP Output: Detected AV1 input, setting video-caps");
+                                    Some(gst::Caps::builder("video/x-av1").build())
+                                }
+                                "video/x-raw" => {
+                                    // Raw video - let webrtcsink encode with default codecs
+                                    info!(
+                                        "WHEP Output: Detected raw video input, using default video-caps"
+                                    );
+                                    None
+                                }
+                                _ => {
+                                    warn!(
+                                        "WHEP Output: Unknown video codec '{}', using default",
+                                        codec_name
+                                    );
+                                    None
+                                }
+                            };
+
+                            if let Some(caps) = video_caps {
+                                if let Some(whepserversink) = whepserversink_weak.upgrade() {
+                                    whepserversink.set_property("video-caps", &caps);
+                                }
+                            }
+                            caps_set_clone.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+            }
+            gst::PadProbeReturn::Pass
+        });
+
+        // Skip additional parsing - feed directly to whepserversink.
+        // webrtcsink handles codec discovery internally. Adding our own parser
+        // caused issues because webrtcsink's internal discovery pipeline creates
+        // its own parser that converts stream format, losing codec_data.
+        //
+        // For pre-encoded video, we rely on:
+        // 1. Upstream parser (in VideoEncoder block) with config-interval=1 for H.264
+        // 2. Dynamic video-caps detection (probe above sets caps based on input codec)
+        info!("WHEP Output: Passing video directly to whepserversink (no additional parsing)");
+
+        // Add a pad probe to normalize H.264 caps before they reach webrtcsink.
+        // h264parse progressively adds fields (coded-picture-structure, chroma-format,
+        // bit-depth-luma, bit-depth-chroma) as it parses the stream. webrtcsink's
+        // input_caps_change_allowed() doesn't account for these and rejects them as "renegotiation".
+        // This probe removes those fields from CAPS events to prevent false renegotiation errors.
+        let queue_src_pad = video_queue.static_pad("src").expect("queue has src pad");
+        queue_src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+            if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                if event.type_() == gst::EventType::Caps {
+                    if let gst::EventView::Caps(caps_event) = event.view() {
+                        let caps = caps_event.caps();
+                        if let Some(structure) = caps.structure(0) {
+                            if structure.name() == "video/x-h264"
+                                || structure.name() == "video/x-h265"
+                            {
+                                // Create new caps without h264parse/h265parse-specific fields
+                                let mut new_caps = caps.copy();
+                                if let Some(s) = new_caps.make_mut().structure_mut(0) {
+                                    s.remove_fields([
+                                        "coded-picture-structure",
+                                        "chroma-format",
+                                        "bit-depth-luma",
+                                        "bit-depth-chroma",
+                                    ]);
+                                }
+                                // Replace the event with one containing cleaned caps
+                                let new_event = gst::event::Caps::new(&new_caps);
+                                info.data = Some(gst::PadProbeData::Event(new_event));
+                            }
+                        }
+                    }
+                }
+            }
+            gst::PadProbeReturn::Ok
+        });
+
+        // Video link: queue -> whepserversink (video_0 request pad)
+        internal_links.push((
+            ElementPadRef::pad(&video_queue_id, "src"),
+            ElementPadRef::pad(&whepserversink_id, "video_0"),
+        ));
+
+        elements.push((video_queue_id, video_queue));
+    }
+
+    // Add whepserversink last (after audio/video processing elements)
+    elements.push((whepserversink_id.clone(), whepserversink));
+
+    info!(
+        "WHEP Output configured: endpoint_id='{}', internal_host={}, stun={}, mode={:?}",
+        endpoint_id, host_addr, stun_server, mode
+    );
+
+    // Register WHEP endpoint with the build context
+    ctx.register_whep_endpoint(instance_id, &endpoint_id, internal_port, mode);
+
+    Ok(BlockBuildResult {
+        elements,
+        internal_links,
+        bus_message_handler: None,
+        pad_properties: HashMap::new(),
+    })
+}
+
 /// Setup a stream from whepclientsrc/whepsrc with caps detection.
 /// Uses an identity element to immediately claim the pad (preventing auto-tee),
 /// then a pad probe to detect actual caps before deciding how to handle the stream:
@@ -997,7 +1525,7 @@ fn setup_video_discard(
 
 /// Get metadata for WHEP blocks (for UI/API).
 pub fn get_blocks() -> Vec<BlockDefinition> {
-    vec![whep_input_definition()]
+    vec![whep_input_definition(), whep_output_definition()]
 }
 
 /// Get WHEP Input block definition (metadata only).
@@ -1095,6 +1623,89 @@ fn whep_input_definition() -> BlockDefinition {
         built_in: true,
         ui_metadata: Some(BlockUIMetadata {
             icon: Some("🌐".to_string()),
+            width: Some(2.5),
+            height: Some(1.5),
+            ..Default::default()
+        }),
+    }
+}
+
+/// Get WHEP Output block definition (server mode - hosts WHEP endpoint).
+fn whep_output_definition() -> BlockDefinition {
+    BlockDefinition {
+        id: "builtin.whep_output".to_string(),
+        name: "WHEP Output".to_string(),
+        description: "Hosts a WHEP server endpoint. Clients can connect via WHEP to receive the WebRTC stream. Access at /api/whep/{endpoint_id}".to_string(),
+        category: "Outputs".to_string(),
+        exposed_properties: vec![
+            ExposedProperty {
+                name: "mode".to_string(),
+                label: "Stream Mode".to_string(),
+                description: "What media to stream: audio only, video only, or both".to_string(),
+                property_type: PropertyType::Enum {
+                    values: vec![
+                        EnumValue {
+                            value: "audio".to_string(),
+                            label: Some("Audio Only".to_string()),
+                        },
+                        EnumValue {
+                            value: "video".to_string(),
+                            label: Some("Video Only".to_string()),
+                        },
+                        EnumValue {
+                            value: "audio_video".to_string(),
+                            label: Some("Audio + Video".to_string()),
+                        },
+                    ],
+                },
+                default_value: Some(PropertyValue::String("audio".to_string())),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "mode".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "endpoint_id".to_string(),
+                label: "Endpoint ID".to_string(),
+                description: "Unique identifier for this WHEP endpoint. Leave empty to auto-generate a UUID. Access at /api/whep/{endpoint_id}".to_string(),
+                property_type: PropertyType::String,
+                default_value: Some(PropertyValue::String("".to_string())),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "endpoint_id".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "stun_server".to_string(),
+                label: "STUN Server".to_string(),
+                description: "STUN server URL for NAT traversal".to_string(),
+                property_type: PropertyType::String,
+                default_value: Some(PropertyValue::String(
+                    "stun://stun.l.google.com:19302".to_string(),
+                )),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "stun_server".to_string(),
+                    transform: None,
+                },
+            },
+        ],
+        // Note: external_pads here are the static defaults. The actual pads are
+        // determined dynamically by WHEPOutputBuilder::get_external_pads() based on mode.
+        external_pads: ExternalPads {
+            inputs: vec![ExternalPad {
+                name: "audio_in".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "audioconvert".to_string(),
+                internal_pad_name: "sink".to_string(),
+            }],
+            outputs: vec![],
+        },
+        built_in: true,
+        ui_metadata: Some(BlockUIMetadata {
+            icon: Some("📡".to_string()),
             width: Some(2.5),
             height: Some(1.5),
             ..Default::default()

@@ -29,7 +29,7 @@
 //! Audio (encoded) -> identity -> [dynamic: parser based on codec] -> mpegtsmux
 //! ```
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -106,6 +106,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!(
             "📡 Building MPEG-TS/SRT Output block instance: {}",

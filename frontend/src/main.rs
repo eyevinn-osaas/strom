@@ -13,6 +13,7 @@ mod compositor_editor;
 mod discovery;
 mod graph;
 mod info_page;
+mod links;
 mod list_navigator;
 mod login;
 mod media;
@@ -94,7 +95,7 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("Strom - GStreamer Flow Engine"),
+            .with_title("Strom"),
         ..Default::default()
     };
 

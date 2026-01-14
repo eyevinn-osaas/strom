@@ -6,5 +6,8 @@ pub mod registry;
 pub mod sdp;
 pub mod storage;
 
-pub use builder::{BlockBuildError, BlockBuildResult, BlockBuilder, BusMessageConnectFn};
+pub use builder::{
+    BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, BusMessageConnectFn,
+    WhepEndpointInfo, WhepStreamMode,
+};
 pub use registry::BlockRegistry;

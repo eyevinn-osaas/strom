@@ -16,7 +16,7 @@
 //! - parser: Codec-specific parser (h264parse, h265parse, etc.) for proper stream formatting
 //! - capsfilter: Sets output caps for proper codec negotiation
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -54,6 +54,7 @@ impl BlockBuilder for VideoEncBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎞️ Building VideoEncoder block instance: {}", instance_id);
 
@@ -694,8 +695,8 @@ fn map_quality_preset_vp9enc(quality_preset: &str) -> i32 {
 /// Get codec-specific caps string for capsfilter.
 fn get_codec_caps_string(codec: Codec) -> String {
     match codec {
-        Codec::H264 => "video/x-h264,stream-format=byte-stream,alignment=au".to_string(),
-        Codec::H265 => "video/x-h265,stream-format=byte-stream,alignment=au".to_string(),
+        Codec::H264 => "video/x-h264,alignment=au".to_string(),
+        Codec::H265 => "video/x-h265,alignment=au".to_string(),
         Codec::AV1 => "video/x-av1".to_string(),
         Codec::VP9 => "video/x-vp9".to_string(),
     }

@@ -4,7 +4,7 @@
 //! - **InterOutput**: Publishes a stream for other flows to consume
 //! - **InterInput**: Subscribes to a stream from another flow
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -106,6 +106,7 @@ impl BlockBuilder for InterOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         tracing::info!("Building InterOutput block instance: {}", instance_id);
 
@@ -172,6 +173,7 @@ impl BlockBuilder for InterInputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         tracing::info!("Building InterInput block instance: {}", instance_id);
 
