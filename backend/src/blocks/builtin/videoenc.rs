@@ -10,8 +10,8 @@
 //! - AV1
 //! - VP9
 //!
-//! The block creates a chain: videoconvert -> encoder -> parser -> capsfilter
-//! - videoconvert: Ensures compatible pixel format for the encoder
+//! The block creates a chain: autovideoconvert -> encoder -> parser -> capsfilter
+//! - autovideoconvert: Auto-selects best converter (GPU-accelerated when available)
 //! - encoder: Selected hardware or software encoder
 //! - parser: Codec-specific parser (h264parse, h265parse, etc.) for proper stream formatting
 //! - capsfilter: Sets output caps for proper codec negotiation
@@ -109,14 +109,16 @@ impl BlockBuilder for VideoEncBuilder {
             .unwrap_or(60);
 
         // Create elements
-        let convert_id = format!("{}:videoconvert", instance_id);
+        let convert_id = format!("{}:autovideoconvert", instance_id);
         let encoder_id = format!("{}:encoder", instance_id);
         let capsfilter_id = format!("{}:capsfilter", instance_id);
 
-        let videoconvert = gst::ElementFactory::make("videoconvert")
+        // Use autovideoconvert instead of videoconvert to support GPU-accelerated
+        // color conversion when using hardware encoders (fixes issue #188)
+        let videoconvert = gst::ElementFactory::make("autovideoconvert")
             .name(&convert_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+            .map_err(|e| BlockBuildError::ElementCreation(format!("autovideoconvert: {}", e)))?;
 
         let encoder = gst::ElementFactory::make(&encoder_name)
             .name(&encoder_id)
@@ -163,11 +165,11 @@ impl BlockBuilder for VideoEncBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
 
         info!(
-            "🎞️ VideoEncoder block created (chain: videoconvert -> {} -> {} -> capsfilter [{}])",
+            "🎞️ VideoEncoder block created (chain: autovideoconvert -> {} -> {} -> capsfilter [{}])",
             encoder_name, parser_name, caps_str
         );
 
-        // Chain: videoconvert -> encoder -> parser -> capsfilter
+        // Chain: autovideoconvert -> encoder -> parser -> capsfilter
         let internal_links = vec![
             (
                 ElementPadRef::pad(&convert_id, "src"),
@@ -840,7 +842,7 @@ fn videoenc_definition() -> BlockDefinition {
             inputs: vec![ExternalPad {
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
-                internal_element_id: "videoconvert".to_string(),
+                internal_element_id: "autovideoconvert".to_string(),
                 internal_pad_name: "sink".to_string(),
             }],
             outputs: vec![ExternalPad {
