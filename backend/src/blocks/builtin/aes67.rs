@@ -1,6 +1,6 @@
 //! AES67 audio-over-IP block builders.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -25,6 +25,7 @@ impl BlockBuilder for AES67InputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         debug!("Building AES67 Input block instance: {}", instance_id);
 
@@ -402,6 +403,7 @@ impl BlockBuilder for AES67OutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         debug!("Building AES67 Output block instance: {}", instance_id);
 

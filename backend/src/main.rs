@@ -359,6 +359,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
 
         // Register GStreamer plugins statically
         gstwebrtchttp::plugin_register_static().expect("Could not register webrtchttp plugins");
+        gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
         gstrsinter::plugin_register_static().expect("Could not register inter plugins");
 
         // Start GLib main loop in background thread for bus watch callbacks
@@ -503,6 +504,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
 
     // Register GStreamer plugins statically
     gstwebrtchttp::plugin_register_static().expect("Could not register webrtchttp plugins");
+    gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
     gstrsinter::plugin_register_static().expect("Could not register inter plugins");
 
     // Start GLib main loop in background thread for bus watch callbacks

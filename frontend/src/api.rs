@@ -430,6 +430,20 @@ impl ApiClient {
         format!("{}/flows/{}/debug-graph", self.base_url, id)
     }
 
+    /// Get the WHEP player URL for a given endpoint ID.
+    /// Returns the full URL that can be opened in a new tab.
+    pub fn get_whep_player_url(&self, endpoint_id: &str) -> String {
+        // base_url is like "http://localhost:8080/api", we need "http://localhost:8080"
+        let server_base = self.base_url.trim_end_matches("/api");
+        // WHEP endpoint path (proxy at /whep/{endpoint_id})
+        let whep_endpoint = format!("/whep/{}", endpoint_id);
+        format!(
+            "{}/player/whep?endpoint={}",
+            server_base,
+            urlencoding::encode(&whep_endpoint)
+        )
+    }
+
     /// List all block definitions (built-in + user-defined).
     pub async fn list_blocks(&self) -> ApiResult<Vec<strom_types::BlockDefinition>> {
         use strom_types::block::BlockListResponse;

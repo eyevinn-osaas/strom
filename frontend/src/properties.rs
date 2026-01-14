@@ -17,6 +17,10 @@ pub struct BlockInspectorResult {
     pub browse_streams_requested: bool,
     /// VLC playlist download requested (for MPEG-TS/SRT blocks) - contains (srt_uri, latency_ms)
     pub vlc_playlist_requested: Option<(String, i32)>,
+    /// WHEP player endpoint_id (for WHEP Output blocks) - used to construct full player URL
+    pub whep_player_url: Option<String>,
+    /// Copy WHEP player URL to clipboard - contains endpoint_id
+    pub copy_whep_url_requested: Option<String>,
 }
 
 /// Property inspector panel.
@@ -320,6 +324,12 @@ impl PropertyInspector {
         let mut result = BlockInspectorResult::default();
 
         ui.push_id(&block_id, |ui| {
+            // Delete button at top, away from action buttons
+            if ui.button("🗑 Delete Block").clicked() {
+                result.delete_requested = true;
+            }
+            ui.separator();
+
             // Block name (read-only)
             ui.horizontal(|ui| {
                 ui.label("Block:");
@@ -341,13 +351,23 @@ impl PropertyInspector {
                 });
             }
 
-            ui.separator();
+            // Check if this block type has action buttons
+            let has_action_buttons = matches!(
+                definition.id.as_str(),
+                "builtin.aes67_input"
+                    | "builtin.glcompositor"
+                    | "builtin.compositor"
+                    | "builtin.media_player"
+                    | "builtin.mpegtssrt_output"
+                    | "builtin.whep_output"
+            );
 
-            // Delete button
-            if ui.button("🗑 Delete Block").clicked() {
-                result.delete_requested = true;
+            // Only show separator before action buttons if there are any
+            if has_action_buttons {
+                ui.separator();
             }
 
+            // Block-specific action buttons
             // Browse Streams button for AES67 Input blocks
             if definition.id == "builtin.aes67_input"
                 && ui
@@ -379,32 +399,75 @@ impl PropertyInspector {
                     .on_hover_text("Download XSPF playlist and open in VLC")
                     .clicked()
             {
-                    // Get SRT URI from block properties or default
-                    let srt_uri = block
-                        .properties
-                        .get("srt_uri")
-                        .and_then(|v| match v {
-                            PropertyValue::String(s) => Some(s.clone()),
-                            _ => None,
-                        })
-                        .unwrap_or_else(|| "srt://:5000?mode=listener".to_string());
+                // Get SRT URI from block properties or default
+                let srt_uri = block
+                    .properties
+                    .get("srt_uri")
+                    .and_then(|v| match v {
+                        PropertyValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "srt://:5000?mode=listener".to_string());
 
-                    // Get latency from block properties or default (125ms)
-                    let latency = block
-                        .properties
-                        .get("latency")
-                        .and_then(|v| match v {
-                            PropertyValue::Int(i) => Some(*i as i32),
-                            PropertyValue::UInt(u) => Some(*u as i32),
-                            _ => None,
-                        })
-                        .unwrap_or(125);
+                // Get latency from block properties or default (125ms)
+                let latency = block
+                    .properties
+                    .get("latency")
+                    .and_then(|v| match v {
+                        PropertyValue::Int(i) => Some(*i as i32),
+                        PropertyValue::UInt(u) => Some(*u as i32),
+                        _ => None,
+                    })
+                    .unwrap_or(125);
 
                 result.vlc_playlist_requested = Some((srt_uri, latency));
             }
 
-            ui.separator();
+            // Open WHEP Player button for WHEP Output blocks
+            if definition.id == "builtin.whep_output" {
+                // Get endpoint_id from runtime_data (set when flow starts)
+                // or from properties if user configured it
+                let endpoint_id = block
+                    .runtime_data
+                    .as_ref()
+                    .and_then(|rd| rd.get("whep_endpoint_id").cloned())
+                    .or_else(|| {
+                        block.properties.get("endpoint_id").and_then(|v| match v {
+                            PropertyValue::String(s) if !s.is_empty() => Some(s.clone()),
+                            _ => None,
+                        })
+                    });
 
+                if let Some(endpoint_id) = endpoint_id {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("▶ Open Player")
+                            .on_hover_text("Open WHEP player in browser")
+                            .clicked()
+                        {
+                            result.whep_player_url = Some(endpoint_id.clone());
+                        }
+                        if ui
+                            .button("📋 Copy URL")
+                            .on_hover_text("Copy player URL to clipboard")
+                            .clicked()
+                        {
+                            result.copy_whep_url_requested = Some(endpoint_id.clone());
+                        }
+                    });
+                } else {
+                    // Flow not running, show disabled button with tooltip
+                    ui.add_enabled_ui(false, |ui| {
+                        ui.button("▶ Open Player")
+                            .on_hover_text("Start the flow to enable player")
+                            .on_disabled_hover_text("Start the flow to enable player");
+                    });
+                }
+            }
+
+            // Separator before properties section
+            // (also serves as separator after action buttons if there were any)
+            ui.separator();
             ui.label("💡 Only modified properties are saved");
 
             ScrollArea::both()

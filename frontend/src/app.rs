@@ -332,6 +332,8 @@ pub enum AppPage {
     Media,
     /// System and version information
     Info,
+    /// Quick links to streaming endpoints
+    Links,
 }
 
 /// Focus target for Ctrl+F cycling
@@ -574,6 +576,8 @@ pub struct StromApp {
     media_page: crate::media::MediaPage,
     /// Info page state
     info_page: crate::info_page::InfoPage,
+    /// Links page state
+    links_page: crate::links::LinksPage,
     /// Flow list filter text
     flow_filter: String,
     /// Show stream picker modal for this block ID (when browsing discovered streams for AES67 Input)
@@ -700,6 +704,7 @@ impl StromApp {
             clocks_page: crate::clocks::ClocksPage::new(),
             media_page: crate::media::MediaPage::new(),
             info_page: crate::info_page::InfoPage::new(),
+            links_page: crate::links::LinksPage::new(),
             flow_filter: String::new(),
             show_stream_picker_for_block: None,
             focus_target: FocusTarget::None,
@@ -798,6 +803,7 @@ impl StromApp {
             clocks_page: crate::clocks::ClocksPage::new(),
             media_page: crate::media::MediaPage::new(),
             info_page: crate::info_page::InfoPage::new(),
+            links_page: crate::links::LinksPage::new(),
             flow_filter: String::new(),
             show_stream_picker_for_block: None,
             focus_target: FocusTarget::None,
@@ -1957,6 +1963,9 @@ impl StromApp {
                 AppPage::Info => {
                     // No search/filters on Info page
                 }
+                AppPage::Links => {
+                    // No search/filters on Links page
+                }
             }
         }
 
@@ -2084,6 +2093,17 @@ impl StromApp {
                         self.current_page = AppPage::Info;
                         self.focus_target = FocusTarget::None;
                     }
+                    if ui
+                        .selectable_label(
+                            self.current_page == AppPage::Links,
+                            egui::RichText::new("Links").size(16.0),
+                        )
+                        .on_hover_text("Quick links to streaming endpoints")
+                        .clicked()
+                    {
+                        self.current_page = AppPage::Links;
+                        self.focus_target = FocusTarget::None;
+                    }
 
                     // Right-aligned system controls
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2153,6 +2173,7 @@ impl StromApp {
             AppPage::Clocks => self.render_clocks_toolbar(ctx),
             AppPage::Media => self.render_media_toolbar(ctx),
             AppPage::Info => self.render_info_toolbar(ctx),
+            AppPage::Links => self.render_links_toolbar(ctx),
         }
     }
 
@@ -2414,6 +2435,20 @@ impl StromApp {
                         self.network_interfaces_loaded = false;
                         self.load_network_interfaces(ctx.clone());
                     }
+                });
+            });
+    }
+
+    /// Render the links page toolbar
+    fn render_links_toolbar(&mut self, ctx: &Context) {
+        TopBottomPanel::top("page_toolbar")
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(egui::RichText::new("Links").heading());
                 });
             });
     }
@@ -3076,6 +3111,19 @@ impl StromApp {
                             let filename = format!("{}.xspf", safe_name);
 
                             download_file(&filename, &playlist_content, "application/xspf+xml");
+                        }
+
+                        // Handle WHEP player request (for WHEP Output)
+                        if let Some(endpoint_id) = result.whep_player_url {
+                            let player_url = self.api.get_whep_player_url(&endpoint_id);
+                            ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                        }
+
+                        // Handle copy WHEP URL to clipboard
+                        if let Some(endpoint_id) = result.copy_whep_url_requested {
+                            let player_url = self.api.get_whep_player_url(&endpoint_id);
+                            ctx.copy_text(player_url);
+                            self.status = "Player URL copied to clipboard".to_string();
                         }
                     } else {
                         ui.label("Block definition not found");
@@ -5857,6 +5905,11 @@ impl eframe::App for StromApp {
                         &self.network_interfaces,
                         &self.flows,
                     );
+                });
+            }
+            AppPage::Links => {
+                CentralPanel::default().show(ctx, |ui| {
+                    self.links_page.render(ui, &self.api, ctx);
                 });
             }
         }

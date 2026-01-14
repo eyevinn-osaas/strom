@@ -37,6 +37,7 @@ pub mod stats;
 pub mod storage;
 pub mod system_monitor;
 pub mod version;
+pub mod whep_registry;
 
 use state::AppState;
 
@@ -206,10 +207,46 @@ pub async fn create_app_with_state_and_auth(
         .route("/login", post(auth::login_handler))
         .route("/logout", post(auth::logout_handler))
         .route("/auth/status", get(auth::auth_status_handler))
+        // WHEP streams list API (JSON)
+        .route("/whep-streams", get(api::whep_player::list_whep_streams))
         // MCP Streamable HTTP endpoint (has its own session management)
         .route("/mcp", post(api::mcp::mcp_post))
         .route("/mcp", get(api::mcp::mcp_get))
         .route("/mcp", delete(api::mcp::mcp_delete));
+
+    // WHEP player pages (HTML) - outside /api
+    let player_router = Router::new()
+        .route("/whep", get(api::whep_player::whep_player))
+        .route("/whep-streams", get(api::whep_player::whep_streams_page));
+
+    // WHEP proxy routes - outside /api (acts as WHEP server endpoint)
+    let whep_router = Router::new()
+        .route(
+            "/{endpoint_id}",
+            post(api::whep_player::whep_endpoint_proxy),
+        )
+        .route(
+            "/{endpoint_id}",
+            axum::routing::options(api::whep_player::whep_endpoint_proxy_options),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            delete(api::whep_player::whep_resource_proxy_delete),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            patch(api::whep_player::whep_resource_proxy_patch),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            axum::routing::options(api::whep_player::whep_resource_proxy_options),
+        )
+        .with_state(state.clone());
+
+    // Static assets for WHEP player
+    let static_router = Router::new()
+        .route("/whep.css", get(api::whep_player::whep_css))
+        .route("/whep.js", get(api::whep_player::whep_js));
 
     // Create MCP session manager
     let mcp_sessions = mcp::McpSessionManager::new();
@@ -228,6 +265,9 @@ pub async fn create_app_with_state_and_auth(
             SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::ApiDoc::openapi()),
         )
         .nest("/api", api_router)
+        .nest("/player", player_router)
+        .nest("/whep", whep_router)
+        .nest("/static", static_router)
         .layer(session_layer)
         .layer(
             CorsLayer::new()
