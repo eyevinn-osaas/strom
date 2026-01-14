@@ -201,14 +201,14 @@ impl BlockBuilder for NDIInputBuilder {
         match mode.as_str() {
             "combined" => {
                 // Video path
-                let videoconvert_id = format!("{}:videoconvert", instance_id);
+                let videoconvert_id = format!("{}:autovideoconvert", instance_id);
                 let videocaps_id = format!("{}:videocapsfilter", instance_id);
 
-                let videoconvert = gst::ElementFactory::make("videoconvert")
+                let videoconvert = gst::ElementFactory::make("autovideoconvert")
                     .name(&videoconvert_id)
                     .build()
                     .map_err(|e| {
-                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                        BlockBuildError::ElementCreation(format!("autovideoconvert: {}", e))
                     })?;
 
                 let video_caps = gst::Caps::builder("video/x-raw").build();
@@ -285,14 +285,14 @@ impl BlockBuilder for NDIInputBuilder {
                 );
             }
             "video" => {
-                let videoconvert_id = format!("{}:videoconvert", instance_id);
+                let videoconvert_id = format!("{}:autovideoconvert", instance_id);
                 let capsfilter_id = format!("{}:capsfilter", instance_id);
 
-                let videoconvert = gst::ElementFactory::make("videoconvert")
+                let videoconvert = gst::ElementFactory::make("autovideoconvert")
                     .name(&videoconvert_id)
                     .build()
                     .map_err(|e| {
-                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                        BlockBuildError::ElementCreation(format!("autovideoconvert: {}", e))
                     })?;
 
                 let caps = gst::Caps::builder("video/x-raw").build();
@@ -413,7 +413,7 @@ impl BlockBuilder for NDIOutputBuilder {
                 ExternalPad {
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
-                    internal_element_id: "videoconvert".to_string(),
+                    internal_element_id: "autovideoconvert".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
@@ -426,7 +426,7 @@ impl BlockBuilder for NDIOutputBuilder {
             "video" => vec![ExternalPad {
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
-                internal_element_id: "videoconvert".to_string(),
+                internal_element_id: "autovideoconvert".to_string(),
                 internal_pad_name: "sink".to_string(),
             }],
             "audio" => vec![ExternalPad {
@@ -476,12 +476,12 @@ impl BlockBuilder for NDIOutputBuilder {
         match mode.as_str() {
             "combined" => {
                 // Video path
-                let videoconvert_id = format!("{}:videoconvert", instance_id);
-                let videoconvert = gst::ElementFactory::make("videoconvert")
+                let videoconvert_id = format!("{}:autovideoconvert", instance_id);
+                let videoconvert = gst::ElementFactory::make("autovideoconvert")
                     .name(&videoconvert_id)
                     .build()
                     .map_err(|e| {
-                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                        BlockBuildError::ElementCreation(format!("autovideoconvert: {}", e))
                     })?;
 
                 // Audio path
@@ -557,14 +557,14 @@ impl BlockBuilder for NDIOutputBuilder {
                 info!("NDI Output (combined) configured: ndi_name={}", ndi_name);
             }
             "video" => {
-                let videoconvert_id = format!("{}:videoconvert", instance_id);
+                let videoconvert_id = format!("{}:autovideoconvert", instance_id);
                 let ndisink_id = format!("{}:ndisink", instance_id);
 
-                let videoconvert = gst::ElementFactory::make("videoconvert")
+                let videoconvert = gst::ElementFactory::make("autovideoconvert")
                     .name(&videoconvert_id)
                     .build()
                     .map_err(|e| {
-                        BlockBuildError::ElementCreation(format!("videoconvert: {}", e))
+                        BlockBuildError::ElementCreation(format!("autovideoconvert: {}", e))
                     })?;
 
                 let ndisink = gst::ElementFactory::make("ndisink")
@@ -841,7 +841,7 @@ fn ndi_output_definition() -> BlockDefinition {
                 ExternalPad {
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
-                    internal_element_id: "videoconvert".to_string(),
+                    internal_element_id: "autovideoconvert".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
