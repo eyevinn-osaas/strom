@@ -18,6 +18,9 @@ pub const SAP_MULTICAST_ADDR: &str = "224.2.127.254";
 /// SAP port.
 pub const SAP_PORT: u16 = 9875;
 
+/// RTSP server port for mDNS/RAVENNA announcements.
+pub const RTSP_PORT: u16 = 8554;
+
 /// A discovered AES67 stream from SAP or mDNS.
 #[derive(Debug, Clone)]
 pub struct DiscoveredStream {
@@ -101,6 +104,17 @@ pub enum DiscoverySource {
         /// Message ID hash from SAP header.
         msg_id_hash: u16,
     },
+    /// Discovered via mDNS (Bonjour/Zeroconf).
+    Mdns {
+        /// Service type (e.g., "_rtsp._tcp.local", "_ndi._tcp.local").
+        service_type: String,
+        /// Service instance name.
+        instance_name: String,
+        /// Hostname from mDNS.
+        hostname: String,
+        /// Port number.
+        port: u16,
+    },
     /// Manually added stream.
     Manual,
 }
@@ -109,6 +123,16 @@ impl std::fmt::Display for DiscoverySource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DiscoverySource::Sap { .. } => write!(f, "SAP"),
+            DiscoverySource::Mdns { service_type, .. } => {
+                // Extract protocol name from service type (e.g., "_rtsp._tcp.local" -> "RTSP")
+                if service_type.starts_with("_rtsp.") {
+                    write!(f, "mDNS (RAVENNA)")
+                } else if service_type.starts_with("_ndi.") {
+                    write!(f, "mDNS (NDI)")
+                } else {
+                    write!(f, "mDNS")
+                }
+            }
             DiscoverySource::Manual => write!(f, "Manual"),
         }
     }
@@ -165,6 +189,8 @@ pub struct AnnouncedStream {
     pub origin_ip: IpAddr,
     /// When this was last announced.
     pub last_announced: Instant,
+    /// mDNS service fullname (if announced via mDNS).
+    pub mdns_fullname: Option<String>,
 }
 
 impl AnnouncedStream {

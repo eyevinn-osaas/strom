@@ -24,6 +24,12 @@ struct ConfigFile {
 struct ServerConfig {
     #[serde(default = "default_port")]
     port: u16,
+    #[serde(default = "default_ice_servers")]
+    ice_servers: Vec<String>,
+}
+
+fn default_ice_servers() -> Vec<String> {
+    vec!["stun:stun.l.google.com:19302".to_string()]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -32,6 +38,7 @@ struct StorageConfig {
     data_dir: Option<PathBuf>,
     flows_path: Option<PathBuf>,
     blocks_path: Option<PathBuf>,
+    media_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -56,6 +63,8 @@ pub struct Config {
     pub flows_path: PathBuf,
     /// Path to blocks storage file
     pub blocks_path: PathBuf,
+    /// Path to media files directory
+    pub media_path: PathBuf,
     /// PostgreSQL database URL (if set, PostgreSQL is used instead of JSON files)
     /// Format: postgresql://user:password@host/database_name
     pub database_url: Option<String>,
@@ -63,6 +72,9 @@ pub struct Config {
     pub log_file: Option<PathBuf>,
     /// Log level (if set, overrides RUST_LOG environment variable)
     pub log_level: Option<String>,
+    /// ICE servers for WebRTC NAT traversal (STUN/TURN)
+    /// Format: stun:host:port or turn:user:pass@host:port
+    pub ice_servers: Vec<String>,
 }
 
 impl Config {
@@ -77,6 +89,7 @@ impl Config {
         data_dir: Option<PathBuf>,
         flows_path: Option<PathBuf>,
         blocks_path: Option<PathBuf>,
+        media_path: Option<PathBuf>,
         database_url: Option<String>,
     ) -> anyhow::Result<Self> {
         // Find config file paths
@@ -91,6 +104,7 @@ impl Config {
         figment = figment.merge(Serialized::defaults(ConfigFile {
             server: ServerConfig {
                 port: strom_types::DEFAULT_PORT,
+                ice_servers: default_ice_servers(),
             },
             storage: StorageConfig::default(),
             logging: LoggingConfig::default(),
@@ -111,11 +125,28 @@ impl Config {
         }
 
         // 4. Merge environment variables (STROM_* prefix)
+        // Note: Single underscore splits nested keys (e.g., STROM_SERVER_PORT -> server.port)
+        // This means field names with underscores can't be set via env vars using this method
         figment = figment.merge(
             Env::prefixed("STROM_")
                 .map(|key| key.as_str().replace("__", ".").into())
                 .split("_"),
         );
+
+        // 4b. Handle STROM_SERVER_ICE_SERVERS specially (comma-separated array)
+        // This needs special handling because:
+        // - The split("_") above would turn ICE_SERVERS into ice.servers (wrong)
+        // - Figment doesn't parse comma-separated values into arrays
+        if let Ok(ice_servers_str) = env::var("STROM_SERVER_ICE_SERVERS") {
+            let ice_servers: Vec<String> = ice_servers_str
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if !ice_servers.is_empty() {
+                figment = figment.merge(Serialized::default("server.ice_servers", ice_servers));
+            }
+        }
 
         // 5. Merge CLI arguments (highest priority)
         if let Some(p) = port {
@@ -130,6 +161,9 @@ impl Config {
         if let Some(ref bp) = blocks_path {
             figment = figment.merge(Serialized::default("storage.blocks_path", bp));
         }
+        if let Some(ref mp) = media_path {
+            figment = figment.merge(Serialized::default("storage.media_path", mp));
+        }
         if let Some(ref db) = database_url {
             figment = figment.merge(Serialized::default("storage.database_url", db));
         }
@@ -142,6 +176,7 @@ impl Config {
             data_dir: config_file.storage.data_dir,
             flows_path: config_file.storage.flows_path,
             blocks_path: config_file.storage.blocks_path,
+            media_path: config_file.storage.media_path,
         };
         let data_paths = DataPaths::resolve(path_config)?;
 
@@ -149,9 +184,11 @@ impl Config {
             port: config_file.server.port,
             flows_path: data_paths.flows_path,
             blocks_path: data_paths.blocks_path,
+            media_path: data_paths.media_path,
             database_url: config_file.storage.database_url,
             log_file: config_file.logging.log_file,
             log_level: config_file.logging.log_level,
+            ice_servers: config_file.server.ice_servers,
         })
     }
 
@@ -163,6 +200,7 @@ impl Config {
         data_dir: Option<PathBuf>,
         flows_path: Option<PathBuf>,
         blocks_path: Option<PathBuf>,
+        media_path: Option<PathBuf>,
         database_url: Option<String>,
     ) -> anyhow::Result<Self> {
         // Resolve data paths
@@ -170,6 +208,7 @@ impl Config {
             data_dir,
             flows_path,
             blocks_path,
+            media_path,
         };
         let data_paths = DataPaths::resolve(path_config)?;
 
@@ -177,9 +216,11 @@ impl Config {
             port,
             flows_path: data_paths.flows_path,
             blocks_path: data_paths.blocks_path,
+            media_path: data_paths.media_path,
             database_url,
             log_file: None,
             log_level: None,
+            ice_servers: default_ice_servers(),
         })
     }
 
@@ -196,9 +237,17 @@ impl Config {
         let data_dir = env::var("STROM_DATA_DIR").ok().map(PathBuf::from);
         let flows_path = env::var("STROM_FLOWS_PATH").ok().map(PathBuf::from);
         let blocks_path = env::var("STROM_BLOCKS_PATH").ok().map(PathBuf::from);
+        let media_path = env::var("STROM_MEDIA_PATH").ok().map(PathBuf::from);
         let database_url = env::var("STROM_DATABASE_URL").ok();
 
-        Self::new(port, data_dir, flows_path, blocks_path, database_url)
+        Self::new(
+            port,
+            data_dir,
+            flows_path,
+            blocks_path,
+            media_path,
+            database_url,
+        )
     }
 }
 
@@ -211,9 +260,11 @@ impl Default for Config {
                 port: strom_types::DEFAULT_PORT,
                 flows_path: PathBuf::from("flows.json"),
                 blocks_path: PathBuf::from("blocks.json"),
+                media_path: PathBuf::from("media"),
                 database_url: None,
                 log_file: None,
                 log_level: None,
+                ice_servers: default_ice_servers(),
             }
         })
     }
@@ -240,7 +291,7 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
 
         // Restore (ignore errors)
         let _ = std::env::set_current_dir(original_dir);
@@ -260,6 +311,7 @@ mod tests {
             None,
             Some(flows.clone()),
             Some(blocks.clone()),
+            None,
             Some("postgresql://test".to_string()),
         )
         .unwrap();
@@ -294,7 +346,7 @@ database_url = "postgresql://localhost/test"
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
 
         // Restore original directory (ignore errors if it fails)
         let _ = std::env::set_current_dir(original_dir);
@@ -311,7 +363,6 @@ database_url = "postgresql://localhost/test"
     fn test_from_figment_env_vars_override_config_file() {
         // Save and clear any existing env vars
         let original_server_port = std::env::var("STROM_SERVER_PORT").ok();
-        let original_port = std::env::var("STROM_PORT").ok();
 
         let temp_dir = TempDir::new().unwrap();
         let config_file = temp_dir.path().join(".strom.toml");
@@ -319,14 +370,14 @@ database_url = "postgresql://localhost/test"
         // Create a test config file with port 7777
         fs::write(&config_file, "[server]\nport = 7777").unwrap();
 
-        // Set environment variable to override (use STROM_SERVER_PORT to match figment's split logic)
+        // Set environment variable to override (STROM_SERVER_PORT -> server.port)
         std::env::set_var("STROM_SERVER_PORT", "8888");
 
         // Change to temp directory
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
 
         // Restore (restore dir before temp_dir is dropped, ignore errors)
         let _ = std::env::set_current_dir(&original_dir);
@@ -336,11 +387,6 @@ database_url = "postgresql://localhost/test"
             std::env::set_var("STROM_SERVER_PORT", port);
         } else {
             std::env::remove_var("STROM_SERVER_PORT");
-        }
-        if let Some(port) = original_port {
-            std::env::set_var("STROM_PORT", port);
-        } else {
-            std::env::remove_var("STROM_PORT");
         }
 
         // Env var should override config file
@@ -352,7 +398,6 @@ database_url = "postgresql://localhost/test"
     fn test_from_figment_cli_overrides_env_and_config() {
         // Save any existing env vars
         let original_server_port = std::env::var("STROM_SERVER_PORT").ok();
-        let original_port = std::env::var("STROM_PORT").ok();
 
         let temp_dir = TempDir::new().unwrap();
         let config_file = temp_dir.path().join(".strom.toml");
@@ -368,7 +413,7 @@ database_url = "postgresql://localhost/test"
         std::env::set_current_dir(&temp_dir).unwrap();
 
         // Pass CLI arg 9999
-        let config = Config::from_figment(Some(9999), None, None, None, None).unwrap();
+        let config = Config::from_figment(Some(9999), None, None, None, None, None).unwrap();
 
         // Restore (restore dir before temp_dir is dropped, ignore errors)
         let _ = std::env::set_current_dir(&original_dir);
@@ -378,11 +423,6 @@ database_url = "postgresql://localhost/test"
             std::env::set_var("STROM_SERVER_PORT", port);
         } else {
             std::env::remove_var("STROM_SERVER_PORT");
-        }
-        if let Some(port) = original_port {
-            std::env::set_var("STROM_PORT", port);
-        } else {
-            std::env::remove_var("STROM_PORT");
         }
 
         // CLI should have highest priority
@@ -416,7 +456,7 @@ data_dir = "{}"
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
 
         // Restore (ignore errors)
         let _ = std::env::set_current_dir(original_dir);
@@ -426,13 +466,54 @@ data_dir = "{}"
     }
 
     #[test]
+    #[serial]
+    fn test_ice_servers_env_var() {
+        // Save any existing env vars
+        let original_ice_servers = std::env::var("STROM_SERVER_ICE_SERVERS").ok();
+
+        let temp_dir = TempDir::new().unwrap();
+        let original_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&temp_dir).unwrap();
+
+        // Set ICE servers env var (comma-separated)
+        std::env::set_var(
+            "STROM_SERVER_ICE_SERVERS",
+            "stun:stun.example.com:3478,turn:user:pass@turn.example.com:3478",
+        );
+
+        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
+
+        // Restore
+        let _ = std::env::set_current_dir(&original_dir);
+        if let Some(ice) = original_ice_servers {
+            std::env::set_var("STROM_SERVER_ICE_SERVERS", ice);
+        } else {
+            std::env::remove_var("STROM_SERVER_ICE_SERVERS");
+        }
+
+        assert_eq!(config.ice_servers.len(), 2);
+        assert_eq!(config.ice_servers[0], "stun:stun.example.com:3478");
+        assert_eq!(
+            config.ice_servers[1],
+            "turn:user:pass@turn.example.com:3478"
+        );
+    }
+
+    #[test]
     fn test_legacy_config_new() {
         let temp_dir = TempDir::new().unwrap();
         let flows = temp_dir.path().join("flows.json");
         let blocks = temp_dir.path().join("blocks.json");
 
-        let config =
-            Config::new(8080, None, Some(flows.clone()), Some(blocks.clone()), None).unwrap();
+        let config = Config::new(
+            8080,
+            None,
+            Some(flows.clone()),
+            Some(blocks.clone()),
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(config.port, 8080);
         assert_eq!(config.flows_path, flows);

@@ -1,5 +1,8 @@
 //! OpenGL video compositor block for combining multiple video inputs.
 //!
+//! **DEPRECATED**: Use `builtin.compositor` (Video Compositor) instead, which supports
+//! both GPU and CPU backends with automatic fallback.
+//!
 //! This block uses GStreamer's `glvideomixerelement` to composite multiple video streams
 //! with hardware-accelerated OpenGL rendering. Each input can be positioned, sized, and
 //! blended independently with configurable properties.
@@ -13,9 +16,9 @@
 //! - Configurable output canvas size
 //! - Multiple background types (checker, black, white, transparent)
 //!
-//! The block creates a chain: glupload (per input) -> glvideomixerelement -> gldownload -> capsfilter
+//! The block creates a chain: glupload -> glcolorconvert (per input) -> glvideomixerelement -> gldownload -> capsfilter
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -85,6 +88,7 @@ impl BlockBuilder for GLCompositorBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎬 Building GLCompositor block instance: {}", instance_id);
 
@@ -331,16 +335,24 @@ impl BlockBuilder for GLCompositorBuilder {
         let mut internal_links = Vec::new();
 
         for (i, sink_pad) in mixer_sink_pads.iter().enumerate() {
-            // Create glupload for hardware-accelerated format conversion
-            // Note: videoconvert removed - it's a CPU bottleneck for live video!
-            // glupload can handle format conversion directly with GPU acceleration
+            // Create glupload for hardware-accelerated upload to GL memory
             let upload_id = format!("{}:glupload_{}", instance_id, i);
             let upload = gst::ElementFactory::make("glupload")
                 .name(&upload_id)
                 .build()
                 .map_err(|e| BlockBuildError::ElementCreation(format!("glupload_{}: {}", i, e)))?;
 
+            // Create glcolorconvert for GPU-based color space conversion (e.g., NV12 -> RGBA)
+            let colorconvert_id = format!("{}:glcolorconvert_{}", instance_id, i);
+            let colorconvert = gst::ElementFactory::make("glcolorconvert")
+                .name(&colorconvert_id)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("glcolorconvert_{}: {}", i, e))
+                })?;
+
             elements.push((upload_id.clone(), upload));
+            elements.push((colorconvert_id.clone(), colorconvert));
 
             let mixer_pad_name = sink_pad.name().to_string();
 
@@ -359,19 +371,27 @@ impl BlockBuilder for GLCompositorBuilder {
 
                 elements.push((queue_id.clone(), queue));
 
-                // Link queue -> glupload -> mixer
+                // Link queue -> glupload -> glcolorconvert -> mixer
                 internal_links.push((
                     ElementPadRef::pad(&queue_id, "src"),
                     ElementPadRef::pad(&upload_id, "sink"),
                 ));
                 internal_links.push((
                     ElementPadRef::pad(&upload_id, "src"),
+                    ElementPadRef::pad(&colorconvert_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&colorconvert_id, "src"),
                     ElementPadRef::pad(&mixer_id, &mixer_pad_name),
                 ));
             } else {
-                // Link glupload -> mixer directly (no queue for lower latency)
+                // Link glupload -> glcolorconvert -> mixer directly (no queue for lower latency)
                 internal_links.push((
                     ElementPadRef::pad(&upload_id, "src"),
+                    ElementPadRef::pad(&colorconvert_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&colorconvert_id, "src"),
                     ElementPadRef::pad(&mixer_id, &mixer_pad_name),
                 ));
             }
@@ -582,7 +602,7 @@ fn glcompositor_definition() -> BlockDefinition {
                 label: "Latency (ms)".to_string(),
                 description: "Additional latency in milliseconds for the mixer aggregator".to_string(),
                 property_type: PropertyType::UInt,
-                default_value: Some(PropertyValue::UInt(0)),
+                default_value: Some(PropertyValue::UInt(200)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "latency".to_string(),
@@ -594,7 +614,7 @@ fn glcompositor_definition() -> BlockDefinition {
                 label: "Min Upstream Latency (ms)".to_string(),
                 description: "Minimum upstream latency in milliseconds that is reported to upstream elements".to_string(),
                 property_type: PropertyType::UInt,
-                default_value: Some(PropertyValue::UInt(0)),
+                default_value: Some(PropertyValue::UInt(200)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "min_upstream_latency".to_string(),
@@ -757,9 +777,9 @@ fn glcompositor_definition() -> BlockDefinition {
 
     BlockDefinition {
         id: "builtin.glcompositor".to_string(),
-        name: "OpenGL Video Compositor".to_string(),
-        description: "Hardware-accelerated OpenGL video compositor. Note: Consider using the new 'Video Compositor' block instead, which supports both GPU and CPU backends with automatic fallback.".to_string(),
-        category: "Video".to_string(),
+        name: "[Deprecated] OpenGL Compositor".to_string(),
+        description: "DEPRECATED: Use 'Video Compositor' instead, which supports both GPU and CPU backends with automatic fallback. This block will be removed in a future release.".to_string(),
+        category: "Deprecated".to_string(),
         exposed_properties,
         // External pads are computed dynamically based on num_inputs
         external_pads: ExternalPads {

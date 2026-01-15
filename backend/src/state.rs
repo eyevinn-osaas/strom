@@ -8,13 +8,15 @@ use crate::ptp_monitor::PtpMonitor;
 use crate::sharing::ChannelRegistry;
 use crate::storage::{JsonFileStorage, Storage};
 use crate::system_monitor::SystemMonitor;
+use crate::whep_registry::WhepRegistry;
+use chrono::Local;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strom_types::element::{ElementInfo, PropertyValue};
 use strom_types::{Flow, FlowId, PipelineState, StromEvent};
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -45,11 +47,22 @@ struct AppStateInner {
     discovery: DiscoveryService,
     /// PTP clock monitoring service
     ptp_monitor: PtpMonitor,
+    /// Media files directory path
+    media_path: PathBuf,
+    /// WHEP endpoint registry (maps endpoint IDs to internal ports)
+    whep_registry: WhepRegistry,
+    /// ICE servers for WebRTC NAT traversal (STUN/TURN URLs)
+    ice_servers: Vec<String>,
 }
 
 impl AppState {
     /// Create new application state with the given storage backend.
-    pub fn new(storage: impl Storage + 'static, blocks_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        storage: impl Storage + 'static,
+        blocks_path: impl Into<PathBuf>,
+        media_path: impl Into<PathBuf>,
+        ice_servers: Vec<String>,
+    ) -> Self {
         let events = EventBroadcaster::default();
         Self {
             inner: Arc::new(AppStateInner {
@@ -64,8 +77,16 @@ impl AppState {
                 channel_registry: ChannelRegistry::new(),
                 discovery: DiscoveryService::new(events),
                 ptp_monitor: PtpMonitor::new(),
+                media_path: media_path.into(),
+                whep_registry: WhepRegistry::new(),
+                ice_servers,
             }),
         }
+    }
+
+    /// Get the WHEP endpoint registry.
+    pub fn whep_registry(&self) -> &WhepRegistry {
+        &self.inner.whep_registry
     }
 
     /// Get the event broadcaster.
@@ -93,6 +114,16 @@ impl AppState {
         &self.inner.ptp_monitor
     }
 
+    /// Get the media files directory path.
+    pub fn media_path(&self) -> &PathBuf {
+        &self.inner.media_path
+    }
+
+    /// Get the configured ICE servers for WebRTC.
+    pub fn ice_servers(&self) -> &[String] {
+        &self.inner.ice_servers
+    }
+
     /// Start background services (SAP discovery, etc).
     pub async fn start_services(&self) {
         info!("Starting discovery service (SAP listener and announcer)...");
@@ -105,8 +136,15 @@ impl AppState {
     pub fn with_json_storage(
         flows_path: impl AsRef<std::path::Path>,
         blocks_path: impl Into<PathBuf>,
+        media_path: impl Into<PathBuf>,
+        ice_servers: Vec<String>,
     ) -> Self {
-        Self::new(JsonFileStorage::new(flows_path), blocks_path)
+        Self::new(
+            JsonFileStorage::new(flows_path),
+            blocks_path,
+            media_path,
+            ice_servers,
+        )
     }
 
     /// Create new application state with PostgreSQL storage.
@@ -116,13 +154,15 @@ impl AppState {
     pub async fn with_postgres_storage(
         database_url: &str,
         blocks_path: impl Into<PathBuf>,
+        media_path: impl Into<PathBuf>,
+        ice_servers: Vec<String>,
     ) -> anyhow::Result<Self> {
         use crate::storage::PostgresStorage;
 
         let storage = PostgresStorage::new(database_url).await?;
         storage.run_migrations().await?;
 
-        Ok(Self::new(storage, blocks_path))
+        Ok(Self::new(storage, blocks_path, media_path, ice_servers))
     }
 
     /// Load flows from storage into memory.
@@ -136,7 +176,7 @@ impl AppState {
                 // This prevents showing stale "Playing" states from before the server stopped
                 for flow in flows.values_mut() {
                     if flow.state.is_some() {
-                        info!(
+                        debug!(
                             "Resetting state for flow '{}' from {:?} to None (server restart)",
                             flow.name, flow.state
                         );
@@ -484,8 +524,12 @@ impl AppState {
 
         // Create pipeline with event broadcaster and block registry
         info!("Creating PipelineManager (this may block)...");
-        let mut manager =
-            PipelineManager::new(&flow, self.inner.events.clone(), &self.inner.block_registry)?;
+        let mut manager = PipelineManager::new(
+            &flow,
+            self.inner.events.clone(),
+            &self.inner.block_registry,
+            self.inner.ice_servers.clone(),
+        )?;
         info!("PipelineManager created successfully");
 
         // Start pipeline
@@ -508,6 +552,32 @@ impl AppState {
             .and_then(|p| p.get_ptp_info())
             .and_then(|info| info.grandmaster_clock_id)
             .map(|id| crate::blocks::sdp::convert_clock_id_to_sdp_format(&id));
+
+        // Collect and register WHEP endpoints from blocks
+        let whep_endpoints: Vec<(String, String)> = if let Some(manager) = pipelines_guard.get(id) {
+            let mut endpoints = Vec::new();
+            for whep_info in manager.whep_endpoints() {
+                info!(
+                    "Registering WHEP endpoint '{}' (block {}) on port {} mode={:?}",
+                    whep_info.endpoint_id,
+                    whep_info.block_id,
+                    whep_info.internal_port,
+                    whep_info.mode
+                );
+                self.inner
+                    .whep_registry
+                    .register(
+                        whep_info.endpoint_id.clone(),
+                        whep_info.internal_port,
+                        whep_info.mode,
+                    )
+                    .await;
+                endpoints.push((whep_info.block_id.clone(), whep_info.endpoint_id.clone()));
+            }
+            endpoints
+        } else {
+            Vec::new()
+        };
 
         // Drop the pipelines guard - we don't need it anymore
         drop(pipelines_guard);
@@ -540,6 +610,51 @@ impl AppState {
                     channels.unwrap_or(2)
                 );
 
+                // Get the multicast destination address for routing lookup
+                let multicast_host = block
+                    .properties
+                    .get("host")
+                    .and_then(|v| {
+                        if let PropertyValue::String(s) = v {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| "239.69.1.1".to_string());
+
+                // Determine origin IP:
+                // 1. If interface is explicitly set, use that interface's IP
+                // 2. Otherwise, ask the kernel which source IP it would use for the multicast address
+                //    This respects the routing table and ensures the SDP origin matches actual traffic
+                let origin_ip = block
+                    .properties
+                    .get("interface")
+                    .and_then(|v| {
+                        if let PropertyValue::String(s) = v {
+                            if !s.is_empty() {
+                                crate::network::get_interface_ipv4(s).map(|ip| ip.to_string())
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        // Query kernel for the source IP it would use for this multicast destination
+                        crate::network::get_source_ipv4_for_destination(&multicast_host)
+                            .map(|ip| ip.to_string())
+                    })
+                    .or_else(|| crate::network::get_default_ipv4().map(|ip| ip.to_string()));
+
+                // Check if RAVENNA extensions are enabled for this block
+                let ravenna_extensions = block
+                    .properties
+                    .get("ravenna_extensions")
+                    .map(|v| matches!(v, PropertyValue::Bool(true)))
+                    .unwrap_or(false);
+
                 // Generate SDP with flow properties for correct clock signaling (RFC 7273)
                 // Include PTP clock identity if available for accurate ts-refclk attribute
                 let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
@@ -549,6 +664,8 @@ impl AppState {
                     channels,
                     Some(&flow.properties),
                     ptp_clock_identity.as_deref(),
+                    origin_ip.as_deref(),
+                    ravenna_extensions,
                 );
 
                 // Initialize runtime_data if needed
@@ -567,6 +684,28 @@ impl AppState {
                     .discovery
                     .announce_stream(*id, &block.id, &sdp)
                     .await;
+            }
+
+            // Store endpoint_id in runtime_data for WHEP output blocks
+            if block.block_definition_id == "builtin.whep_output" {
+                if let Some((_, endpoint_id)) =
+                    whep_endpoints.iter().find(|(bid, _)| bid == &block.id)
+                {
+                    info!(
+                        "Storing WHEP endpoint_id '{}' for block {} in runtime_data",
+                        endpoint_id, block.id
+                    );
+
+                    // Initialize runtime_data if needed
+                    if block.runtime_data.is_none() {
+                        block.runtime_data = Some(std::collections::HashMap::new());
+                    }
+
+                    // Store endpoint_id
+                    if let Some(runtime_data) = &mut block.runtime_data {
+                        runtime_data.insert("whep_endpoint_id".to_string(), endpoint_id.clone());
+                    }
+                }
             }
         }
 
@@ -620,6 +759,7 @@ impl AppState {
         // so it won't be persisted to storage (which is correct - it's runtime-only data)
         flow.state = Some(state);
         flow.properties.auto_restart = true; // Enable auto-restart when flow is started
+        flow.properties.started_at = Some(Local::now().to_rfc3339()); // Record when flow started
         {
             let mut flows = self.inner.flows.write().await;
             flows.insert(*id, flow.clone());
@@ -659,6 +799,18 @@ impl AppState {
             return Ok(PipelineState::Null);
         };
 
+        // Unregister WHEP endpoints before stopping
+        for whep_info in manager.whep_endpoints() {
+            info!(
+                "Unregistering WHEP endpoint '{}' (block {})",
+                whep_info.endpoint_id, whep_info.block_id
+            );
+            self.inner
+                .whep_registry
+                .unregister(&whep_info.endpoint_id)
+                .await;
+        }
+
         // Stop the pipeline
         let state = manager.stop()?;
 
@@ -679,6 +831,7 @@ impl AppState {
                 }
                 flow.state = Some(state);
                 flow.properties.auto_restart = false; // Disable auto-restart when manually stopped
+                flow.properties.started_at = None; // Clear started_at when stopped
                 Some(flow.clone())
             } else {
                 None
@@ -946,6 +1099,11 @@ impl AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::with_json_storage("flows.json", "blocks.json")
+        Self::with_json_storage(
+            "flows.json",
+            "blocks.json",
+            "media",
+            vec!["stun:stun.l.google.com:19302".to_string()],
+        )
     }
 }

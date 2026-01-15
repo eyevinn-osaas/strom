@@ -176,6 +176,8 @@ pub struct PipelineManager {
     /// Maps element_id -> {pad_name -> tee_element_name}
     /// These tees have allow-not-linked=true so unlinked streams don't block the pipeline
     dynamic_pad_tees: std::sync::Arc<std::sync::RwLock<HashMap<String, HashMap<String, String>>>>,
+    /// WHEP endpoints registered by blocks
+    whep_endpoints: Vec<crate::blocks::WhepEndpointInfo>,
 }
 
 impl PipelineManager {
@@ -184,6 +186,7 @@ impl PipelineManager {
         flow: &Flow,
         events: EventBroadcaster,
         _block_registry: &BlockRegistry,
+        ice_servers: Vec<String>,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
         info!(
@@ -217,6 +220,7 @@ impl PipelineManager {
             ptp_stats: std::sync::Arc::new(std::sync::RwLock::new(None)),
             ptp_stats_callback: None,
             dynamic_pad_tees: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
+            whep_endpoints: Vec::new(),
         };
 
         // Expand blocks into GStreamer elements
@@ -226,9 +230,13 @@ impl PipelineManager {
             info!("Inside block_in_place, calling block_on...");
             tokio::runtime::Handle::current().block_on(async {
                 info!("Inside block_on, calling expand_blocks...");
-                let result =
-                    super::block_expansion::expand_blocks(&flow.blocks, &flow.links, &flow_id)
-                        .await;
+                let result = super::block_expansion::expand_blocks(
+                    &flow.blocks,
+                    &flow.links,
+                    &flow_id,
+                    ice_servers,
+                )
+                .await;
                 info!("expand_blocks completed");
                 result
             })
@@ -296,6 +304,15 @@ impl PipelineManager {
             }
         }
         manager.pad_properties.extend(expanded.pad_properties);
+
+        // Store WHEP endpoints from blocks
+        if !expanded.whep_endpoints.is_empty() {
+            info!(
+                "Storing {} WHEP endpoint(s) from blocks",
+                expanded.whep_endpoints.len()
+            );
+        }
+        manager.whep_endpoints = expanded.whep_endpoints;
 
         // Analyze links and auto-insert tee elements where needed
         let all_links = expanded.links;
@@ -680,6 +697,15 @@ impl PipelineManager {
         if element.has_property("qos") {
             element.set_property("qos", true);
             debug!("Enabled QoS on element {}", element_def.id);
+        }
+
+        // Default is-live=true for test sources (unless explicitly set by user)
+        if (element_def.element_type == "videotestsrc"
+            || element_def.element_type == "audiotestsrc")
+            && !element_def.properties.contains_key("is-live")
+        {
+            element.set_property("is-live", true);
+            debug!("Enabled is-live on test source {}", element_def.id);
         }
 
         // Set properties
@@ -2012,6 +2038,11 @@ impl PipelineManager {
     /// Get the underlying GStreamer pipeline (for debugging).
     pub fn pipeline(&self) -> &gst::Pipeline {
         &self.pipeline
+    }
+
+    /// Get WHEP endpoints registered by blocks in this pipeline.
+    pub fn whep_endpoints(&self) -> &[crate::blocks::WhepEndpointInfo] {
+        &self.whep_endpoints
     }
 
     /// Generate a DOT graph of the pipeline for debugging.
@@ -3414,13 +3445,17 @@ mod tests {
         flow
     }
 
+    fn default_test_ice_servers() -> Vec<String> {
+        vec!["stun:stun.l.google.com:19302".to_string()]
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn test_create_pipeline() {
         gst::init().unwrap();
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry);
+        let manager = PipelineManager::new(&flow, events, &registry, default_test_ice_servers());
         assert!(manager.is_ok());
     }
 
@@ -3430,7 +3465,8 @@ mod tests {
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let mut manager = PipelineManager::new(&flow, events, &registry).unwrap();
+        let mut manager =
+            PipelineManager::new(&flow, events, &registry, default_test_ice_servers()).unwrap();
 
         // Start pipeline
         let state = manager.start();
@@ -3455,7 +3491,7 @@ mod tests {
 
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry);
+        let manager = PipelineManager::new(&flow, events, &registry, default_test_ice_servers());
         assert!(manager.is_err());
     }
 
@@ -3501,7 +3537,7 @@ mod tests {
 
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry);
+        let manager = PipelineManager::new(&flow, events, &registry, default_test_ice_servers());
         assert!(manager.is_ok());
 
         let manager = manager.unwrap();
@@ -3519,7 +3555,8 @@ mod tests {
 
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry).unwrap();
+        let manager =
+            PipelineManager::new(&flow, events, &registry, default_test_ice_servers()).unwrap();
 
         // Should have only 2 original elements, no tee
         assert_eq!(manager.elements.len(), 2);

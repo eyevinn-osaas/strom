@@ -4,10 +4,12 @@ use clap::Parser;
 use gstreamer::glib;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-#[cfg(feature = "gui")]
+use strom_types::flow::GStreamerClockType;
+
+#[cfg(not(feature = "no-gui"))]
 use strom::create_app_with_state_and_auth;
 use strom::{auth, config::Config, create_app_with_state, state::AppState};
 
@@ -110,7 +112,8 @@ fn handle_hash_password(password: Option<&str>) -> anyhow::Result<()> {
         Ok(hash) => {
             println!("\nPassword hash:");
             println!("{}", hash);
-            println!("\nAdd this to your environment:");
+            println!("\nAdd both variables to your environment to enable authentication:");
+            println!("export STROM_ADMIN_USER='admin'");
             println!("export STROM_ADMIN_PASSWORD_HASH='{}'", hash);
         }
         Err(e) => {
@@ -145,34 +148,42 @@ struct Args {
     #[arg(long, env = "STROM_BLOCKS_PATH")]
     blocks_path: Option<PathBuf>,
 
+    /// Path to media files directory (overrides --data-dir)
+    #[arg(long, env = "STROM_MEDIA_PATH")]
+    media_path: Option<PathBuf>,
+
     /// Database URL (e.g., postgresql://user:pass@localhost/strom)
     /// If set, database storage is used instead of JSON files
     /// Supported schemes: postgresql://
     #[arg(long, env = "STROM_DATABASE_URL")]
     database_url: Option<String>,
 
-    /// Run in headless mode (no GUI) - only available when gui feature is enabled
-    #[cfg(feature = "gui")]
+    /// Run in headless mode (no GUI)
+    #[cfg(not(feature = "no-gui"))]
     #[arg(long)]
     headless: bool,
 
     /// Force X11 display backend (default on WSL2, option on native Linux)
-    #[cfg(feature = "gui")]
+    #[cfg(not(feature = "no-gui"))]
     #[arg(long)]
     x11: bool,
 
     /// Force Wayland display backend (default on native Linux, option on WSL2)
-    #[cfg(feature = "gui")]
+    #[cfg(not(feature = "no-gui"))]
     #[arg(long)]
     wayland: bool,
 
     /// Disable automatic restart of flows on startup (useful for development/testing)
     #[arg(long)]
     no_auto_restart: bool,
+
+    /// Print detailed version and build information and exit
+    #[arg(long)]
+    version_info: bool,
 }
 
 /// Detect if running under WSL (Windows Subsystem for Linux).
-#[cfg(feature = "gui")]
+#[cfg(not(feature = "no-gui"))]
 fn is_wsl() -> bool {
     std::fs::read_to_string("/proc/version")
         .map(|v| {
@@ -192,8 +203,11 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Initialize process startup time before anything else
+    strom::version::init_process_startup_time();
+
     // Parse command line arguments
-    #[cfg_attr(not(feature = "gui"), allow(unused_variables))]
+    #[cfg_attr(feature = "no-gui", allow(unused_variables))]
     let args = Args::parse();
 
     // Handle subcommands before starting server
@@ -205,11 +219,35 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Handle --version-info flag
+    if args.version_info {
+        let info = strom::version::VersionInfo::get();
+        println!("Strom - GStreamer Flow Engine");
+        println!("==============================");
+        println!("Version:     v{}", info.version);
+        if !info.git_tag.is_empty() {
+            println!("Tag:         {}", info.git_tag);
+        }
+        println!("Git Hash:    {}", info.git_hash);
+        println!("Branch:      {}", info.git_branch);
+        if info.git_dirty {
+            println!("Status:      Modified (dirty)");
+        }
+        println!("Build Time:  {}", info.build_timestamp);
+        println!("Build ID:    {}", info.build_id);
+        println!("GStreamer:   {}", info.gstreamer_version);
+        println!("OS:          {}", info.os_info);
+        if info.in_docker {
+            println!("Container:   Docker");
+        }
+        return Ok(());
+    }
+
     // Select display backend based on platform and CLI flags
     // WSL2 has clipboard issues with Wayland (smithay-clipboard), so default to X11 there
     // Native Linux works better with Wayland by default
     // This must happen before any GUI initialization
-    #[cfg(feature = "gui")]
+    #[cfg(not(feature = "no-gui"))]
     if !args.headless {
         let force_x11 = if args.x11 {
             true // Explicit --x11 flag
@@ -231,6 +269,7 @@ fn main() -> anyhow::Result<()> {
         args.data_dir.clone(),
         args.flows_path.clone(),
         args.blocks_path.clone(),
+        args.media_path.clone(),
         args.database_url.clone(),
     )
     .unwrap_or_else(|e| {
@@ -245,10 +284,24 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Determine if GUI should be enabled
-    #[cfg(feature = "gui")]
+    #[cfg(not(feature = "no-gui"))]
     let gui_enabled = !args.headless;
-    #[cfg(not(feature = "gui"))]
+    #[cfg(feature = "no-gui")]
     let gui_enabled = false;
+
+    // Log version and build info at startup
+    let version_info = strom::version::VersionInfo::get();
+    info!(
+        "Strom v{} ({}) build_id={} gstreamer={}",
+        version_info.version,
+        if version_info.git_tag.is_empty() {
+            &version_info.git_hash
+        } else {
+            &version_info.git_tag
+        },
+        &version_info.build_id[..8.min(version_info.build_id.len())],
+        version_info.gstreamer_version
+    );
 
     if gui_enabled {
         info!("Starting Strom backend server with GUI...");
@@ -256,7 +309,7 @@ fn main() -> anyhow::Result<()> {
         info!("Starting Strom backend server (headless mode)...");
     }
 
-    #[cfg(feature = "gui")]
+    #[cfg(not(feature = "no-gui"))]
     {
         if gui_enabled {
             // GUI mode: Run HTTP server in background, GUI on main thread
@@ -267,14 +320,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    #[cfg(not(feature = "gui"))]
+    #[cfg(feature = "no-gui")]
     {
-        // Always headless when gui feature is disabled
+        // Always headless when no-gui feature is enabled
         run_headless(config, args.no_auto_restart)
     }
 }
 
-#[cfg(feature = "gui")]
+#[cfg(not(feature = "no-gui"))]
 fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -305,8 +358,13 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         info!("GStreamer initialized");
 
         // Register GStreamer plugins statically
+        gstwebrtchttp::plugin_register_static().expect("Could not register webrtchttp plugins");
         gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
         gstrsinter::plugin_register_static().expect("Could not register inter plugins");
+
+        // Detect GPU capabilities for video conversion mode selection
+        // This tests CUDA-GL interop to determine if autovideoconvert works
+        strom::gpu::detect_gpu_capabilities();
 
         // Start GLib main loop in background thread for bus watch callbacks
         start_glib_main_loop();
@@ -319,12 +377,22 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         // Create application with persistent storage
         let state = if let Some(ref db_url) = config.database_url {
             info!("Using PostgreSQL storage");
-            AppState::with_postgres_storage(db_url, &config.blocks_path)
-                .await
-                .expect("Failed to initialize PostgreSQL storage")
+            AppState::with_postgres_storage(
+                db_url,
+                &config.blocks_path,
+                &config.media_path,
+                config.ice_servers.clone(),
+            )
+            .await
+            .expect("Failed to initialize PostgreSQL storage")
         } else {
             info!("Using JSON file storage");
-            AppState::with_json_storage(&config.flows_path, &config.blocks_path)
+            AppState::with_json_storage(
+                &config.flows_path,
+                &config.blocks_path,
+                &config.media_path,
+                config.ice_servers.clone(),
+            )
         };
         state
             .load_from_storage()
@@ -372,13 +440,34 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
             info!("Auto-restart disabled by --no-auto-restart flag");
         }
 
-        // Run HTTP server with graceful shutdown
+        // Run HTTP server with graceful shutdown for both SIGINT (Ctrl+C) and SIGTERM (Docker stop)
         let shutdown_signal = async move {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install Ctrl+C handler");
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
 
-            info!("Received Ctrl+C, shutting down gracefully...");
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+                let mut sigint =
+                    signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+
+                tokio::select! {
+                    _ = sigterm.recv() => {
+                        info!("Received SIGTERM, shutting down gracefully...");
+                    }
+                    _ = sigint.recv() => {
+                        info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
+                    }
+                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c()
+                    .await
+                    .expect("Failed to install Ctrl+C handler");
+                info!("Received Ctrl+C, shutting down gracefully...");
+            }
 
             // Note: We don't need to explicitly stop flows here.
             // GStreamer will clean up when the process exits, and
@@ -428,8 +517,13 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     info!("GStreamer initialized");
 
     // Register GStreamer plugins statically
+    gstwebrtchttp::plugin_register_static().expect("Could not register webrtchttp plugins");
     gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
     gstrsinter::plugin_register_static().expect("Could not register inter plugins");
+
+    // Detect GPU capabilities for video conversion mode selection
+    // This tests CUDA-GL interop to determine if autovideoconvert works
+    strom::gpu::detect_gpu_capabilities();
 
     // Start GLib main loop in background thread for bus watch callbacks
     start_glib_main_loop();
@@ -440,10 +534,21 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     // Create application with persistent storage
     let state = if let Some(ref db_url) = config.database_url {
         info!("Using PostgreSQL storage");
-        AppState::with_postgres_storage(db_url, &config.blocks_path).await?
+        AppState::with_postgres_storage(
+            db_url,
+            &config.blocks_path,
+            &config.media_path,
+            config.ice_servers.clone(),
+        )
+        .await?
     } else {
         info!("Using JSON file storage");
-        AppState::with_json_storage(&config.flows_path, &config.blocks_path)
+        AppState::with_json_storage(
+            &config.flows_path,
+            &config.blocks_path,
+            &config.media_path,
+            config.ice_servers.clone(),
+        )
     };
     state.load_from_storage().await?;
 
@@ -485,13 +590,34 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
         info!("Auto-restart disabled by --no-auto-restart flag");
     }
 
-    // Set up graceful shutdown handler
+    // Set up graceful shutdown handler for both SIGINT (Ctrl+C) and SIGTERM (Docker stop)
     let shutdown_signal = async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
 
-        info!("Received Ctrl+C, shutting down gracefully...");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+            let mut sigint =
+                signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+
+            tokio::select! {
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, shutting down gracefully...");
+                }
+                _ = sigint.recv() => {
+                    info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::signal::ctrl_c()
+                .await
+                .expect("Failed to install Ctrl+C handler");
+            info!("Received Ctrl+C, shutting down gracefully...");
+        }
 
         // Note: We don't need to explicitly stop flows here.
         // GStreamer will clean up when the process exits, and
@@ -533,28 +659,125 @@ async fn restart_flows(state: &AppState) {
 
     info!("Restarting flows that have auto_restart enabled...");
     let flows = state.get_flows().await;
-    let mut count = 0;
+
+    // Separate flows into PTP and non-PTP
+    let mut non_ptp_flows = Vec::new();
+    let mut ptp_flows = Vec::new();
+
     for flow in flows {
         if flow.properties.auto_restart {
-            count += 1;
+            if flow.properties.clock_type == GStreamerClockType::Ptp {
+                ptp_flows.push(flow);
+            } else {
+                non_ptp_flows.push(flow);
+            }
+        }
+    }
+
+    let mut count = 0;
+
+    // Start non-PTP flows immediately
+    for flow in non_ptp_flows {
+        count += 1;
+        info!(
+            "Auto-restarting flow {}: {} ({}) [non-PTP]",
+            count, flow.name, flow.id
+        );
+        match state.start_flow(&flow.id).await {
+            Ok(_) => {
+                info!("Successfully restarted flow: {}", flow.name);
+                // Small delay between flow starts to avoid overwhelming GStreamer
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                error!("Failed to restart flow {}: {}", flow.name, e);
+            }
+        }
+    }
+
+    // For PTP flows, wait for PTP clock to sync before starting
+    if !ptp_flows.is_empty() {
+        // Collect unique PTP domains that need to be synced
+        let mut domains_to_wait: std::collections::HashSet<u8> = std::collections::HashSet::new();
+        for flow in &ptp_flows {
+            let domain = flow.properties.ptp_domain.unwrap_or(0);
+            domains_to_wait.insert(domain);
+            // Register the flow with PTP monitor so it starts tracking the domain
+            if let Err(e) = state.ptp_monitor().register_flow(flow.id, domain) {
+                warn!(
+                    "Failed to register flow {} for PTP domain {}: {}",
+                    flow.name, domain, e
+                );
+            }
+        }
+
+        info!(
+            "Waiting for PTP sync on {} domain(s) before starting {} PTP flow(s)...",
+            domains_to_wait.len(),
+            ptp_flows.len()
+        );
+
+        // Wait for all PTP domains to sync (with timeout)
+        const PTP_SYNC_TIMEOUT_SECS: u64 = 30;
+        const PTP_POLL_INTERVAL_MS: u64 = 500;
+        let start_time = std::time::Instant::now();
+
+        loop {
+            // Check if all domains are synced
+            let all_synced = domains_to_wait
+                .iter()
+                .all(|domain| state.ptp_monitor().is_domain_synced(*domain));
+
+            if all_synced {
+                info!("All PTP domains synchronized, starting PTP flows...");
+                break;
+            }
+
+            // Check timeout
+            if start_time.elapsed().as_secs() >= PTP_SYNC_TIMEOUT_SECS {
+                warn!(
+                    "PTP sync timeout after {}s, starting PTP flows anyway (may have clock issues)",
+                    PTP_SYNC_TIMEOUT_SECS
+                );
+                break;
+            }
+
+            // Log which domains are still waiting
+            let unsynced: Vec<u8> = domains_to_wait
+                .iter()
+                .filter(|d| !state.ptp_monitor().is_domain_synced(**d))
+                .copied()
+                .collect();
             info!(
-                "Auto-restarting flow {}: {} ({})",
-                count, flow.name, flow.id
+                "Waiting for PTP sync on domain(s) {:?} ({:.1}s elapsed)",
+                unsynced,
+                start_time.elapsed().as_secs_f32()
+            );
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(PTP_POLL_INTERVAL_MS)).await;
+        }
+
+        // Now start PTP flows
+        for flow in ptp_flows {
+            count += 1;
+            let domain = flow.properties.ptp_domain.unwrap_or(0);
+            let synced = state.ptp_monitor().is_domain_synced(domain);
+            info!(
+                "Auto-restarting flow {}: {} ({}) [PTP domain {}, synced={}]",
+                count, flow.name, flow.id, domain, synced
             );
             match state.start_flow(&flow.id).await {
                 Ok(_) => {
                     info!("Successfully restarted flow: {}", flow.name);
-                    // Small delay between flow starts to avoid overwhelming GStreamer
-                    // and to give SRT time to initialize properly
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
                 Err(e) => {
                     error!("Failed to restart flow {}: {}", flow.name, e);
-                    // Continue with other flows even if one fails
                 }
             }
         }
     }
+
     if count > 0 {
         info!("Auto-restart complete: {} flow(s) restarted", count);
     }

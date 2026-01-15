@@ -6,6 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::process::{Command, Stdio};
 use strom_types::{
@@ -199,7 +200,17 @@ pub async fn create_flow(
 ) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
     info!("Received create flow request: name='{}'", req.name);
 
-    let flow = Flow::new(req.name);
+    let mut flow = Flow::new(req.name);
+
+    // Set description if provided
+    if let Some(description) = req.description {
+        flow.properties.description = Some(description);
+    }
+
+    // Set creation timestamp
+    let now = Local::now().to_rfc3339();
+    flow.properties.created_at = Some(now.clone());
+    flow.properties.last_modified = Some(now);
 
     info!("Creating flow: {} ({})", flow.name, flow.id);
 
@@ -328,6 +339,12 @@ pub async fn update_flow(
         layout::apply_auto_layout(&mut flow);
     }
 
+    // Update last_modified timestamp (preserve created_at from old flow)
+    flow.properties.last_modified = Some(Local::now().to_rfc3339());
+    if flow.properties.created_at.is_none() {
+        flow.properties.created_at = old_flow.properties.created_at.clone();
+    }
+
     // Check if the flow is currently running
     let is_running = old_flow.state == Some(strom_types::PipelineState::Playing);
 
@@ -387,6 +404,32 @@ pub async fn update_flow(
     }
 
     Ok(Json(FlowResponse { flow }))
+}
+
+/// Update an existing flow (PUT alias).
+///
+/// This is an alias for the POST update endpoint, provided for RESTful API conventions.
+#[utoipa::path(
+    put,
+    path = "/api/flows/{id}",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    request_body = Flow,
+    responses(
+        (status = 200, description = "Flow updated", body = FlowResponse),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "Flow not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn update_flow_put(
+    state: State<AppState>,
+    id: Path<FlowId>,
+    flow: Json<Flow>,
+) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
+    update_flow(state, id, flow).await
 }
 
 /// Delete a flow.
@@ -686,6 +729,49 @@ pub async fn get_block_sdp(
         .and_then(|info| info.grandmaster_clock_id.as_ref())
         .map(|id| crate::blocks::sdp::convert_clock_id_to_sdp_format(id));
 
+    // Get the multicast destination address for routing lookup
+    let multicast_host = block
+        .properties
+        .get("host")
+        .and_then(|v| {
+            if let strom_types::PropertyValue::String(s) = v {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "239.69.1.1".to_string());
+
+    // Determine origin IP:
+    // 1. If interface is explicitly set, use that interface's IP
+    // 2. Otherwise, ask the kernel which source IP it would use for the multicast address
+    let origin_ip = block
+        .properties
+        .get("interface")
+        .and_then(|v| {
+            if let strom_types::PropertyValue::String(s) = v {
+                if !s.is_empty() {
+                    crate::network::get_interface_ipv4(s).map(|ip| ip.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            crate::network::get_source_ipv4_for_destination(&multicast_host)
+                .map(|ip| ip.to_string())
+        })
+        .or_else(|| crate::network::get_default_ipv4().map(|ip| ip.to_string()));
+
+    // Check if RAVENNA extensions are enabled for this block
+    let ravenna_extensions = block
+        .properties
+        .get("ravenna_extensions")
+        .map(|v| matches!(v, strom_types::PropertyValue::Bool(true)))
+        .unwrap_or(false);
+
     // Generate SDP (using default sample rate and channels since we can't query caps here)
     // Pass flow properties for correct clock signaling (RFC 7273)
     let sdp = crate::blocks::sdp::generate_aes67_output_sdp(
@@ -695,6 +781,8 @@ pub async fn get_block_sdp(
         None,
         Some(&flow.properties),
         ptp_clock_identity.as_deref(),
+        origin_ip.as_deref(),
+        ravenna_extensions,
     );
 
     info!("Successfully generated SDP for block {}", block_id);
@@ -984,8 +1072,13 @@ pub async fn update_flow_properties(
         )
     })?;
 
-    // Update properties
+    // Update properties while preserving timestamps
+    let old_created_at = flow.properties.created_at.clone();
+    let old_started_at = flow.properties.started_at.clone();
     flow.properties = req.properties;
+    flow.properties.created_at = old_created_at;
+    flow.properties.started_at = old_started_at;
+    flow.properties.last_modified = Some(Local::now().to_rfc3339());
 
     // Save the updated flow
     if let Err(e) = state.upsert_flow(flow.clone()).await {

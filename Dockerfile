@@ -119,9 +119,15 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     export PKG_CONFIG_ALLOW_CROSS=1 && \
     export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
     export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu && \
-    export CFLAGS="-I/usr/include -I/usr/include/aarch64-linux-gnu" && \
+    # Use C17 standard to avoid glibc 2.38+ C23 symbols (__isoc23_sscanf, __isoc23_strtol) \
+    # that aws-lc-sys would otherwise use when built on Ubuntu 25.04 (glibc 2.41) \
+    # CFLAGS/CXXFLAGS for regular builds, CMAKE_C_FLAGS/CMAKE_CXX_FLAGS for CMake (aws-lc-sys) \
+    export CFLAGS="-std=gnu17 -I/usr/include -I/usr/include/aarch64-linux-gnu" && \
+    export CXXFLAGS="-std=gnu++17" && \
+    export CMAKE_C_FLAGS="-std=gnu17" && \
+    export CMAKE_CXX_FLAGS="-std=gnu++17" && \
     export RUSTFLAGS="-L /usr/lib/aarch64-linux-gnu" && \
-    cargo zigbuild --release --package strom --no-default-features --target aarch64-unknown-linux-gnu.2.36 && \
+    cargo zigbuild --release --package strom --no-default-features --features no-gui --target aarch64-unknown-linux-gnu.2.36 && \
     cargo zigbuild --release --package strom-mcp-server --target aarch64-unknown-linux-gnu.2.36 && \
     # Move binaries to expected location (cargo-zigbuild puts them in target/aarch64-unknown-linux-gnu/release)
     mkdir -p target/release && \
@@ -129,7 +135,7 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     cp target/aarch64-unknown-linux-gnu/release/strom-mcp-server target/release/strom-mcp-server; \
 else \
     echo "==> Native build for $TARGETPLATFORM"; \
-    cargo build --release --package strom --no-default-features && \
+    cargo build --release --package strom --features no-gui && \
     cargo build --release --package strom-mcp-server; \
 fi
 
@@ -137,30 +143,89 @@ fi
 FROM ubuntu:plucky AS runtime
 WORKDIR /app
 
-# Install only GStreamer runtime dependencies
+# Get target architecture for conditional package installation
+ARG TARGETARCH
+
+# Install GStreamer runtime dependencies
+# For amd64: Use plucky-proposed to get gstreamer1.0-plugins-bad 1.26.0-1ubuntu2.2+
+# which fixes the nvcodec plugin (Bug #2109413 - was accidentally disabled on amd64)
+# For arm64: Use standard packages (nvcodec was incorrectly enabled there, but harmless)
+#
+# IMPORTANT: gstreamer1.0-gl and EGL/GBM libraries are required for CUDA-GL interop:
+# - gstreamer1.0-gl: GL plugins (glupload, gldownload, glcolorconvert)
+# - libegl1, libegl-mesa0, libgbm1: Headless EGL/GBM rendering (no X11 required)
+# - libgl1-mesa-dri: Mesa DRI drivers for software fallback
+# The nvidia-container-toolkit mounts NVIDIA GL libraries at runtime via --gpus all
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y \
-    libgstreamer1.0-0 \
-    libgstreamer-plugins-base1.0-0 \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
-    gstreamer1.0-libav \
-    gstreamer1.0-nice \
-    gstreamer1.0-tools \
-    graphviz \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        echo "deb http://archive.ubuntu.com/ubuntu plucky-proposed main universe" > /etc/apt/sources.list.d/proposed.list && \
+        apt-get update && apt-get install -y \
+            libgstreamer1.0-0 \
+            libgstreamer-plugins-base1.0-0 \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            libgstreamer-plugins-bad1.0-0=1.26.0-1ubuntu2.2 \
+            gstreamer1.0-plugins-bad=1.26.0-1ubuntu2.2 \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-nice \
+            gstreamer1.0-tools \
+            gstreamer1.0-gl \
+            libegl1 \
+            libegl-mesa0 \
+            libgbm1 \
+            libgl1-mesa-dri \
+            graphviz \
+            ca-certificates && \
+        rm /etc/apt/sources.list.d/proposed.list; \
+    else \
+        apt-get update && apt-get install -y \
+            libgstreamer1.0-0 \
+            libgstreamer-plugins-base1.0-0 \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-libav \
+            gstreamer1.0-nice \
+            gstreamer1.0-tools \
+            gstreamer1.0-gl \
+            libegl1 \
+            libegl-mesa0 \
+            libgbm1 \
+            libgl1-mesa-dri \
+            graphviz \
+            ca-certificates; \
+    fi && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binaries from backend-builder to /app
 COPY --from=backend-builder /app/target/release/strom /app/strom
 COPY --from=backend-builder /app/target/release/strom-mcp-server /app/strom-mcp-server
 
+# Copy setup scripts for optional host/container configuration (NDI, NVIDIA, etc.)
+COPY scripts/setup /app/scripts/setup
+
 # Set environment variables
 ENV RUST_LOG=info
 ENV STROM_PORT=8080
 ENV STROM_DATA_DIR=/data
+
+# Enable all NVIDIA driver capabilities (needed for NVENC/NVDEC video encoding/decoding)
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# Headless GStreamer GL configuration for CUDA-GL interop
+# GST_GL_WINDOW=egl-device: Use EGL device extension - direct GPU access without display server
+# GST_GL_PLATFORM=egl: Use EGL platform (not GLX which requires X11)
+# This enables true zero-copy CUDA-GL interop for glupload/gldownload/glcolorconvert
+# The nvidia-container-toolkit mounts NVIDIA's EGL libraries at runtime via --gpus all
+ENV GST_GL_WINDOW=egl-device
+ENV GST_GL_PLATFORM=egl
+
+# Add NVIDIA EGL vendor config (nvidia-container-toolkit mounts libEGL_nvidia.so but not the ICD file)
+# This tells libglvnd to use NVIDIA's EGL implementation for CUDA-GL interop
+RUN mkdir -p /usr/share/glvnd/egl_vendor.d && \
+    echo '{"file_format_version":"1.0.0","ICD":{"library_path":"libEGL_nvidia.so.0"}}' \
+    > /usr/share/glvnd/egl_vendor.d/10_nvidia.json
 
 # Create data directory for persistent storage
 RUN mkdir -p /data

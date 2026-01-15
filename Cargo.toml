@@ -4,7 +4,7 @@ members = ["types", "backend", "frontend", "mcp-server"]
 default-members = ["backend"]
 
 [workspace.package]
-version = "0.2.11"
+version = "0.3.9"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Per"]
@@ -16,15 +16,16 @@ serde_json = "1.0"
 uuid = { version = "1.19", features = ["serde", "v4", "js"] }
 
 # Backend
-axum = { version = "0.8.7", features = ["ws"] }
-tokio = { version = "1.48", features = ["full"] }
+axum = { version = "0.8.8", features = ["ws", "multipart"] }
+tokio = { version = "1.49", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
 gstreamer = { version = "0.24.4", features = ["v1_20"] }
 gstreamer-app = { version = "0.24.2", features = ["v1_20"] }
 gstreamer-net = { version = "0.24.4", features = ["v1_20"] }
-gst-plugin-webrtc = { git = "https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs", features = ["whep", "whip"], rev = "83625619" }
+gst-plugin-webrtc = { version = "0.15.0-alpha.1", features = ["whep", "whip"] }
+gst-plugin-webrtchttp = "0.14"
 gst-plugin-inter = "0.14"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
@@ -36,7 +37,5 @@ utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 # Frontend
 egui = "0.33"
 eframe = { version = "0.33", features = ["default_fonts", "glow", "persistence"] }
-# Use rustls instead of native-tls to avoid OpenSSL dependency
-# This enables cross-compilation with zigbuild to older glibc versions
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 gloo-net = { version = "0.6", features = ["websocket"] }

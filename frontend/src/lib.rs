@@ -12,8 +12,12 @@ mod clocks;
 mod compositor_editor;
 mod discovery;
 mod graph;
+mod info_page;
+mod links;
 mod list_navigator;
 mod login;
+mod media;
+mod mediaplayer;
 mod meter;
 mod palette;
 mod properties;
@@ -38,7 +42,7 @@ pub fn run_native_gui(port: u16) -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("Strom - GStreamer Flow Engine"),
+            .with_title("Strom"),
         ..Default::default()
     };
 
@@ -67,7 +71,7 @@ pub fn run_native_gui_with_shutdown(
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("Strom - GStreamer Flow Engine"),
+            .with_title("Strom"),
         ..Default::default()
     };
 

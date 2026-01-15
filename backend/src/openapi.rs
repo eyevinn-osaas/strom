@@ -2,10 +2,11 @@
 
 use crate::version::VersionInfo;
 use strom_types::api::{
-    CreateFlowRequest, ElementInfoResponse, ElementListResponse, ElementPropertiesResponse,
-    ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse, FlowListResponse, FlowResponse,
-    FlowStatsResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, UpdateFlowPropertiesRequest,
-    UpdatePropertyRequest,
+    CreateDirectoryRequest, CreateFlowRequest, ElementInfoResponse, ElementListResponse,
+    ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse,
+    FlowListResponse, FlowResponse, FlowStatsResponse, ListMediaResponse, MediaFileEntry,
+    MediaOperationResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, RenameMediaRequest,
+    UpdateFlowPropertiesRequest, UpdatePropertyRequest,
 };
 use strom_types::block::{
     BlockCategoriesResponse, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
@@ -25,6 +26,7 @@ use utoipa::OpenApi;
         crate::api::flows::create_flow,
         crate::api::flows::get_flow,
         crate::api::flows::update_flow,
+        crate::api::flows::update_flow_put,
         crate::api::flows::delete_flow,
         crate::api::flows::start_flow,
         crate::api::flows::stop_flow,
@@ -45,6 +47,13 @@ use utoipa::OpenApi;
         crate::api::gst_launch::export_gst_launch,
         crate::api::network::list_interfaces,
         crate::api::version::get_version,
+        crate::api::media::list_media,
+        crate::api::media::download_file,
+        crate::api::media::upload_files,
+        crate::api::media::rename_media,
+        crate::api::media::delete_file,
+        crate::api::media::create_directory,
+        crate::api::media::delete_directory,
     ),
     components(
         schemas(
@@ -84,6 +93,11 @@ use utoipa::OpenApi;
             NetworkInterfaceInfo,
             Ipv4AddressInfo,
             Ipv6AddressInfo,
+            ListMediaResponse,
+            MediaFileEntry,
+            RenameMediaRequest,
+            CreateDirectoryRequest,
+            MediaOperationResponse,
         )
     ),
     tags(
@@ -92,7 +106,8 @@ use utoipa::OpenApi;
         (name = "blocks", description = "Reusable block management endpoints"),
         (name = "gst-launch", description = "gst-launch-1.0 import/export endpoints"),
         (name = "Network", description = "Network interface discovery endpoints"),
-        (name = "System", description = "System information endpoints")
+        (name = "System", description = "System information endpoints"),
+        (name = "Media", description = "Media file management endpoints")
     ),
     info(
         title = "Strom GStreamer Flow Engine API",

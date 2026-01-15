@@ -46,8 +46,9 @@ temp/
 # CI/CD files
 .github/workflows/
 
-# Development scripts
+# Development scripts (except setup scripts bundled in image)
 scripts/
+!scripts/setup/
 
 # Test data
 test-data/
@@ -57,5 +58,6 @@ core-dumps/
 *.core
 gst-debug.log
 
-# Test and development scripts
+# Test and development scripts (except setup scripts)
 *.sh
+!scripts/setup/**/*.sh

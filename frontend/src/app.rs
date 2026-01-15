@@ -6,7 +6,11 @@ use strom_types::{Flow, PipelineState};
 use crate::api::{ApiClient, AuthStatusResponse};
 use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
+use crate::info_page::{
+    current_time_millis, format_datetime_local, format_uptime, parse_iso8601_to_millis,
+};
 use crate::login::LoginScreen;
+use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
 use crate::properties::PropertyInspector;
@@ -76,6 +80,226 @@ pub fn remove_local_storage(key: &str) {
     }
 }
 
+/// Trigger a file download in the browser with the given content.
+#[cfg(target_arch = "wasm32")]
+pub fn download_file(filename: &str, content: &str, mime_type: &str) {
+    use wasm_bindgen::JsCast;
+
+    let window = match web_sys::window() {
+        Some(w) => w,
+        None => return,
+    };
+    let document = match window.document() {
+        Some(d) => d,
+        None => return,
+    };
+
+    // Create a blob with the content
+    let blob_parts = js_sys::Array::new();
+    blob_parts.push(&wasm_bindgen::JsValue::from_str(content));
+
+    let blob_options = web_sys::BlobPropertyBag::new();
+    blob_options.set_type(mime_type);
+
+    let blob = match web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_options) {
+        Ok(b) => b,
+        Err(_) => return,
+    };
+
+    // Create object URL
+    let url = match web_sys::Url::create_object_url_with_blob(&blob) {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+
+    // Create a temporary anchor element and click it
+    let anchor = match document.create_element("a") {
+        Ok(el) => el,
+        Err(_) => return,
+    };
+
+    let _ = anchor.set_attribute("href", &url);
+    let _ = anchor.set_attribute("download", filename);
+
+    if let Some(html_anchor) = anchor.dyn_ref::<web_sys::HtmlElement>() {
+        html_anchor.click();
+    }
+
+    // Clean up the object URL
+    let _ = web_sys::Url::revoke_object_url(&url);
+}
+
+/// Native mode - save file to temp directory and open with default application.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn download_file(filename: &str, content: &str, _mime_type: &str) {
+    // Save to temp directory so it doesn't clutter working directory
+    let path = std::env::temp_dir().join(filename);
+
+    match std::fs::write(&path, content) {
+        Ok(_) => {
+            tracing::info!("Saved file to: {}", path.display());
+
+            // Open the file with the default application (VLC for .xspf)
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(e) = std::process::Command::new("xdg-open").arg(&path).spawn() {
+                    tracing::error!("Failed to open file with xdg-open: {}", e);
+                }
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = std::process::Command::new("open").arg(&path).spawn() {
+                    tracing::error!("Failed to open file: {}", e);
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                if let Err(e) = std::process::Command::new("cmd")
+                    .args(["/C", "start", "", &path.to_string_lossy()])
+                    .spawn()
+                {
+                    tracing::error!("Failed to open file: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to save file {}: {}", path.display(), e);
+        }
+    }
+}
+
+/// Generate XSPF playlist content for VLC to play an SRT stream.
+///
+/// If the block is in listener mode (e.g., `srt://:5000?mode=listener`), VLC needs to
+/// connect as a caller. We transform the URI to use the server's hostname from the
+/// current browser URL.
+pub fn generate_vlc_playlist(srt_uri: &str, latency_ms: i32, stream_name: &str) -> String {
+    // Transform URI if it's in listener mode - VLC needs to connect as caller
+    let vlc_uri = transform_srt_uri_for_vlc(srt_uri);
+
+    // Escape XML special characters in the URI
+    let escaped_uri = vlc_uri
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;");
+
+    let escaped_name = stream_name
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;");
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<playlist xmlns="http://xspf.org/ns/0/" xmlns:vlc="http://www.videolan.org/vlc/playlist/ns/0/" version="1">
+  <title>Strom SRT Stream</title>
+  <trackList>
+    <track>
+      <location>{}</location>
+      <title>{}</title>
+      <extension application="http://www.videolan.org/vlc/playlist/0">
+        <vlc:option>network-caching={}</vlc:option>
+      </extension>
+    </track>
+  </trackList>
+</playlist>
+"#,
+        escaped_uri, escaped_name, latency_ms
+    )
+}
+
+/// Transform SRT URI for VLC playback.
+///
+/// When the MPEG-TS/SRT block is in listener mode (server waiting for connections),
+/// VLC needs to connect as a caller. This function:
+/// 1. Detects listener mode URIs (e.g., `srt://:5000?mode=listener`)
+/// 2. Replaces empty host with the Strom server's hostname
+/// 3. Changes mode from listener to caller
+fn transform_srt_uri_for_vlc(srt_uri: &str) -> String {
+    // Check if this is a listener mode URI (empty host or mode=listener)
+    let is_listener = srt_uri.contains("mode=listener");
+    let has_empty_host = srt_uri.starts_with("srt://:") || srt_uri.starts_with("srt://:");
+
+    if !is_listener && !has_empty_host {
+        // Already in caller mode with a host, use as-is
+        return srt_uri.to_string();
+    }
+
+    // Get the current hostname from the browser (WASM) or use localhost (native)
+    let hostname = get_current_hostname();
+
+    // Parse the URI to extract port and other parameters
+    // URI format: srt://[host]:port[?params]
+    let uri_without_scheme = srt_uri.strip_prefix("srt://").unwrap_or(srt_uri);
+
+    // Find the port - it's between : and ? (or end of string)
+    let (host_port, params) = if let Some(q_pos) = uri_without_scheme.find('?') {
+        (
+            &uri_without_scheme[..q_pos],
+            Some(&uri_without_scheme[q_pos + 1..]),
+        )
+    } else {
+        (uri_without_scheme, None)
+    };
+
+    // Extract just the port (after the last colon)
+    let port = if let Some(colon_pos) = host_port.rfind(':') {
+        &host_port[colon_pos + 1..]
+    } else {
+        host_port
+    };
+
+    // Build the new URI with caller mode
+    let mut new_uri = format!("srt://{}:{}", hostname, port);
+
+    // Add parameters, but change mode to caller
+    if let Some(params) = params {
+        let new_params: Vec<&str> = params
+            .split('&')
+            .filter(|p| !p.starts_with("mode="))
+            .collect();
+
+        if new_params.is_empty() {
+            new_uri.push_str("?mode=caller");
+        } else {
+            new_uri.push('?');
+            new_uri.push_str(&new_params.join("&"));
+            new_uri.push_str("&mode=caller");
+        }
+    } else {
+        new_uri.push_str("?mode=caller");
+    }
+
+    new_uri
+}
+
+/// Get the hostname of the current server.
+/// Returns "127.0.0.1" instead of "localhost" because VLC doesn't work well with localhost.
+#[cfg(target_arch = "wasm32")]
+fn get_current_hostname() -> String {
+    let hostname = web_sys::window()
+        .and_then(|w| w.location().hostname().ok())
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+
+    // VLC doesn't work well with "localhost", use 127.0.0.1 instead
+    if hostname == "localhost" {
+        "127.0.0.1".to_string()
+    } else {
+        hostname
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn get_current_hostname() -> String {
+    // VLC doesn't work well with "localhost", use 127.0.0.1 instead
+    "127.0.0.1".to_string()
+}
+
 /// Theme preference for the application
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThemePreference {
@@ -104,6 +328,12 @@ pub enum AppPage {
     Discovery,
     /// PTP clock monitoring
     Clocks,
+    /// Media file browser
+    Media,
+    /// System and version information
+    Info,
+    /// Quick links to streaming endpoints
+    Links,
 }
 
 /// Focus target for Ctrl+F cycling
@@ -120,6 +350,8 @@ enum FocusTarget {
     PaletteBlocks,
     /// Discovery search filter (Discovery page)
     DiscoveryFilter,
+    /// Media search filter (Media page)
+    MediaFilter,
 }
 
 /// Log message severity level
@@ -274,6 +506,8 @@ pub struct StromApp {
     last_inter_input_refresh: Option<String>,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
+    /// Media player data storage for all media player blocks
+    mediaplayer_data: MediaPlayerDataStore,
     /// WebRTC stats storage for all WebRTC connections
     webrtc_stats: WebRtcStatsStore,
     /// System monitoring statistics
@@ -287,7 +521,6 @@ pub struct StromApp {
     /// Whether to show the detailed system monitor window
     show_system_monitor: bool,
     /// Last time WebRTC stats were polled
-    #[cfg(not(target_arch = "wasm32"))]
     last_webrtc_poll: instant::Instant,
     /// Current theme preference
     theme_preference: ThemePreference,
@@ -325,6 +558,8 @@ pub struct StromApp {
     show_stats_panel: bool,
     /// Compositor layout editor (if open)
     compositor_editor: Option<CompositorEditor>,
+    /// Playlist editor (if open)
+    playlist_editor: Option<PlaylistEditor>,
     /// Log entries for pipeline messages (errors, warnings, info)
     log_entries: Vec<LogEntry>,
     /// Whether to show the log panel
@@ -337,6 +572,12 @@ pub struct StromApp {
     discovery_page: crate::discovery::DiscoveryPage,
     /// Clocks page state (PTP monitoring)
     clocks_page: crate::clocks::ClocksPage,
+    /// Media file browser page state
+    media_page: crate::media::MediaPage,
+    /// Info page state
+    info_page: crate::info_page::InfoPage,
+    /// Links page state
+    links_page: crate::links::LinksPage,
     /// Flow list filter text
     flow_filter: String,
     /// Show stream picker modal for this block ID (when browsing discovered streams for AES67 Input)
@@ -425,12 +666,14 @@ impl StromApp {
             properties_ptp_domain_buffer: String::new(),
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             meter_data: MeterDataStore::new(),
+            mediaplayer_data: MediaPlayerDataStore::new(),
             webrtc_stats: WebRtcStatsStore::new(),
             system_monitor: SystemMonitorStore::new(),
             ptp_stats: crate::ptp_monitor::PtpStatsStore::new(),
             qos_stats: crate::qos_monitor::QoSStore::new(),
             flow_start_times: std::collections::HashMap::new(),
             show_system_monitor: false,
+            last_webrtc_poll: instant::Instant::now(),
             theme_preference: ThemePreference::Dark,
             version_info: None,
             login_screen: LoginScreen::default(),
@@ -447,6 +690,7 @@ impl StromApp {
             last_stats_fetch: instant::Instant::now(),
             show_stats_panel: false,
             compositor_editor: None,
+            playlist_editor: None,
             network_interfaces: Vec::new(),
             network_interfaces_loaded: false,
             available_channels: Vec::new(),
@@ -458,6 +702,9 @@ impl StromApp {
             current_page: AppPage::default(),
             discovery_page: crate::discovery::DiscoveryPage::new(),
             clocks_page: crate::clocks::ClocksPage::new(),
+            media_page: crate::media::MediaPage::new(),
+            info_page: crate::info_page::InfoPage::new(),
+            links_page: crate::links::LinksPage::new(),
             flow_filter: String::new(),
             show_stream_picker_for_block: None,
             focus_target: FocusTarget::None,
@@ -518,6 +765,7 @@ impl StromApp {
             port,
             auth_token,
             meter_data: MeterDataStore::new(),
+            mediaplayer_data: MediaPlayerDataStore::new(),
             webrtc_stats: WebRtcStatsStore::new(),
             system_monitor: SystemMonitorStore::new(),
             ptp_stats: crate::ptp_monitor::PtpStatsStore::new(),
@@ -541,6 +789,7 @@ impl StromApp {
             last_stats_fetch: instant::Instant::now(),
             show_stats_panel: false,
             compositor_editor: None,
+            playlist_editor: None,
             network_interfaces: Vec::new(),
             network_interfaces_loaded: false,
             available_channels: Vec::new(),
@@ -552,6 +801,9 @@ impl StromApp {
             current_page: AppPage::default(),
             discovery_page: crate::discovery::DiscoveryPage::new(),
             clocks_page: crate::clocks::ClocksPage::new(),
+            media_page: crate::media::MediaPage::new(),
+            info_page: crate::info_page::InfoPage::new(),
+            links_page: crate::links::LinksPage::new(),
             flow_filter: String::new(),
             show_stream_picker_for_block: None,
             focus_target: FocusTarget::None,
@@ -903,8 +1155,7 @@ impl StromApp {
     }
 
     /// Poll WebRTC stats for running flows that have WebRTC elements.
-    /// Called periodically (every second) for native mode.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Called periodically (every second).
     fn poll_webrtc_stats(&mut self, ctx: &Context) {
         // Find running flows
         let running_flows: Vec<_> = self
@@ -1705,6 +1956,16 @@ impl StromApp {
                 AppPage::Clocks => {
                     // No filters on Clocks page
                 }
+                AppPage::Media => {
+                    self.media_page.focus_search();
+                    self.focus_target = FocusTarget::MediaFilter;
+                }
+                AppPage::Info => {
+                    // No search/filters on Info page
+                }
+                AppPage::Links => {
+                    // No search/filters on Links page
+                }
             }
         }
 
@@ -1775,6 +2036,20 @@ impl StromApp {
                     {
                         ctx.open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
                     }
+
+                    // Open Web GUI button (native mode only)
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        if ui
+                            .button("Open Web GUI")
+                            .on_hover_text("Open the web interface in your browser")
+                            .clicked()
+                        {
+                            let url = format!("http://localhost:{}", self.port);
+                            ctx.open_url(egui::OpenUrl::new_tab(&url));
+                        }
+                    }
+
                     ui.separator();
 
                     // Navigation tabs (bigger text)
@@ -1808,6 +2083,39 @@ impl StromApp {
                         .clicked()
                     {
                         self.current_page = AppPage::Clocks;
+                        self.focus_target = FocusTarget::None;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.current_page == AppPage::Media,
+                            egui::RichText::new("Media").size(16.0),
+                        )
+                        .on_hover_text("Media file browser")
+                        .clicked()
+                    {
+                        self.current_page = AppPage::Media;
+                        self.focus_target = FocusTarget::None;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.current_page == AppPage::Info,
+                            egui::RichText::new("Info").size(16.0),
+                        )
+                        .on_hover_text("System and version information")
+                        .clicked()
+                    {
+                        self.current_page = AppPage::Info;
+                        self.focus_target = FocusTarget::None;
+                    }
+                    if ui
+                        .selectable_label(
+                            self.current_page == AppPage::Links,
+                            egui::RichText::new("Links").size(16.0),
+                        )
+                        .on_hover_text("Quick links to streaming endpoints")
+                        .clicked()
+                    {
+                        self.current_page = AppPage::Links;
                         self.focus_target = FocusTarget::None;
                     }
 
@@ -1877,6 +2185,9 @@ impl StromApp {
             AppPage::Flows => self.render_flows_toolbar(ctx),
             AppPage::Discovery => self.render_discovery_toolbar(ctx),
             AppPage::Clocks => self.render_clocks_toolbar(ctx),
+            AppPage::Media => self.render_media_toolbar(ctx),
+            AppPage::Info => self.render_info_toolbar(ctx),
+            AppPage::Links => self.render_links_toolbar(ctx),
         }
     }
 
@@ -2025,6 +2336,29 @@ impl StromApp {
                         let url = self.api.get_debug_graph_url(flow_id);
                         ctx.open_url(egui::OpenUrl::new_tab(&url));
                     }
+
+                    // Show flow uptime on the right side (only for running flows)
+                    if let Some(flow) = self.flows.iter().find(|f| f.id == flow_id) {
+                        if let Some(ref started_at) = flow.properties.started_at {
+                            if let Some(started_millis) = parse_iso8601_to_millis(started_at) {
+                                let uptime_millis = current_time_millis() - started_millis;
+
+                                // Push to right side
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    // Build tooltip text
+                                    let mut tooltip = format!("Started: {}", format_datetime_local(started_at));
+                                    if let Some(ref modified) = flow.properties.last_modified {
+                                        tooltip.push_str(&format!("\nLast modified: {}", format_datetime_local(modified)));
+                                    }
+
+                                    ui.label(
+                                        egui::RichText::new(format!("Flow uptime: {}", format_uptime(uptime_millis)))
+                                            .color(Color32::GREEN)
+                                    ).on_hover_text(tooltip);
+                                });
+                            }
+                        }
+                    }
                 }
 
             });
@@ -2068,6 +2402,67 @@ impl StromApp {
                     ui.label(egui::RichText::new("Clocks").heading());
                     ui.separator();
                     ui.label("PTP clocks are shared per domain");
+                });
+            });
+    }
+
+    /// Render the media page toolbar
+    fn render_media_toolbar(&mut self, ctx: &Context) {
+        let is_loading = self.media_page.loading;
+
+        TopBottomPanel::top("page_toolbar")
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(egui::RichText::new("Media Files").heading());
+                    ui.separator();
+
+                    if ui.button("Refresh").clicked() {
+                        self.media_page
+                            .refresh(&self.api, ctx, &self.channels.sender());
+                    }
+                    if is_loading {
+                        ui.spinner();
+                    }
+                });
+            });
+    }
+
+    /// Render the info page toolbar
+    fn render_info_toolbar(&mut self, ctx: &Context) {
+        TopBottomPanel::top("page_toolbar")
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(egui::RichText::new("System Information").heading());
+                    ui.separator();
+
+                    if ui.button("Refresh").clicked() {
+                        self.load_version(ctx.clone());
+                        // Force reload of network interfaces
+                        self.network_interfaces_loaded = false;
+                        self.load_network_interfaces(ctx.clone());
+                    }
+                });
+            });
+    }
+
+    /// Render the links page toolbar
+    fn render_links_toolbar(&mut self, ctx: &Context) {
+        TopBottomPanel::top("page_toolbar")
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .inner_margin(egui::Margin::symmetric(8, 4)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.label(egui::RichText::new("Links").heading());
                 });
             });
     }
@@ -2357,6 +2752,45 @@ impl StromApp {
                                 }
                             };
                             ui.label(format!("State: {}", state_text));
+
+                            // Show timestamps
+                            if flow.properties.started_at.is_some()
+                                || flow.properties.last_modified.is_some()
+                                || flow.properties.created_at.is_some()
+                            {
+                                ui.add_space(5.0);
+                                ui.separator();
+
+                                if let Some(ref started_at) = flow.properties.started_at {
+                                    ui.label(format!(
+                                        "Started: {}",
+                                        format_datetime_local(started_at)
+                                    ));
+                                    if let Some(started_millis) =
+                                        parse_iso8601_to_millis(started_at)
+                                    {
+                                        let uptime_millis = current_time_millis() - started_millis;
+                                        ui.label(format!(
+                                            "Uptime: {}",
+                                            format_uptime(uptime_millis)
+                                        ));
+                                    }
+                                }
+
+                                if let Some(ref modified) = flow.properties.last_modified {
+                                    ui.label(format!(
+                                        "Last modified: {}",
+                                        format_datetime_local(modified)
+                                    ));
+                                }
+
+                                if let Some(ref created) = flow.properties.created_at {
+                                    ui.label(format!(
+                                        "Created: {}",
+                                        format_datetime_local(created)
+                                    ));
+                                }
+                            }
                         });
 
                         // Buttons on the right
@@ -2667,9 +3101,43 @@ impl StromApp {
 
                         // Handle browse streams request (for AES67 Input)
                         if result.browse_streams_requested {
-                            self.show_stream_picker_for_block = Some(block_id);
+                            self.show_stream_picker_for_block = Some(block_id.clone());
                             // Refresh discovered streams for the picker
                             self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                        }
+
+                        // Handle VLC playlist download request (for MPEG-TS/SRT Output)
+                        if let Some((srt_uri, latency_ms)) = result.vlc_playlist_requested {
+                            // Get flow name for the stream title
+                            let stream_name = self
+                                .current_flow()
+                                .map(|f| f.name.clone())
+                                .unwrap_or_else(|| "SRT Stream".to_string());
+
+                            let playlist_content =
+                                generate_vlc_playlist(&srt_uri, latency_ms, &stream_name);
+
+                            // Generate filename based on flow name
+                            let safe_name: String = stream_name
+                                .chars()
+                                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                                .collect();
+                            let filename = format!("{}.xspf", safe_name);
+
+                            download_file(&filename, &playlist_content, "application/xspf+xml");
+                        }
+
+                        // Handle WHEP player request (for WHEP Output)
+                        if let Some(endpoint_id) = result.whep_player_url {
+                            let player_url = self.api.get_whep_player_url(&endpoint_id);
+                            ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                        }
+
+                        // Handle copy WHEP URL to clipboard
+                        if let Some(endpoint_id) = result.copy_whep_url_requested {
+                            let player_url = self.api.get_whep_player_url(&endpoint_id);
+                            ctx.copy_text(player_url);
+                            self.status = "Player URL copied to clipboard".to_string();
                         }
                     } else {
                         ui.label("Block definition not found");
@@ -2781,6 +3249,49 @@ impl StromApp {
                                 },
                             );
                         }
+                    }
+
+                    // Setup dynamic content for Media Player blocks
+                    let player_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.media_player")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in player_blocks {
+                        // Get player data or use default
+                        let player_data = self
+                            .mediaplayer_data
+                            .get(&flow_id, &block_id)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        let height = crate::mediaplayer::calculate_compact_height();
+                        let player_data_clone = player_data.clone();
+                        let block_id_for_action = block_id.clone();
+
+                        self.graph.set_block_content(
+                            block_id,
+                            crate::graph::BlockContentInfo {
+                                additional_height: height + 10.0,
+                                render_callback: Some(Box::new(move |ui, _rect| {
+                                    if let Some((action, seek_pos)) =
+                                        crate::mediaplayer::show_compact(ui, &player_data_clone)
+                                    {
+                                        // Use local storage to signal actions
+                                        let action_data = if let Some(pos) = seek_pos {
+                                            format!("{}:{}:{}", block_id_for_action, action, pos)
+                                        } else {
+                                            format!("{}:{}", block_id_for_action, action)
+                                        };
+                                        tracing::debug!("Setting player_action: {}", action_data);
+                                        set_local_storage("player_action", &action_data);
+                                    }
+                                })),
+                            },
+                        );
                     }
                 }
 
@@ -2929,6 +3440,20 @@ impl StromApp {
                                 }
                                 ui.label(format!("Branch: {}", version_info.git_branch));
                                 ui.label(format!("Built: {}", version_info.build_timestamp));
+                                if !version_info.gstreamer_version.is_empty() {
+                                    ui.label(format!(
+                                        "GStreamer: {}",
+                                        version_info.gstreamer_version
+                                    ));
+                                }
+                                if !version_info.os_info.is_empty() {
+                                    let os_text = if version_info.in_docker {
+                                        format!("{} (Docker)", version_info.os_info)
+                                    } else {
+                                        version_info.os_info.clone()
+                                    };
+                                    ui.label(format!("OS: {}", os_text));
+                                }
                                 if version_info.git_dirty {
                                     ui.colored_label(
                                         Color32::YELLOW,
@@ -3376,6 +3901,51 @@ impl StromApp {
                                 ui.colored_label(Color32::GRAY, "[-] Not set");
                             }
                         });
+                    }
+                }
+
+                // Show timestamps section
+                if let Some(flow) = self.editing_properties_flow_id.and_then(|id| self.flows.iter().find(|f| f.id == id)) {
+                    let has_timestamps = flow.properties.created_at.is_some()
+                        || flow.properties.last_modified.is_some()
+                        || flow.properties.started_at.is_some();
+
+                    if has_timestamps {
+                        ui.add_space(15.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+                        ui.label(egui::RichText::new("Timestamps").strong());
+
+                        egui::Grid::new("timestamps_grid")
+                            .num_columns(2)
+                            .spacing([8.0, 4.0])
+                            .show(ui, |ui| {
+                                if let Some(ref created) = flow.properties.created_at {
+                                    ui.label("Created:");
+                                    ui.label(format_datetime_local(created));
+                                    ui.end_row();
+                                }
+
+                                if let Some(ref modified) = flow.properties.last_modified {
+                                    ui.label("Last modified:");
+                                    ui.label(format_datetime_local(modified));
+                                    ui.end_row();
+                                }
+
+                                if let Some(ref started) = flow.properties.started_at {
+                                    ui.label("Started:");
+                                    ui.label(format_datetime_local(started));
+                                    ui.end_row();
+
+                                    // Show uptime
+                                    if let Some(started_millis) = parse_iso8601_to_millis(started) {
+                                        let uptime_millis = current_time_millis() - started_millis;
+                                        ui.label("Uptime:");
+                                        ui.label(format_uptime(uptime_millis));
+                                        ui.end_row();
+                                    }
+                                }
+                            });
                     }
                 }
 
@@ -4207,7 +4777,7 @@ impl eframe::App for StromApp {
                                 match api.get_flow(flow_id).await {
                                     Ok(flow) => {
                                         tracing::info!("Fetched updated flow: {}", flow.name);
-                                        let _ = tx.send(AppMessage::FlowFetched(flow));
+                                        let _ = tx.send(AppMessage::FlowFetched(Box::new(flow)));
                                         ctx.request_repaint();
                                     }
                                     Err(e) => {
@@ -4235,7 +4805,7 @@ impl eframe::App for StromApp {
                                 match api.get_flow(flow_id).await {
                                     Ok(flow) => {
                                         tracing::info!("Fetched started flow: {}", flow.name);
-                                        let _ = tx.send(AppMessage::FlowFetched(flow));
+                                        let _ = tx.send(AppMessage::FlowFetched(Box::new(flow)));
                                         ctx.request_repaint();
                                     }
                                     Err(e) => {
@@ -4259,7 +4829,7 @@ impl eframe::App for StromApp {
                                 match api.get_flow(flow_id).await {
                                     Ok(flow) => {
                                         tracing::info!("Fetched updated flow: {}", flow.name);
-                                        let _ = tx.send(AppMessage::FlowFetched(flow));
+                                        let _ = tx.send(AppMessage::FlowFetched(Box::new(flow)));
                                         ctx.request_repaint();
                                     }
                                     Err(e) => {
@@ -4357,6 +4927,49 @@ impl eframe::App for StromApp {
                                 crate::meter::MeterData { rms, peak, decay },
                             );
                             tracing::trace!("📊 Meter data stored for element {}", element_id);
+                        }
+                        StromEvent::MediaPlayerPosition {
+                            flow_id,
+                            block_id,
+                            position_ns,
+                            duration_ns,
+                            current_file_index,
+                            total_files,
+                        } => {
+                            tracing::trace!(
+                                "Media player position: flow={}, block={}, pos={}ns, dur={}ns",
+                                flow_id,
+                                block_id,
+                                position_ns,
+                                duration_ns
+                            );
+                            self.mediaplayer_data.update_position(
+                                flow_id,
+                                block_id,
+                                position_ns,
+                                duration_ns,
+                                current_file_index,
+                                total_files,
+                            );
+                        }
+                        StromEvent::MediaPlayerStateChanged {
+                            flow_id,
+                            block_id,
+                            state,
+                            current_file,
+                        } => {
+                            tracing::debug!(
+                                "Media player state changed: flow={}, block={}, state={}",
+                                flow_id,
+                                block_id,
+                                state
+                            );
+                            self.mediaplayer_data.update_state(
+                                flow_id,
+                                block_id,
+                                state,
+                                current_file,
+                            );
                         }
                         StromEvent::SystemStats(stats) => {
                             self.system_monitor.update(stats);
@@ -4508,11 +5121,15 @@ impl eframe::App for StromApp {
                         self.needs_refresh = true;
                         self.elements_loaded = false;
                         self.blocks_loaded = false;
+
+                        // Check if backend has been rebuilt - this will trigger a reload if build_id changed
+                        self.load_version(ctx.clone());
                     }
 
                     self.connection_state = state;
                 }
                 AppMessage::FlowFetched(flow) => {
+                    let flow = *flow; // Unbox
                     tracing::info!("Received updated flow: {} (id={})", flow.name, flow.id);
 
                     // Check if this is the currently selected flow BEFORE updating
@@ -4610,10 +5227,38 @@ impl eframe::App for StromApp {
                 }
                 AppMessage::VersionLoaded(version_info) => {
                     tracing::info!(
-                        "Version info loaded: v{} ({})",
+                        "Version info loaded: v{} ({}) build_id={}",
                         version_info.version,
-                        version_info.git_hash
+                        version_info.git_hash,
+                        version_info.build_id
                     );
+
+                    // Check if backend build_id differs from the one we got on initial load
+                    // If so, the backend has been rebuilt and we need to reload the frontend
+                    if let Some(ref existing_info) = self.version_info {
+                        if !version_info.build_id.is_empty()
+                            && !existing_info.build_id.is_empty()
+                            && version_info.build_id != existing_info.build_id
+                        {
+                            tracing::warn!(
+                                "Build ID mismatch! Previous: {}, Current: {} - reloading frontend",
+                                existing_info.build_id,
+                                version_info.build_id
+                            );
+
+                            // Force a hard reload to get the new frontend from the backend
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                if let Some(window) = web_sys::window() {
+                                    if let Err(e) = window.location().reload() {
+                                        tracing::error!("Failed to reload page: {:?}", e);
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                    }
+
                     self.version_info = Some(version_info);
                 }
                 AppMessage::AuthStatusLoaded(status) => {
@@ -4772,11 +5417,11 @@ impl eframe::App for StromApp {
                     self.available_channels = channels;
                 }
                 AppMessage::DiscoveredStreamsLoaded(streams) => {
-                    tracing::info!("Discovered streams loaded: {} streams", streams.len());
+                    tracing::debug!("Discovered streams loaded: {} streams", streams.len());
                     self.discovery_page.set_discovered_streams(streams);
                 }
                 AppMessage::AnnouncedStreamsLoaded(streams) => {
-                    tracing::info!("Announced streams loaded: {} streams", streams.len());
+                    tracing::debug!("Announced streams loaded: {} streams", streams.len());
                     self.discovery_page.set_announced_streams(streams);
                 }
                 AppMessage::StreamSdpLoaded { stream_id, sdp } => {
@@ -4800,6 +5445,27 @@ impl eframe::App for StromApp {
                         tracing::warn!("Block {} not found in graph when applying SDP", block_id);
                         self.error = Some(format!("Block not found: {}", block_id));
                     }
+                }
+                AppMessage::MediaListLoaded(response) => {
+                    tracing::debug!(
+                        "Media list loaded: {} entries in {}",
+                        response.entries.len(),
+                        response.current_path
+                    );
+                    self.media_page.set_entries(response);
+                }
+                AppMessage::MediaSuccess(message) => {
+                    tracing::info!("Media operation success: {}", message);
+                    self.status = message;
+                }
+                AppMessage::MediaError(message) => {
+                    tracing::error!("Media operation error: {}", message);
+                    self.error = Some(message);
+                }
+                AppMessage::MediaRefresh => {
+                    tracing::debug!("Media refresh requested");
+                    self.media_page
+                        .refresh(&self.api, ctx, &self.channels.sender());
                 }
                 // SDP messages are handled elsewhere
                 AppMessage::SdpLoaded { .. } | AppMessage::SdpError(_) => {}
@@ -4862,8 +5528,7 @@ impl eframe::App for StromApp {
             self.needs_refresh = false;
         }
 
-        // Poll WebRTC stats every second for running flows (native only)
-        #[cfg(not(target_arch = "wasm32"))]
+        // Poll WebRTC stats every second for running flows
         {
             let poll_interval = std::time::Duration::from_secs(1);
             if self.last_webrtc_poll.elapsed() >= poll_interval {
@@ -4944,6 +5609,249 @@ impl eframe::App for StromApp {
             }
         }
 
+        // Check for playlist editor open signal
+        if let Some(block_id) = get_local_storage("open_playlist_editor") {
+            remove_local_storage("open_playlist_editor");
+
+            // Get current flow
+            if let Some(flow) = self.current_flow() {
+                // Find the block
+                if let Some(block) = flow.blocks.iter().find(|b| b.id == block_id) {
+                    // Create playlist editor
+                    let mut editor = PlaylistEditor::new(flow.id, block_id.clone());
+
+                    // Load current playlist from block properties
+                    if let Some(strom_types::PropertyValue::String(playlist_json)) =
+                        block.properties.get("playlist")
+                    {
+                        if let Ok(playlist) = serde_json::from_str::<Vec<String>>(playlist_json) {
+                            editor.set_playlist(playlist);
+                        }
+                    }
+
+                    self.playlist_editor = Some(editor);
+                }
+            }
+        }
+
+        // Show playlist editor if open (as a window, doesn't block main UI)
+        if let Some(ref mut editor) = self.playlist_editor {
+            // Check if browser needs to load files
+            if let Some(path) = editor.get_browser_path_to_load() {
+                let api = self.api.clone();
+                // Use local storage to pass results back
+                #[cfg(target_arch = "wasm32")]
+                {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        match api.list_media(&path).await {
+                            Ok(result) => {
+                                // Serialize result to local storage
+                                if let Ok(json) = serde_json::to_string(&result) {
+                                    set_local_storage("media_browser_result", &json);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to list media files: {}", e);
+                                set_local_storage("media_browser_result", "error");
+                            }
+                        }
+                    });
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let rt = tokio::runtime::Handle::try_current();
+                    if let Ok(handle) = rt {
+                        handle.spawn(async move {
+                            match api.list_media(&path).await {
+                                Ok(result) => {
+                                    if let Ok(json) = serde_json::to_string(&result) {
+                                        set_local_storage("media_browser_result", &json);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to list media files: {}", e);
+                                    set_local_storage("media_browser_result", "error");
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Check for media browser results
+            if let Some(result_json) = get_local_storage("media_browser_result") {
+                remove_local_storage("media_browser_result");
+                if result_json != "error" {
+                    if let Ok(result) =
+                        serde_json::from_str::<strom_types::api::ListMediaResponse>(&result_json)
+                    {
+                        let entries: Vec<crate::mediaplayer::MediaEntry> = result
+                            .entries
+                            .into_iter()
+                            .map(|e| crate::mediaplayer::MediaEntry {
+                                name: e.name,
+                                path: e.path,
+                                is_dir: e.is_directory,
+                                size: e.size,
+                            })
+                            .collect();
+                        editor.set_browser_entries(
+                            result.current_path,
+                            result.parent_path,
+                            entries,
+                        );
+                    }
+                } else {
+                    // Clear loading state on error
+                    editor.browser_loading = false;
+                }
+            }
+
+            // Update current playing index from player data
+            if let Some(player_data) = self.mediaplayer_data.get(&editor.flow_id, &editor.block_id)
+            {
+                editor.current_playing_index = Some(player_data.current_file_index);
+            }
+
+            if let Some(playlist) = editor.show(ctx) {
+                // User clicked Save - send playlist to API
+                let flow_id = editor.flow_id;
+                let block_id = editor.block_id.clone();
+                let api = self.api.clone();
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if let Err(e) = api.set_player_playlist(flow_id, &block_id, playlist).await
+                        {
+                            tracing::error!("Failed to set playlist: {}", e);
+                        }
+                    });
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let rt = tokio::runtime::Handle::try_current();
+                    if let Ok(handle) = rt {
+                        handle.spawn(async move {
+                            if let Err(e) =
+                                api.set_player_playlist(flow_id, &block_id, playlist).await
+                            {
+                                tracing::error!("Failed to set playlist: {}", e);
+                            }
+                        });
+                    }
+                }
+            }
+
+            if !editor.open {
+                self.playlist_editor = None;
+            }
+        }
+
+        // Check for player action signals (from compact UI controls)
+        if let Some(action_data) = get_local_storage("player_action") {
+            remove_local_storage("player_action");
+            tracing::info!("Received player action: {}", action_data);
+
+            // Parse action data: "block_id:action" or "block_id:action:position"
+            let parts: Vec<&str> = action_data.split(':').collect();
+            if parts.len() >= 2 {
+                let block_id = parts[0].to_string();
+                let action = parts[1];
+                tracing::info!("Parsed action: block={}, action={}", block_id, action);
+
+                if let Some(flow) = self.current_flow() {
+                    let flow_id = flow.id;
+                    let api = self.api.clone();
+                    tracing::info!("Sending action to flow {}", flow_id);
+
+                    match action {
+                        "play" | "pause" | "next" | "previous" => {
+                            let action_str = action.to_string();
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                wasm_bindgen_futures::spawn_local(async move {
+                                    if let Err(e) =
+                                        api.control_player(flow_id, &block_id, &action_str).await
+                                    {
+                                        tracing::error!("Failed to control player: {}", e);
+                                    }
+                                });
+                            }
+
+                            #[cfg(not(target_arch = "wasm32"))]
+                            {
+                                let rt = tokio::runtime::Handle::try_current();
+                                if let Ok(handle) = rt {
+                                    handle.spawn(async move {
+                                        if let Err(e) = api
+                                            .control_player(flow_id, &block_id, &action_str)
+                                            .await
+                                        {
+                                            tracing::error!("Failed to control player: {}", e);
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        "seek" if parts.len() >= 3 => {
+                            if let Ok(position_ns) = parts[2].parse::<u64>() {
+                                #[cfg(target_arch = "wasm32")]
+                                {
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        if let Err(e) =
+                                            api.seek_player(flow_id, &block_id, position_ns).await
+                                        {
+                                            tracing::error!("Failed to seek player: {}", e);
+                                        }
+                                    });
+                                }
+
+                                #[cfg(not(target_arch = "wasm32"))]
+                                {
+                                    let rt = tokio::runtime::Handle::try_current();
+                                    if let Ok(handle) = rt {
+                                        handle.spawn(async move {
+                                            if let Err(e) = api
+                                                .seek_player(flow_id, &block_id, position_ns)
+                                                .await
+                                            {
+                                                tracing::error!("Failed to seek player: {}", e);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        "playlist" => {
+                            // Open playlist editor for this block
+                            let mut editor = PlaylistEditor::new(flow_id, block_id.clone());
+
+                            // Load current playlist from block properties
+                            if let Some(block) = flow.blocks.iter().find(|b| b.id == block_id) {
+                                if let Some(strom_types::PropertyValue::String(playlist_json)) =
+                                    block.properties.get("playlist")
+                                {
+                                    if let Ok(playlist) =
+                                        serde_json::from_str::<Vec<String>>(playlist_json)
+                                    {
+                                        editor.set_playlist(playlist);
+                                    }
+                                }
+                            }
+
+                            self.playlist_editor = Some(editor);
+                        }
+                        _ => {
+                            tracing::warn!("Unknown player action: {}", action);
+                        }
+                    }
+                }
+            }
+        }
+
         self.render_toolbar(ctx);
 
         // Render page-specific content
@@ -4988,6 +5896,34 @@ impl eframe::App for StromApp {
             AppPage::Clocks => {
                 CentralPanel::default().show(ctx, |ui| {
                     self.clocks_page.render(ui, &self.ptp_stats, &self.flows);
+                });
+            }
+            AppPage::Media => {
+                CentralPanel::default().show(ctx, |ui| {
+                    self.media_page
+                        .render(ui, &self.api, ctx, &self.channels.sender());
+                });
+            }
+            AppPage::Info => {
+                // Auto-load network interfaces when Info page is shown
+                if self.info_page.should_load_network() {
+                    self.network_interfaces_loaded = false;
+                    self.load_network_interfaces(ctx.clone());
+                }
+
+                CentralPanel::default().show(ctx, |ui| {
+                    self.info_page.render(
+                        ui,
+                        self.version_info.as_ref(),
+                        &self.system_monitor,
+                        &self.network_interfaces,
+                        &self.flows,
+                    );
+                });
+            }
+            AppPage::Links => {
+                CentralPanel::default().show(ctx, |ui| {
+                    self.links_page.render(ui, &self.api, ctx);
                 });
             }
         }

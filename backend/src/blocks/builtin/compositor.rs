@@ -14,10 +14,10 @@
 //! - Multiple background types (black, white, transparent)
 //! - Automatic fallback from GPU to CPU when OpenGL is unavailable
 //!
-//! GPU backend chain: queue -> glupload -> glvideomixerelement -> gldownload -> capsfilter
+//! GPU backend chain: queue -> glupload -> glcolorconvert -> glvideomixerelement -> gldownload -> capsfilter
 //! CPU backend chain: queue -> videoconvert -> compositor -> capsfilter
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -115,6 +115,7 @@ impl BlockBuilder for CompositorBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎬 Building Compositor block instance: {}", instance_id);
 
@@ -343,7 +344,17 @@ fn build_opengl_compositor(
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("glupload_{}: {}", i, e)))?;
 
+        // Create glcolorconvert for GPU-based color space conversion (e.g., NV12 -> RGBA)
+        let colorconvert_id = format!("{}:glcolorconvert_{}", instance_id, i);
+        let colorconvert = gst::ElementFactory::make("glcolorconvert")
+            .name(&colorconvert_id)
+            .build()
+            .map_err(|e| {
+                BlockBuildError::ElementCreation(format!("glcolorconvert_{}: {}", i, e))
+            })?;
+
         elements.push((upload_id.clone(), upload));
+        elements.push((colorconvert_id.clone(), colorconvert));
         let mixer_pad_name = sink_pad.name().to_string();
 
         if use_queues {
@@ -351,19 +362,27 @@ fn build_opengl_compositor(
             let queue = create_input_queue(&queue_id, i)?;
             elements.push((queue_id.clone(), queue));
 
-            // Link: queue -> glupload -> mixer
+            // Link: queue -> glupload -> glcolorconvert -> mixer
             internal_links.push((
                 ElementPadRef::pad(&queue_id, "src"),
                 ElementPadRef::pad(&upload_id, "sink"),
             ));
             internal_links.push((
                 ElementPadRef::pad(&upload_id, "src"),
+                ElementPadRef::pad(&colorconvert_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&colorconvert_id, "src"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         } else {
-            // Link: glupload -> mixer directly
+            // Link: glupload -> glcolorconvert -> mixer directly
             internal_links.push((
                 ElementPadRef::pad(&upload_id, "src"),
+                ElementPadRef::pad(&colorconvert_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&colorconvert_id, "src"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         }
@@ -905,7 +924,7 @@ fn compositor_definition() -> BlockDefinition {
             label: "Latency (ms)".to_string(),
             description: "Additional latency in milliseconds for the mixer aggregator".to_string(),
             property_type: PropertyType::UInt,
-            default_value: Some(PropertyValue::UInt(0)),
+            default_value: Some(PropertyValue::UInt(200)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "latency".to_string(),
@@ -918,7 +937,7 @@ fn compositor_definition() -> BlockDefinition {
             label: "Min Upstream Latency (ms)".to_string(),
             description: "Minimum upstream latency reported to upstream elements".to_string(),
             property_type: PropertyType::UInt,
-            default_value: Some(PropertyValue::UInt(0)),
+            default_value: Some(PropertyValue::UInt(200)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "min_upstream_latency".to_string(),

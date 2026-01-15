@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+default-run = "strom"
 
 [features]
-default = ["gui", "nvidia"]
-gui = ["dep:strom-frontend", "dep:eframe"]
+default = ["nvidia"]
+no-gui = []
 nvidia = ["dep:nvml-wrapper"]
 
 [dependencies]
@@ -18,12 +19,19 @@ strom-types = { path = "../types", features = ["openapi"] }
 axum.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
+tokio-util = { version = "0.7", features = ["io"] }
 futures.workspace = true
 tower-http.workspace = true
 
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+
+# Date/time
+chrono = "0.4"
+
+# URL encoding
+urlencoding = "2.1"
 
 # Logging
 tracing.workspace = true
@@ -40,6 +48,7 @@ gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-net.workspace = true
 gst-plugin-webrtc.workspace = true
+gst-plugin-webrtchttp.workspace = true
 gst-plugin-inter.workspace = true
 
 # Error handling
@@ -84,16 +93,25 @@ nvml-wrapper = { version = "0.11", optional = true }
 # Network interface discovery
 network-interface = "2.0"
 
-# SAP/AES67 discovery
-socket2 = "0.5"      # Multicast socket options
-flate2 = "1.0"       # Zlib decompression for SAP
+# HTTP client for test harness
+reqwest.workspace = true
 
-# Optional GUI (native frontend)
-strom-frontend = { path = "../frontend", optional = true }
-eframe = { workspace = true, optional = true }
+# Terminal UI for test harness
+crossterm = "0.29"
+
+# Network discovery
+socket2 = "0.6"      # Multicast socket options for SAP
+flate2 = "1.0"       # Zlib decompression for SAP
+mdns-sd = "0.17"     # mDNS service discovery (RAVENNA, NDI, etc.)
+hostname = "0.4"     # Cross-platform hostname detection
+
+# GUI (native frontend) - use --features no-gui to disable
+strom-frontend = { path = "../frontend" }
+eframe = { workspace = true }
 
 [build-dependencies]
 chrono = "0.4"
+uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.8"
@@ -101,6 +119,6 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 serial_test = "3.0"
 
-[[example]]
-name = "test-glvideomixer"
-path = "../examples/test-glvideomixer.rs"
+[[bin]]
+name = "mediaplayer-test"
+path = "src/bin/mediaplayer_test/main.rs"

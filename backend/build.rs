@@ -3,6 +3,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use uuid::Uuid;
 
 fn main() {
     // Set version and build information
@@ -19,6 +20,8 @@ fn main() {
     println!("cargo:rerun-if-changed=../frontend/Trunk.toml");
     // Also rerun if dist directory changes (manual builds)
     println!("cargo:rerun-if-changed=dist");
+    // Rerun if static assets change (WHEP player, etc.)
+    println!("cargo:rerun-if-changed=static");
     // Rerun if .git/HEAD changes (new commits)
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs");
@@ -101,12 +104,18 @@ fn set_version_info() {
         .map(|output| !output.stdout.is_empty())
         .unwrap_or(false);
 
+    // Generate a unique build ID (UUID) for this build
+    // This is used by the frontend to detect when the backend has been rebuilt
+    // and trigger a reload to ensure frontend/backend are in sync
+    let build_id = Uuid::new_v4().to_string();
+
     // Set environment variables for compile-time embedding
     println!("cargo:rustc-env=GIT_HASH={}", git_hash);
     println!("cargo:rustc-env=GIT_TAG={}", git_tag);
     println!("cargo:rustc-env=GIT_BRANCH={}", git_branch);
     println!("cargo:rustc-env=GIT_DIRTY={}", git_dirty);
     println!("cargo:rustc-env=BUILD_TIMESTAMP={}", build_timestamp);
+    println!("cargo:rustc-env=BUILD_ID={}", build_id);
 
     // Print warnings for visibility during build
     println!(

@@ -22,16 +22,16 @@ The Video Encoder block (`builtin.videoenc`) provides automatic hardware-acceler
 ### Block Structure
 
 ```
-┌──────────────┐    ┌─────────┐    ┌────────────┐
+┌──────────────────┐    ┌─────────┐    ┌────────────┐
 │ videoconvert │───▶│ encoder │───▶│ capsfilter │
-└──────────────┘    └─────────┘    └────────────┘
-      ▲                                    │
-      │                                    ▼
- video_in                           encoded_out
+└──────────────────┘    └─────────┘    └────────────┘
+        ▲                                    │
+        │                                    ▼
+   video_in                           encoded_out
 ```
 
 **Elements:**
-1. **videoconvert**: Ensures compatible pixel format for the selected encoder
+1. **videoconvert**: Ensures compatible pixel format for the encoder
 2. **encoder**: Dynamically selected hardware or software encoder element
 3. **capsfilter**: Sets output caps for proper codec negotiation
 

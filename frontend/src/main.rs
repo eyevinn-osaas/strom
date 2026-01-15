@@ -12,8 +12,12 @@ mod clocks;
 mod compositor_editor;
 mod discovery;
 mod graph;
+mod info_page;
+mod links;
 mod list_navigator;
 mod login;
+mod media;
+mod mediaplayer;
 mod meter;
 mod palette;
 mod properties;
@@ -38,8 +42,12 @@ fn main() {
     // Initialize panic handler for better error messages in browser console
     console_error_panic_hook::set_once();
 
-    // Initialize tracing for WASM
-    tracing_wasm::set_as_global_default();
+    // Initialize tracing for WASM with info level (less verbose)
+    tracing_wasm::set_as_global_default_with_config(
+        tracing_wasm::WASMLayerConfigBuilder::default()
+            .set_max_level(tracing::Level::INFO)
+            .build(),
+    );
 
     let web_options = eframe::WebOptions::default();
 
@@ -87,7 +95,7 @@ fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_title("Strom - GStreamer Flow Engine"),
+            .with_title("Strom"),
         ..Default::default()
     };
 

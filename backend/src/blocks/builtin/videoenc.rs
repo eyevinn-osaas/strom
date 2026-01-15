@@ -16,7 +16,8 @@
 //! - parser: Codec-specific parser (h264parse, h265parse, etc.) for proper stream formatting
 //! - capsfilter: Sets output caps for proper codec negotiation
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::gpu::video_convert_mode;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -54,6 +55,7 @@ impl BlockBuilder for VideoEncBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎞️ Building VideoEncoder block instance: {}", instance_id);
 
@@ -108,14 +110,21 @@ impl BlockBuilder for VideoEncBuilder {
             .unwrap_or(60);
 
         // Create elements
+        // Use detected video convert mode (autovideoconvert if GPU interop works, videoconvert otherwise)
+        // Note: We always use "videoconvert" as the element ID for consistent external pad references,
+        // even when the actual GStreamer element is "autovideoconvert"
+        let convert_mode = video_convert_mode();
+        let convert_element_name = convert_mode.element_name();
         let convert_id = format!("{}:videoconvert", instance_id);
         let encoder_id = format!("{}:encoder", instance_id);
         let capsfilter_id = format!("{}:capsfilter", instance_id);
 
-        let videoconvert = gst::ElementFactory::make("videoconvert")
+        let videoconvert = gst::ElementFactory::make(convert_element_name)
             .name(&convert_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+            .map_err(|e| {
+                BlockBuildError::ElementCreation(format!("{}: {}", convert_element_name, e))
+            })?;
 
         let encoder = gst::ElementFactory::make(&encoder_name)
             .name(&encoder_id)
@@ -162,11 +171,11 @@ impl BlockBuilder for VideoEncBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
 
         info!(
-            "🎞️ VideoEncoder block created (chain: videoconvert -> {} -> {} -> capsfilter [{}])",
-            encoder_name, parser_name, caps_str
+            "🎞️ VideoEncoder block created (chain: {} -> {} -> {} -> capsfilter [{}])",
+            convert_element_name, encoder_name, parser_name, caps_str
         );
 
-        // Chain: videoconvert -> encoder -> parser -> capsfilter
+        // Chain: videoconvert/autovideoconvert -> encoder -> parser -> capsfilter
         let internal_links = vec![
             (
                 ElementPadRef::pad(&convert_id, "src"),
@@ -694,8 +703,8 @@ fn map_quality_preset_vp9enc(quality_preset: &str) -> i32 {
 /// Get codec-specific caps string for capsfilter.
 fn get_codec_caps_string(codec: Codec) -> String {
     match codec {
-        Codec::H264 => "video/x-h264,stream-format=byte-stream,alignment=au".to_string(),
-        Codec::H265 => "video/x-h265,stream-format=byte-stream,alignment=au".to_string(),
+        Codec::H264 => "video/x-h264,alignment=au".to_string(),
+        Codec::H265 => "video/x-h265,alignment=au".to_string(),
         Codec::AV1 => "video/x-av1".to_string(),
         Codec::VP9 => "video/x-vp9".to_string(),
     }
@@ -851,7 +860,7 @@ fn videoenc_definition() -> BlockDefinition {
         },
         built_in: true,
         ui_metadata: Some(BlockUIMetadata {
-            icon: Some("🎞️".to_string()),
+            icon: Some("🎞".to_string()),
             width: Some(1.5),
             height: Some(2.5),
             ..Default::default()

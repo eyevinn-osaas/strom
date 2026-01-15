@@ -3,7 +3,8 @@
 //! Provides separate video and audio input/output blocks for Blackmagic DeckLink cards.
 //! Uses GStreamer's DeckLink plugin (gst-plugins-bad) for hardware integration.
 
-use crate::blocks::{BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::gpu::video_convert_mode;
 use gstreamer as gst;
 use std::collections::HashMap;
 use strom_types::{block::*, element::ElementPadRef, EnumValue, PropertyValue, *};
@@ -17,6 +18,7 @@ impl BlockBuilder for DeckLinkVideoInputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("📹 Building DeckLink Video Input block: {}", instance_id);
 
@@ -47,6 +49,11 @@ impl BlockBuilder for DeckLinkVideoInputBuilder {
             .unwrap_or("sdi");
 
         // Create elements with namespaced IDs
+        // Use detected video convert mode (autovideoconvert if GPU interop works, videoconvert otherwise)
+        // Note: We always use "videoconvert" as the element ID for consistent external pad references,
+        // even when the actual GStreamer element is "autovideoconvert"
+        let convert_mode = video_convert_mode();
+        let convert_element_name = convert_mode.element_name();
         let videosrc_id = format!("{}:decklinkvideosrc", instance_id);
         let videoconvert_id = format!("{}:videoconvert", instance_id);
         let capsfilter_id = format!("{}:capsfilter", instance_id);
@@ -59,10 +66,12 @@ impl BlockBuilder for DeckLinkVideoInputBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("decklinkvideosrc: {}", e)))?;
 
-        let videoconvert = gst::ElementFactory::make("videoconvert")
+        let videoconvert = gst::ElementFactory::make(convert_element_name)
             .name(&videoconvert_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+            .map_err(|e| {
+                BlockBuildError::ElementCreation(format!("{}: {}", convert_element_name, e))
+            })?;
 
         // Capsfilter with generic video/x-raw caps (no specific format restriction)
         let caps = gst::Caps::builder("video/x-raw").build();
@@ -110,6 +119,7 @@ impl BlockBuilder for DeckLinkAudioInputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎵 Building DeckLink Audio Input block: {}", instance_id);
 
@@ -134,11 +144,12 @@ impl BlockBuilder for DeckLinkAudioInputBuilder {
         let channels = properties
             .get("channels")
             .and_then(|v| match v {
-                PropertyValue::UInt(u) => Some(*u as i32),
-                PropertyValue::Int(i) if *i > 0 => Some(*i as i32),
+                PropertyValue::UInt(u) => Some(u.to_string()),
+                PropertyValue::Int(i) if *i > 0 => Some(i.to_string()),
+                PropertyValue::String(s) => Some(s.clone()),
                 _ => None,
             })
-            .unwrap_or(2);
+            .unwrap_or_else(|| "2".to_string());
 
         // Create elements with namespaced IDs
         let audiosrc_id = format!("{}:decklinkaudiosrc", instance_id);
@@ -150,7 +161,7 @@ impl BlockBuilder for DeckLinkAudioInputBuilder {
             .name(&audiosrc_id)
             .property("device-number", device_number)
             .property_from_str("connection", connection)
-            .property("channels", channels)
+            .property_from_str("channels", &channels)
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("decklinkaudiosrc: {}", e)))?;
 
@@ -215,6 +226,7 @@ impl BlockBuilder for DeckLinkVideoOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("📹 Building DeckLink Video Output block: {}", instance_id);
 
@@ -237,13 +249,20 @@ impl BlockBuilder for DeckLinkVideoOutputBuilder {
             .unwrap_or("auto");
 
         // Create elements with namespaced IDs
+        // Use detected video convert mode (autovideoconvert if GPU interop works, videoconvert otherwise)
+        // Note: We always use "videoconvert" as the element ID for consistent external pad references,
+        // even when the actual GStreamer element is "autovideoconvert"
+        let convert_mode = video_convert_mode();
+        let convert_element_name = convert_mode.element_name();
         let videoconvert_id = format!("{}:videoconvert", instance_id);
         let videosink_id = format!("{}:decklinkvideosink", instance_id);
 
-        let videoconvert = gst::ElementFactory::make("videoconvert")
+        let videoconvert = gst::ElementFactory::make(convert_element_name)
             .name(&videoconvert_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("videoconvert: {}", e)))?;
+            .map_err(|e| {
+                BlockBuildError::ElementCreation(format!("{}: {}", convert_element_name, e))
+            })?;
 
         let videosink = gst::ElementFactory::make("decklinkvideosink")
             .name(&videosink_id)
@@ -280,6 +299,7 @@ impl BlockBuilder for DeckLinkAudioOutputBuilder {
         &self,
         instance_id: &str,
         properties: &HashMap<String, PropertyValue>,
+        _ctx: &BlockBuildContext,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         info!("🎵 Building DeckLink Audio Output block: {}", instance_id);
 
@@ -617,6 +637,10 @@ fn decklink_audio_input_definition() -> BlockDefinition {
                         EnumValue {
                             value: "16".to_string(),
                             label: Some("16".to_string()),
+                        },
+                        EnumValue {
+                            value: "max".to_string(),
+                            label: Some("Max (auto-detect)".to_string()),
                         },
                     ],
                 },
