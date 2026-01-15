@@ -129,7 +129,7 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     cp target/aarch64-unknown-linux-gnu/release/strom-mcp-server target/release/strom-mcp-server; \
 else \
     echo "==> Native build for $TARGETPLATFORM"; \
-    cargo build --release --package strom --no-default-features && \
+    cargo build --release --package strom --features no-gui && \
     cargo build --release --package strom-mcp-server; \
 fi
 
