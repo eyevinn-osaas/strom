@@ -3,15 +3,20 @@
 //! This block provides a mixer similar to digital consoles like Behringer X32:
 //! - Configurable number of input channels (1-32)
 //! - Per-channel: gate, compressor, 4-band parametric EQ, pan, fader, mute
+//! - Aux sends (0-4 configurable aux buses)
+//! - Subgroups (0-4 configurable)
+//! - PFL (Pre-Fader Listen) bus
 //! - Main stereo bus with audiomixer
-//! - Per-channel metering
-//!
-//! Future phases will add: aux sends, subgroups, PFL
+//! - Per-channel and bus metering
 //!
 //! Pipeline structure per channel:
 //! ```text
 //! input_N → audioconvert → capsfilter(F32LE) → gate → compressor → EQ →
-//!           audiopanorama_N → volume_N → level_N → audiomixer (main)
+//!           pre_fader_tee → audiopanorama_N → volume_N → post_fader_tee →
+//!           level_N → [subgroup or main audiomixer]
+//!
+//! pre_fader_tee → pfl_volume_N → pfl_queue_N → pfl_mixer
+//! post_fader_tee → aux_send_N_M → aux_queue_N_M → aux_M_mixer
 //! ```
 //!
 //! Processing uses LSP LV2 plugins for professional-quality gate, compressor, and EQ.
@@ -31,6 +36,10 @@ use tracing::{debug, info, trace};
 const MAX_CHANNELS: usize = 32;
 /// Default number of channels
 const DEFAULT_CHANNELS: usize = 8;
+/// Maximum number of aux buses
+const MAX_AUX_BUSES: usize = 4;
+/// Maximum number of subgroups
+const MAX_SUBGROUPS: usize = 4;
 
 /// Mixer block builder.
 pub struct MixerBuilder;
@@ -41,6 +50,7 @@ impl BlockBuilder for MixerBuilder {
         properties: &HashMap<String, PropertyValue>,
     ) -> Option<ExternalPads> {
         let num_channels = parse_num_channels(properties);
+        let num_aux_buses = parse_num_aux_buses(properties);
 
         // Create input pads dynamically
         let inputs = (0..num_channels)
@@ -52,13 +62,33 @@ impl BlockBuilder for MixerBuilder {
             })
             .collect();
 
-        // Main stereo output
-        let outputs = vec![ExternalPad {
-            name: "main_out".to_string(),
-            media_type: MediaType::Audio,
-            internal_element_id: "main_level".to_string(),
-            internal_pad_name: "src".to_string(),
-        }];
+        // Output pads
+        let mut outputs = vec![
+            // Main stereo output
+            ExternalPad {
+                name: "main_out".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "main_level".to_string(),
+                internal_pad_name: "src".to_string(),
+            },
+            // PFL output (always present)
+            ExternalPad {
+                name: "pfl_out".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "pfl_level".to_string(),
+                internal_pad_name: "src".to_string(),
+            },
+        ];
+
+        // Add aux outputs
+        for aux in 0..num_aux_buses {
+            outputs.push(ExternalPad {
+                name: format!("aux_out_{}", aux + 1),
+                media_type: MediaType::Audio,
+                internal_element_id: format!("aux{}_level", aux),
+                internal_pad_name: "src".to_string(),
+            });
+        }
 
         Some(ExternalPads { inputs, outputs })
     }
@@ -72,7 +102,12 @@ impl BlockBuilder for MixerBuilder {
         info!("Building Mixer block instance: {}", instance_id);
 
         let num_channels = parse_num_channels(properties);
-        info!("Mixer config: {} input channels", num_channels);
+        let num_aux_buses = parse_num_aux_buses(properties);
+        let num_subgroups = parse_num_subgroups(properties);
+        info!(
+            "Mixer config: {} channels, {} aux buses, {} subgroups",
+            num_channels, num_aux_buses, num_subgroups
+        );
 
         let mut elements = Vec::new();
         let mut internal_links = Vec::new();
@@ -124,6 +159,133 @@ impl BlockBuilder for MixerBuilder {
             ElementPadRef::pad(&main_volume_id, "src"),
             ElementPadRef::pad(&main_level_id, "sink"),
         ));
+
+        // ========================================================================
+        // Create PFL (Pre-Fader Listen) bus
+        // ========================================================================
+        let pfl_mixer_id = format!("{}:pfl_mixer", instance_id);
+        let pfl_mixer = gst::ElementFactory::make("audiomixer")
+            .name(&pfl_mixer_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_mixer: {}", e)))?;
+        elements.push((pfl_mixer_id.clone(), pfl_mixer));
+
+        let pfl_level_id = format!("{}:pfl_level", instance_id);
+        let pfl_level = gst::ElementFactory::make("level")
+            .name(&pfl_level_id)
+            .property("interval", 100_000_000u64)
+            .property("post-messages", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_level: {}", e)))?;
+        elements.push((pfl_level_id.clone(), pfl_level));
+
+        // Link: pfl_mixer → pfl_level
+        internal_links.push((
+            ElementPadRef::pad(&pfl_mixer_id, "src"),
+            ElementPadRef::pad(&pfl_level_id, "sink"),
+        ));
+
+        // ========================================================================
+        // Create Aux buses
+        // ========================================================================
+        for aux in 0..num_aux_buses {
+            let aux_mixer_id = format!("{}:aux{}_mixer", instance_id, aux);
+            let aux_mixer = gst::ElementFactory::make("audiomixer")
+                .name(&aux_mixer_id)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("aux{}_mixer: {}", aux, e))
+                })?;
+            elements.push((aux_mixer_id.clone(), aux_mixer));
+
+            let aux_fader = get_float_prop(properties, &format!("aux{}_fader", aux + 1), 1.0);
+            let aux_mute = get_bool_prop(properties, &format!("aux{}_mute", aux + 1), false);
+            let aux_volume_val = if aux_mute { 0.0 } else { aux_fader };
+
+            let aux_volume_id = format!("{}:aux{}_volume", instance_id, aux);
+            let aux_volume = gst::ElementFactory::make("volume")
+                .name(&aux_volume_id)
+                .property("volume", aux_volume_val)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("aux{}_volume: {}", aux, e))
+                })?;
+            elements.push((aux_volume_id.clone(), aux_volume));
+
+            let aux_level_id = format!("{}:aux{}_level", instance_id, aux);
+            let aux_level = gst::ElementFactory::make("level")
+                .name(&aux_level_id)
+                .property("interval", 100_000_000u64)
+                .property("post-messages", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("aux{}_level: {}", aux, e))
+                })?;
+            elements.push((aux_level_id.clone(), aux_level));
+
+            // Link: aux_mixer → aux_volume → aux_level
+            internal_links.push((
+                ElementPadRef::pad(&aux_mixer_id, "src"),
+                ElementPadRef::pad(&aux_volume_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&aux_volume_id, "src"),
+                ElementPadRef::pad(&aux_level_id, "sink"),
+            ));
+        }
+
+        // ========================================================================
+        // Create Subgroups
+        // ========================================================================
+        for sg in 0..num_subgroups {
+            let sg_mixer_id = format!("{}:subgroup{}_mixer", instance_id, sg);
+            let sg_mixer = gst::ElementFactory::make("audiomixer")
+                .name(&sg_mixer_id)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("subgroup{}_mixer: {}", sg, e))
+                })?;
+            elements.push((sg_mixer_id.clone(), sg_mixer));
+
+            let sg_fader = get_float_prop(properties, &format!("subgroup{}_fader", sg + 1), 1.0);
+            let sg_mute = get_bool_prop(properties, &format!("subgroup{}_mute", sg + 1), false);
+            let sg_volume_val = if sg_mute { 0.0 } else { sg_fader };
+
+            let sg_volume_id = format!("{}:subgroup{}_volume", instance_id, sg);
+            let sg_volume = gst::ElementFactory::make("volume")
+                .name(&sg_volume_id)
+                .property("volume", sg_volume_val)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("subgroup{}_volume: {}", sg, e))
+                })?;
+            elements.push((sg_volume_id.clone(), sg_volume));
+
+            let sg_level_id = format!("{}:subgroup{}_level", instance_id, sg);
+            let sg_level = gst::ElementFactory::make("level")
+                .name(&sg_level_id)
+                .property("interval", 100_000_000u64)
+                .property("post-messages", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("subgroup{}_level: {}", sg, e))
+                })?;
+            elements.push((sg_level_id.clone(), sg_level));
+
+            // Link: subgroup_mixer → subgroup_volume → subgroup_level → main audiomixer
+            internal_links.push((
+                ElementPadRef::pad(&sg_mixer_id, "src"),
+                ElementPadRef::pad(&sg_volume_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&sg_volume_id, "src"),
+                ElementPadRef::pad(&sg_level_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&sg_level_id, "src"),
+                ElementPadRef::element(&mixer_id), // Request pad from main audiomixer
+            ));
+        }
 
         // ========================================================================
         // Create per-channel processing
@@ -281,6 +443,19 @@ impl BlockBuilder for MixerBuilder {
             }
             elements.push((eq_id.clone(), eq));
 
+            // ----------------------------------------------------------------
+            // Pre-fader tee (for PFL tap - after EQ, before pan)
+            // ----------------------------------------------------------------
+            let pre_fader_tee_id = format!("{}:pre_fader_tee_{}", instance_id, ch);
+            let pre_fader_tee = gst::ElementFactory::make("tee")
+                .name(&pre_fader_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("pre_fader_tee ch{}: {}", ch_num, e))
+                })?;
+            elements.push((pre_fader_tee_id.clone(), pre_fader_tee));
+
             // audiopanorama (pan control)
             let pan_id = format!("{}:pan_{}", instance_id, ch);
             let panorama = gst::ElementFactory::make("audiopanorama")
@@ -304,7 +479,20 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((volume_id.clone(), volume));
 
-            // level (metering) - tee before mixer to get pre-mixer levels
+            // ----------------------------------------------------------------
+            // Post-fader tee (for aux sends - after volume, before level)
+            // ----------------------------------------------------------------
+            let post_fader_tee_id = format!("{}:post_fader_tee_{}", instance_id, ch);
+            let post_fader_tee = gst::ElementFactory::make("tee")
+                .name(&post_fader_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("post_fader_tee ch{}: {}", ch_num, e))
+                })?;
+            elements.push((post_fader_tee_id.clone(), post_fader_tee));
+
+            // level (metering)
             let level_id = format!("{}:level_{}", instance_id, ch);
             let level = gst::ElementFactory::make("level")
                 .name(&level_id)
@@ -316,7 +504,91 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((level_id.clone(), level));
 
-            // Chain: convert → caps → gate → comp → eq → pan → volume → level → mixer
+            // ----------------------------------------------------------------
+            // PFL path (pre-fader listen)
+            // ----------------------------------------------------------------
+            let pfl_enabled = get_bool_prop(properties, &format!("ch{}_pfl", ch_num), false);
+
+            let pfl_volume_id = format!("{}:pfl_volume_{}", instance_id, ch);
+            let pfl_volume = gst::ElementFactory::make("volume")
+                .name(&pfl_volume_id)
+                .property("volume", if pfl_enabled { 1.0 } else { 0.0 })
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("pfl_volume ch{}: {}", ch_num, e))
+                })?;
+            elements.push((pfl_volume_id.clone(), pfl_volume));
+
+            let pfl_queue_id = format!("{}:pfl_queue_{}", instance_id, ch);
+            let pfl_queue = gst::ElementFactory::make("queue")
+                .name(&pfl_queue_id)
+                .property("max-size-buffers", 3u32)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("pfl_queue ch{}: {}", ch_num, e))
+                })?;
+            elements.push((pfl_queue_id.clone(), pfl_queue));
+
+            // ----------------------------------------------------------------
+            // Aux send paths (post-fader)
+            // ----------------------------------------------------------------
+            for aux in 0..num_aux_buses {
+                let aux_send_level = get_float_prop(
+                    properties,
+                    &format!("ch{}_aux{}_level", ch_num, aux + 1),
+                    0.0,
+                );
+
+                let aux_send_id = format!("{}:aux_send_{}_{}", instance_id, ch, aux);
+                let aux_send = gst::ElementFactory::make("volume")
+                    .name(&aux_send_id)
+                    .property("volume", aux_send_level)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!(
+                            "aux_send ch{} aux{}: {}",
+                            ch_num,
+                            aux + 1,
+                            e
+                        ))
+                    })?;
+                elements.push((aux_send_id.clone(), aux_send));
+
+                let aux_queue_id = format!("{}:aux_queue_{}_{}", instance_id, ch, aux);
+                let aux_queue = gst::ElementFactory::make("queue")
+                    .name(&aux_queue_id)
+                    .property("max-size-buffers", 3u32)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!(
+                            "aux_queue ch{} aux{}: {}",
+                            ch_num,
+                            aux + 1,
+                            e
+                        ))
+                    })?;
+                elements.push((aux_queue_id.clone(), aux_queue));
+
+                // Link: post_fader_tee → aux_send → aux_queue → aux_mixer
+                let aux_mixer_id = format!("{}:aux{}_mixer", instance_id, aux);
+                internal_links.push((
+                    ElementPadRef::element(&post_fader_tee_id), // Request pad from tee
+                    ElementPadRef::pad(&aux_send_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&aux_send_id, "src"),
+                    ElementPadRef::pad(&aux_queue_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&aux_queue_id, "src"),
+                    ElementPadRef::element(&aux_mixer_id), // Request pad from aux_mixer
+                ));
+            }
+
+            // ----------------------------------------------------------------
+            // Main chain links
+            // ----------------------------------------------------------------
+            // Chain: convert → caps → gate → comp → eq → pre_fader_tee
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
                 ElementPadRef::pad(&caps_id, "sink"),
@@ -335,6 +607,12 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::pad(&eq_id, "src"),
+                ElementPadRef::pad(&pre_fader_tee_id, "sink"),
+            ));
+
+            // pre_fader_tee → pan → volume → post_fader_tee → level
+            internal_links.push((
+                ElementPadRef::element(&pre_fader_tee_id), // Request pad from tee
                 ElementPadRef::pad(&pan_id, "sink"),
             ));
             internal_links.push((
@@ -343,17 +621,57 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::pad(&volume_id, "src"),
+                ElementPadRef::pad(&post_fader_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::element(&post_fader_tee_id), // Request pad from tee
                 ElementPadRef::pad(&level_id, "sink"),
             ));
-            // Link to audiomixer (request pad)
+
+            // PFL path: pre_fader_tee → pfl_volume → pfl_queue → pfl_mixer
             internal_links.push((
-                ElementPadRef::pad(&level_id, "src"),
-                ElementPadRef::element(&mixer_id), // Request pad from audiomixer
+                ElementPadRef::element(&pre_fader_tee_id), // Request pad from tee
+                ElementPadRef::pad(&pfl_volume_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&pfl_volume_id, "src"),
+                ElementPadRef::pad(&pfl_queue_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&pfl_queue_id, "src"),
+                ElementPadRef::element(&pfl_mixer_id), // Request pad from pfl_mixer
             ));
 
+            // ----------------------------------------------------------------
+            // Route to subgroup or main mixer
+            // ----------------------------------------------------------------
+            let subgroup_assign =
+                get_int_prop(properties, &format!("ch{}_subgroup", ch_num), -1) as i32;
+
+            if subgroup_assign >= 0 && (subgroup_assign as usize) < num_subgroups {
+                // Route to subgroup
+                let sg_mixer_id =
+                    format!("{}:subgroup{}_mixer", instance_id, subgroup_assign as usize);
+                internal_links.push((
+                    ElementPadRef::pad(&level_id, "src"),
+                    ElementPadRef::element(&sg_mixer_id),
+                ));
+                debug!(
+                    "Channel {} routed to subgroup {}",
+                    ch_num,
+                    subgroup_assign + 1
+                );
+            } else {
+                // Route to main audiomixer
+                internal_links.push((
+                    ElementPadRef::pad(&level_id, "src"),
+                    ElementPadRef::element(&mixer_id),
+                ));
+            }
+
             debug!(
-                "Channel {} created: pan={}, fader={}, mute={}",
-                ch_num, pan, fader, mute
+                "Channel {} created: pan={}, fader={}, mute={}, pfl={}",
+                ch_num, pan, fader, mute, pfl_enabled
             );
         }
 
@@ -390,6 +708,34 @@ fn parse_num_channels(properties: &HashMap<String, PropertyValue>) -> usize {
         .clamp(1, MAX_CHANNELS)
 }
 
+/// Parse number of aux buses from properties.
+fn parse_num_aux_buses(properties: &HashMap<String, PropertyValue>) -> usize {
+    properties
+        .get("num_aux_buses")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i as usize),
+            PropertyValue::UInt(u) => Some(*u as usize),
+            PropertyValue::String(s) => s.parse::<usize>().ok(),
+            _ => None,
+        })
+        .unwrap_or(0)
+        .clamp(0, MAX_AUX_BUSES)
+}
+
+/// Parse number of subgroups from properties.
+fn parse_num_subgroups(properties: &HashMap<String, PropertyValue>) -> usize {
+    properties
+        .get("num_subgroups")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i as usize),
+            PropertyValue::UInt(u) => Some(*u as usize),
+            PropertyValue::String(s) => s.parse::<usize>().ok(),
+            _ => None,
+        })
+        .unwrap_or(0)
+        .clamp(0, MAX_SUBGROUPS)
+}
+
 /// Get a float property with default.
 fn get_float_prop(properties: &HashMap<String, PropertyValue>, name: &str, default: f64) -> f64 {
     properties
@@ -408,6 +754,18 @@ fn get_bool_prop(properties: &HashMap<String, PropertyValue>, name: &str, defaul
         .get(name)
         .and_then(|v| match v {
             PropertyValue::Bool(b) => Some(*b),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+/// Get an int property with default.
+fn get_int_prop(properties: &HashMap<String, PropertyValue>, name: &str, default: i64) -> i64 {
+    properties
+        .get(name)
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i),
+            PropertyValue::UInt(u) => Some(*u as i64),
             _ => None,
         })
         .unwrap_or(default)
@@ -447,6 +805,9 @@ fn connect_mixer_meter_handler(
 
     let level_prefix = format!("{}:level_", instance_id);
     let main_level_id = format!("{}:main_level", instance_id);
+    let pfl_level_id = format!("{}:pfl_level", instance_id);
+    let aux_level_prefix = format!("{}:aux", instance_id);
+    let subgroup_level_prefix = format!("{}:subgroup", instance_id);
 
     bus.connect_message(None, move |_bus, msg| {
         if let MessageView::Element(element_msg) = msg.view() {
@@ -466,10 +827,7 @@ fn connect_mixer_meter_handler(
                         // Check if this is the main level meter
                         if source_name == main_level_id {
                             trace!("Mixer main meter: rms={:?}, peak={:?}", rms, peak);
-
-                            // Format: "block_id:meter:main" for main mix
                             let element_id = format!("{}:meter:main", instance_id);
-
                             events.broadcast(StromEvent::MeterData {
                                 flow_id,
                                 element_id,
@@ -478,6 +836,83 @@ fn connect_mixer_meter_handler(
                                 decay,
                             });
                             return;
+                        }
+
+                        // Check if this is the PFL level meter
+                        if source_name == pfl_level_id {
+                            trace!("Mixer PFL meter: rms={:?}, peak={:?}", rms, peak);
+                            let element_id = format!("{}:meter:pfl", instance_id);
+                            events.broadcast(StromEvent::MeterData {
+                                flow_id,
+                                element_id,
+                                rms,
+                                peak,
+                                decay,
+                            });
+                            return;
+                        }
+
+                        // Check if this is an aux level meter
+                        // Format: "instance_id:auxN_level"
+                        if source_name.starts_with(&aux_level_prefix)
+                            && source_name.contains("_level")
+                        {
+                            // Extract aux number from "auxN_level"
+                            if let Some(aux_part) =
+                                source_name.strip_prefix(&format!("{}:aux", instance_id))
+                            {
+                                if let Some(aux_num_str) = aux_part.strip_suffix("_level") {
+                                    if let Ok(aux_num) = aux_num_str.parse::<usize>() {
+                                        trace!(
+                                            "Mixer aux{} meter: rms={:?}, peak={:?}",
+                                            aux_num + 1,
+                                            rms,
+                                            peak
+                                        );
+                                        let element_id =
+                                            format!("{}:meter:aux{}", instance_id, aux_num + 1);
+                                        events.broadcast(StromEvent::MeterData {
+                                            flow_id,
+                                            element_id,
+                                            rms,
+                                            peak,
+                                            decay,
+                                        });
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check if this is a subgroup level meter
+                        // Format: "instance_id:subgroupN_level"
+                        if source_name.starts_with(&subgroup_level_prefix)
+                            && source_name.contains("_level")
+                        {
+                            if let Some(sg_part) =
+                                source_name.strip_prefix(&format!("{}:subgroup", instance_id))
+                            {
+                                if let Some(sg_num_str) = sg_part.strip_suffix("_level") {
+                                    if let Ok(sg_num) = sg_num_str.parse::<usize>() {
+                                        trace!(
+                                            "Mixer subgroup{} meter: rms={:?}, peak={:?}",
+                                            sg_num + 1,
+                                            rms,
+                                            peak
+                                        );
+                                        let element_id =
+                                            format!("{}:meter:subgroup{}", instance_id, sg_num + 1);
+                                        events.broadcast(StromEvent::MeterData {
+                                            flow_id,
+                                            element_id,
+                                            rms,
+                                            peak,
+                                            decay,
+                                        });
+                                        return;
+                                    }
+                                }
+                            }
                         }
 
                         // Check if this is a channel level meter
@@ -581,7 +1016,135 @@ fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
         },
+        // Number of aux buses
+        ExposedProperty {
+            name: "num_aux_buses".to_string(),
+            label: "Aux Buses".to_string(),
+            description: "Number of aux send buses (0-4)".to_string(),
+            property_type: PropertyType::Enum {
+                values: vec![
+                    EnumValue {
+                        value: "0".to_string(),
+                        label: Some("None".to_string()),
+                    },
+                    EnumValue {
+                        value: "1".to_string(),
+                        label: Some("1".to_string()),
+                    },
+                    EnumValue {
+                        value: "2".to_string(),
+                        label: Some("2".to_string()),
+                    },
+                    EnumValue {
+                        value: "3".to_string(),
+                        label: Some("3".to_string()),
+                    },
+                    EnumValue {
+                        value: "4".to_string(),
+                        label: Some("4".to_string()),
+                    },
+                ],
+            },
+            default_value: Some(PropertyValue::String("0".to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "num_aux_buses".to_string(),
+                transform: None,
+            },
+        },
+        // Number of subgroups
+        ExposedProperty {
+            name: "num_subgroups".to_string(),
+            label: "Subgroups".to_string(),
+            description: "Number of subgroup buses (0-4)".to_string(),
+            property_type: PropertyType::Enum {
+                values: vec![
+                    EnumValue {
+                        value: "0".to_string(),
+                        label: Some("None".to_string()),
+                    },
+                    EnumValue {
+                        value: "1".to_string(),
+                        label: Some("1".to_string()),
+                    },
+                    EnumValue {
+                        value: "2".to_string(),
+                        label: Some("2".to_string()),
+                    },
+                    EnumValue {
+                        value: "3".to_string(),
+                        label: Some("3".to_string()),
+                    },
+                    EnumValue {
+                        value: "4".to_string(),
+                        label: Some("4".to_string()),
+                    },
+                ],
+            },
+            default_value: Some(PropertyValue::String("0".to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "num_subgroups".to_string(),
+                transform: None,
+            },
+        },
     ];
+
+    // Add aux bus master properties
+    for aux in 1..=MAX_AUX_BUSES {
+        exposed_properties.push(ExposedProperty {
+            name: format!("aux{}_fader", aux),
+            label: format!("Aux {} Fader", aux),
+            description: format!("Aux bus {} master level (0.0 to 2.0)", aux),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(1.0)),
+            mapping: PropertyMapping {
+                element_id: format!("aux{}_volume", aux - 1),
+                property_name: "volume".to_string(),
+                transform: None,
+            },
+        });
+        exposed_properties.push(ExposedProperty {
+            name: format!("aux{}_mute", aux),
+            label: format!("Aux {} Mute", aux),
+            description: format!("Mute aux bus {}", aux),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: format!("aux{}_mute", aux),
+                transform: None,
+            },
+        });
+    }
+
+    // Add subgroup properties
+    for sg in 1..=MAX_SUBGROUPS {
+        exposed_properties.push(ExposedProperty {
+            name: format!("subgroup{}_fader", sg),
+            label: format!("Subgroup {} Fader", sg),
+            description: format!("Subgroup {} level (0.0 to 2.0)", sg),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(1.0)),
+            mapping: PropertyMapping {
+                element_id: format!("subgroup{}_volume", sg - 1),
+                property_name: "volume".to_string(),
+                transform: None,
+            },
+        });
+        exposed_properties.push(ExposedProperty {
+            name: format!("subgroup{}_mute", sg),
+            label: format!("Subgroup {} Mute", sg),
+            description: format!("Mute subgroup {}", sg),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: format!("subgroup{}_mute", sg),
+                transform: None,
+            },
+        });
+    }
 
     // Add per-channel properties (we'll generate for max channels, UI will show based on num_channels)
     for ch in 1..=MAX_CHANNELS {
@@ -623,6 +1186,50 @@ fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
         });
+
+        // PFL (Pre-Fader Listen)
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_pfl", ch),
+            label: format!("Ch {} PFL", ch),
+            description: format!("Enable PFL (Pre-Fader Listen) on channel {}", ch),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: format!("pfl_volume_{}", ch - 1),
+                property_name: "volume".to_string(),
+                transform: Some("bool_to_volume".to_string()),
+            },
+        });
+
+        // Subgroup assignment
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_subgroup", ch),
+            label: format!("Ch {} Subgroup", ch),
+            description: format!("Assign channel {} to subgroup (-1=main, 0-3=subgroup)", ch),
+            property_type: PropertyType::Int,
+            default_value: Some(PropertyValue::Int(-1)),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: format!("ch{}_subgroup", ch),
+                transform: None,
+            },
+        });
+
+        // Aux send levels (per aux bus)
+        for aux in 1..=MAX_AUX_BUSES {
+            exposed_properties.push(ExposedProperty {
+                name: format!("ch{}_aux{}_level", ch, aux),
+                label: format!("Ch {} Aux {} Send", ch, aux),
+                description: format!("Channel {} send level to aux bus {} (0.0 to 2.0)", ch, aux),
+                property_type: PropertyType::Float,
+                default_value: Some(PropertyValue::Float(0.0)),
+                mapping: PropertyMapping {
+                    element_id: format!("aux_send_{}_{}", ch - 1, aux - 1),
+                    property_name: "volume".to_string(),
+                    transform: None,
+                },
+            });
+        }
 
         // ============================================================
         // Gate properties
@@ -840,6 +1447,7 @@ fn mixer_definition() -> BlockDefinition {
         category: "Audio".to_string(),
         exposed_properties,
         // External pads are computed dynamically based on num_channels
+        // (this is the default, get_external_pads() provides dynamic version)
         external_pads: ExternalPads {
             inputs: (0..DEFAULT_CHANNELS)
                 .map(|i| ExternalPad {
@@ -849,12 +1457,20 @@ fn mixer_definition() -> BlockDefinition {
                     internal_pad_name: "sink".to_string(),
                 })
                 .collect(),
-            outputs: vec![ExternalPad {
-                name: "main_out".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "main_level".to_string(),
-                internal_pad_name: "src".to_string(),
-            }],
+            outputs: vec![
+                ExternalPad {
+                    name: "main_out".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "main_level".to_string(),
+                    internal_pad_name: "src".to_string(),
+                },
+                ExternalPad {
+                    name: "pfl_out".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "pfl_level".to_string(),
+                    internal_pad_name: "src".to_string(),
+                },
+            ],
         },
         built_in: true,
         ui_metadata: Some(BlockUIMetadata {
