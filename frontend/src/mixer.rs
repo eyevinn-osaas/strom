@@ -541,11 +541,9 @@ impl MixerEditor {
                             let fader_response = self.render_fader(ui, index, fader_height);
                             if fader_response.dragged() {
                                 self.active_control = ActiveControl::Fader(index);
+                                self.update_channel_property(ctx, index, "fader");
                             } else if fader_response.drag_stopped() {
                                 self.active_control = ActiveControl::None;
-                            }
-                            if fader_response.changed() {
-                                self.update_channel_property(ctx, index, "fader");
                             }
                         },
                     );
