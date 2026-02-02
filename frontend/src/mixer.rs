@@ -359,6 +359,9 @@ impl MixerEditor {
             Color32::from_rgb(40, 40, 45)
         };
 
+        // Track if we should select this channel (set by background click, but only if no button was clicked)
+        let mut should_select = false;
+
         let frame_response = egui::Frame::default()
             .fill(frame_color)
             .corner_radius(CornerRadius::same(4))
@@ -367,17 +370,18 @@ impl MixerEditor {
                 ui.set_min_width(strip_width);
                 ui.set_max_width(strip_width);
 
+                // Background click detector - FIRST so it has lowest priority
+                // Buttons rendered after will override this
+                let bg_rect = ui.available_rect_before_wrap();
+                let bg_response =
+                    ui.interact(bg_rect, ui.id().with(("strip_bg", index)), Sense::click());
+                if bg_response.clicked() {
+                    should_select = true;
+                }
+
                 ui.vertical_centered(|ui| {
-                    // Channel label - click to select
-                    if ui
-                        .add(
-                            egui::Label::new(egui::RichText::new(&channel_label).strong())
-                                .sense(Sense::click()),
-                        )
-                        .clicked()
-                    {
-                        self.selected_channel = Some(index);
-                    }
+                    // Channel label
+                    ui.label(egui::RichText::new(&channel_label).strong());
 
                     ui.add_space(4.0);
 
@@ -599,16 +603,12 @@ impl MixerEditor {
                 });
             });
 
-        // Click on strip background to select (after all widgets have been rendered)
-        let strip_rect = frame_response.response.rect;
-        let bg_response = ui.interact(
-            strip_rect,
-            ui.id().with(("strip_bg", index)),
-            Sense::click(),
-        );
-        if bg_response.clicked() {
+        // Select channel if background was clicked (and no button consumed the click)
+        if should_select {
             self.selected_channel = Some(index);
         }
+        // Suppress unused variable warning
+        let _ = frame_response;
     }
 
     /// Render the main/master strip.
