@@ -1045,9 +1045,7 @@ impl GraphEditor {
                 }
 
                 // Handle double-click to open mixer editor for Mixer blocks
-                if node_response.double_clicked()
-                    && block.block_definition_id == "builtin.mixer"
-                {
+                if node_response.double_clicked() && block.block_definition_id == "builtin.mixer" {
                     set_local_storage("open_mixer_editor", &block.id);
                 }
 
