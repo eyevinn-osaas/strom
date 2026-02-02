@@ -92,6 +92,15 @@ impl ChannelStrip {
     }
 }
 
+/// What control is currently being adjusted (for value display).
+#[derive(Debug, Clone, PartialEq)]
+enum ActiveControl {
+    None,
+    Pan(usize),   // Channel index
+    Fader(usize), // Channel index
+    MainFader,
+}
+
 /// Mixer editor state.
 pub struct MixerEditor {
     /// Flow ID
@@ -105,6 +114,8 @@ pub struct MixerEditor {
     channels: Vec<ChannelStrip>,
     /// Currently selected channel (for keyboard control)
     selected_channel: Option<usize>,
+    /// Currently active control (for value display)
+    active_control: ActiveControl,
 
     /// Main fader level
     main_fader: f32,
@@ -136,6 +147,7 @@ impl MixerEditor {
             num_channels,
             channels,
             selected_channel: None,
+            active_control: ActiveControl::None,
             main_fader: 1.0,
             main_mute: false,
             api,
@@ -330,6 +342,7 @@ impl MixerEditor {
     ) {
         // Extract values from channel to avoid borrow issues
         let channel_label = self.channels[index].label.clone();
+        let channel_pan = self.channels[index].pan;
         let channel_fader = self.channels[index].fader;
         let channel_mute = self.channels[index].mute;
         let channel_pfl = self.channels[index].pfl;
@@ -447,9 +460,61 @@ impl MixerEditor {
 
                     ui.add_space(4.0);
 
-                    // Pan knob
-                    ui.label("Pan");
+                    // Value display - shows pan normally, or fader dB when adjusting
+                    let display_text = match &self.active_control {
+                        ActiveControl::Fader(ch) if *ch == index => {
+                            // Show fader dB when adjusting
+                            if channel_fader <= 0.001 {
+                                "-inf dB".to_string()
+                            } else {
+                                format!("{:.1} dB", 20.0 * channel_fader.log10())
+                            }
+                        }
+                        _ => {
+                            // Show pan value normally
+                            if channel_pan < -0.01 {
+                                format!("L{:.0}", (-channel_pan * 100.0))
+                            } else if channel_pan > 0.01 {
+                                format!("R{:.0}", (channel_pan * 100.0))
+                            } else {
+                                "C".to_string()
+                            }
+                        }
+                    };
+
+                    // Styled display box (like small LCD)
+                    let display_rect = ui
+                        .allocate_exact_size(Vec2::new(strip_width - 12.0, 18.0), Sense::hover())
+                        .0;
+                    let painter = ui.painter();
+                    painter.rect_filled(
+                        display_rect,
+                        CornerRadius::same(2),
+                        Color32::from_rgb(20, 25, 30),
+                    );
+                    painter.rect_stroke(
+                        display_rect,
+                        CornerRadius::same(2),
+                        Stroke::new(1.0, Color32::from_rgb(50, 55, 60)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    painter.text(
+                        display_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &display_text,
+                        egui::FontId::monospace(11.0),
+                        Color32::from_rgb(100, 200, 100), // Green LCD-like color
+                    );
+
+                    ui.add_space(2.0);
+
+                    // Pan control
                     let pan_response = self.render_pan_control(ui, index);
+                    if pan_response.dragged() {
+                        self.active_control = ActiveControl::Pan(index);
+                    } else if pan_response.drag_stopped() {
+                        self.active_control = ActiveControl::None;
+                    }
                     if pan_response.changed() {
                         self.update_channel_property(ctx, index, "pan");
                     }
@@ -474,20 +539,16 @@ impl MixerEditor {
 
                             // Fader
                             let fader_response = self.render_fader(ui, index, fader_height);
+                            if fader_response.dragged() {
+                                self.active_control = ActiveControl::Fader(index);
+                            } else if fader_response.drag_stopped() {
+                                self.active_control = ActiveControl::None;
+                            }
                             if fader_response.changed() {
                                 self.update_channel_property(ctx, index, "fader");
                             }
                         },
                     );
-
-                    // dB display
-                    let db_text = if channel_fader <= 0.001 {
-                        "-inf".to_string()
-                    } else {
-                        let db = 20.0 * channel_fader.log10();
-                        format!("{:.1}", db)
-                    };
-                    ui.label(egui::RichText::new(db_text).small());
 
                     ui.add_space(4.0);
 
@@ -562,6 +623,44 @@ impl MixerEditor {
 
                     ui.add_space(8.0);
 
+                    // Value display (shows dB)
+                    let db = if self.main_fader > 0.0 {
+                        20.0 * self.main_fader.log10()
+                    } else {
+                        -60.0
+                    };
+                    let display_text = if db <= -59.0 {
+                        "-inf dB".to_string()
+                    } else {
+                        format!("{:.1} dB", db)
+                    };
+
+                    // Styled display box (like small LCD)
+                    let display_rect = ui
+                        .allocate_exact_size(Vec2::new(strip_width - 20.0, 22.0), Sense::hover())
+                        .0;
+                    let painter = ui.painter();
+                    painter.rect_filled(
+                        display_rect,
+                        CornerRadius::same(2),
+                        Color32::from_rgb(20, 25, 30),
+                    );
+                    painter.rect_stroke(
+                        display_rect,
+                        CornerRadius::same(2),
+                        Stroke::new(1.0, Color32::from_rgb(50, 55, 60)),
+                        egui::epaint::StrokeKind::Inside,
+                    );
+                    painter.text(
+                        display_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &display_text,
+                        egui::FontId::monospace(12.0),
+                        Color32::from_rgb(100, 200, 100), // Green LCD-like color
+                    );
+
+                    ui.add_space(8.0);
+
                     // Main fader with stereo meter and scale - use fixed height container
                     let fader_height = 180.0;
                     ui.allocate_ui_with_layout(
@@ -585,11 +684,14 @@ impl MixerEditor {
                                 .allocate_exact_size(Vec2::new(20.0, fader_height), Sense::drag());
 
                             if response.dragged() {
+                                self.active_control = ActiveControl::MainFader;
                                 let delta = -response.drag_delta().y;
                                 let db_per_pixel = 66.0 / fader_height;
                                 main_fader_db =
                                     (main_fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
                                 self.main_fader = db_to_linear_f32(main_fader_db);
+                            } else if response.drag_stopped() {
+                                self.active_control = ActiveControl::None;
                             }
 
                             // Draw fader track
@@ -626,14 +728,6 @@ impl MixerEditor {
                             }
                         },
                     );
-
-                    // dB display
-                    let db = if self.main_fader > 0.0 {
-                        20.0 * self.main_fader.log10()
-                    } else {
-                        -60.0
-                    };
-                    ui.label(egui::RichText::new(format!("{:.1} dB", db)).size(14.0));
 
                     ui.add_space(8.0);
 

@@ -6,7 +6,6 @@ use strom_types::{Flow, PipelineState, PropertyValue};
 use crate::api::{ApiClient, AuthStatusResponse};
 use crate::audiorouter::RoutingMatrixEditor;
 use crate::compositor_editor::CompositorEditor;
-use crate::mixer::MixerEditor;
 use crate::graph::GraphEditor;
 use crate::info_page::{
     current_time_millis, format_datetime_local, format_uptime, parse_iso8601_to_millis,
@@ -15,6 +14,7 @@ use crate::latency::LatencyDataStore;
 use crate::login::LoginScreen;
 use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
+use crate::mixer::MixerEditor;
 use crate::palette::ElementPalette;
 use crate::properties::PropertyInspector;
 use crate::state::{AppMessage, AppStateChannels, ConnectionState};
@@ -6695,20 +6695,13 @@ impl eframe::App for StromApp {
 
             if let Some((flow_id, properties, num_channels)) = mixer_data {
                 // Create mixer editor
-                let mut editor = MixerEditor::new(
-                    flow_id,
-                    block_id.clone(),
-                    num_channels,
-                    self.api.clone(),
-                );
+                let mut editor =
+                    MixerEditor::new(flow_id, block_id.clone(), num_channels, self.api.clone());
                 editor.load_from_properties(&properties);
                 self.mixer_editor = Some(editor);
 
                 // Enter Live Audio mode
-                self.app_mode = AppMode::Live {
-                    flow_id,
-                    block_id,
-                };
+                self.app_mode = AppMode::Live { flow_id, block_id };
                 tracing::info!("Entered Live Audio mode for mixer");
             }
         }
