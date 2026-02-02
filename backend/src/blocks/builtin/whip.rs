@@ -790,6 +790,7 @@ impl BlockBuilder for WHIPInputBuilder {
 
         if mode.has_audio() {
             outputs.push(ExternalPad {
+                label: Some("Audio".to_string()),
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "output_audioresample".to_string(),
@@ -799,6 +800,7 @@ impl BlockBuilder for WHIPInputBuilder {
 
         if mode.has_video() {
             outputs.push(ExternalPad {
+                label: Some("Video".to_string()),
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "output_videoconvert".to_string(),
@@ -1543,6 +1545,7 @@ fn whip_output_definition() -> BlockDefinition {
         ],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
+                label: None,
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "audioconvert".to_string(),
@@ -1614,12 +1617,14 @@ fn whip_input_definition() -> BlockDefinition {
             inputs: vec![],
             outputs: vec![
                 ExternalPad {
+                    label: Some("Audio".to_string()),
                     name: "audio_out".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "output_audioresample".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
                 ExternalPad {
+                    label: Some("Video".to_string()),
                     name: "video_out".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "output_videoconvert".to_string(),

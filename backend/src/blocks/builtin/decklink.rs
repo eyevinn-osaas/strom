@@ -549,6 +549,7 @@ fn decklink_video_input_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![],
             outputs: vec![ExternalPad {
+                label: None,
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "capsfilter".to_string(),
@@ -652,6 +653,7 @@ fn decklink_audio_input_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![],
             outputs: vec![ExternalPad {
+                label: None,
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "capsfilter".to_string(),
@@ -707,6 +709,7 @@ fn decklink_video_output_definition() -> BlockDefinition {
         ],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
+                label: None,
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "videoconvert".to_string(),
@@ -746,6 +749,7 @@ fn decklink_audio_output_definition() -> BlockDefinition {
         }],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
+                label: None,
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "audioconvert".to_string(),
