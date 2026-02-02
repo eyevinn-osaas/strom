@@ -359,7 +359,7 @@ impl MixerEditor {
             Color32::from_rgb(40, 40, 45)
         };
 
-        egui::Frame::default()
+        let frame_response = egui::Frame::default()
             .fill(frame_color)
             .corner_radius(CornerRadius::same(4))
             .inner_margin(4.0)
@@ -598,6 +598,17 @@ impl MixerEditor {
                     pfl_btn.on_hover_text("Pre-Fader Listen (not yet implemented)");
                 });
             });
+
+        // Click on strip background to select (after all widgets have been rendered)
+        let strip_rect = frame_response.response.rect;
+        let bg_response = ui.interact(
+            strip_rect,
+            ui.id().with(("strip_bg", index)),
+            Sense::click(),
+        );
+        if bg_response.clicked() {
+            self.selected_channel = Some(index);
+        }
     }
 
     /// Render the main/master strip.
