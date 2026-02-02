@@ -18,6 +18,11 @@ use crate::meter::{MeterData, MeterDataStore};
 /// Default fader value (~-6dB)
 const DEFAULT_FADER: f32 = 0.75;
 
+/// Maximum number of aux buses
+const MAX_AUX_BUSES: usize = 4;
+/// Maximum number of subgroups
+const MAX_SUBGROUPS: usize = 4;
+
 /// A single channel strip in the mixer.
 #[derive(Debug, Clone)]
 struct ChannelStrip {
@@ -33,6 +38,10 @@ struct ChannelStrip {
     mute: bool,
     /// PFL (Pre-Fader Listen) state
     pfl: bool,
+    /// Subgroup assignment (-1 = main, 0-3 = subgroup index)
+    subgroup: i32,
+    /// Aux send levels (up to 4 aux buses)
+    aux_sends: [f32; MAX_AUX_BUSES],
     /// Gate enabled
     gate_enabled: bool,
     /// Gate threshold (dB)
@@ -61,6 +70,28 @@ struct ChannelStrip {
     pending_update: bool,
 }
 
+/// Subgroup strip state.
+#[derive(Debug, Clone)]
+struct SubgroupStrip {
+    /// Subgroup index (0-based)
+    index: usize,
+    /// Fader level (0.0 to 2.0)
+    fader: f32,
+    /// Mute state
+    mute: bool,
+}
+
+/// Aux bus master state.
+#[derive(Debug, Clone)]
+struct AuxMaster {
+    /// Aux index (0-based)
+    index: usize,
+    /// Master fader level
+    fader: f32,
+    /// Mute state
+    mute: bool,
+}
+
 impl ChannelStrip {
     fn new(channel_num: usize) -> Self {
         Self {
@@ -70,6 +101,8 @@ impl ChannelStrip {
             fader: DEFAULT_FADER,
             mute: false,
             pfl: false,
+            subgroup: -1, // -1 = direct to main
+            aux_sends: [0.0; MAX_AUX_BUSES],
             gate_enabled: false,
             gate_threshold: -40.0,
             gate_attack: 5.0,
@@ -92,6 +125,26 @@ impl ChannelStrip {
     }
 }
 
+impl SubgroupStrip {
+    fn new(index: usize) -> Self {
+        Self {
+            index,
+            fader: 1.0,
+            mute: false,
+        }
+    }
+}
+
+impl AuxMaster {
+    fn new(index: usize) -> Self {
+        Self {
+            index,
+            fader: 1.0,
+            mute: false,
+        }
+    }
+}
+
 /// What control is currently being adjusted (for value display).
 #[derive(Debug, Clone, PartialEq)]
 enum ActiveControl {
@@ -110,8 +163,18 @@ pub struct MixerEditor {
 
     /// Number of channels
     num_channels: usize,
+    /// Number of aux buses
+    num_aux_buses: usize,
+    /// Number of subgroups
+    num_subgroups: usize,
+
     /// Channel strips
     channels: Vec<ChannelStrip>,
+    /// Subgroup strips
+    subgroups: Vec<SubgroupStrip>,
+    /// Aux masters
+    aux_masters: Vec<AuxMaster>,
+
     /// Currently selected channel (for keyboard control)
     selected_channel: Option<usize>,
     /// Currently active control (for value display)
@@ -145,7 +208,11 @@ impl MixerEditor {
             flow_id,
             block_id,
             num_channels,
+            num_aux_buses: 0,
+            num_subgroups: 0,
             channels,
+            subgroups: Vec::new(),
+            aux_masters: Vec::new(),
             selected_channel: None,
             active_control: ActiveControl::None,
             main_fader: 1.0,
@@ -165,6 +232,63 @@ impl MixerEditor {
             self.main_fader = *f as f32;
         }
 
+        // Load number of aux buses
+        self.num_aux_buses = properties
+            .get("num_aux_buses")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as usize),
+                PropertyValue::String(s) => s.parse().ok(),
+                _ => None,
+            })
+            .unwrap_or(0)
+            .min(MAX_AUX_BUSES);
+
+        // Load number of subgroups
+        self.num_subgroups = properties
+            .get("num_subgroups")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as usize),
+                PropertyValue::String(s) => s.parse().ok(),
+                _ => None,
+            })
+            .unwrap_or(0)
+            .min(MAX_SUBGROUPS);
+
+        // Initialize subgroups
+        self.subgroups = (0..self.num_subgroups)
+            .map(|i| {
+                let mut sg = SubgroupStrip::new(i);
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("subgroup{}_fader", i + 1))
+                {
+                    sg.fader = *f as f32;
+                }
+                if let Some(PropertyValue::Bool(b)) =
+                    properties.get(&format!("subgroup{}_mute", i + 1))
+                {
+                    sg.mute = *b;
+                }
+                sg
+            })
+            .collect();
+
+        // Initialize aux masters
+        self.aux_masters = (0..self.num_aux_buses)
+            .map(|i| {
+                let mut aux = AuxMaster::new(i);
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("aux{}_fader", i + 1))
+                {
+                    aux.fader = *f as f32;
+                }
+                if let Some(PropertyValue::Bool(b)) = properties.get(&format!("aux{}_mute", i + 1))
+                {
+                    aux.mute = *b;
+                }
+                aux
+            })
+            .collect();
+
         // Load per-channel properties
         for ch in &mut self.channels {
             let ch_num = ch.channel_num;
@@ -177,6 +301,21 @@ impl MixerEditor {
             }
             if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_mute", ch_num)) {
                 ch.mute = *b;
+            }
+            if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_pfl", ch_num)) {
+                ch.pfl = *b;
+            }
+            // Subgroup assignment
+            if let Some(PropertyValue::Int(i)) = properties.get(&format!("ch{}_subgroup", ch_num)) {
+                ch.subgroup = *i as i32;
+            }
+            // Aux send levels
+            for aux in 0..MAX_AUX_BUSES {
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("ch{}_aux{}_level", ch_num, aux + 1))
+                {
+                    ch.aux_sends[aux] = *f as f32;
+                }
             }
             // Gate
             if let Some(PropertyValue::Bool(b)) =
@@ -597,9 +736,9 @@ impl MixerEditor {
                     );
                     if pfl_btn.clicked() {
                         self.channels[index].pfl = !self.channels[index].pfl;
-                        // PFL not yet implemented in backend - visual toggle only
+                        self.update_channel_property(ctx, index, "pfl");
                     }
-                    pfl_btn.on_hover_text("Pre-Fader Listen (not yet implemented)");
+                    pfl_btn.on_hover_text("Pre-Fader Listen");
                 });
             });
 
@@ -1505,6 +1644,11 @@ impl MixerEditor {
                 format!("eq_{}", index),
                 "enabled",
                 PropertyValue::Bool(channel.eq_enabled),
+            ),
+            "pfl" => (
+                format!("pfl_volume_{}", index),
+                "volume",
+                PropertyValue::Float(if channel.pfl { 1.0 } else { 0.0 }),
             ),
             _ => return,
         };
