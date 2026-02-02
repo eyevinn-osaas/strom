@@ -1,11 +1,12 @@
 //! Main application structure.
 
 use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
-use strom_types::{Flow, PipelineState};
+use strom_types::{Flow, PipelineState, PropertyValue};
 
 use crate::api::{ApiClient, AuthStatusResponse};
 use crate::audiorouter::RoutingMatrixEditor;
 use crate::compositor_editor::CompositorEditor;
+use crate::mixer::MixerEditor;
 use crate::graph::GraphEditor;
 use crate::info_page::{
     current_time_millis, format_datetime_local, format_uptime, parse_iso8601_to_millis,
@@ -620,6 +621,8 @@ pub struct StromApp {
     show_stats_panel: bool,
     /// Compositor layout editor (if open)
     compositor_editor: Option<CompositorEditor>,
+    /// Mixer editor (if open)
+    mixer_editor: Option<MixerEditor>,
     /// Playlist editor (if open)
     playlist_editor: Option<PlaylistEditor>,
     /// Routing matrix editor for Audio Router blocks (if open)
@@ -787,6 +790,7 @@ impl StromApp {
             last_rtp_stats_fetch: instant::Instant::now(),
             show_stats_panel: false,
             compositor_editor: None,
+            mixer_editor: None,
             playlist_editor: None,
             routing_matrix_editor: None,
             network_interfaces: Vec::new(),
@@ -924,6 +928,7 @@ impl StromApp {
             last_rtp_stats_fetch: instant::Instant::now(),
             show_stats_panel: false,
             compositor_editor: None,
+            mixer_editor: None,
             playlist_editor: None,
             routing_matrix_editor: None,
             network_interfaces: Vec::new(),
@@ -2274,15 +2279,19 @@ impl StromApp {
     fn exit_live_mode(&mut self) {
         self.app_mode = AppMode::Admin;
         self.compositor_editor = None;
+        self.mixer_editor = None;
         tracing::info!("Exited Live mode");
     }
 
     /// Render the Live UI (minimal top bar + full-screen compositor editor).
     fn render_live_ui(&mut self, ctx: &Context, flow_id: strom_types::FlowId, block_id: &str) {
-        // Ensure compositor editor exists
-        if self.compositor_editor.is_none() {
+        // Ensure editor exists (compositor or mixer)
+        if self.compositor_editor.is_none() && self.mixer_editor.is_none() {
             self.enter_live_mode(flow_id, block_id.to_string(), ctx);
         }
+
+        // Determine view type for title
+        let is_mixer = self.mixer_editor.is_some();
 
         // Get flow and block names for display
         let flow_name = self
@@ -2313,7 +2322,8 @@ impl StromApp {
                     }
 
                     // Title
-                    ui.label(egui::RichText::new("Live View").strong().size(16.0));
+                    let title = if is_mixer { "Live Audio" } else { "Live View" };
+                    ui.label(egui::RichText::new(title).strong().size(16.0));
 
                     ui.separator();
 
@@ -2398,17 +2408,21 @@ impl StromApp {
                 });
             });
 
-        // Full-screen compositor editor
+        // Full-screen editor (compositor or mixer)
         if let Some(ref mut editor) = self.compositor_editor {
             CentralPanel::default().show(ctx, |ui| {
                 editor.show_fullscreen(ui, ctx);
+            });
+        } else if let Some(ref mut editor) = self.mixer_editor {
+            CentralPanel::default().show(ctx, |ui| {
+                editor.show_fullscreen(ui, ctx, &self.meter_data);
             });
         } else {
             // Show loading state
             CentralPanel::default().show(ctx, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.spinner();
-                    ui.label("Loading compositor...");
+                    ui.label("Loading...");
                 });
             });
         }
@@ -6609,6 +6623,46 @@ impl eframe::App for StromApp {
                     // Enter Live mode for this compositor
                     self.enter_live_mode(flow.id, block_id, ctx);
                 }
+            }
+        }
+
+        // Check for mixer editor open signal - enters Live Audio mode
+        if let Some(block_id) = get_local_storage("open_mixer_editor") {
+            remove_local_storage("open_mixer_editor");
+
+            // Extract data from flow/block to avoid borrow issues
+            let mixer_data = self.current_flow().and_then(|flow| {
+                flow.blocks.iter().find(|b| b.id == block_id).map(|block| {
+                    let num_channels = block
+                        .properties
+                        .get("num_channels")
+                        .and_then(|v| match v {
+                            PropertyValue::String(s) => s.parse::<usize>().ok(),
+                            PropertyValue::Int(i) => Some(*i as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(8);
+                    (flow.id, block.properties.clone(), num_channels)
+                })
+            });
+
+            if let Some((flow_id, properties, num_channels)) = mixer_data {
+                // Create mixer editor
+                let mut editor = MixerEditor::new(
+                    flow_id,
+                    block_id.clone(),
+                    num_channels,
+                    self.api.clone(),
+                );
+                editor.load_from_properties(&properties);
+                self.mixer_editor = Some(editor);
+
+                // Enter Live Audio mode
+                self.app_mode = AppMode::Live {
+                    flow_id,
+                    block_id,
+                };
+                tracing::info!("Entered Live Audio mode for mixer");
             }
         }
 

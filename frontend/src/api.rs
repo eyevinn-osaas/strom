@@ -1194,6 +1194,51 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Update an element property on a running element in a flow.
+    pub async fn update_element_property(
+        &self,
+        flow_id: &FlowId,
+        element_id: &str,
+        property_name: &str,
+        value: strom_types::PropertyValue,
+    ) -> ApiResult<()> {
+        use strom_types::api::UpdatePropertyRequest;
+        use tracing::info;
+
+        let url = format!(
+            "{}/flows/{}/elements/{}/properties",
+            self.base_url, flow_id, element_id
+        );
+        info!(
+            "Updating element property: {} on {} in flow {}",
+            property_name, element_id, flow_id
+        );
+
+        let request = UpdatePropertyRequest {
+            property_name: property_name.to_string(),
+            value,
+        };
+
+        let response = self
+            .with_auth(self.client.patch(&url).json(&request))
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::error!("Network request failed: {}", e);
+                ApiError::Network(e.to_string())
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            tracing::error!("HTTP error {}: {}", status, text);
+            return Err(ApiError::Http(status, text));
+        }
+
+        info!("Successfully updated element property");
+        Ok(())
+    }
+
     /// Trigger a transition on a compositor block.
     pub async fn trigger_transition(
         &self,
