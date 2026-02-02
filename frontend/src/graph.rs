@@ -2056,7 +2056,7 @@ impl GraphEditor {
                     );
                 }
 
-                // Draw label inside port
+                // Draw label inside port (media type indicator)
                 if !label.is_empty() {
                     painter.text(
                         pad_center,
@@ -2064,6 +2064,18 @@ impl GraphEditor {
                         label,
                         FontId::proportional(10.0 * self.zoom),
                         Color32::BLACK,
+                    );
+                }
+
+                // Draw pad label inside block (to the right of input pad)
+                if let Some(pad_label) = &external_pad.label {
+                    let label_pos = pos2(rect.min.x + port_size * 0.8, pad_center.y);
+                    painter.text(
+                        label_pos,
+                        egui::Align2::LEFT_CENTER,
+                        pad_label,
+                        FontId::proportional(11.0 * self.zoom),
+                        Color32::from_gray(200),
                     );
                 }
             }
@@ -2137,7 +2149,7 @@ impl GraphEditor {
                     );
                 }
 
-                // Draw label inside port
+                // Draw label inside port (media type indicator)
                 if !label.is_empty() {
                     painter.text(
                         pad_center,
@@ -2145,6 +2157,18 @@ impl GraphEditor {
                         label,
                         FontId::proportional(10.0 * self.zoom),
                         Color32::BLACK,
+                    );
+                }
+
+                // Draw pad label inside block (to the left of output pad)
+                if let Some(pad_label) = &external_pad.label {
+                    let label_pos = pos2(rect.max.x - port_size * 0.8, pad_center.y);
+                    painter.text(
+                        label_pos,
+                        egui::Align2::RIGHT_CENTER,
+                        pad_label,
+                        FontId::proportional(11.0 * self.zoom),
+                        Color32::from_gray(200),
                     );
                 }
             }
@@ -2744,6 +2768,7 @@ impl GraphEditor {
                     self.hovered_pad = Some((block.id.clone(), external_pad.name.clone()));
                     any_hovered = true;
                 }
+                pad_response.on_hover_text(&external_pad.name);
             }
 
             // Handle output pad interactions
@@ -2774,6 +2799,7 @@ impl GraphEditor {
                     self.hovered_pad = Some((block.id.clone(), external_pad.name.clone()));
                     any_hovered = true;
                 }
+                pad_response.on_hover_text(&external_pad.name);
             }
         }
 

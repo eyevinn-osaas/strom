@@ -38,8 +38,10 @@ struct ChannelStrip {
     mute: bool,
     /// PFL (Pre-Fader Listen) state
     pfl: bool,
-    /// Subgroup assignment (-1 = main, 0-3 = subgroup index)
-    subgroup: i32,
+    /// Route to main mix
+    to_main: bool,
+    /// Route to subgroups (up to 4)
+    to_sg: [bool; MAX_SUBGROUPS],
     /// Aux send levels (up to 4 aux buses)
     aux_sends: [f32; MAX_AUX_BUSES],
     /// Gate enabled
@@ -101,7 +103,8 @@ impl ChannelStrip {
             fader: DEFAULT_FADER,
             mute: false,
             pfl: false,
-            subgroup: -1, // -1 = direct to main
+            to_main: true,
+            to_sg: [false; MAX_SUBGROUPS],
             aux_sends: [0.0; MAX_AUX_BUSES],
             gate_enabled: false,
             gate_threshold: -40.0,
@@ -149,8 +152,11 @@ impl AuxMaster {
 #[derive(Debug, Clone, PartialEq)]
 enum ActiveControl {
     None,
-    Pan(usize),   // Channel index
-    Fader(usize), // Channel index
+    Pan(usize),            // Channel index
+    Fader(usize),          // Channel index
+    AuxSend(usize, usize), // (Channel index, Aux index)
+    SubgroupFader(usize),  // Subgroup index
+    AuxMasterFader(usize), // Aux master index
     MainFader,
 }
 
@@ -305,9 +311,17 @@ impl MixerEditor {
             if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_pfl", ch_num)) {
                 ch.pfl = *b;
             }
-            // Subgroup assignment
-            if let Some(PropertyValue::Int(i)) = properties.get(&format!("ch{}_subgroup", ch_num)) {
-                ch.subgroup = *i as i32;
+            // Routing to main
+            if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_to_main", ch_num)) {
+                ch.to_main = *b;
+            }
+            // Routing to subgroups
+            for sg in 0..MAX_SUBGROUPS {
+                if let Some(PropertyValue::Bool(b)) =
+                    properties.get(&format!("ch{}_to_sg{}", ch_num, sg + 1))
+                {
+                    ch.to_sg[sg] = *b;
+                }
             }
             // Aux send levels
             for aux in 0..MAX_AUX_BUSES {
@@ -433,6 +447,22 @@ impl MixerEditor {
 
                                     self.render_channel_strip(ui, ctx, i, meter_data);
                                     ui.add_space(4.0);
+                                }
+
+                                // Aux master section (if configured)
+                                if self.num_aux_buses > 0 {
+                                    ui.add_space(16.0);
+                                    ui.separator();
+                                    ui.add_space(16.0);
+                                    self.render_aux_masters(ui, ctx, meter_store);
+                                }
+
+                                // Subgroup strips (if configured)
+                                if self.num_subgroups > 0 {
+                                    ui.add_space(16.0);
+                                    ui.separator();
+                                    ui.add_space(16.0);
+                                    self.render_subgroup_strips(ui, ctx, meter_store);
                                 }
 
                                 ui.add_space(16.0);
@@ -598,6 +628,117 @@ impl MixerEditor {
                         {
                             self.channels[index].eq_enabled = !self.channels[index].eq_enabled;
                             self.update_channel_property(ctx, index, "eq_enabled");
+                        }
+                    });
+
+                    // Aux sends (small knobs) - only show if aux buses configured
+                    if self.num_aux_buses > 0 {
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            for aux_idx in 0..self.num_aux_buses.min(MAX_AUX_BUSES) {
+                                let aux_level = self.channels[index].aux_sends[aux_idx];
+                                let aux_color = if aux_level > 0.01 {
+                                    Color32::from_rgb(100, 150, 200)
+                                } else {
+                                    Color32::from_rgb(50, 50, 55)
+                                };
+                                let response = ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(format!("{}", aux_idx + 1))
+                                            .small()
+                                            .color(if aux_level > 0.01 {
+                                                Color32::WHITE
+                                            } else {
+                                                Color32::GRAY
+                                            }),
+                                    )
+                                    .fill(aux_color)
+                                    .min_size(Vec2::new(14.0, 14.0)),
+                                );
+                                if response.clicked() {
+                                    // Toggle aux send between 0 and 1
+                                    self.channels[index].aux_sends[aux_idx] =
+                                        if aux_level > 0.01 { 0.0 } else { 1.0 };
+                                    self.update_aux_send(ctx, index, aux_idx);
+                                }
+                                response.on_hover_text(format!(
+                                    "Aux {} send: {:.0}%",
+                                    aux_idx + 1,
+                                    aux_level * 100.0
+                                ));
+                            }
+                        });
+                    }
+
+                    // Routing buttons - Main and Subgroups
+                    // Always show Main button, show SG buttons if subgroups configured
+                    ui.add_space(2.0);
+
+                    // Calculate button width based on number of destinations
+                    let num_destinations = 1 + self.num_subgroups;
+                    let button_width = if num_destinations <= 2 {
+                        (strip_width - 14.0) / num_destinations as f32
+                    } else {
+                        // For many destinations, use smaller buttons in a grid
+                        (strip_width - 14.0) / 2.0
+                    };
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+
+                        // Main routing button
+                        let to_main = self.channels[index].to_main;
+                        let main_color = if to_main {
+                            Color32::from_rgb(80, 120, 80)
+                        } else {
+                            Color32::from_rgb(40, 40, 45)
+                        };
+                        let response = ui.add(
+                            egui::Button::new(egui::RichText::new("M").small().color(if to_main {
+                                Color32::WHITE
+                            } else {
+                                Color32::GRAY
+                            }))
+                            .fill(main_color)
+                            .min_size(Vec2::new(button_width, 14.0)),
+                        );
+                        if response.clicked() {
+                            self.channels[index].to_main = !to_main;
+                            self.update_routing(ctx, index);
+                        }
+                        response.on_hover_text(if to_main {
+                            "Routed to Main"
+                        } else {
+                            "Not routed to Main"
+                        });
+
+                        // Subgroup routing buttons
+                        for sg in 0..self.num_subgroups.min(MAX_SUBGROUPS) {
+                            let to_sg = self.channels[index].to_sg[sg];
+                            let sg_color = if to_sg {
+                                Color32::from_rgb(150, 100, 150)
+                            } else {
+                                Color32::from_rgb(40, 40, 45)
+                            };
+                            let response = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new(format!("{}", sg + 1))
+                                        .small()
+                                        .color(if to_sg { Color32::WHITE } else { Color32::GRAY }),
+                                )
+                                .fill(sg_color)
+                                .min_size(Vec2::new(button_width, 14.0)),
+                            );
+                            if response.clicked() {
+                                self.channels[index].to_sg[sg] = !to_sg;
+                                self.update_routing(ctx, index);
+                            }
+                            response.on_hover_text(if to_sg {
+                                format!("Routed to Subgroup {}", sg + 1)
+                            } else {
+                                format!("Not routed to Subgroup {}", sg + 1)
+                            });
                         }
                     });
 
@@ -899,6 +1040,360 @@ impl MixerEditor {
                     }
                 });
             });
+    }
+
+    /// Render the subgroup strips section.
+    fn render_subgroup_strips(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
+        for sg_idx in 0..self.num_subgroups.min(MAX_SUBGROUPS) {
+            // Ensure we have data for this subgroup
+            while self.subgroups.len() <= sg_idx {
+                self.subgroups
+                    .push(SubgroupStrip::new(self.subgroups.len()));
+            }
+
+            let strip_width = 60.0;
+            let fader_height = 180.0;
+
+            // Get meter data
+            let meter_key = format!("{}:meter:subgroup{}", self.block_id, sg_idx + 1);
+            let meter_data = meter_store.get(&self.flow_id, &meter_key);
+
+            egui::Frame::default()
+                .fill(Color32::from_rgb(50, 45, 55))
+                .corner_radius(CornerRadius::same(4))
+                .inner_margin(4.0)
+                .show(ui, |ui| {
+                    ui.set_min_width(strip_width);
+                    ui.set_max_width(strip_width);
+
+                    ui.vertical_centered(|ui| {
+                        // Label
+                        ui.label(
+                            egui::RichText::new(format!("SG{}", sg_idx + 1))
+                                .strong()
+                                .color(Color32::from_rgb(200, 150, 200)),
+                        );
+
+                        // Spacer to align with channel G/C/E buttons
+                        ui.add_space(22.0);
+
+                        // Spacer for aux sends row
+                        if self.num_aux_buses > 0 {
+                            ui.add_space(18.0);
+                        }
+
+                        // Spacer for subgroup button row
+                        ui.add_space(22.0);
+
+                        // Value display (dB)
+                        let fader_val = self.subgroups[sg_idx].fader;
+                        let db = if fader_val > 0.0 {
+                            20.0 * fader_val.log10()
+                        } else {
+                            -60.0
+                        };
+                        let display_text = if db <= -59.0 {
+                            "-inf dB".to_string()
+                        } else {
+                            format!("{:.1} dB", db)
+                        };
+
+                        let display_rect = ui
+                            .allocate_exact_size(
+                                Vec2::new(strip_width - 12.0, 18.0),
+                                Sense::hover(),
+                            )
+                            .0;
+                        let painter = ui.painter();
+                        painter.rect_filled(
+                            display_rect,
+                            CornerRadius::same(2),
+                            Color32::from_rgb(20, 25, 30),
+                        );
+                        painter.text(
+                            display_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            &display_text,
+                            egui::FontId::monospace(11.0),
+                            Color32::from_rgb(100, 200, 100),
+                        );
+
+                        ui.add_space(2.0);
+
+                        // Spacer for pan control
+                        ui.add_space(22.0);
+
+                        ui.add_space(4.0);
+
+                        // Fader with meter and scale
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), fader_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                // Meter
+                                self.render_stereo_meter(ui, meter_data, fader_height);
+                                ui.add_space(2.0);
+
+                                // dB scale
+                                self.render_db_scale(ui, fader_height);
+                                ui.add_space(2.0);
+
+                                // Fader
+                                let fader_response =
+                                    self.render_subgroup_fader(ui, sg_idx, fader_height);
+                                if fader_response.dragged() {
+                                    self.active_control = ActiveControl::SubgroupFader(sg_idx);
+                                    self.update_subgroup_fader(ctx, sg_idx);
+                                } else if fader_response.drag_stopped() {
+                                    self.active_control = ActiveControl::None;
+                                }
+                            },
+                        );
+
+                        ui.add_space(4.0);
+
+                        // Mute button
+                        let mute = self.subgroups[sg_idx].mute;
+                        let mute_color = if mute {
+                            Color32::RED
+                        } else {
+                            Color32::from_rgb(60, 60, 65)
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("M").color(Color32::WHITE).small(),
+                                )
+                                .fill(mute_color)
+                                .min_size(Vec2::new(strip_width - 8.0, 20.0)),
+                            )
+                            .clicked()
+                        {
+                            self.subgroups[sg_idx].mute = !self.subgroups[sg_idx].mute;
+                            self.update_subgroup_mute(ctx, sg_idx);
+                        }
+
+                        // Spacer to align with PFL button
+                        ui.add_space(22.0);
+                    });
+                });
+
+            ui.add_space(4.0);
+        }
+    }
+
+    /// Render the aux master section.
+    fn render_aux_masters(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
+        for aux_idx in 0..self.num_aux_buses.min(MAX_AUX_BUSES) {
+            // Ensure we have data for this aux
+            while self.aux_masters.len() <= aux_idx {
+                self.aux_masters
+                    .push(AuxMaster::new(self.aux_masters.len()));
+            }
+
+            let strip_width = 60.0;
+            let fader_height = 180.0;
+
+            // Get meter data
+            let meter_key = format!("{}:meter:aux{}", self.block_id, aux_idx + 1);
+            let meter_data = meter_store.get(&self.flow_id, &meter_key);
+
+            egui::Frame::default()
+                .fill(Color32::from_rgb(45, 50, 60))
+                .corner_radius(CornerRadius::same(4))
+                .inner_margin(4.0)
+                .show(ui, |ui| {
+                    ui.set_min_width(strip_width);
+                    ui.set_max_width(strip_width);
+
+                    ui.vertical_centered(|ui| {
+                        // Label
+                        ui.label(
+                            egui::RichText::new(format!("AX{}", aux_idx + 1))
+                                .strong()
+                                .color(Color32::from_rgb(150, 200, 255)),
+                        );
+
+                        // Spacer to align with channel G/C/E buttons
+                        ui.add_space(22.0);
+
+                        // Spacer for aux sends row
+                        if self.num_aux_buses > 0 {
+                            ui.add_space(18.0);
+                        }
+
+                        // Spacer for subgroup button row
+                        if self.num_subgroups > 0 {
+                            ui.add_space(22.0);
+                        }
+
+                        // Value display (dB)
+                        let fader_val = self.aux_masters[aux_idx].fader;
+                        let db = if fader_val > 0.0 {
+                            20.0 * fader_val.log10()
+                        } else {
+                            -60.0
+                        };
+                        let display_text = if db <= -59.0 {
+                            "-inf dB".to_string()
+                        } else {
+                            format!("{:.1} dB", db)
+                        };
+
+                        let display_rect = ui
+                            .allocate_exact_size(
+                                Vec2::new(strip_width - 12.0, 18.0),
+                                Sense::hover(),
+                            )
+                            .0;
+                        let painter = ui.painter();
+                        painter.rect_filled(
+                            display_rect,
+                            CornerRadius::same(2),
+                            Color32::from_rgb(20, 25, 30),
+                        );
+                        painter.text(
+                            display_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            &display_text,
+                            egui::FontId::monospace(11.0),
+                            Color32::from_rgb(100, 200, 100),
+                        );
+
+                        ui.add_space(2.0);
+
+                        // Spacer for pan control
+                        ui.add_space(22.0);
+
+                        ui.add_space(4.0);
+
+                        // Fader with meter and scale
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(ui.available_width(), fader_height),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                // Meter
+                                self.render_stereo_meter(ui, meter_data, fader_height);
+                                ui.add_space(2.0);
+
+                                // dB scale
+                                self.render_db_scale(ui, fader_height);
+                                ui.add_space(2.0);
+
+                                // Fader
+                                let fader_response =
+                                    self.render_aux_master_fader(ui, aux_idx, fader_height);
+                                if fader_response.dragged() {
+                                    self.active_control = ActiveControl::AuxMasterFader(aux_idx);
+                                    self.update_aux_master_fader(ctx, aux_idx);
+                                } else if fader_response.drag_stopped() {
+                                    self.active_control = ActiveControl::None;
+                                }
+                            },
+                        );
+
+                        ui.add_space(4.0);
+
+                        // Mute button
+                        let mute = self.aux_masters[aux_idx].mute;
+                        let mute_color = if mute {
+                            Color32::RED
+                        } else {
+                            Color32::from_rgb(60, 60, 65)
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("M").color(Color32::WHITE).small(),
+                                )
+                                .fill(mute_color)
+                                .min_size(Vec2::new(strip_width - 8.0, 20.0)),
+                            )
+                            .clicked()
+                        {
+                            self.aux_masters[aux_idx].mute = !self.aux_masters[aux_idx].mute;
+                            self.update_aux_master_mute(ctx, aux_idx);
+                        }
+
+                        // Spacer to align with PFL button
+                        ui.add_space(22.0);
+                    });
+                });
+
+            ui.add_space(4.0);
+        }
+    }
+
+    /// Render a subgroup fader.
+    fn render_subgroup_fader(&mut self, ui: &mut Ui, sg_idx: usize, height: f32) -> Response {
+        let fader_val = self.subgroups[sg_idx].fader;
+        let mut fader_db = linear_to_db(fader_val as f64) as f32;
+
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(16.0, height), Sense::drag());
+
+        if response.dragged() {
+            let delta = -response.drag_delta().y;
+            let db_per_pixel = 66.0 / height;
+            fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
+            self.subgroups[sg_idx].fader = db_to_linear_f32(fader_db);
+        }
+
+        // Draw fader track
+        let painter = ui.painter();
+        let track_rect = Rect::from_center_size(rect.center(), Vec2::new(4.0, height - 10.0));
+        painter.rect_filled(track_rect, CornerRadius::same(2), Color32::from_gray(60));
+
+        // Draw handle
+        let normalized = (fader_db - (-60.0)) / 66.0;
+        let handle_y = rect.max.y - 5.0 - (normalized * (height - 10.0));
+        let handle_rect =
+            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(14.0, 8.0));
+        let handle_color = if response.dragged() {
+            Color32::from_rgb(200, 150, 200)
+        } else if response.hovered() {
+            Color32::from_rgb(200, 200, 200)
+        } else {
+            Color32::from_rgb(160, 160, 160)
+        };
+        painter.rect_filled(handle_rect, CornerRadius::same(2), handle_color);
+
+        response
+    }
+
+    /// Render an aux master fader.
+    fn render_aux_master_fader(&mut self, ui: &mut Ui, aux_idx: usize, height: f32) -> Response {
+        let fader_val = self.aux_masters[aux_idx].fader;
+        let mut fader_db = linear_to_db(fader_val as f64) as f32;
+
+        let (rect, response) = ui.allocate_exact_size(Vec2::new(16.0, height), Sense::drag());
+
+        if response.dragged() {
+            let delta = -response.drag_delta().y;
+            let db_per_pixel = 66.0 / height;
+            fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
+            self.aux_masters[aux_idx].fader = db_to_linear_f32(fader_db);
+        }
+
+        // Draw fader track
+        let painter = ui.painter();
+        let track_rect = Rect::from_center_size(rect.center(), Vec2::new(4.0, height - 10.0));
+        painter.rect_filled(track_rect, CornerRadius::same(2), Color32::from_gray(60));
+
+        // Draw handle
+        let normalized = (fader_db - (-60.0)) / 66.0;
+        let handle_y = rect.max.y - 5.0 - (normalized * (height - 10.0));
+        let handle_rect =
+            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(14.0, 8.0));
+        let handle_color = if response.dragged() {
+            Color32::from_rgb(150, 200, 255)
+        } else if response.hovered() {
+            Color32::from_rgb(200, 200, 200)
+        } else {
+            Color32::from_rgb(160, 160, 160)
+        };
+        painter.rect_filled(handle_rect, CornerRadius::same(2), handle_color);
+
+        response
     }
 
     /// Render a pan control (horizontal slider).
@@ -1716,6 +2211,222 @@ impl MixerEditor {
         let api = self.api.clone();
         let flow_id = self.flow_id;
         let element_id = format!("{}:main_volume", self.block_id);
+        let value = PropertyValue::Float(effective_volume);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, "volume", value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update aux send level via API.
+    fn update_aux_send(&mut self, ctx: &Context, ch_idx: usize, aux_idx: usize) {
+        if !self.live_updates {
+            return;
+        }
+
+        let level = self.channels[ch_idx].aux_sends[aux_idx] as f64;
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:aux_send_{}_{}", self.block_id, ch_idx, aux_idx);
+        let value = PropertyValue::Float(level);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, "volume", value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update channel routing via API.
+    /// Routing is implemented using volume elements - all destinations are always
+    /// connected, we just set volume to 1.0 for active route and 0.0 for inactive.
+    fn update_routing(&mut self, ctx: &Context, ch_idx: usize) {
+        if !self.live_updates {
+            return;
+        }
+
+        let to_main = self.channels[ch_idx].to_main;
+        let to_sg = self.channels[ch_idx].to_sg;
+        let num_subgroups = self.num_subgroups;
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let block_id = self.block_id.clone();
+        let ctx = ctx.clone();
+
+        // Update to_main volume
+        let to_main_vol = if to_main { 1.0 } else { 0.0 };
+        let to_main_id = format!("{}:to_main_vol_{}", block_id, ch_idx);
+
+        let api_clone = api.clone();
+        let ctx_clone = ctx.clone();
+        crate::app::spawn_task(async move {
+            let _ = api_clone
+                .update_element_property(
+                    &flow_id,
+                    &to_main_id,
+                    "volume",
+                    PropertyValue::Float(to_main_vol),
+                )
+                .await;
+            ctx_clone.request_repaint();
+        });
+
+        // Update each subgroup route volume
+        for (sg, &enabled) in to_sg.iter().enumerate().take(num_subgroups) {
+            let route_sg_vol = if enabled { 1.0 } else { 0.0 };
+            let to_sg_id = format!("{}:to_sg{}_vol_{}", block_id, sg, ch_idx);
+
+            let api_clone = api.clone();
+            let flow_id_clone = flow_id;
+            let ctx_clone = ctx.clone();
+            crate::app::spawn_task(async move {
+                let _ = api_clone
+                    .update_element_property(
+                        &flow_id_clone,
+                        &to_sg_id,
+                        "volume",
+                        PropertyValue::Float(route_sg_vol),
+                    )
+                    .await;
+                ctx_clone.request_repaint();
+            });
+        }
+
+        // Build routing description for logging
+        let mut routes = Vec::new();
+        if to_main {
+            routes.push("Main".to_string());
+        }
+        for (sg, &enabled) in to_sg.iter().enumerate().take(num_subgroups) {
+            if enabled {
+                routes.push(format!("SG{}", sg + 1));
+            }
+        }
+        let routes_str = if routes.is_empty() {
+            "None".to_string()
+        } else {
+            routes.join(", ")
+        };
+        tracing::info!("Routing updated: Ch {} -> {}", ch_idx + 1, routes_str);
+    }
+
+    /// Update subgroup fader via API.
+    fn update_subgroup_fader(&mut self, ctx: &Context, sg_idx: usize) {
+        if !self.live_updates {
+            return;
+        }
+
+        // Throttle updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
+
+        let mute = self.subgroups[sg_idx].mute;
+        let effective_volume = if mute {
+            0.0
+        } else {
+            self.subgroups[sg_idx].fader as f64
+        };
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:subgroup{}_volume", self.block_id, sg_idx);
+        let value = PropertyValue::Float(effective_volume);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, "volume", value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update subgroup mute via API.
+    fn update_subgroup_mute(&mut self, ctx: &Context, sg_idx: usize) {
+        if !self.live_updates {
+            return;
+        }
+
+        let mute = self.subgroups[sg_idx].mute;
+        let effective_volume = if mute {
+            0.0
+        } else {
+            self.subgroups[sg_idx].fader as f64
+        };
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:subgroup{}_volume", self.block_id, sg_idx);
+        let value = PropertyValue::Float(effective_volume);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, "volume", value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update aux master fader via API.
+    fn update_aux_master_fader(&mut self, ctx: &Context, aux_idx: usize) {
+        if !self.live_updates {
+            return;
+        }
+
+        // Throttle updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
+
+        let mute = self.aux_masters[aux_idx].mute;
+        let effective_volume = if mute {
+            0.0
+        } else {
+            self.aux_masters[aux_idx].fader as f64
+        };
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:aux{}_volume", self.block_id, aux_idx);
+        let value = PropertyValue::Float(effective_volume);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, "volume", value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update aux master mute via API.
+    fn update_aux_master_mute(&mut self, ctx: &Context, aux_idx: usize) {
+        if !self.live_updates {
+            return;
+        }
+
+        let mute = self.aux_masters[aux_idx].mute;
+        let effective_volume = if mute {
+            0.0
+        } else {
+            self.aux_masters[aux_idx].fader as f64
+        };
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:aux{}_volume", self.block_id, aux_idx);
         let value = PropertyValue::Float(effective_volume);
         let ctx = ctx.clone();
 

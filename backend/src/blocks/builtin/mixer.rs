@@ -56,6 +56,7 @@ impl BlockBuilder for MixerBuilder {
         let inputs = (0..num_channels)
             .map(|i| ExternalPad {
                 name: format!("input_{}", i + 1),
+                label: Some(format!("{}", i + 1)),
                 media_type: MediaType::Audio,
                 internal_element_id: format!("convert_{}", i),
                 internal_pad_name: "sink".to_string(),
@@ -67,6 +68,7 @@ impl BlockBuilder for MixerBuilder {
             // Main stereo output
             ExternalPad {
                 name: "main_out".to_string(),
+                label: Some("Main".to_string()),
                 media_type: MediaType::Audio,
                 internal_element_id: "main_level".to_string(),
                 internal_pad_name: "src".to_string(),
@@ -74,6 +76,7 @@ impl BlockBuilder for MixerBuilder {
             // PFL output (always present)
             ExternalPad {
                 name: "pfl_out".to_string(),
+                label: Some("PFL".to_string()),
                 media_type: MediaType::Audio,
                 internal_element_id: "pfl_level".to_string(),
                 internal_pad_name: "src".to_string(),
@@ -84,6 +87,7 @@ impl BlockBuilder for MixerBuilder {
         for aux in 0..num_aux_buses {
             outputs.push(ExternalPad {
                 name: format!("aux_out_{}", aux + 1),
+                label: Some(format!("Aux{}", aux + 1)),
                 media_type: MediaType::Audio,
                 internal_element_id: format!("aux{}_level", aux),
                 internal_pad_name: "src".to_string(),
@@ -505,6 +509,19 @@ impl BlockBuilder for MixerBuilder {
             elements.push((level_id.clone(), level));
 
             // ----------------------------------------------------------------
+            // Routing tee (after level, for multi-destination routing)
+            // ----------------------------------------------------------------
+            let routing_tee_id = format!("{}:routing_tee_{}", instance_id, ch);
+            let routing_tee = gst::ElementFactory::make("tee")
+                .name(&routing_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("routing_tee ch{}: {}", ch_num, e))
+                })?;
+            elements.push((routing_tee_id.clone(), routing_tee));
+
+            // ----------------------------------------------------------------
             // PFL path (pre-fader listen)
             // ----------------------------------------------------------------
             let pfl_enabled = get_bool_prop(properties, &format!("ch{}_pfl", ch_num), false);
@@ -610,7 +627,7 @@ impl BlockBuilder for MixerBuilder {
                 ElementPadRef::pad(&pre_fader_tee_id, "sink"),
             ));
 
-            // pre_fader_tee → pan → volume → post_fader_tee → level
+            // pre_fader_tee → pan → volume → post_fader_tee → level → routing_tee
             internal_links.push((
                 ElementPadRef::element(&pre_fader_tee_id), // Request pad from tee
                 ElementPadRef::pad(&pan_id, "sink"),
@@ -626,6 +643,10 @@ impl BlockBuilder for MixerBuilder {
             internal_links.push((
                 ElementPadRef::element(&post_fader_tee_id), // Request pad from tee
                 ElementPadRef::pad(&level_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&level_id, "src"),
+                ElementPadRef::pad(&routing_tee_id, "sink"),
             ));
 
             // PFL path: pre_fader_tee → pfl_volume → pfl_queue → pfl_mixer
@@ -643,35 +664,104 @@ impl BlockBuilder for MixerBuilder {
             ));
 
             // ----------------------------------------------------------------
-            // Route to subgroup or main mixer
+            // Multi-destination routing (Main + Subgroups)
+            // Each destination has a volume element to enable/disable routing
             // ----------------------------------------------------------------
-            let subgroup_assign =
-                get_int_prop(properties, &format!("ch{}_subgroup", ch_num), -1) as i32;
 
-            if subgroup_assign >= 0 && (subgroup_assign as usize) < num_subgroups {
-                // Route to subgroup
-                let sg_mixer_id =
-                    format!("{}:subgroup{}_mixer", instance_id, subgroup_assign as usize);
+            // Route to main mixer
+            let to_main_enabled = get_bool_prop(properties, &format!("ch{}_to_main", ch_num), true);
+            let to_main_vol_id = format!("{}:to_main_vol_{}", instance_id, ch);
+            let to_main_vol = gst::ElementFactory::make("volume")
+                .name(&to_main_vol_id)
+                .property("volume", if to_main_enabled { 1.0 } else { 0.0 })
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("to_main_vol ch{}: {}", ch_num, e))
+                })?;
+            elements.push((to_main_vol_id.clone(), to_main_vol));
+
+            let to_main_queue_id = format!("{}:to_main_queue_{}", instance_id, ch);
+            let to_main_queue = gst::ElementFactory::make("queue")
+                .name(&to_main_queue_id)
+                .property("max-size-buffers", 3u32)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("to_main_queue ch{}: {}", ch_num, e))
+                })?;
+            elements.push((to_main_queue_id.clone(), to_main_queue));
+
+            // Link: routing_tee → to_main_vol → to_main_queue → main_mixer
+            internal_links.push((
+                ElementPadRef::element(&routing_tee_id),
+                ElementPadRef::pad(&to_main_vol_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&to_main_vol_id, "src"),
+                ElementPadRef::pad(&to_main_queue_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&to_main_queue_id, "src"),
+                ElementPadRef::element(&mixer_id),
+            ));
+
+            // Route to subgroups
+            for sg in 0..num_subgroups {
+                let to_sg_enabled =
+                    get_bool_prop(properties, &format!("ch{}_to_sg{}", ch_num, sg + 1), false);
+
+                let to_sg_vol_id = format!("{}:to_sg{}_vol_{}", instance_id, sg, ch);
+                let to_sg_vol = gst::ElementFactory::make("volume")
+                    .name(&to_sg_vol_id)
+                    .property("volume", if to_sg_enabled { 1.0 } else { 0.0 })
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!(
+                            "to_sg{}_vol ch{}: {}",
+                            sg + 1,
+                            ch_num,
+                            e
+                        ))
+                    })?;
+                elements.push((to_sg_vol_id.clone(), to_sg_vol));
+
+                let to_sg_queue_id = format!("{}:to_sg{}_queue_{}", instance_id, sg, ch);
+                let to_sg_queue = gst::ElementFactory::make("queue")
+                    .name(&to_sg_queue_id)
+                    .property("max-size-buffers", 3u32)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!(
+                            "to_sg{}_queue ch{}: {}",
+                            sg + 1,
+                            ch_num,
+                            e
+                        ))
+                    })?;
+                elements.push((to_sg_queue_id.clone(), to_sg_queue));
+
+                // Link: routing_tee → to_sg_vol → to_sg_queue → subgroup_mixer
+                let sg_mixer_id = format!("{}:subgroup{}_mixer", instance_id, sg);
                 internal_links.push((
-                    ElementPadRef::pad(&level_id, "src"),
+                    ElementPadRef::element(&routing_tee_id),
+                    ElementPadRef::pad(&to_sg_vol_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&to_sg_vol_id, "src"),
+                    ElementPadRef::pad(&to_sg_queue_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&to_sg_queue_id, "src"),
                     ElementPadRef::element(&sg_mixer_id),
                 ));
-                debug!(
-                    "Channel {} routed to subgroup {}",
-                    ch_num,
-                    subgroup_assign + 1
-                );
-            } else {
-                // Route to main audiomixer
-                internal_links.push((
-                    ElementPadRef::pad(&level_id, "src"),
-                    ElementPadRef::element(&mixer_id),
-                ));
+
+                if to_sg_enabled {
+                    debug!("Channel {} routed to subgroup {}", ch_num, sg + 1);
+                }
             }
 
             debug!(
-                "Channel {} created: pan={}, fader={}, mute={}, pfl={}",
-                ch_num, pan, fader, mute, pfl_enabled
+                "Channel {} created: pan={}, fader={}, mute={}, pfl={}, to_main={}",
+                ch_num, pan, fader, mute, pfl_enabled, to_main_enabled
             );
         }
 
@@ -754,18 +844,6 @@ fn get_bool_prop(properties: &HashMap<String, PropertyValue>, name: &str, defaul
         .get(name)
         .and_then(|v| match v {
             PropertyValue::Bool(b) => Some(*b),
-            _ => None,
-        })
-        .unwrap_or(default)
-}
-
-/// Get an int property with default.
-fn get_int_prop(properties: &HashMap<String, PropertyValue>, name: &str, default: i64) -> i64 {
-    properties
-        .get(name)
-        .and_then(|v| match v {
-            PropertyValue::Int(i) => Some(*i),
-            PropertyValue::UInt(u) => Some(*u as i64),
             _ => None,
         })
         .unwrap_or(default)
@@ -1201,19 +1279,35 @@ fn mixer_definition() -> BlockDefinition {
             },
         });
 
-        // Subgroup assignment
+        // Routing to main
         exposed_properties.push(ExposedProperty {
-            name: format!("ch{}_subgroup", ch),
-            label: format!("Ch {} Subgroup", ch),
-            description: format!("Assign channel {} to subgroup (-1=main, 0-3=subgroup)", ch),
-            property_type: PropertyType::Int,
-            default_value: Some(PropertyValue::Int(-1)),
+            name: format!("ch{}_to_main", ch),
+            label: format!("Ch {} → Main", ch),
+            description: format!("Route channel {} to main mix", ch),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(true)),
             mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: format!("ch{}_subgroup", ch),
-                transform: None,
+                element_id: format!("to_main_vol_{}", ch - 1),
+                property_name: "volume".to_string(),
+                transform: Some("bool_to_volume".to_string()),
             },
         });
+
+        // Routing to subgroups
+        for sg in 1..=MAX_SUBGROUPS {
+            exposed_properties.push(ExposedProperty {
+                name: format!("ch{}_to_sg{}", ch, sg),
+                label: format!("Ch {} → SG{}", ch, sg),
+                description: format!("Route channel {} to subgroup {}", ch, sg),
+                property_type: PropertyType::Bool,
+                default_value: Some(PropertyValue::Bool(false)),
+                mapping: PropertyMapping {
+                    element_id: format!("to_sg{}_vol_{}", sg - 1, ch - 1),
+                    property_name: "volume".to_string(),
+                    transform: Some("bool_to_volume".to_string()),
+                },
+            });
+        }
 
         // Aux send levels (per aux bus)
         for aux in 1..=MAX_AUX_BUSES {
@@ -1452,6 +1546,7 @@ fn mixer_definition() -> BlockDefinition {
             inputs: (0..DEFAULT_CHANNELS)
                 .map(|i| ExternalPad {
                     name: format!("input_{}", i + 1),
+                    label: Some(format!("{}", i + 1)),
                     media_type: MediaType::Audio,
                     internal_element_id: format!("convert_{}", i),
                     internal_pad_name: "sink".to_string(),
@@ -1460,12 +1555,14 @@ fn mixer_definition() -> BlockDefinition {
             outputs: vec![
                 ExternalPad {
                     name: "main_out".to_string(),
+                    label: Some("Main".to_string()),
                     media_type: MediaType::Audio,
                     internal_element_id: "main_level".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
                 ExternalPad {
                     name: "pfl_out".to_string(),
+                    label: Some("PFL".to_string()),
                     media_type: MediaType::Audio,
                     internal_element_id: "pfl_level".to_string(),
                     internal_pad_name: "src".to_string(),

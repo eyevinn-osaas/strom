@@ -360,6 +360,7 @@ fn whip_output_definition() -> BlockDefinition {
         ],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
+                label: None,
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "audioconvert".to_string(),

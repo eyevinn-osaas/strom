@@ -123,12 +123,51 @@ pub struct ExternalPad {
     /// External name for this pad
     pub name: String,
 
+    /// Optional display label (shown in graph editor)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+
     /// Media type (audio, video, generic)
     pub media_type: MediaType,
 
     /// Which internal element and pad this maps to
     pub internal_element_id: String,
     pub internal_pad_name: String,
+}
+
+impl ExternalPad {
+    /// Create a new ExternalPad without a label
+    pub fn new(
+        name: impl Into<String>,
+        media_type: MediaType,
+        internal_element_id: impl Into<String>,
+        internal_pad_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            label: None,
+            media_type,
+            internal_element_id: internal_element_id.into(),
+            internal_pad_name: internal_pad_name.into(),
+        }
+    }
+
+    /// Create a new ExternalPad with a label
+    pub fn with_label(
+        name: impl Into<String>,
+        label: impl Into<String>,
+        media_type: MediaType,
+        internal_element_id: impl Into<String>,
+        internal_pad_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            label: Some(label.into()),
+            media_type,
+            internal_element_id: internal_element_id.into(),
+            internal_pad_name: internal_pad_name.into(),
+        }
+    }
 }
 
 /// Block instance in a flow

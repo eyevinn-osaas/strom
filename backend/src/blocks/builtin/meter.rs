@@ -207,12 +207,14 @@ fn meter_definition() -> BlockDefinition {
         }],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
+                label: None,
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "level".to_string(),
                 internal_pad_name: "sink".to_string(),
             }],
             outputs: vec![ExternalPad {
+                label: None,
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "level".to_string(),
