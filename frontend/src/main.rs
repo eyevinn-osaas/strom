@@ -22,6 +22,7 @@ mod login;
 mod media;
 mod mediaplayer;
 mod meter;
+mod mixer;
 mod palette;
 mod properties;
 mod ptp_monitor;

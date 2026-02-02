@@ -9,6 +9,7 @@ pub mod inter;
 pub mod latency;
 pub mod mediaplayer;
 pub mod meter;
+pub mod mixer;
 pub mod mpegtssrt;
 pub mod ndi;
 pub mod videoenc;
@@ -50,6 +51,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
 
     // Add Meter blocks
     blocks.extend(meter::get_blocks());
+
+    // Add Mixer blocks
+    blocks.extend(mixer::get_blocks());
 
     // Add MPEG-TS/SRT blocks
     blocks.extend(mpegtssrt::get_blocks());
@@ -93,6 +97,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.latency" => Some(Arc::new(latency::LatencyBuilder)),
         "builtin.media_player" => Some(Arc::new(mediaplayer::MediaPlayerBuilder)),
         "builtin.meter" => Some(Arc::new(meter::MeterBuilder)),
+        "builtin.mixer" => Some(Arc::new(mixer::MixerBuilder)),
         "builtin.mpegtssrt_output" => Some(Arc::new(mpegtssrt::MpegTsSrtOutputBuilder)),
         "builtin.ndi_input" => Some(Arc::new(ndi::NDIInputBuilder)),
         "builtin.ndi_output" => Some(Arc::new(ndi::NDIOutputBuilder)),
