@@ -10,7 +10,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 use strom_types::flow::GStreamerClockType;
 
 #[cfg(not(feature = "no-gui"))]
-use strom::create_app_with_state_and_auth;
+use strom::create_app_with_config;
 use strom::{auth, config::Config, create_app_with_state, state::AppState};
 
 /// Initialize logging with optional file output and configurable log level
@@ -385,6 +385,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
                 &config.blocks_path,
                 &config.media_path,
                 config.ice_servers.clone(),
+                config.ice_transport_policy.clone(),
                 config.sap_multicast_addresses.clone(),
             )
             .await
@@ -396,6 +397,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
                 &config.blocks_path,
                 &config.media_path,
                 config.ice_servers.clone(),
+                config.ice_transport_policy.clone(),
                 config.sap_multicast_addresses.clone(),
             )
         };
@@ -413,7 +415,12 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         // GStreamer elements are discovered lazily on first /api/elements request
 
         // Create the HTTP app BEFORE auto-restart
-        let app = create_app_with_state_and_auth(state.clone(), auth_config).await;
+        let app = create_app_with_config(
+            state.clone(),
+            auth_config,
+            config.cors_allowed_origins.clone(),
+        )
+        .await;
 
         // Start server - bind to 0.0.0.0 to be accessible from all interfaces
         let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
@@ -550,6 +557,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
             &config.blocks_path,
             &config.media_path,
             config.ice_servers.clone(),
+            config.ice_transport_policy.clone(),
             config.sap_multicast_addresses.clone(),
         )
         .await?
@@ -560,6 +568,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
             &config.blocks_path,
             &config.media_path,
             config.ice_servers.clone(),
+            config.ice_transport_policy.clone(),
             config.sap_multicast_addresses.clone(),
         )
     };

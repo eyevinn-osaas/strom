@@ -149,15 +149,14 @@ impl BlockBuilder for AES67InputBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("sdpdemux: {}", e)))?;
 
         // Keep RTP sources even if inactive (GStreamer 1.24+)
-        if sdpdemux
-            .find_property("timeout-inactive-rtp-sources")
-            .is_some()
-        {
+        if sdpdemux.has_property("timeout-inactive-rtp-sources") {
             sdpdemux.set_property("timeout-inactive-rtp-sources", false);
         }
 
-        // Disable RTCP for AES67 input - set as string enum value
-        sdpdemux.set_property_from_str("rtcp-mode", "inactivate");
+        // Disable RTCP for AES67 input (GStreamer 1.24+)
+        if sdpdemux.has_property("rtcp-mode") {
+            sdpdemux.set_property_from_str("rtcp-mode", "inactivate");
+        }
 
         // Set up pad-added handler on sdpdemux to log new streams
         let sdpdemux_id_for_pad_handler = sdpdemux_id.clone();

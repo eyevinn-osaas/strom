@@ -1326,14 +1326,12 @@ impl StromApp {
         spawn_task(async move {
             match api.get_webrtc_stats(flow_id).await {
                 Ok(stats) => {
-                    if !stats.connections.is_empty() {
-                        tracing::debug!(
-                            "Fetched WebRTC stats for flow {}: {} connections",
-                            flow_id,
-                            stats.connections.len()
-                        );
-                        let _ = tx.send(AppMessage::WebRtcStatsLoaded { flow_id, stats });
-                    }
+                    tracing::debug!(
+                        "Fetched WebRTC stats for flow {}: {} connections",
+                        flow_id,
+                        stats.connections.len()
+                    );
+                    let _ = tx.send(AppMessage::WebRtcStatsLoaded { flow_id, stats });
                 }
                 Err(e) => {
                     // Don't log errors for flows without WebRTC elements
@@ -4078,6 +4076,19 @@ impl StromApp {
 
                 // Version info on the right side
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Debug console button (WASM only)
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if ui
+                            .small_button("🐛")
+                            .on_hover_text("Toggle debug console")
+                            .clicked()
+                        {
+                            crate::wasm_utils::toggle_debug_console_panel();
+                        }
+                        ui.separator();
+                    }
+
                     if let Some(ref version_info) = self.version_info {
                         let version_text = if !version_info.git_tag.is_empty() {
                             // On a tagged release
@@ -5753,15 +5764,17 @@ impl eframe::App for StromApp {
                         }
                         StromEvent::FlowDeleted { flow_id } => {
                             tracing::info!("Flow deleted, triggering full refresh");
-                            // Clear QoS stats and start time for deleted flow
+                            // Clear QoS stats, WebRTC stats and start time for deleted flow
                             self.qos_stats.clear_flow(&flow_id);
+                            self.webrtc_stats.clear_flow(&flow_id);
                             self.flow_start_times.remove(&flow_id);
                             self.needs_refresh = true;
                         }
                         StromEvent::FlowStopped { flow_id } => {
                             tracing::info!("Flow {} stopped, clearing QoS stats", flow_id);
-                            // Clear QoS stats and start time when flow is stopped
+                            // Clear QoS stats, WebRTC stats and start time when flow is stopped
                             self.qos_stats.clear_flow(&flow_id);
+                            self.webrtc_stats.clear_flow(&flow_id);
                             // Refresh available channels (channels may have been removed)
                             self.refresh_available_channels();
                             self.flow_start_times.remove(&flow_id);
@@ -6566,6 +6579,8 @@ impl eframe::App for StromApp {
             let poll_interval = std::time::Duration::from_secs(1);
             if self.last_webrtc_poll.elapsed() >= poll_interval {
                 self.poll_webrtc_stats(ctx);
+                self.webrtc_stats
+                    .evict_stale(std::time::Duration::from_secs(3));
                 self.last_webrtc_poll = instant::Instant::now();
             }
         }

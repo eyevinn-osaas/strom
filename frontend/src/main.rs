@@ -30,6 +30,8 @@ mod state;
 mod system_monitor;
 mod themes;
 mod thread_monitor;
+#[cfg(target_arch = "wasm32")]
+mod wasm_utils;
 mod webrtc_stats;
 mod ws;
 
