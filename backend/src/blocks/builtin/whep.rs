@@ -1699,7 +1699,7 @@ fn whep_output_definition() -> BlockDefinition {
                         },
                     ],
                 },
-                default_value: Some(PropertyValue::String("audio_video".to_string())),
+                default_value: Some(PropertyValue::String("video".to_string())),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "mode".to_string(),
@@ -1723,9 +1723,9 @@ fn whep_output_definition() -> BlockDefinition {
         // determined dynamically by WHEPOutputBuilder::get_external_pads() based on mode.
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
-                name: "audio_in".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "audioconvert".to_string(),
+                name: "video_in".to_string(),
+                media_type: MediaType::Video,
+                internal_element_id: "video_queue".to_string(),
                 internal_pad_name: "sink".to_string(),
             }],
             outputs: vec![],
