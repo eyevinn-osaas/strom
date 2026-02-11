@@ -179,8 +179,11 @@ fn build_whepsrc(
 
     // Set properties directly on whepsrc (no signaller child)
     whepsrc.set_property("whep-endpoint", &whep_endpoint);
-    if let Some(ref stun) = stun_server {
-        whepsrc.set_property("stun-server", stun);
+    // Explicitly clear defaults when not configured,
+    // since whepsrc defaults to stun://stun.l.google.com:19302
+    match stun_server {
+        Some(ref stun) => whepsrc.set_property("stun-server", stun),
+        None => whepsrc.set_property("stun-server", None::<&str>),
     }
     if let Some(ref turn) = turn_server {
         whepsrc.set_property("turn-server", turn);
@@ -363,9 +366,11 @@ fn build_whepclientsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("whepclientsrc: {}", e)))?;
 
-    // Set ICE server properties on the source
-    if let Some(ref stun) = stun_server {
-        whepclientsrc.set_property("stun-server", stun);
+    // Set ICE server properties on the source (explicitly clear defaults when
+    // not configured, since webrtcsrc defaults to stun://stun.l.google.com:19302)
+    match stun_server {
+        Some(ref stun) => whepclientsrc.set_property("stun-server", stun),
+        None => whepclientsrc.set_property("stun-server", None::<&str>),
     }
     if let Some(ref turn) = turn_server {
         whepclientsrc.set_property("turn-server", turn);
@@ -695,10 +700,11 @@ fn build_whepserversink(
         .get("endpoint_id")
         .and_then(|v| {
             if let PropertyValue::String(s) = v {
-                if s.is_empty() {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
                     None
                 } else {
-                    Some(s.clone())
+                    Some(trimmed)
                 }
             } else {
                 None
@@ -736,10 +742,12 @@ fn build_whepserversink(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("whepserversink: {}", e)))?;
 
-    // Set ICE server properties
+    // Set ICE server properties (explicitly clear defaults when not configured,
+    // since webrtcsink defaults to stun://stun.l.google.com:19302)
     // Note: webrtcsink-based elements use "turn-servers" (plural, array) not "turn-server"
-    if let Some(ref stun) = stun_server {
-        whepserversink.set_property("stun-server", stun);
+    match stun_server {
+        Some(ref stun) => whepserversink.set_property("stun-server", stun),
+        None => whepserversink.set_property("stun-server", None::<&str>),
     }
     if let Some(ref turn) = turn_server {
         let turn_servers = gst::Array::new([turn]);
@@ -861,39 +869,32 @@ fn build_whepserversink(
                 pad_name, codec_prefs
             );
 
-            // Check if this transceiver has profile constraints that need relaxing
-            let mut needs_modification = false;
+            // Filter codec-preferences: remove outdated codecs and relax profile constraints.
+            // IMPORTANT: Only keep ONE entry per codec type to avoid duplicate streams.
+            // Browser may offer multiple H.264 profiles (baseline, main, high) - if we
+            // accept all of them after relaxing profile matching, webrtcsink sends the
+            // same data on multiple payloads, doubling bandwidth.
+            let mut new_caps = gst::Caps::new_empty();
+            let mut seen_codecs = std::collections::HashSet::new();
             for i in 0..codec_prefs.size() {
-                if let Some(s) = codec_prefs.structure(i) {
-                    if s.has_field("profile-level-id") || s.has_field("profile") {
-                        needs_modification = true;
-                        break;
+                if let Some(structure) = codec_prefs.structure(i) {
+                    let codec_name = structure.name().as_str();
+                    // Skip VP8 - outdated codec, not worth offering
+                    if codec_name == "video/x-vp8" {
+                        continue;
+                    }
+                    // Only add first occurrence of each codec type
+                    if seen_codecs.insert(codec_name.to_string()) {
+                        let mut new_structure = structure.to_owned();
+                        new_structure.remove_field("profile-level-id");
+                        new_structure.remove_field("profile");
+                        new_caps.get_mut().unwrap().append_structure(new_structure);
                     }
                 }
             }
-
-            if needs_modification {
-                // Create new caps without profile constraints
-                // IMPORTANT: Only keep ONE entry per codec type to avoid duplicate streams.
-                // Browser may offer multiple H.264 profiles (baseline, main, high) - if we
-                // accept all of them after relaxing profile matching, webrtcsink sends the
-                // same data on multiple payloads, doubling bandwidth.
-                let mut new_caps = gst::Caps::new_empty();
-                let mut seen_codecs = std::collections::HashSet::new();
-                for i in 0..codec_prefs.size() {
-                    if let Some(structure) = codec_prefs.structure(i) {
-                        let codec_name = structure.name().as_str();
-                        // Only add first occurrence of each codec type
-                        if seen_codecs.insert(codec_name.to_string()) {
-                            let mut new_structure = structure.to_owned();
-                            new_structure.remove_field("profile-level-id");
-                            new_structure.remove_field("profile");
-                            new_caps.get_mut().unwrap().append_structure(new_structure);
-                        }
-                    }
-                }
+            if new_caps != codec_prefs {
                 debug!(
-                    "WHEP Output: Relaxing transceiver for pad {} codec-preferences: {:?} -> {:?}",
+                    "WHEP Output: Modified transceiver for pad {} codec-preferences: {:?} -> {:?}",
                     pad_name, codec_prefs, new_caps
                 );
                 transceiver.set_property("codec-preferences", &new_caps);
@@ -908,62 +909,117 @@ fn build_whepserversink(
         None
     });
 
-    // WORKAROUND #2: Relax strict H.264 profile-level-id matching in capsfilters.
+    // WORKAROUND #2: Fix H.264 profile-level-id mismatch blocking video flow.
     //
-    // Problem: Browsers send profile-level-id=42e01f (Constrained Baseline + Extended constraint).
-    // Our encoder produces 42c0xx (Constrained Baseline without Extended constraint).
-    // Both are codec-compatible, but webrtcsink does strict string matching on profile-level-id
-    // in the capsfilter it creates during discovery, causing a 30-second timeout.
+    // Problem: webrtcsink creates capsfilters downstream of the payloader with
+    // profile-level-id from the browser's SDP (e.g. 42001f = Baseline). When the
+    // actual H.264 stream has a different profile (e.g. high-4:4:4 = f40028),
+    // rtph264pay queries downstream, sees only baseline is acceptable, and
+    // negotiation fails with NOT_NEGOTIATED.
     //
-    // Solution: Connect to payloader-setup signal. Find the downstream capsfilter (pay_filter)
-    // and remove the profile-level-id constraint.
+    // There are two cases:
+    //   1. Discovery pipeline: the output_filter capsfilter already exists at
+    //      payloader-setup time → we strip profile-level-id immediately.
+    //   2. Consumer session: the pay_filter capsfilter is created later in
+    //      connect_input_stream → we use element-added + notify::caps to strip
+    //      profile-level-id synchronously when the capsfilter's caps are set,
+    //      before negotiation occurs.
     whepserversink.connect("payloader-setup", false, |values| {
-        // values[0] = self, values[1] = consumer_id, values[2] = pad_name, values[3] = payloader
         let consumer_id = values[1].get::<String>().unwrap_or_default();
         let payloader = values[3].get::<gst::Element>().unwrap();
 
-        // Always relax profile matching - both for discovery and real consumer sessions.
-        // This allows browsers requesting profile-level-id=42e01f to connect to streams
-        // encoded with profile-level-id=42c015 (both are constrained-baseline compatible).
-        // Find the downstream capsfilter by traversing from payloader's src pad
-        if let Some(src_pad) = payloader.static_pad("src") {
-            if let Some(peer_pad) = src_pad.peer() {
-                if let Some(capsfilter) = peer_pad.parent_element() {
-                    // Verify it's a capsfilter
-                    if capsfilter
+        // Helper: walk downstream capsfilters from a pad and strip profile fields
+        fn strip_downstream_capsfilters(start_pad: &gst::Pad, consumer_id: &str) -> u32 {
+            let mut count = 0u32;
+            let mut next_pad = start_pad.peer();
+            while let Some(peer) = next_pad {
+                if let Some(element) = peer.parent_element() {
+                    let is_capsfilter = element
                         .factory()
                         .map(|f| f.name().as_str() == "capsfilter")
-                        .unwrap_or(false)
-                    {
-                        let caps: gst::Caps = capsfilter.property("caps");
-                        // Check if caps contain profile constraints (H.264 RTP caps)
-                        // Browsers may send profile-level-id, profile, or both
+                        .unwrap_or(false);
+                    if is_capsfilter {
+                        let caps: gst::Caps = element.property("caps");
                         if let Some(s) = caps.structure(0) {
                             if s.has_field("profile-level-id") || s.has_field("profile") {
-                                // Create new caps without profile constraints
-                                // Use merge_structure to deduplicate identical caps
                                 let mut new_caps = gst::Caps::new_empty();
                                 for i in 0..caps.size() {
                                     if let Some(structure) = caps.structure(i) {
-                                        let mut new_structure: gst::Structure =
-                                            structure.to_owned();
-                                        new_structure.remove_field("profile-level-id");
-                                        new_structure.remove_field("profile");
-                                        new_caps.merge_structure(new_structure);
+                                        let mut ns = structure.to_owned();
+                                        ns.remove_field("profile-level-id");
+                                        ns.remove_field("profile");
+                                        new_caps.merge_structure(ns);
                                     }
                                 }
-                                debug!(
-                                    "WHEP Output: Relaxing capsfilter profile matching for {}: {:?} -> {:?}",
-                                    consumer_id, caps, new_caps
+                                info!(
+                                    "WHEP Output: Stripped profile from capsfilter {} for {}: {:?}",
+                                    element.name(),
+                                    consumer_id,
+                                    new_caps
                                 );
-                                capsfilter.set_property("caps", &new_caps);
+                                element.set_property("caps", &new_caps);
+                                count += 1;
                             }
                         }
                     }
+                    next_pad = element.static_pad("src").and_then(|p| p.peer());
+                } else {
+                    break;
+                }
+            }
+            count
+        }
+
+        if let Some(src_pad) = payloader.static_pad("src") {
+            // Case 1: Strip any capsfilters that already exist downstream (discovery).
+            strip_downstream_capsfilters(&src_pad, &consumer_id);
+        }
+
+        // Case 2: For consumer sessions, connect_input_stream creates a second
+        // capsfilter (pay_filter) AFTER payloader-setup and sets it with SDP caps
+        // including profile-level-id. We intercept this by watching for new
+        // capsfilters added to the session pipeline and stripping profile-level-id
+        // from their caps via notify::caps (fires synchronously during set_property,
+        // BEFORE any caps negotiation occurs).
+        if consumer_id != "discovery" {
+            if let Some(parent) = payloader.parent() {
+                if let Ok(bin) = parent.downcast::<gst::Bin>() {
+                    let consumer_id_bin = consumer_id.clone();
+                    bin.connect_element_added(move |_bin, element| {
+                        let is_capsfilter = element
+                            .factory()
+                            .map(|f| f.name().as_str() == "capsfilter")
+                            .unwrap_or(false);
+                        if !is_capsfilter {
+                            return;
+                        }
+                        let cid = consumer_id_bin.clone();
+                        element.connect_notify(Some("caps"), move |el, _| {
+                            let caps: gst::Caps = el.property("caps");
+                            if let Some(s) = caps.structure(0) {
+                                if s.has_field("profile-level-id") || s.has_field("profile") {
+                                    let mut new_caps = gst::Caps::new_empty();
+                                    for i in 0..caps.size() {
+                                        if let Some(structure) = caps.structure(i) {
+                                            let mut ns = structure.to_owned();
+                                            ns.remove_field("profile-level-id");
+                                            ns.remove_field("profile");
+                                            new_caps.merge_structure(ns);
+                                        }
+                                    }
+                                    info!(
+                                        "WHEP Output: notify::caps stripped profile from {} for {}: {:?}",
+                                        el.name(), cid, new_caps
+                                    );
+                                    el.set_property("caps", &new_caps);
+                                }
+                            }
+                        });
+                    });
                 }
             }
         }
-        // Return false to let default handler run as well
+
         Some(false.to_value())
     });
 
@@ -1038,7 +1094,7 @@ fn build_whepserversink(
 
         // Dynamic video codec detection: Add a pad probe to detect input codec
         // and set video-caps on whepserversink before discovery runs.
-        // This allows the WHEP block to work with any codec (H264, H265, VP8, VP9, AV1, raw).
+        // This allows the WHEP block to work with any codec (H264, H265, VP9, AV1, raw).
         let whepserversink_weak = whepserversink.downgrade();
         let caps_set = Arc::new(AtomicBool::new(false));
         let caps_set_clone = caps_set.clone();
@@ -1068,10 +1124,6 @@ fn build_whepserversink(
                                 "video/x-h265" => {
                                     info!("WHEP Output: Detected H.265 input, setting video-caps");
                                     Some(gst::Caps::builder("video/x-h265").build())
-                                }
-                                "video/x-vp8" => {
-                                    info!("WHEP Output: Detected VP8 input, setting video-caps");
-                                    Some(gst::Caps::builder("video/x-vp8").build())
                                 }
                                 "video/x-vp9" => {
                                     info!("WHEP Output: Detected VP9 input, setting video-caps");
@@ -1699,7 +1751,7 @@ fn whep_output_definition() -> BlockDefinition {
                         },
                     ],
                 },
-                default_value: Some(PropertyValue::String("audio_video".to_string())),
+                default_value: Some(PropertyValue::String("video".to_string())),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "mode".to_string(),
@@ -1723,9 +1775,9 @@ fn whep_output_definition() -> BlockDefinition {
         // determined dynamically by WHEPOutputBuilder::get_external_pads() based on mode.
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
-                name: "audio_in".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "audioconvert".to_string(),
+                name: "video_in".to_string(),
+                media_type: MediaType::Video,
+                internal_element_id: "video_queue".to_string(),
                 internal_pad_name: "sink".to_string(),
             }],
             outputs: vec![],

@@ -4,14 +4,13 @@ use clap::Parser;
 use gstreamer::glib;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use strom_types::flow::GStreamerClockType;
 
-#[cfg(not(feature = "no-gui"))]
-use strom::create_app_with_config;
-use strom::{auth, config::Config, create_app_with_state, state::AppState};
+use strom::{auth, config::Config, create_app_with_config, state::AppState};
 
 /// Initialize logging with optional file output and configurable log level
 fn init_logging(log_file: Option<&PathBuf>, log_level: Option<&String>) -> anyhow::Result<()> {
@@ -173,6 +172,14 @@ struct Args {
     #[arg(long)]
     wayland: bool,
 
+    /// Path to TLS certificate file (PEM). Enables HTTPS when paired with --tls-key.
+    #[arg(long, env = "STROM_TLS_CERT")]
+    tls_cert: Option<PathBuf>,
+
+    /// Path to TLS private key file (PEM). Enables HTTPS when paired with --tls-cert.
+    #[arg(long, env = "STROM_TLS_KEY")]
+    tls_key: Option<PathBuf>,
+
     /// Disable automatic restart of flows on startup (useful for development/testing)
     #[arg(long)]
     no_auto_restart: bool,
@@ -271,6 +278,8 @@ fn main() -> anyhow::Result<()> {
         args.blocks_path.clone(),
         args.media_path.clone(),
         args.database_url.clone(),
+        args.tls_cert.clone(),
+        args.tls_key.clone(),
     )
     .unwrap_or_else(|e| {
         eprintln!("Failed to load configuration: {}", e);
@@ -335,6 +344,9 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
     // Create tokio runtime on main thread
     let runtime = tokio::runtime::Runtime::new()?;
 
+    // Determine TLS state before config is moved into the async block
+    let tls_enabled = config.tls_cert.is_some();
+
     // Shared shutdown flag for coordination between threads
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let shutdown_flag_gui = shutdown_flag.clone();
@@ -364,6 +376,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         gstwebrtchttp::plugin_register_static().expect("Could not register webrtchttp plugins");
         gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
         gstrsinter::plugin_register_static().expect("Could not register inter plugins");
+        gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
 
         // Detect GPU capabilities for video conversion mode selection
         // This tests CUDA-GL interop to determine if autovideoconvert works
@@ -425,20 +438,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         // Start server - bind to 0.0.0.0 to be accessible from all interfaces
         let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
-        let listener = match tokio::net::TcpListener::bind(addr).await {
-            Ok(l) => {
-                info!("Server listening on {}", addr);
-                l
-            }
-            Err(e) => {
-                eprintln!("Error: Failed to bind to port {}: {}", config.port, e);
-                eprintln!("Port {} is already in use or unavailable.", config.port);
-                eprintln!("Please either:");
-                eprintln!("  - Stop the other process using this port");
-                eprintln!("  - Use a different port with --port <PORT> or STROM_PORT=<PORT>");
-                std::process::exit(1);
-            }
-        };
+        let tls_config = setup_tls(&config).await;
 
         // Notify main thread that server is ready and send the actual port
         server_started_tx.send(actual_port).ok();
@@ -455,46 +455,18 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
             info!("Auto-restart disabled by --no-auto-restart flag");
         }
 
-        // Run HTTP server with graceful shutdown for both SIGINT (Ctrl+C) and SIGTERM (Docker stop)
-        let shutdown_signal = async move {
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{signal, SignalKind};
-
-                let mut sigterm =
-                    signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
-                let mut sigint =
-                    signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
-
-                tokio::select! {
-                    _ = sigterm.recv() => {
-                        info!("Received SIGTERM, shutting down gracefully...");
-                    }
-                    _ = sigint.recv() => {
-                        info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
-                    }
-                }
-            }
-
-            #[cfg(not(unix))]
-            {
-                tokio::signal::ctrl_c()
-                    .await
-                    .expect("Failed to install Ctrl+C handler");
-                info!("Received Ctrl+C, shutting down gracefully...");
-            }
-
-            // Note: We don't need to explicitly stop flows here.
-            // GStreamer will clean up when the process exits, and
-            // we want to preserve the auto_restart flag for flows
-            // that were running, so they restart on next backend startup.
-
+        // Graceful shutdown via axum_server::Handle
+        let handle = axum_server::Handle::new();
+        let handle_for_signal = handle.clone();
+        tokio::spawn(async move {
+            wait_for_shutdown_signal().await;
+            strom::blocks::builtin::whip::shutdown_whip_servers();
             info!("Signaling GUI to close...");
             shutdown_flag.store(true, Ordering::SeqCst);
-        };
+            handle_for_signal.graceful_shutdown(Some(Duration::from_secs(10)));
+        });
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal)
+        serve_with_tls(addr, app, handle, tls_config)
             .await
             .expect("Server error");
     });
@@ -513,9 +485,9 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
     // Run GUI on main thread (blocks until window closes)
     // If auth is enabled, pass the native GUI token for auto-authentication
     let gui_result = if let Some(token) = native_gui_token {
-        strom::gui::launch_gui_with_auth(actual_port, shutdown_flag_gui, token)
+        strom::gui::launch_gui_with_auth(actual_port, tls_enabled, shutdown_flag_gui, token)
     } else {
-        strom::gui::launch_gui_with_shutdown(actual_port, shutdown_flag_gui)
+        strom::gui::launch_gui_with_shutdown(actual_port, tls_enabled, shutdown_flag_gui)
     };
 
     if let Err(e) = gui_result {
@@ -538,6 +510,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     gstwebrtchttp::plugin_register_static().expect("Could not register webrtchttp plugins");
     gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
     gstrsinter::plugin_register_static().expect("Could not register inter plugins");
+    gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
 
     // Detect GPU capabilities for video conversion mode selection
     // This tests CUDA-GL interop to determine if autovideoconvert works
@@ -583,25 +556,17 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     // GStreamer elements are discovered lazily on first /api/elements request
 
     // Create the HTTP app BEFORE auto-restart, then bind AFTER
-    let app = create_app_with_state(state.clone()).await;
+    let app = create_app_with_config(
+        state.clone(),
+        auth::AuthConfig::from_env(),
+        config.cors_allowed_origins.clone(),
+    )
+    .await;
 
     // Start server - bind to 0.0.0.0 to be accessible from all interfaces (Docker, network, etc.)
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
 
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => {
-            info!("Server listening on {}", addr);
-            l
-        }
-        Err(e) => {
-            eprintln!("Error: Failed to bind to port {}: {}", config.port, e);
-            eprintln!("Port {} is already in use or unavailable.", config.port);
-            eprintln!("Please either:");
-            eprintln!("  - Stop the other process using this port");
-            eprintln!("  - Use a different port with --port <PORT> or STROM_PORT=<PORT>");
-            std::process::exit(1);
-        }
-    };
+    let tls_config = setup_tls(&config).await;
 
     // Restart flows AFTER server binds, on a separate tokio task
     // This ensures auto-restart runs on a worker thread, not the main thread,
@@ -615,48 +580,95 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
         info!("Auto-restart disabled by --no-auto-restart flag");
     }
 
-    // Set up graceful shutdown handler for both SIGINT (Ctrl+C) and SIGTERM (Docker stop)
-    let shutdown_signal = async move {
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{signal, SignalKind};
-
-            let mut sigterm =
-                signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
-            let mut sigint =
-                signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
-
-            tokio::select! {
-                _ = sigterm.recv() => {
-                    info!("Received SIGTERM, shutting down gracefully...");
-                }
-                _ = sigint.recv() => {
-                    info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
-                }
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            tokio::signal::ctrl_c()
-                .await
-                .expect("Failed to install Ctrl+C handler");
-            info!("Received Ctrl+C, shutting down gracefully...");
-        }
-
-        // Note: We don't need to explicitly stop flows here.
-        // GStreamer will clean up when the process exits, and
-        // we want to preserve the auto_restart flag for flows
-        // that were running, so they restart on next backend startup.
-
+    // Graceful shutdown via axum_server::Handle
+    let handle = axum_server::Handle::new();
+    let handle_for_signal = handle.clone();
+    tokio::spawn(async move {
+        wait_for_shutdown_signal().await;
+        strom::blocks::builtin::whip::shutdown_whip_servers();
         info!("Server shutting down");
-    };
+        handle_for_signal.graceful_shutdown(Some(Duration::from_secs(10)));
+    });
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    serve_with_tls(addr, app, handle, tls_config).await?;
 
     Ok(())
+}
+
+/// Load TLS configuration if cert and key paths are provided.
+/// Returns `Some(RustlsConfig)` with a cert file watcher if TLS is configured.
+async fn setup_tls(config: &Config) -> Option<axum_server::tls_rustls::RustlsConfig> {
+    match config.tls_paths() {
+        Ok(Some((cert, key))) => match strom::tls::load_rustls_config(cert, key).await {
+            Ok(tls_config) => {
+                if let Err(e) = strom::tls::spawn_cert_watcher(cert, key, tls_config.clone()) {
+                    warn!("TLS certificate watcher failed to start: {}", e);
+                }
+                Some(tls_config)
+            }
+            Err(e) => {
+                eprintln!("Error: Failed to load TLS configuration: {}", e);
+                std::process::exit(1);
+            }
+        },
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Start the HTTP(S) server, binding to the given address.
+async fn serve_with_tls(
+    addr: SocketAddr,
+    app: axum::Router,
+    handle: axum_server::Handle<SocketAddr>,
+    tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
+) -> anyhow::Result<()> {
+    if let Some(tls_config) = tls_config {
+        info!("Server listening on https://{}", addr);
+        axum_server::bind_rustls(addr, tls_config)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        info!("Server listening on http://{}", addr);
+        axum_server::bind(addr)
+            .handle(handle)
+            .serve(app.into_make_service())
+            .await?;
+    }
+    Ok(())
+}
+
+/// Wait for SIGINT or SIGTERM shutdown signal.
+async fn wait_for_shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to install SIGINT handler");
+
+        tokio::select! {
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down gracefully...");
+            }
+            _ = sigint.recv() => {
+                info!("Received SIGINT (Ctrl+C), shutting down gracefully...");
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to install Ctrl+C handler");
+        info!("Received Ctrl+C, shutting down gracefully...");
+    }
 }
 
 async fn restart_flows(state: &AppState) {

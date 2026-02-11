@@ -39,8 +39,10 @@ pub mod stats;
 pub mod storage;
 pub mod system_monitor;
 pub mod thread_registry;
+pub mod tls;
 pub mod version;
 pub mod whep_registry;
+pub mod whip_registry;
 
 use state::AppState;
 
@@ -94,7 +96,8 @@ pub async fn create_app_with_config(
     // Create session store (in-memory, sessions lost on restart)
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_expiry(Expiry::OnInactivity(Duration::hours(24)));
+        .with_expiry(Expiry::OnInactivity(Duration::hours(24)))
+        .with_secure(false);
 
     // Build protected API router (requires authentication)
     let protected_api_router = Router::new()
@@ -258,6 +261,13 @@ pub async fn create_app_with_config(
         .route("/auth/status", get(auth::auth_status_handler))
         // WHEP streams list API (JSON)
         .route("/whep-streams", get(api::whep_player::list_whep_streams))
+        // WHIP endpoints list API (JSON)
+        .route(
+            "/whip-endpoints",
+            get(api::whip_ingest::list_whip_endpoints),
+        )
+        // Client-side log relay (WHIP/WHEP browser pages)
+        .route("/client-log", post(api::whip_ingest::client_log))
         // ICE servers for WebRTC connections
         .route("/ice-servers", get(api::whep_player::get_ice_servers))
         // MCP Streamable HTTP endpoint (has its own session management)
@@ -265,10 +275,12 @@ pub async fn create_app_with_config(
         .route("/mcp", get(api::mcp::mcp_get))
         .route("/mcp", delete(api::mcp::mcp_delete));
 
-    // WHEP player pages (HTML) - outside /api
+    // Player/ingest pages (HTML) - outside /api
     let player_router = Router::new()
         .route("/whep", get(api::whep_player::whep_player))
-        .route("/whep-streams", get(api::whep_player::whep_streams_page));
+        .route("/whep-streams", get(api::whep_player::whep_streams_page))
+        .route("/whip-ingest", get(api::whip_ingest::whip_ingest_page))
+        .with_state(state.clone());
 
     // WHEP proxy routes - outside /api (acts as WHEP server endpoint)
     let whep_router = Router::new()
@@ -294,10 +306,67 @@ pub async fn create_app_with_config(
         )
         .with_state(state.clone());
 
-    // Static assets for WHEP player
+    // WHIP proxy routes - outside /api (acts as WHIP server endpoint)
+    let whip_router = Router::new()
+        .route("/{endpoint_id}", post(api::whip_ingest::whip_post))
+        .route(
+            "/{endpoint_id}",
+            axum::routing::options(api::whip_ingest::whip_options),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            delete(api::whip_ingest::whip_resource_delete),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            patch(api::whip_ingest::whip_resource_patch),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            axum::routing::options(api::whip_ingest::whip_resource_options),
+        )
+        .with_state(state.clone());
+
+    // Static assets for WHEP player and WHIP ingest
     let static_router = Router::new()
-        .route("/whep.css", get(api::whep_player::whep_css))
-        .route("/whep.js", get(api::whep_player::whep_js));
+        .route(
+            "/webrtc.css",
+            get(|| async {
+                serve_embedded_asset::<assets::WebrtcAssets>("webrtc.css", "text/css")
+            }),
+        )
+        .route(
+            "/webrtc.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WebrtcAssets>("webrtc.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/devices.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WebrtcAssets>("devices.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/whep.css",
+            get(|| async { serve_embedded_asset::<assets::WhepAssets>("whep.css", "text/css") }),
+        )
+        .route(
+            "/whep.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WhepAssets>("whep.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/whip.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WhipAssets>("whip.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/whip.css",
+            get(|| async { serve_embedded_asset::<assets::WhipAssets>("whip.css", "text/css") }),
+        );
 
     // Create MCP session manager
     let mcp_sessions = mcp::McpSessionManager::new();
@@ -318,6 +387,7 @@ pub async fn create_app_with_config(
         .nest("/api", api_router)
         .nest("/player", player_router)
         .nest("/whep", whep_router)
+        .nest("/whip", whip_router)
         .nest("/static", static_router)
         .layer(session_layer)
         .layer({
@@ -359,4 +429,23 @@ pub async fn create_app_with_config(
 /// Health check endpoint.
 async fn health() -> &'static str {
     "OK"
+}
+
+/// Serve an embedded static asset with the given content type.
+fn serve_embedded_asset<T: rust_embed::RustEmbed>(
+    file: &str,
+    content_type: &str,
+) -> axum::response::Response {
+    match T::get(file) {
+        Some(content) => axum::response::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, content_type)
+            .header(axum::http::header::CACHE_CONTROL, "no-cache")
+            .body(axum::body::Body::from(content.data))
+            .unwrap(),
+        None => axum::response::Response::builder()
+            .status(axum::http::StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("Not found"))
+            .unwrap(),
+    }
 }
