@@ -3,7 +3,9 @@
 use crate::blocks::builtin;
 use crate::blocks::{
     BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, WhepEndpointInfo,
+    WhipEndpointInfo,
 };
+use crate::whip_registry::WhipRegistry;
 use gstreamer as gst;
 use strom_types::{BlockInstance, Link};
 use tracing::{debug, info};
@@ -25,6 +27,8 @@ pub struct ExpandedPipeline {
     pub pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
     /// WHEP endpoints registered by blocks
     pub whep_endpoints: Vec<WhepEndpointInfo>,
+    /// WHIP endpoints registered by blocks
+    pub whip_endpoints: Vec<WhipEndpointInfo>,
 }
 
 /// Expand block instances into GStreamer elements using BlockBuilder trait.
@@ -43,6 +47,7 @@ pub async fn expand_blocks(
     ice_servers: Vec<String>,
     ice_transport_policy: String,
     dynamic_webrtcbins: DynamicWebrtcbinStore,
+    whip_registry: Option<WhipRegistry>,
 ) -> Result<ExpandedPipeline, PipelineError> {
     let mut gst_elements = Vec::new();
     let mut all_links = Vec::new();
@@ -55,6 +60,7 @@ pub async fn expand_blocks(
         ice_servers,
         ice_transport_policy,
         dynamic_webrtcbins,
+        whip_registry,
     );
 
     debug!("Expanding {} block instance(s)", blocks.len());
@@ -151,13 +157,25 @@ pub async fn expand_blocks(
         }
     }
 
+    // Collect WHIP endpoints from context
+    let whip_endpoints = ctx.take_whip_endpoints();
+    if !whip_endpoints.is_empty() {
+        for ep in &whip_endpoints {
+            info!(
+                "Block {} registered WHIP endpoint: endpoint_id='{}', port={}",
+                ep.block_id, ep.endpoint_id, ep.internal_port
+            );
+        }
+    }
+
     debug!(
-        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties, {} WHEP endpoints",
+        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
         gst_elements.len(),
         all_links.len(),
         bus_message_handlers.len(),
         all_pad_properties.len(),
-        whep_endpoints.len()
+        whep_endpoints.len(),
+        whip_endpoints.len()
     );
 
     Ok(ExpandedPipeline {
@@ -166,6 +184,7 @@ pub async fn expand_blocks(
         bus_message_handlers,
         pad_properties: all_pad_properties,
         whep_endpoints,
+        whip_endpoints,
     })
 }
 
@@ -288,6 +307,7 @@ mod tests {
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,
+            None,
         )
         .await;
         assert!(result.is_ok());

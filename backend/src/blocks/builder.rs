@@ -1,6 +1,7 @@
 //! Block builder trait for runtime GStreamer element creation.
 
 use crate::events::EventBroadcaster;
+use crate::whip_registry::WhipRegistry;
 use gstreamer as gst;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -84,6 +85,19 @@ impl WhepStreamMode {
     }
 }
 
+/// WHIP endpoint registration info (for WHIP Input blocks).
+#[derive(Debug, Clone)]
+pub struct WhipEndpointInfo {
+    /// The block instance ID that owns this endpoint
+    pub block_id: String,
+    /// The endpoint ID (user-configurable or auto-generated UUID)
+    pub endpoint_id: String,
+    /// The internal localhost port where whipserversrc is listening
+    pub internal_port: u16,
+    /// Stream mode (audio, video, or both)
+    pub mode: WhepStreamMode,
+}
+
 /// WHEP endpoint registration info.
 #[derive(Debug, Clone)]
 pub struct WhepEndpointInfo {
@@ -106,6 +120,8 @@ pub struct WhepEndpointInfo {
 pub struct BlockBuildContext {
     /// WHEP endpoints queued for registration
     whep_endpoints: RefCell<Vec<WhepEndpointInfo>>,
+    /// WHIP endpoints queued for registration
+    whip_endpoints: RefCell<Vec<WhipEndpointInfo>>,
     /// ICE servers for WebRTC NAT traversal (STUN/TURN URLs)
     ice_servers: Vec<String>,
     /// ICE transport policy ("all" or "relay")
@@ -113,6 +129,8 @@ pub struct BlockBuildContext {
     /// Storage for dynamically created webrtcbin elements (shared with PipelineManager).
     /// Used by blocks like WHEP Output that create webrtcbins dynamically via consumer-added.
     dynamic_webrtcbins: DynamicWebrtcbinStore,
+    /// WHIP endpoint registry (optional, only set when WHIP blocks need it for element recreation)
+    whip_registry: Option<WhipRegistry>,
 }
 
 impl BlockBuildContext {
@@ -120,9 +138,11 @@ impl BlockBuildContext {
     pub fn new(ice_servers: Vec<String>, ice_transport_policy: String) -> Self {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
+            whip_endpoints: RefCell::new(Vec::new()),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins: Arc::new(Mutex::new(HashMap::new())),
+            whip_registry: None,
         }
     }
 
@@ -131,12 +151,15 @@ impl BlockBuildContext {
         ice_servers: Vec<String>,
         ice_transport_policy: String,
         dynamic_webrtcbins: DynamicWebrtcbinStore,
+        whip_registry: Option<WhipRegistry>,
     ) -> Self {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
+            whip_endpoints: RefCell::new(Vec::new()),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,
+            whip_registry,
         }
     }
 
@@ -144,6 +167,11 @@ impl BlockBuildContext {
     /// Use this to pass to callbacks that create webrtcbins dynamically.
     pub fn dynamic_webrtcbin_store(&self) -> DynamicWebrtcbinStore {
         Arc::clone(&self.dynamic_webrtcbins)
+    }
+
+    /// Get the WHIP endpoint registry (if available).
+    pub fn whip_registry(&self) -> Option<&WhipRegistry> {
+        self.whip_registry.as_ref()
     }
 
     /// Register a dynamically created webrtcbin (called from consumer-added callbacks).
@@ -235,6 +263,31 @@ impl BlockBuildContext {
     /// Called after block expansion to process the registrations.
     pub fn take_whep_endpoints(&self) -> Vec<WhepEndpointInfo> {
         self.whep_endpoints.borrow_mut().drain(..).collect()
+    }
+
+    /// Register a WHIP endpoint (called by WHIP Input blocks during build).
+    ///
+    /// The endpoint will be registered with the WhipRegistry after the pipeline starts.
+    pub fn register_whip_endpoint(
+        &self,
+        block_id: &str,
+        endpoint_id: &str,
+        port: u16,
+        mode: WhepStreamMode,
+    ) {
+        self.whip_endpoints.borrow_mut().push(WhipEndpointInfo {
+            block_id: block_id.to_string(),
+            endpoint_id: endpoint_id.to_string(),
+            internal_port: port,
+            mode,
+        });
+    }
+
+    /// Take all queued WHIP endpoint registrations.
+    ///
+    /// Called after block expansion to process the registrations.
+    pub fn take_whip_endpoints(&self) -> Vec<WhipEndpointInfo> {
+        self.whip_endpoints.borrow_mut().drain(..).collect()
     }
 }
 

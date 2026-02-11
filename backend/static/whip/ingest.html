@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=0.75">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <title>WHIP Ingest - Strom</title>
+    <link rel="stylesheet" href="/static/webrtc.css">
+    <link rel="stylesheet" href="/static/whip.css">
+    <link rel="icon" href="/assets/favicon.ico">
+</head>
+<body style="display: flex; flex-direction: column; align-items: center;">
+    <div class="container">
+        <div style="position: relative; margin-bottom: 8px;">
+            <h1 style="text-align: center; margin: 0;">WHIP Ingest at <span id="hostAddress"></span></h1>
+            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v6</span>
+            <a href="/player/whep-streams" style="color: #888; font-size: 0.9em; position: absolute; right: 0; top: 50%; transform: translateY(-50%);">WHEP streams</a>
+        </div>
+
+        <!-- Endpoint -->
+        <div class="form-group" id="endpointGroup">
+            <label for="endpointSelect">WHIP Endpoint</label>
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <select id="endpointSelect" style="flex: 1;">
+                    <option value="">Loading endpoints...</option>
+                </select>
+                <span style="color: #666; font-size: 11px;">or</span>
+                <input type="text" id="endpointUrl" placeholder="/whip/my-stream" style="flex: 1;">
+            </div>
+        </div>
+
+        <!-- Media settings -->
+        <div class="media-settings">
+            <div class="media-row">
+                <button class="media-toggle active" id="videoToggle" onclick="toggleVideo()" title="Toggle video">Video</button>
+                <label><select id="cameraSelect" style="width: auto;" onchange="onCameraChange()"></select>
+                    <button id="cameraFlipBtn" class="flip-btn" onclick="onCameraFlip()" style="display: none;" title="Switch camera">&#8693;</button>
+                </label>
+                <label><select id="resolutionSelect" style="width: auto;" onchange="saveSettings()">
+                    <option value="720">720p</option>
+                    <option value="1080">1080p</option>
+                    <option value="480">480p</option>
+                    <option value="auto">Auto</option>
+                </select></label>
+            </div>
+            <div class="media-row">
+                <button class="media-toggle active" id="audioToggle" onclick="toggleAudio()" title="Toggle audio">Audio</button>
+                <label><select id="micSelect" style="width: auto;" onchange="onMicChange()"></select></label>
+                <div class="audio-meter" id="audioMeter">
+                    <div class="meter-bar"><div class="meter-fill" id="meterFill"></div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Buttons -->
+        <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+            <button class="connect-btn" id="btnConnect" style="flex: 1;" disabled>Connect</button>
+            <button class="disconnect-btn" id="btnDisconnect" style="flex: 1;" disabled>Disconnect</button>
+        </div>
+
+        <!-- Video -->
+        <div class="video-container">
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+
+        <!-- Status -->
+        <div class="status disconnected" id="status">Not connected</div>
+
+        <!-- Stats -->
+        <div class="stats-panel" id="statsPanel">
+            <div class="stats-grid">
+                <div class="stat"><div class="stat-label">Resolution</div><div class="stat-value" id="statResolution">-</div></div>
+                <div class="stat"><div class="stat-label">Framerate</div><div class="stat-value" id="statFps">-</div></div>
+                <div class="stat"><div class="stat-label">Video Bitrate</div><div class="stat-value" id="statVideoBitrate">-</div></div>
+                <div class="stat"><div class="stat-label">Audio Bitrate</div><div class="stat-value" id="statAudioBitrate">-</div></div>
+                <div class="stat"><div class="stat-label">Codec</div><div class="stat-value" id="statCodec">-</div></div>
+                <div class="stat"><div class="stat-label">Quality Limit</div><div class="stat-value" id="statQualityLimit">-</div></div>
+                <div class="stat"><div class="stat-label">Packets Lost</div><div class="stat-value" id="statPacketLoss">-</div></div>
+                <div class="stat"><div class="stat-label">Round Trip</div><div class="stat-value" id="statRtt">-</div></div>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div style="display: flex; align-items: center; gap: 6px; margin-top: 16px; margin-bottom: 4px;">
+            <input type="checkbox" id="debugMode" data-storage-key="whip-debug" onchange="toggleDebugMode(); whipDebugMode = this.checked;" style="margin: 0; width: auto;">
+            <label for="debugMode" style="color: #666; font-size: 0.8em; cursor: pointer; margin: 0;">Debug</label>
+            <button onclick="copyLog()" style="padding: 2px 6px; white-space: nowrap;">Copy log</button>
+        </div>
+        <div class="log" id="log"></div>
+    </div>
+
+    <script src="/static/webrtc.js"></script>
+    <script src="/static/whip.js"></script>
+    <script src="/static/devices.js"></script>
+    <script>
+        // State
+        let whipClient = null;
+        let previewStream = null;
+        let audioContext = null;
+        let audioAnalyser = null;
+        let meterAnimFrame = null;
+        let statsInterval = null;
+        let prevVideoBytes = 0;
+        let prevAudioBytes = 0;
+        let prevTimestamp = 0;
+        let videoEnabled = true;
+        let audioEnabled = true;
+        // debug state is in whipDebugMode (whip.js global)
+
+        // Reconnect state
+        let wantConnected = false;
+        let reconnectAttempt = 0;
+        let reconnectTimer = null;
+        let activeEndpoint = null;
+        const MAX_RECONNECT_ATTEMPTS = 15;
+        const RECONNECT_DELAY = 10000;
+
+        // Elements
+        const endpointSelect = document.getElementById('endpointSelect');
+        const endpointUrlInput = document.getElementById('endpointUrl');
+        const localVideo = document.getElementById('localVideo');
+        const btnConnect = document.getElementById('btnConnect');
+        const btnDisconnect = document.getElementById('btnDisconnect');
+
+        // ============================================================
+        // Device management
+        // ============================================================
+        const deviceManager = new DeviceManager({
+            storagePrefix: 'whip',
+            onLog: (msg, type) => log(msg, type),
+            onDevicesChanged: () => {
+                deviceManager.populateCameraUI(
+                    document.getElementById('cameraSelect'),
+                    document.getElementById('cameraFlipBtn')
+                );
+                deviceManager.populateMicSelect(document.getElementById('micSelect'));
+                deviceManager.restoreCameraFlipIndex();
+            }
+        });
+
+        function getResolutionConstraints() {
+            const res = document.getElementById('resolutionSelect').value;
+            if (res === 'auto') return {};
+            const h = parseInt(res);
+            return { height: { ideal: h }, width: { ideal: Math.round(h * 16 / 9) } };
+        }
+
+        function getActivePeerConnection() {
+            return whipClient && whipClient.isConnected() ? whipClient.peerConnection : null;
+        }
+
+        function updatePreviewVideoTrack(newTrack, oldTrack) {
+            if (previewStream) {
+                for (const t of previewStream.getVideoTracks()) {
+                    if (t !== newTrack) previewStream.removeTrack(t);
+                }
+                if (!previewStream.getVideoTracks().includes(newTrack)) {
+                    previewStream.addTrack(newTrack);
+                }
+            }
+            if (oldTrack) oldTrack.stop();
+            localVideo.srcObject = previewStream;
+        }
+
+        function updatePreviewAudioTrack(newTrack, oldTrack) {
+            if (previewStream) {
+                for (const t of previewStream.getAudioTracks()) {
+                    if (t !== newTrack) previewStream.removeTrack(t);
+                }
+                if (!previewStream.getAudioTracks().includes(newTrack)) {
+                    previewStream.addTrack(newTrack);
+                }
+            }
+            if (oldTrack) oldTrack.stop();
+            stopAudioMeter();
+            if (previewStream) setupAudioMeter(previewStream);
+        }
+
+        async function onCameraChange() {
+            const deviceId = document.getElementById('cameraSelect').value;
+            if (!deviceId) return;
+            if (previewStream) {
+                const result = await deviceManager.switchCamera(deviceId, getResolutionConstraints(), getActivePeerConnection());
+                if (result) {
+                    updatePreviewVideoTrack(result.newTrack, result.oldTrack);
+                    result.newTrack.enabled = videoEnabled;
+                    const s = result.newTrack.getSettings();
+                    log('Switched camera: ' + (s.width || '?') + 'x' + (s.height || '?') + ' @ ' + (s.frameRate || '?') + 'fps');
+                }
+            } else {
+                deviceManager.saveSelection('camera', deviceId);
+            }
+        }
+
+        async function onCameraFlip() {
+            if (!previewStream) return;
+            const result = await deviceManager.flipCamera(getResolutionConstraints(), getActivePeerConnection());
+            if (result) {
+                updatePreviewVideoTrack(result.newTrack, result.oldTrack);
+                result.newTrack.enabled = videoEnabled;
+                log('Flipped to ' + deviceManager.getCameraFlipLabel() + ' camera');
+            }
+        }
+
+        async function onMicChange() {
+            const deviceId = document.getElementById('micSelect').value;
+            if (!deviceId) return;
+            if (previewStream) {
+                const result = await deviceManager.switchMic(deviceId, {}, getActivePeerConnection());
+                if (result) {
+                    updatePreviewAudioTrack(result.newTrack, result.oldTrack);
+                    result.newTrack.enabled = audioEnabled;
+                    log('Switched mic: ' + result.newTrack.label);
+                }
+            } else {
+                deviceManager.saveSelection('mic', deviceId);
+            }
+        }
+
+        // ============================================================
+        // Mute / Video-off toggles
+        // ============================================================
+        function updateToggleLabel(id, label, enabled) {
+            const btn = document.getElementById(id);
+            btn.classList.toggle('active', enabled);
+            btn.textContent = enabled ? label : label + ' OFF';
+        }
+
+        function toggleVideo() {
+            videoEnabled = !videoEnabled;
+            if (previewStream) {
+                previewStream.getVideoTracks().forEach(t => t.enabled = videoEnabled);
+            }
+            updateToggleLabel('videoToggle', 'Video', videoEnabled);
+            saveSettings();
+        }
+
+        function toggleAudio() {
+            audioEnabled = !audioEnabled;
+            if (previewStream) {
+                previewStream.getAudioTracks().forEach(t => t.enabled = audioEnabled);
+            }
+            updateToggleLabel('audioToggle', 'Audio', audioEnabled);
+            // Hide meter when muted
+            const hasTracks = previewStream && previewStream.getAudioTracks().length > 0;
+            document.getElementById('audioMeter').style.display =
+                audioEnabled && hasTracks ? 'flex' : 'none';
+            saveSettings();
+        }
+
+        // ============================================================
+        // Debug logging (syncs with whipDebugMode in whip.js)
+        // ============================================================
+        function debugLog(msg) {
+            if (whipDebugMode) log(msg);
+        }
+
+        // ============================================================
+        // Reconnect logic
+        // ============================================================
+        function scheduleReconnect(reason) {
+            if (!wantConnected || reconnectTimer) return;
+            if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+                log('Max reconnection attempts (' + MAX_RECONNECT_ATTEMPTS + ') reached. Giving up.', 'error');
+                setStatus('status', 'Connection failed', 'error');
+                wantConnected = false;
+                btnConnect.disabled = false;
+                btnDisconnect.disabled = true;
+                return;
+            }
+            reconnectAttempt++;
+            log('Reconnecting in ' + (RECONNECT_DELAY / 1000) + 's (attempt ' + reconnectAttempt + '/' + MAX_RECONNECT_ATTEMPTS + ')... Reason: ' + reason, 'warning');
+            setStatus('status', 'Reconnecting in ' + (RECONNECT_DELAY / 1000) + 's (attempt ' + reconnectAttempt + ')...', 'connecting');
+            reconnectTimer = setTimeout(() => {
+                reconnectTimer = null;
+                if (wantConnected) doReconnect();
+            }, RECONNECT_DELAY);
+        }
+
+        function cancelReconnect() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+        }
+
+        async function doReconnect() {
+            if (!activeEndpoint || !previewStream) return;
+            // Check that media tracks are still alive
+            const liveTracks = previewStream.getTracks().filter(t => t.readyState === 'live');
+            if (liveTracks.length === 0) {
+                log('Media tracks ended, cannot reconnect', 'error');
+                setStatus('status', 'Media lost', 'error');
+                wantConnected = false;
+                btnConnect.disabled = false;
+                btnDisconnect.disabled = true;
+                return;
+            }
+            setStatus('status', 'Reconnecting...', 'connecting');
+            log('Reconnecting to ' + activeEndpoint);
+            doConnectWithStream(activeEndpoint, previewStream);
+        }
+
+        function saveSettings() {
+            try {
+                localStorage.setItem('whip-resolution', document.getElementById('resolutionSelect').value);
+                localStorage.setItem('whip-audio-enabled', audioEnabled);
+                localStorage.setItem('whip-video-enabled', videoEnabled);
+            } catch(e) {}
+        }
+
+        function restoreSettings() {
+            try {
+                const res = localStorage.getItem('whip-resolution');
+                if (res) document.getElementById('resolutionSelect').value = res;
+                const audio = localStorage.getItem('whip-audio-enabled');
+                if (audio !== null) {
+                    audioEnabled = audio === 'true';
+                    updateToggleLabel('audioToggle', 'Audio', audioEnabled);
+                }
+                const video = localStorage.getItem('whip-video-enabled');
+                if (video !== null) {
+                    videoEnabled = video === 'true';
+                    updateToggleLabel('videoToggle', 'Video', videoEnabled);
+                }
+            } catch(e) {}
+        }
+
+        // ============================================================
+        // Endpoint
+        // ============================================================
+        function getEndpointUrl() {
+            const manual = endpointUrlInput.value.trim();
+            if (manual) return manual;
+            return endpointSelect.value || null;
+        }
+
+        async function loadEndpoints() {
+            try {
+                const resp = await fetch('/api/whip-endpoints');
+                if (!resp.ok) return;
+                const endpoints = await resp.json();
+                endpoints.sort((a, b) => a.endpoint_id.localeCompare(b.endpoint_id));
+                endpointSelect.innerHTML = '';
+                if (endpoints.length === 0) {
+                    endpointSelect.innerHTML = '<option value="">No active endpoints</option>';
+                } else {
+                    endpointSelect.innerHTML = '<option value="">Select endpoint...</option>';
+                    for (const ep of endpoints) {
+                        const opt = document.createElement('option');
+                        opt.value = '/whip/' + ep.endpoint_id;
+                        opt.textContent = ep.endpoint_id;
+                        endpointSelect.appendChild(opt);
+                    }
+                    // Sync dropdown to match current text input
+                    const current = endpointUrlInput.value.trim();
+                    if (current) {
+                        const match = Array.from(endpointSelect.options).some(o => o.value === current);
+                        if (match) endpointSelect.value = current;
+                    }
+                }
+            } catch(e) {
+                endpointSelect.innerHTML = '<option value="">Failed to load</option>';
+            }
+        }
+
+        endpointSelect.addEventListener('change', () => {
+            if (endpointSelect.value) {
+                endpointUrlInput.value = endpointSelect.value;
+                saveEndpoint(endpointSelect.value);
+            }
+        });
+
+        endpointUrlInput.addEventListener('change', () => {
+            const val = endpointUrlInput.value.trim();
+            if (val) saveEndpoint(val);
+        });
+
+        function saveEndpoint(value) {
+            try { localStorage.setItem('whip-endpoint', value); } catch(e) {}
+        }
+
+        function restoreEndpoint() {
+            try {
+                const saved = localStorage.getItem('whip-endpoint');
+                if (saved) endpointUrlInput.value = saved;
+            } catch(e) {}
+        }
+
+        // ============================================================
+        // Media
+        // ============================================================
+        function getConstraints() {
+            const c = {};
+
+            // Always request audio
+            const micId = document.getElementById('micSelect').value;
+            c.audio = {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+            };
+            if (micId) c.audio.deviceId = { exact: micId };
+
+            // Always request video
+            const res = document.getElementById('resolutionSelect').value;
+            const cameraId = document.getElementById('cameraSelect').value;
+            const vc = {};
+            if (cameraId) vc.deviceId = { exact: cameraId };
+            if (res !== 'auto') {
+                const h = parseInt(res);
+                vc.height = { ideal: h };
+                vc.width = { ideal: Math.round(h * 16 / 9) };
+            }
+            c.video = Object.keys(vc).length > 0 ? vc : true;
+
+            return c;
+        }
+
+        function setupAudioMeter(stream) {
+            const tracks = stream.getAudioTracks();
+            const meter = document.getElementById('audioMeter');
+            if (tracks.length === 0) { meter.style.display = 'none'; return; }
+            meter.style.display = 'flex';
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const src = audioContext.createMediaStreamSource(stream);
+                audioAnalyser = audioContext.createAnalyser();
+                audioAnalyser.fftSize = 256;
+                src.connect(audioAnalyser);
+                const data = new Uint8Array(audioAnalyser.frequencyBinCount);
+                function update() {
+                    audioAnalyser.getByteFrequencyData(data);
+                    let sum = 0;
+                    for (let i = 0; i < data.length; i++) sum += data[i];
+                    const pct = Math.min(100, (sum / data.length / 128) * 100);
+                    document.getElementById('meterFill').style.width = pct + '%';
+                    meterAnimFrame = requestAnimationFrame(update);
+                }
+                update();
+            } catch(e) { debugLog('Audio meter error: ' + e.message); }
+        }
+
+        function stopAudioMeter() {
+            if (meterAnimFrame) { cancelAnimationFrame(meterAnimFrame); meterAnimFrame = null; }
+            if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; }
+            audioAnalyser = null;
+            document.getElementById('audioMeter').style.display = 'none';
+            document.getElementById('meterFill').style.width = '0%';
+        }
+
+        function stopPreview() {
+            stopAudioMeter();
+            if (previewStream) { previewStream.getTracks().forEach(t => t.stop()); previewStream = null; }
+            localVideo.srcObject = null;
+        }
+
+        // ============================================================
+        // Start media / Connect / Disconnect
+        // ============================================================
+        async function startMedia() {
+            stopPreview();
+            const constraints = getConstraints();
+            try {
+                previewStream = await navigator.mediaDevices.getUserMedia(constraints);
+                // Apply mute/video-off states
+                previewStream.getVideoTracks().forEach(t => t.enabled = videoEnabled);
+                previewStream.getAudioTracks().forEach(t => t.enabled = audioEnabled);
+                localVideo.srcObject = previewStream;
+                // Re-enumerate devices now that we have permission (for labels)
+                deviceManager.enumerate();
+                // Log actual track settings
+                for (const t of previewStream.getTracks()) {
+                    if (t.kind === 'video') {
+                        const s = t.getSettings();
+                        log('Camera: ' + s.width + 'x' + s.height + ' @ ' + (s.frameRate||'?') + 'fps');
+                    }
+                }
+                btnConnect.disabled = false;
+                if (audioEnabled) setupAudioMeter(previewStream);
+            } catch(e) {
+                log('Failed to get media: ' + e.message, 'error');
+                setStatus('status', 'Media error', 'error');
+            }
+        }
+
+        function doConnectWithStream(endpoint, stream) {
+            // Clean up previous client without triggering callbacks
+            if (whipClient) {
+                whipClient.callbacks = {};
+                whipClient.cleanup();
+                whipClient = null;
+            }
+            stopStats();
+
+            whipClient = new WhipClient(endpoint, {
+                onLog: (msg, type) => { log(msg, type || ''); },
+                onConnected: async () => {
+                    cancelReconnect();
+                    reconnectAttempt = 0;
+                    setStatus('status', 'Connected', 'connected');
+                    // Delay transport info check — ICE connects with the first
+                    // successful pair (often relay) then promotes a better direct
+                    // pair. Wait 2s so ICE has time to settle on the final pair.
+                    if (whipDebugMode && whipClient) {
+                        setTimeout(async () => {
+                            if (!whipClient) return;
+                            const info = await whipClient.getTransportInfo();
+                            if (info) {
+                                const via = info.type === 'relay' ? 'relay' : 'direct';
+                                const statusText = 'Connected - ' + via + (info.remoteAddress ? ' ' + info.remoteAddress : '');
+                                log('Transport: ' + via + ' (' + info.protocol + ')' +
+                                    (info.remoteAddress ? ' to ' + info.remoteAddress : '') +
+                                    (info.relayProtocol ? ' via ' + info.relayProtocol : ''), 'success');
+                                setStatus('status', statusText, 'connected');
+                            }
+                        }, 2000);
+                    }
+                    log('Connected to ' + endpoint, 'success');
+                    startStats();
+                },
+                onDisconnected: () => {
+                    // Send DELETE so whipserversrc tears down the session
+                    if (whipClient) {
+                        const client = whipClient;
+                        whipClient = null;
+                        client.disconnect().catch(() => {});
+                    }
+                    stopStats();
+                    if (wantConnected) {
+                        scheduleReconnect('connection lost');
+                    } else {
+                        setStatus('status', 'Disconnected', 'disconnected');
+                        btnConnect.disabled = false;
+                        btnDisconnect.disabled = true;
+                    }
+                },
+                onError: (msg) => {
+                    log('Error: ' + msg, 'error');
+                    stopStats();
+                    if (wantConnected) {
+                        scheduleReconnect('error: ' + msg);
+                    } else {
+                        setStatus('status', 'Error: ' + msg, 'error');
+                        btnConnect.disabled = false;
+                        btnDisconnect.disabled = true;
+                    }
+                },
+                onIceState: () => {},
+            });
+
+            whipClient.connect(stream);
+        }
+
+        btnConnect.addEventListener('click', async () => {
+            const endpoint = getEndpointUrl();
+            if (!endpoint) { log('Select or enter endpoint', 'error'); return; }
+            if (!previewStream) { log('No media available', 'error'); return; }
+            saveEndpoint(endpoint);
+
+            setStatus('status', 'Connecting...', 'connecting');
+            btnConnect.disabled = true;
+            btnDisconnect.disabled = false;
+
+            wantConnected = true;
+            activeEndpoint = endpoint;
+            reconnectAttempt = 0;
+            doConnectWithStream(endpoint, previewStream);
+        });
+
+        btnDisconnect.addEventListener('click', async () => {
+            wantConnected = false;
+            cancelReconnect();
+            reconnectAttempt = 0;
+            if (whipClient) { await whipClient.disconnect(); whipClient = null; }
+            stopStats();
+            setStatus('status', 'Disconnected', 'disconnected');
+            btnConnect.disabled = false;
+            btnDisconnect.disabled = true;
+        });
+
+        // ============================================================
+        // WebRTC Stats
+        // ============================================================
+        function startStats() {
+            document.getElementById('statsPanel').classList.add('active');
+            prevVideoBytes = 0; prevAudioBytes = 0; prevTimestamp = 0;
+            statsInterval = setInterval(collectStats, 1000);
+        }
+
+        function stopStats() {
+            if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+            document.getElementById('statsPanel').classList.remove('active');
+        }
+
+        async function collectStats() {
+            if (!whipClient || !whipClient.peerConnection) return;
+            try {
+                const stats = await whipClient.peerConnection.getStats();
+                const now = performance.now();
+                const elapsed = prevTimestamp > 0 ? (now - prevTimestamp) / 1000 : 1;
+
+                stats.forEach(report => {
+                    if (report.type === 'outbound-rtp' && report.kind === 'video') {
+                        const w = report.frameWidth || 0;
+                        const h = report.frameHeight || 0;
+                        document.getElementById('statResolution').textContent = w && h ? w + 'x' + h : '-';
+
+                        const fps = report.framesPerSecond;
+                        const fpsEl = document.getElementById('statFps');
+                        fpsEl.textContent = fps != null ? fps.toFixed(1) : '-';
+                        fpsEl.className = 'stat-value' + (fps != null && fps < 20 ? ' warn' : '');
+
+                        if (prevVideoBytes > 0) {
+                            const bps = ((report.bytesSent - prevVideoBytes) * 8) / elapsed;
+                            const el = document.getElementById('statVideoBitrate');
+                            el.textContent = bps > 1_000_000 ? (bps / 1_000_000).toFixed(1) + ' Mbps' : (bps / 1000).toFixed(0) + ' kbps';
+                            el.className = 'stat-value' + (bps < 500_000 ? ' bad' : bps < 1_500_000 ? ' warn' : '');
+                        }
+                        prevVideoBytes = report.bytesSent;
+
+                        const ql = report.qualityLimitationReason || 'none';
+                        const qlEl = document.getElementById('statQualityLimit');
+                        qlEl.textContent = ql;
+                        qlEl.className = 'stat-value' + (ql !== 'none' ? ' warn' : '');
+
+                        if (report.codecId) {
+                            const codec = stats.get(report.codecId);
+                            if (codec) document.getElementById('statCodec').textContent = codec.mimeType || '-';
+                        }
+                    }
+
+                    if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+                        if (prevAudioBytes > 0) {
+                            const bps = ((report.bytesSent - prevAudioBytes) * 8) / elapsed;
+                            document.getElementById('statAudioBitrate').textContent = (bps / 1000).toFixed(0) + ' kbps';
+                        }
+                        prevAudioBytes = report.bytesSent;
+                    }
+
+                    if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+                        const lost = report.packetsLost || 0;
+                        const lostEl = document.getElementById('statPacketLoss');
+                        lostEl.textContent = lost.toString();
+                        lostEl.className = 'stat-value' + (lost > 100 ? ' bad' : lost > 10 ? ' warn' : '');
+
+                        const rtt = report.roundTripTime;
+                        if (rtt != null) {
+                            const rttEl = document.getElementById('statRtt');
+                            rttEl.textContent = (rtt * 1000).toFixed(0) + ' ms';
+                            rttEl.className = 'stat-value' + (rtt > 0.3 ? ' bad' : rtt > 0.1 ? ' warn' : '');
+                        }
+                    }
+                });
+
+                prevTimestamp = now;
+            } catch(e) { /* PC may be closed */ }
+        }
+
+        // ============================================================
+        // Init
+        // ============================================================
+        window.onload = async () => {
+            document.getElementById('hostAddress').textContent = location.host;
+            document.title = 'WHIP Ingest | Strom | ' + location.host;
+
+            // Restore settings
+            restoreSettings();
+            restoreEndpoint();
+            whipDebugMode = restoreDebugMode('whip-debug');
+
+            // URL param overrides saved endpoint and hides the selector
+            const params = new URLSearchParams(window.location.search);
+            const ep = params.get('endpoint');
+            if (ep) {
+                endpointUrlInput.value = ep;
+                document.getElementById('endpointGroup').style.display = 'none';
+            }
+
+            loadEndpoints();
+            setInterval(loadEndpoints, 10000);
+
+            // Enumerate devices and wait for dropdowns to populate before preview
+            await deviceManager.enumerate();
+
+            // Auto-start camera/mic
+            await startMedia();
+
+            // Auto-test mode: ?autotest=1&endpoint=/whip/raktest
+            // Loops: connect -> wait -> disconnect -> wait -> reconnect -> verify -> repeat
+            //
+            // IMPORTANT: wantConnected stays false to suppress the built-in reconnect
+            // mechanism. The autotest manages its own connect/disconnect lifecycle.
+            if (params.get('autotest') === '1') {
+                // Enable debug mode for log relay during autotest
+                const debugCheckbox = document.getElementById('debugMode');
+                if (debugCheckbox) { debugCheckbox.checked = true; whipDebugMode = true; }
+
+                const testEndpoint = getEndpointUrl();
+                if (!testEndpoint || !previewStream) {
+                    log('AUTOTEST: No endpoint or media available', 'error');
+                } else {
+                    let cycle = 0;
+                    let passCount = 0;
+                    let failCount = 0;
+
+                    async function autotestConnect(stream) {
+                        // Clean up any previous client (suppress callbacks to avoid reconnect)
+                        if (whipClient) {
+                            whipClient.callbacks = {};
+                            whipClient.cleanup();
+                            whipClient = null;
+                        }
+                        stopStats();
+
+                        return new Promise((resolve) => {
+                            let settled = false;
+                            const settle = (result) => {
+                                if (!settled) { settled = true; resolve(result); }
+                            };
+
+                            whipClient = new WhipClient(testEndpoint, {
+                                onLog: (msg, type) => log(msg, type || ''),
+                                onConnected: () => {
+                                    startStats();
+                                    settle('connected');
+                                },
+                                onDisconnected: () => settle('disconnected'),
+                                onError: (msg) => settle('error: ' + msg),
+                                onIceState: () => {},
+                            });
+                            whipClient.connect(stream);
+
+                            // Timeout: if not connected in 15s, give up
+                            setTimeout(() => settle('timeout'), 15000);
+                        });
+                    }
+
+                    async function autotestDisconnect() {
+                        cancelReconnect();
+                        if (whipClient) {
+                            whipClient.callbacks = {};
+                            await whipClient.disconnect();
+                            whipClient = null;
+                        }
+                        stopStats();
+                    }
+
+                    async function runAutoTestCycle() {
+                        cycle++;
+                        log('=== AUTOTEST cycle ' + cycle + ': connect -> disconnect -> reconnect ===', 'warning');
+                        wantConnected = false;
+
+                        // Phase 1: Connect
+                        log('AUTOTEST [' + cycle + ']: Connect', 'warning');
+                        let result = await autotestConnect(previewStream);
+                        log('AUTOTEST [' + cycle + ']: Connect result: ' + result);
+                        if (result !== 'connected') {
+                            log('AUTOTEST [' + cycle + ']: Initial connect failed (' + result + '), skipping cycle', 'error');
+                            failCount++;
+                            await autotestDisconnect();
+                            await new Promise(r => setTimeout(r, 4000));
+                            runAutoTestCycle();
+                            return;
+                        }
+
+                        // Stay connected for 10s to verify stability (catches
+                        // late disconnects from DTLS/ICE issues that surface after ~7s)
+                        await new Promise(r => setTimeout(r, 10000));
+                        if (!whipClient || !whipClient.isConnected()) {
+                            log('AUTOTEST [' + cycle + ']: Connection dropped during stability check', 'error');
+                            failCount++;
+                            await autotestDisconnect();
+                            await new Promise(r => setTimeout(r, 4000));
+                            runAutoTestCycle();
+                            return;
+                        }
+
+                        // Phase 2: Disconnect
+                        log('AUTOTEST [' + cycle + ']: Disconnect', 'warning');
+                        await autotestDisconnect();
+                        await new Promise(r => setTimeout(r, 4000));
+
+                        // Phase 3: Reconnect
+                        log('AUTOTEST [' + cycle + ']: Reconnect', 'warning');
+                        result = await autotestConnect(previewStream);
+                        const ok = result === 'connected';
+                        if (ok) passCount++; else failCount++;
+                        log('AUTOTEST [' + cycle + ']: ' + (ok ? 'PASS' : 'FAIL (' + result + ')') +
+                            ' [total: ' + passCount + ' pass, ' + failCount + ' fail]',
+                            ok ? 'success' : 'error');
+
+                        // Clean disconnect before next cycle
+                        await autotestDisconnect();
+                        await new Promise(r => setTimeout(r, 4000));
+
+                        // Loop
+                        runAutoTestCycle();
+                    }
+                    await new Promise(r => setTimeout(r, 1000));
+                    runAutoTestCycle();
+                }
+            }
+        };
+    </script>
+</body>
+</html>

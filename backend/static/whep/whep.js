@@ -87,14 +87,22 @@ class WhepConnection {
         this.remoteCandidates = [];
         this.iceConfig = null;
         this.statsInterval = null;
+        this._videoHealthInterval = null;
+        this._prevFramesDecoded = 0;
+        this._prevPacketsLost = 0;
+        this._frozenSince = 0;      // timestamp when freeze was first detected
+        this._lossRecoveryPending = false;
+        // Short session ID for log correlation
+        this._sessionId = Array.from(crypto.getRandomValues(new Uint8Array(3)),
+            b => b.toString(16).padStart(2, '0')).join('');
     }
 
     // Always log (for essential messages like errors, connection status)
     _logAlways(message, type = '') {
         const timestamp = new Date().toISOString();
-        console.log(`[WHEP ${timestamp}] ${message}`);
+        console.log(`[WHEP ${this._sessionId} ${timestamp}] ${message}`);
         if (this.callbacks.onLog) {
-            this.callbacks.onLog(message, type);
+            this.callbacks.onLog(`[${this._sessionId}] ${message}`, type);
         }
     }
 
@@ -107,9 +115,9 @@ class WhepConnection {
     _logDebug(message) {
         if (!whepDebugMode) return;
         const timestamp = new Date().toISOString();
-        console.log(`[WHEP DEBUG ${timestamp}] ${message}`);
+        console.log(`[WHEP DEBUG ${this._sessionId} ${timestamp}] ${message}`);
         if (this.callbacks.onLog) {
-            this.callbacks.onLog(`[DEBUG] ${message}`, 'debug');
+            this.callbacks.onLog(`[${this._sessionId}] [DEBUG] ${message}`, 'debug');
         }
     }
 
@@ -121,7 +129,7 @@ class WhepConnection {
 
         try {
             // Fetch ICE servers and transport policy from the server configuration
-            let iceServers = [{ urls: 'stun:stun.l.google.com:19302' }]; // fallback
+            let iceServers = [];
             let iceTransportPolicy = 'all'; // fallback
 
             this._log('Fetching ICE server configuration from /api/ice-servers...');
@@ -191,10 +199,10 @@ class WhepConnection {
             };
 
             this.peerConnection.onicecandidateerror = (event) => {
-                this._logAlways('ICE candidate error: ' + event.errorText +
+                this._log('ICE candidate error: ' + event.errorText +
                     ' (code=' + event.errorCode +
                     ' url=' + event.url +
-                    ' host=' + event.address + ':' + event.port + ')', 'error');
+                    ' host=' + event.address + ':' + event.port + ')');
             };
 
             this.peerConnection.ontrack = (event) => {
@@ -226,8 +234,13 @@ class WhepConnection {
                 if (state === 'connected' || state === 'completed') {
                     this._updateStatus();
                     this._logConnectionStats();
+                    if (this.callbacks.onConnected) {
+                        this.callbacks.onConnected();
+                    }
                     // Start periodic stats logging
                     this._startStatsLogging();
+                    // Start video health monitor for freeze/artifact recovery
+                    this._startVideoHealthMonitor();
                 } else if (state === 'failed') {
                     this._logAlways('ICE connection failed', 'error');
                     this._logDebugSummary();
@@ -256,7 +269,7 @@ class WhepConnection {
             this._logDebug('=== LOCAL SDP OFFER ===\n' + offer.sdp);
 
             // Wait for ICE gathering with detailed logging
-            this._log('Waiting for ICE gathering (timeout: 5s)...');
+            this._log('Waiting for ICE gathering (timeout: 2s)...');
             const gatheringStartTime = Date.now();
 
             await new Promise((resolve) => {
@@ -264,9 +277,9 @@ class WhepConnection {
                     resolve();
                 } else {
                     const timeout = setTimeout(() => {
-                        this._log('ICE gathering timeout after 5s', 'warning');
+                        this._log('ICE gathering timeout after 2s', 'warning');
                         resolve();
-                    }, 5000);
+                    }, 2000);
                     this.peerConnection.onicegatheringstatechange = () => {
                         if (this.peerConnection.iceGatheringState === 'complete') {
                             clearTimeout(timeout);
@@ -325,10 +338,6 @@ class WhepConnection {
             });
 
             this._log('Remote description set, waiting for ICE to connect...');
-
-            if (this.callbacks.onConnected) {
-                this.callbacks.onConnected();
-            }
 
             return true;
         } catch (error) {
@@ -430,7 +439,7 @@ class WhepConnection {
 
         this.statsInterval = setInterval(async () => {
             // Stop if debug mode disabled, disconnected, or connection gone
-            if (!whepDebugMode || !this.peerConnection || this.peerConnection.iceConnectionState !== 'connected') {
+            if (!whepDebugMode || !this.isConnected()) {
                 clearInterval(this.statsInterval);
                 this.statsInterval = null;
                 return;
@@ -467,8 +476,104 @@ class WhepConnection {
         }, 5000);
     }
 
+    // Monitor video health: detect freeze after packet loss and recover
+    // by re-attaching the stream to force a fresh decoder context + PLI burst.
+    _startVideoHealthMonitor() {
+        if (this._videoHealthInterval) return;
+        this._prevFramesDecoded = 0;
+        this._prevPacketsLost = 0;
+        this._frozenSince = 0;
+        this._lossRecoveryPending = false;
+
+        this._videoHealthInterval = setInterval(async () => {
+            if (!this.isConnected() || !this.hasVideo) return;
+
+            try {
+                const stats = await this.peerConnection.getStats();
+                let framesDecoded = 0;
+                let packetsLost = 0;
+                let pliCount = 0;
+
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        framesDecoded = report.framesDecoded || 0;
+                        packetsLost = report.packetsLost || 0;
+                        pliCount = report.pliCount || 0;
+                    }
+                });
+
+                const newLoss = packetsLost - this._prevPacketsLost;
+                const newFrames = framesDecoded - this._prevFramesDecoded;
+
+                // Detect new packet loss
+                if (newLoss > 0 && this._prevPacketsLost > 0) {
+                    this._lossRecoveryPending = true;
+                    this._logDebug('Video packet loss detected: +' + newLoss +
+                        ' (total=' + packetsLost + ', PLIs sent=' + pliCount + ')');
+                }
+
+                // Check if video is frozen (no new frames decoded)
+                const now = Date.now();
+                if (this._prevFramesDecoded > 0 && newFrames === 0) {
+                    if (this._frozenSince === 0) {
+                        this._frozenSince = now;
+                    }
+                } else {
+                    // Frames are being decoded
+                    if (this._lossRecoveryPending && newFrames > 0) {
+                        // Got fresh frames after loss - recovery succeeded
+                        this._lossRecoveryPending = false;
+                    }
+                    this._frozenSince = 0;
+                }
+
+                // If frozen for >3s after packet loss, re-attach stream to recover
+                if (this._frozenSince > 0 && this._lossRecoveryPending &&
+                    (now - this._frozenSince) > 3000) {
+                    this._logAlways('Video frozen after packet loss, requesting recovery', 'warning');
+                    this._recoverVideo();
+                    this._frozenSince = 0;
+                    this._lossRecoveryPending = false;
+                }
+
+                this._prevFramesDecoded = framesDecoded;
+                this._prevPacketsLost = packetsLost;
+            } catch (e) {
+                // PC may be closing
+            }
+        }, 1000);
+    }
+
+    _stopVideoHealthMonitor() {
+        if (this._videoHealthInterval) {
+            clearInterval(this._videoHealthInterval);
+            this._videoHealthInterval = null;
+        }
+    }
+
+    // Re-attach video stream to force decoder reset + new PLI
+    _recoverVideo() {
+        if (!this.peerConnection) return;
+        const receivers = this.peerConnection.getReceivers();
+        for (const receiver of receivers) {
+            if (receiver.track && receiver.track.kind === 'video') {
+                // Create a new MediaStream with the same track to force
+                // the video element to re-initialize its decoder, which
+                // triggers an immediate PLI request for a fresh keyframe.
+                const freshStream = new MediaStream([receiver.track]);
+                if (this.callbacks.onVideoTrack) {
+                    this.callbacks.onVideoTrack(freshStream);
+                }
+                this._logDebug('Re-attached video stream for decoder recovery');
+                break;
+            }
+        }
+    }
+
     _updateStatus() {
-        if (this.peerConnection && this.peerConnection.iceConnectionState === 'connected') {
+        if (!this.peerConnection) return;
+        const state = this.peerConnection.iceConnectionState;
+        if (state === 'connected' || state === 'completed') {
             if (this.callbacks.onMediaStatus) {
                 this.callbacks.onMediaStatus(this.hasAudio, this.hasVideo);
             }
@@ -499,6 +604,7 @@ class WhepConnection {
             clearInterval(this.statsInterval);
             this.statsInterval = null;
         }
+        this._stopVideoHealthMonitor();
 
         if (this.peerConnection) {
             this.peerConnection.close();
@@ -510,29 +616,55 @@ class WhepConnection {
     }
 
     isConnected() {
-        return this.peerConnection && this.peerConnection.iceConnectionState === 'connected';
+        if (!this.peerConnection) return false;
+        const s = this.peerConnection.iceConnectionState;
+        return s === 'connected' || s === 'completed';
     }
-}
 
-// UI Helper functions
-function setElementClass(id, className, condition) {
-    const el = document.getElementById(id);
-    if (el) {
-        if (condition) {
-            el.classList.add(className);
-        } else {
-            el.classList.remove(className);
+    /**
+     * Get info about the active ICE transport (candidate type, remote address).
+     * @returns {{ type: string, protocol: string, remoteAddress: string, relayProtocol: string|null } | null}
+     */
+    async getTransportInfo() {
+        if (!this.peerConnection) return null;
+        try {
+            const stats = await this.peerConnection.getStats();
+            // Find the active candidate pair via the transport report's selectedCandidatePairId
+            let selectedPairId = null;
+            stats.forEach(report => {
+                if (report.type === 'transport' && report.selectedCandidatePairId) {
+                    selectedPairId = report.selectedCandidatePairId;
+                }
+            });
+            let localId = null;
+            let remoteId = null;
+            if (selectedPairId) {
+                const pair = stats.get(selectedPairId);
+                if (pair) {
+                    localId = pair.localCandidateId;
+                    remoteId = pair.remoteCandidateId;
+                }
+            }
+            if (!localId) return null;
+            const local = stats.get(localId);
+            const remote = stats.get(remoteId);
+            const remoteAddr = remote?.address || remote?.ip || null;
+            console.log('[WHEP-TRANSPORT] selectedPairId=' + selectedPairId +
+                ' local=' + JSON.stringify(local) +
+                ' remote=' + JSON.stringify(remote));
+            return {
+                type: local?.candidateType || 'unknown',
+                protocol: local?.protocol || 'unknown',
+                remoteAddress: remoteAddr ? remoteAddr + ':' + remote.port : null,
+                relayProtocol: local?.relayProtocol || null,
+            };
+        } catch (e) {
+            return null;
         }
     }
 }
 
-function setStatus(elementId, message, state) {
-    const el = document.getElementById(elementId);
-    if (el) {
-        el.textContent = message;
-        el.className = 'status ' + state;
-    }
-}
+// UI Helper functions (setStatus, setElementClass, copyFallback are in webrtc.js)
 
 function createAudioIndicator() {
     return `

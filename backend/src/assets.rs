@@ -17,6 +17,16 @@ pub struct Assets;
 #[folder = "static/whep/"]
 pub struct WhepAssets;
 
+/// Embedded WHIP ingest assets (CSS, JS, HTML templates)
+#[derive(RustEmbed)]
+#[folder = "static/whip/"]
+pub struct WhipAssets;
+
+/// Shared WebRTC page assets (CSS, JS shared across WHIP/WHEP pages)
+#[derive(RustEmbed)]
+#[folder = "static/webrtc/"]
+pub struct WebrtcAssets;
+
 /// Embedded icon assets (favicons, app icons, etc.)
 #[derive(RustEmbed)]
 #[folder = "../assets/"]
@@ -53,6 +63,7 @@ pub async fn serve_static(uri: Uri) -> impl IntoResponse {
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, mime.as_ref())
+                .header(header::CACHE_CONTROL, "no-cache")
                 .body(Body::from(content.data))
                 .unwrap()
         }
@@ -62,6 +73,7 @@ pub async fn serve_static(uri: Uri) -> impl IntoResponse {
                 Response::builder()
                     .status(StatusCode::OK)
                     .header(header::CONTENT_TYPE, "text/html")
+                    .header(header::CACHE_CONTROL, "no-cache")
                     .body(Body::from(index.data))
                     .unwrap()
             } else {
