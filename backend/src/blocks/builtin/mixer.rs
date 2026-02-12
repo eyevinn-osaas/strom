@@ -1074,8 +1074,8 @@ fn make_gate_element(
         .name(name)
         .build()
     {
-        if gate.find_property("bypass").is_some() {
-            gate.set_property("bypass", !enabled);
+        if gate.find_property("enabled").is_some() {
+            gate.set_property("enabled", enabled);
         }
         if gate.find_property("gt").is_some() {
             gate.set_property("gt", db_to_linear(threshold_db) as f32);
@@ -1116,8 +1116,8 @@ fn make_compressor_element(
         .name(name)
         .build()
     {
-        if comp.find_property("bypass").is_some() {
-            comp.set_property("bypass", !enabled);
+        if comp.find_property("enabled").is_some() {
+            comp.set_property("enabled", enabled);
         }
         if comp.find_property("al").is_some() {
             comp.set_property("al", db_to_linear(threshold_db) as f32);
@@ -1159,8 +1159,8 @@ fn make_eq_element(
         .name(name)
         .build()
     {
-        if eq.find_property("bypass").is_some() {
-            eq.set_property("bypass", !enabled);
+        if eq.find_property("enabled").is_some() {
+            eq.set_property("enabled", enabled);
         }
         for (band, (freq, gain_db, q)) in bands.iter().enumerate() {
             let ft_prop = format!("ft-{}", band);
@@ -1203,8 +1203,8 @@ fn make_limiter_element(
         .name(name)
         .build()
     {
-        if lim.find_property("bypass").is_some() {
-            lim.set_property("bypass", !enabled);
+        if lim.find_property("enabled").is_some() {
+            lim.set_property("enabled", enabled);
         }
         if lim.find_property("th").is_some() {
             lim.set_property("th", db_to_linear(threshold_db) as f32);
@@ -1762,8 +1762,8 @@ fn mixer_definition() -> BlockDefinition {
         default_value: Some(PropertyValue::Bool(false)),
         mapping: PropertyMapping {
             element_id: "main_comp".to_string(),
-            property_name: "bypass".to_string(),
-            transform: Some("bool_invert".to_string()),
+            property_name: "enabled".to_string(),
+            transform: None,
         },
     });
     for (prop_suffix, label, gst_prop, default, desc, transform) in [
@@ -1831,8 +1831,8 @@ fn mixer_definition() -> BlockDefinition {
         default_value: Some(PropertyValue::Bool(false)),
         mapping: PropertyMapping {
             element_id: "main_eq".to_string(),
-            property_name: "bypass".to_string(),
-            transform: Some("bool_invert".to_string()),
+            property_name: "enabled".to_string(),
+            transform: None,
         },
     });
     let main_eq_band_defaults = [
@@ -1893,8 +1893,8 @@ fn mixer_definition() -> BlockDefinition {
         default_value: Some(PropertyValue::Bool(false)),
         mapping: PropertyMapping {
             element_id: "main_limiter".to_string(),
-            property_name: "bypass".to_string(),
-            transform: Some("bool_invert".to_string()),
+            property_name: "enabled".to_string(),
+            transform: None,
         },
     });
     exposed_properties.push(ExposedProperty {
@@ -2153,8 +2153,8 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: format!("gate_{}", ch - 1),
-                property_name: "bypass".to_string(),
-                transform: Some("bool_invert".to_string()),
+                property_name: "enabled".to_string(),
+                transform: None,
             },
         });
 
@@ -2211,8 +2211,8 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
-                property_name: "bypass".to_string(),
-                transform: Some("bool_invert".to_string()),
+                property_name: "enabled".to_string(),
+                transform: None,
             },
         });
 
@@ -2305,8 +2305,8 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: format!("eq_{}", ch - 1),
-                property_name: "bypass".to_string(),
-                transform: Some("bool_invert".to_string()),
+                property_name: "enabled".to_string(),
+                transform: None,
             },
         });
 
@@ -2613,14 +2613,13 @@ mod tests {
                 .find(|p| p.name == *prop_name)
                 .unwrap_or_else(|| panic!("Missing property: {}", prop_name));
             assert_eq!(
-                prop.mapping.property_name, "bypass",
-                "{} should map to 'bypass', got '{}'",
+                prop.mapping.property_name, "enabled",
+                "{} should map to 'enabled', got '{}'",
                 prop_name, prop.mapping.property_name
             );
             assert_eq!(
-                prop.mapping.transform,
-                Some("bool_invert".to_string()),
-                "{} should have 'bool_invert' transform",
+                prop.mapping.transform, None,
+                "{} should have no transform",
                 prop_name
             );
         }
@@ -2638,14 +2637,13 @@ mod tests {
                 .find(|p| p.name == prop_name)
                 .unwrap_or_else(|| panic!("Missing property: {}", prop_name));
             assert_eq!(
-                prop.mapping.property_name, "bypass",
-                "{} should map to 'bypass', got '{}'",
+                prop.mapping.property_name, "enabled",
+                "{} should map to 'enabled', got '{}'",
                 prop_name, prop.mapping.property_name
             );
             assert_eq!(
-                prop.mapping.transform,
-                Some("bool_invert".to_string()),
-                "{} should have 'bool_invert' transform",
+                prop.mapping.transform, None,
+                "{} should have no transform",
                 prop_name
             );
         }
@@ -2759,9 +2757,9 @@ mod tests {
         let gate = gate.unwrap();
 
         // Verify bypass property was set (enabled=true means bypass=false)
-        if gate.find_property("bypass").is_some() {
-            let bypass: bool = gate.property("bypass");
-            assert!(!bypass, "Gate enabled=true should set bypass=false");
+        if gate.find_property("enabled").is_some() {
+            let enabled_val: bool = gate.property("enabled");
+            assert!(enabled_val, "Gate enabled=true should set enabled=true");
         }
     }
 
@@ -2776,9 +2774,9 @@ mod tests {
         assert!(gate.is_ok());
         let gate = gate.unwrap();
 
-        if gate.find_property("bypass").is_some() {
-            let bypass: bool = gate.property("bypass");
-            assert!(bypass, "Gate enabled=false should set bypass=true");
+        if gate.find_property("enabled").is_some() {
+            let enabled_val: bool = gate.property("enabled");
+            assert!(!enabled_val, "Gate enabled=false should set enabled=false");
         }
     }
 
@@ -2793,9 +2791,9 @@ mod tests {
         assert!(comp.is_ok(), "Should create compressor element");
         let comp = comp.unwrap();
 
-        if comp.find_property("bypass").is_some() {
-            let bypass: bool = comp.property("bypass");
-            assert!(!bypass, "Comp enabled=true should set bypass=false");
+        if comp.find_property("enabled").is_some() {
+            let enabled_val: bool = comp.property("enabled");
+            assert!(enabled_val, "Comp enabled=true should set enabled=true");
         }
 
         // Verify threshold was converted to linear
@@ -2828,9 +2826,9 @@ mod tests {
         assert!(eq.is_ok(), "Should create EQ element");
         let eq = eq.unwrap();
 
-        if eq.find_property("bypass").is_some() {
-            let bypass: bool = eq.property("bypass");
-            assert!(!bypass, "EQ enabled=true should set bypass=false");
+        if eq.find_property("enabled").is_some() {
+            let enabled_val: bool = eq.property("enabled");
+            assert!(enabled_val, "EQ enabled=true should set enabled=true");
         }
 
         // Verify first band frequency

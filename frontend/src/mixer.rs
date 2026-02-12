@@ -2350,18 +2350,18 @@ impl MixerEditor {
             }
             "gate_enabled" => (
                 format!("gate_{}", index),
-                "bypass",
-                PropertyValue::Bool(!channel.gate_enabled),
+                "enabled",
+                PropertyValue::Bool(channel.gate_enabled),
             ),
             "comp_enabled" => (
                 format!("comp_{}", index),
-                "bypass",
-                PropertyValue::Bool(!channel.comp_enabled),
+                "enabled",
+                PropertyValue::Bool(channel.comp_enabled),
             ),
             "eq_enabled" => (
                 format!("eq_{}", index),
-                "bypass",
-                PropertyValue::Bool(!channel.eq_enabled),
+                "enabled",
+                PropertyValue::Bool(channel.eq_enabled),
             ),
             "pfl" => (
                 format!("pfl_volume_{}", index),
