@@ -158,7 +158,7 @@ impl ChannelStrip {
             comp_attack: 10.0,
             comp_release: 100.0,
             comp_makeup: 0.0,
-            comp_knee: 3.0,
+            comp_knee: -6.0,
             eq_enabled: false,
             eq_bands: [
                 (80.0, 0.0, 1.0),   // Low
@@ -2015,7 +2015,7 @@ impl MixerEditor {
                 if ui
                     .add(
                         egui::DragValue::new(&mut self.channels[index].comp_knee)
-                            .range(0.0..=12.0)
+                            .range(-24.0..=0.0)
                             .suffix(" dB")
                             .speed(0.2),
                     )
@@ -2185,7 +2185,7 @@ impl MixerEditor {
             ("comp", "knee") => (
                 format!("comp_{}", index),
                 "kn".to_string(),
-                PropertyValue::Float(channel.comp_knee as f64),
+                PropertyValue::Float(db_to_linear_f64(channel.comp_knee as f64).clamp(0.0631, 1.0)),
             ),
             _ => return,
         };

@@ -599,7 +599,7 @@ impl BlockBuilder for MixerBuilder {
             let comp_release =
                 get_float_prop(properties, &format!("ch{}_comp_release", ch_num), 100.0);
             let comp_makeup = get_float_prop(properties, &format!("ch{}_comp_makeup", ch_num), 0.0);
-            let comp_knee = get_float_prop(properties, &format!("ch{}_comp_knee", ch_num), 3.0);
+            let comp_knee = get_float_prop(properties, &format!("ch{}_comp_knee", ch_num), -6.0);
 
             let comp_id = format!("{}:comp_{}", instance_id, ch);
             let compressor = make_compressor_element(
@@ -612,8 +612,10 @@ impl BlockBuilder for MixerBuilder {
                 comp_makeup,
             )?;
             // Set knee if the element supports it (LSP property)
+            // kn range: 0.0631..1.0 (linear gain, default ~0.5 = -6dB)
             if compressor.find_property("kn").is_some() {
-                compressor.set_property("kn", db_to_linear(comp_knee) as f32);
+                let kn_val = db_to_linear(comp_knee).clamp(0.0631, 1.0) as f32;
+                compressor.set_property("kn", kn_val);
             }
             elements.push((comp_id.clone(), compressor));
 
@@ -1072,10 +1074,18 @@ fn make_gate_element(
         .name(name)
         .build()
     {
-        gate.set_property("bypass", !enabled);
-        gate.set_property("gt", db_to_linear(threshold_db) as f32);
-        gate.set_property("at", attack_ms as f32);
-        gate.set_property("rt", release_ms as f32);
+        if gate.find_property("bypass").is_some() {
+            gate.set_property("bypass", !enabled);
+        }
+        if gate.find_property("gt").is_some() {
+            gate.set_property("gt", db_to_linear(threshold_db) as f32);
+        }
+        if gate.find_property("at").is_some() {
+            gate.set_property("at", attack_ms as f32);
+        }
+        if gate.find_property("rt").is_some() {
+            gate.set_property("rt", release_ms as f32);
+        }
         // Note: LSP gate has no settable "range" parameter.
         // "gr" is a read-only reduction meter, "gz" is zone size (different concept).
         // Gate range is not supported by this plugin.
@@ -1106,12 +1116,24 @@ fn make_compressor_element(
         .name(name)
         .build()
     {
-        comp.set_property("bypass", !enabled);
-        comp.set_property("al", db_to_linear(threshold_db) as f32);
-        comp.set_property("cr", ratio as f32);
-        comp.set_property("at", attack_ms as f32);
-        comp.set_property("rt", release_ms as f32);
-        comp.set_property("mk", db_to_linear(makeup_db) as f32);
+        if comp.find_property("bypass").is_some() {
+            comp.set_property("bypass", !enabled);
+        }
+        if comp.find_property("al").is_some() {
+            comp.set_property("al", db_to_linear(threshold_db) as f32);
+        }
+        if comp.find_property("cr").is_some() {
+            comp.set_property("cr", ratio as f32);
+        }
+        if comp.find_property("at").is_some() {
+            comp.set_property("at", attack_ms as f32);
+        }
+        if comp.find_property("rt").is_some() {
+            comp.set_property("rt", release_ms as f32);
+        }
+        if comp.find_property("mk").is_some() {
+            comp.set_property("mk", db_to_linear(makeup_db) as f32);
+        }
         return Ok(comp);
     }
     warn!(
@@ -1137,12 +1159,26 @@ fn make_eq_element(
         .name(name)
         .build()
     {
-        eq.set_property("bypass", !enabled);
+        if eq.find_property("bypass").is_some() {
+            eq.set_property("bypass", !enabled);
+        }
         for (band, (freq, gain_db, q)) in bands.iter().enumerate() {
-            eq.set_property_from_str(&format!("ft-{}", band), "Bell");
-            eq.set_property(&format!("f-{}", band), *freq as f32);
-            eq.set_property(&format!("g-{}", band), db_to_linear(*gain_db) as f32);
-            eq.set_property(&format!("q-{}", band), *q as f32);
+            let ft_prop = format!("ft-{}", band);
+            let f_prop = format!("f-{}", band);
+            let g_prop = format!("g-{}", band);
+            let q_prop = format!("q-{}", band);
+            if eq.find_property(&ft_prop).is_some() {
+                eq.set_property_from_str(&ft_prop, "Bell");
+            }
+            if eq.find_property(&f_prop).is_some() {
+                eq.set_property(&f_prop, *freq as f32);
+            }
+            if eq.find_property(&g_prop).is_some() {
+                eq.set_property(&g_prop, db_to_linear(*gain_db) as f32);
+            }
+            if eq.find_property(&q_prop).is_some() {
+                eq.set_property(&q_prop, *q as f32);
+            }
         }
         return Ok(eq);
     }
@@ -1198,9 +1234,9 @@ fn make_hpf_element(
         .build()
     {
         // mode: 0=low-pass, 1=high-pass
-        hpf.set_property("mode", 1i32);
+        hpf.set_property_from_str("mode", "high-pass");
         hpf.set_property("cutoff", cutoff_hz as f32);
-        hpf.set_property("poles", 4i32); // 24dB/oct slope
+        hpf.set_property_from_str("poles", "4"); // 24dB/oct slope
         if !enabled {
             // Bypass by setting cutoff to minimum
             hpf.set_property("cutoff", 1.0f32);
@@ -1212,7 +1248,7 @@ fn make_hpf_element(
         .name(name)
         .build()
     {
-        hpf.set_property("mode", 1i32); // high-pass
+        hpf.set_property_from_str("mode", "high-pass");
         hpf.set_property("cutoff", cutoff_hz as f32);
         if !enabled {
             hpf.set_property("cutoff", 1.0f32);
@@ -2248,13 +2284,13 @@ fn mixer_definition() -> BlockDefinition {
         exposed_properties.push(ExposedProperty {
             name: format!("ch{}_comp_knee", ch),
             label: format!("Ch {} Comp Knee", ch),
-            description: format!("Channel {} compressor knee in dB (0 to 12)", ch),
+            description: format!("Channel {} compressor knee in dB (-24 to 0)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(3.0)),
+            default_value: Some(PropertyValue::Float(-6.0)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "kn".to_string(),
-                transform: None,
+                transform: Some("db_to_linear".to_string()),
             },
         });
 
