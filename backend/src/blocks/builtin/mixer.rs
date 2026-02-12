@@ -20,7 +20,11 @@
 //! (pre_fader_tee | post_fader_tee) → aux_send_N_M → aux_queue_N_M → aux_M_mixer
 //! ```
 //!
-//! Main bus: audiomixer → main_comp → main_eq → main_limiter → main_volume → main_level
+//! Main bus: audiomixer → main_comp → main_eq → main_limiter → main_volume → main_level → main_out_tee
+//!
+//! All output buses terminate in a tee with allow-not-linked=true, so unconnected
+//! output pads don't cause NOT_LINKED flow errors. Audiomixer elements use
+//! force-live=true so unconnected input pads don't stall the pipeline.
 //!
 //! Processing uses LSP LV2 plugins when available. Falls back to identity passthrough
 //! when LV2 plugins are not installed.
@@ -66,23 +70,24 @@ impl BlockBuilder for MixerBuilder {
             })
             .collect();
 
-        // Output pads
+        // Output pads - point to output tees so unconnected outputs don't cause
+        // NOT_LINKED flow errors. Each output tee has allow-not-linked=true.
         let mut outputs = vec![
             // Main stereo output
             ExternalPad {
                 name: "main_out".to_string(),
                 label: Some("Main".to_string()),
                 media_type: MediaType::Audio,
-                internal_element_id: "main_level".to_string(),
-                internal_pad_name: "src".to_string(),
+                internal_element_id: "main_out_tee".to_string(),
+                internal_pad_name: "src_%u".to_string(),
             },
             // PFL output (always present)
             ExternalPad {
                 name: "pfl_out".to_string(),
                 label: Some("PFL".to_string()),
                 media_type: MediaType::Audio,
-                internal_element_id: "pfl_level".to_string(),
-                internal_pad_name: "src".to_string(),
+                internal_element_id: "pfl_out_tee".to_string(),
+                internal_pad_name: "src_%u".to_string(),
             },
         ];
 
@@ -92,8 +97,8 @@ impl BlockBuilder for MixerBuilder {
                 name: format!("aux_out_{}", aux + 1),
                 label: Some(format!("Aux{}", aux + 1)),
                 media_type: MediaType::Audio,
-                internal_element_id: format!("aux{}_level", aux),
-                internal_pad_name: "src".to_string(),
+                internal_element_id: format!("aux{}_out_tee", aux),
+                internal_pad_name: "src_%u".to_string(),
             });
         }
 
@@ -103,8 +108,8 @@ impl BlockBuilder for MixerBuilder {
                 name: format!("group_out_{}", sg + 1),
                 label: Some(format!("Grp{}", sg + 1)),
                 media_type: MediaType::Audio,
-                internal_element_id: format!("group{}_level", sg),
-                internal_pad_name: "src".to_string(),
+                internal_element_id: format!("group{}_out_tee", sg),
+                internal_pad_name: "src_%u".to_string(),
             });
         }
 
@@ -134,14 +139,18 @@ impl BlockBuilder for MixerBuilder {
         let mut elements = Vec::new();
         let mut internal_links = Vec::new();
 
+        // Mixer aggregator settings
+        let force_live = get_bool_prop(properties, "force_live", true);
+        let latency_ms = get_float_prop(properties, "latency", 30.0) as u64;
+        let min_upstream_latency_ms =
+            get_float_prop(properties, "min_upstream_latency", 30.0) as u64;
+
         // ========================================================================
         // Create main audiomixer
         // ========================================================================
         let mixer_id = format!("{}:audiomixer", instance_id);
-        let audiomixer = gst::ElementFactory::make("audiomixer")
-            .name(&mixer_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("audiomixer: {}", e)))?;
+        let audiomixer =
+            make_audiomixer(&mixer_id, force_live, latency_ms, min_upstream_latency_ms)?;
         elements.push((mixer_id.clone(), audiomixer.clone()));
 
         // ========================================================================
@@ -231,7 +240,16 @@ impl BlockBuilder for MixerBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("main level: {}", e)))?;
         elements.push((main_level_id.clone(), main_level));
 
-        // Link: mixer → main_comp → main_eq → main_limiter → main_volume → main_level
+        // Main output tee (allow-not-linked so unconnected main_out doesn't stall pipeline)
+        let main_out_tee_id = format!("{}:main_out_tee", instance_id);
+        let main_out_tee = gst::ElementFactory::make("tee")
+            .name(&main_out_tee_id)
+            .property("allow-not-linked", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("main_out_tee: {}", e)))?;
+        elements.push((main_out_tee_id.clone(), main_out_tee));
+
+        // Link: mixer → main_comp → main_eq → main_limiter → main_volume → main_level → main_out_tee
         internal_links.push((
             ElementPadRef::pad(&mixer_id, "src"),
             ElementPadRef::pad(&main_comp_id, "sink"),
@@ -252,15 +270,21 @@ impl BlockBuilder for MixerBuilder {
             ElementPadRef::pad(&main_volume_id, "src"),
             ElementPadRef::pad(&main_level_id, "sink"),
         ));
+        internal_links.push((
+            ElementPadRef::pad(&main_level_id, "src"),
+            ElementPadRef::pad(&main_out_tee_id, "sink"),
+        ));
 
         // ========================================================================
         // Create PFL (Pre-Fader Listen) bus with master level
         // ========================================================================
         let pfl_mixer_id = format!("{}:pfl_mixer", instance_id);
-        let pfl_mixer = gst::ElementFactory::make("audiomixer")
-            .name(&pfl_mixer_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_mixer: {}", e)))?;
+        let pfl_mixer = make_audiomixer(
+            &pfl_mixer_id,
+            force_live,
+            latency_ms,
+            min_upstream_latency_ms,
+        )?;
         elements.push((pfl_mixer_id.clone(), pfl_mixer));
 
         // PFL master volume
@@ -282,7 +306,16 @@ impl BlockBuilder for MixerBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_level: {}", e)))?;
         elements.push((pfl_level_id.clone(), pfl_level));
 
-        // Link: pfl_mixer → pfl_master_vol → pfl_level
+        // PFL output tee (allow-not-linked so unconnected pfl_out doesn't stall pipeline)
+        let pfl_out_tee_id = format!("{}:pfl_out_tee", instance_id);
+        let pfl_out_tee = gst::ElementFactory::make("tee")
+            .name(&pfl_out_tee_id)
+            .property("allow-not-linked", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_out_tee: {}", e)))?;
+        elements.push((pfl_out_tee_id.clone(), pfl_out_tee));
+
+        // Link: pfl_mixer → pfl_master_vol → pfl_level → pfl_out_tee
         internal_links.push((
             ElementPadRef::pad(&pfl_mixer_id, "src"),
             ElementPadRef::pad(&pfl_master_vol_id, "sink"),
@@ -291,18 +324,22 @@ impl BlockBuilder for MixerBuilder {
             ElementPadRef::pad(&pfl_master_vol_id, "src"),
             ElementPadRef::pad(&pfl_level_id, "sink"),
         ));
+        internal_links.push((
+            ElementPadRef::pad(&pfl_level_id, "src"),
+            ElementPadRef::pad(&pfl_out_tee_id, "sink"),
+        ));
 
         // ========================================================================
         // Create Aux buses
         // ========================================================================
         for aux in 0..num_aux_buses {
             let aux_mixer_id = format!("{}:aux{}_mixer", instance_id, aux);
-            let aux_mixer = gst::ElementFactory::make("audiomixer")
-                .name(&aux_mixer_id)
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("aux{}_mixer: {}", aux, e))
-                })?;
+            let aux_mixer = make_audiomixer(
+                &aux_mixer_id,
+                force_live,
+                latency_ms,
+                min_upstream_latency_ms,
+            )?;
             elements.push((aux_mixer_id.clone(), aux_mixer));
 
             let aux_fader = get_float_prop(properties, &format!("aux{}_fader", aux + 1), 1.0);
@@ -330,7 +367,18 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((aux_level_id.clone(), aux_level));
 
-            // Link: aux_mixer → aux_volume → aux_level
+            // Aux output tee (allow-not-linked so unconnected aux_out doesn't stall pipeline)
+            let aux_out_tee_id = format!("{}:aux{}_out_tee", instance_id, aux);
+            let aux_out_tee = gst::ElementFactory::make("tee")
+                .name(&aux_out_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("aux{}_out_tee: {}", aux, e))
+                })?;
+            elements.push((aux_out_tee_id.clone(), aux_out_tee));
+
+            // Link: aux_mixer → aux_volume → aux_level → aux_out_tee
             internal_links.push((
                 ElementPadRef::pad(&aux_mixer_id, "src"),
                 ElementPadRef::pad(&aux_volume_id, "sink"),
@@ -339,6 +387,10 @@ impl BlockBuilder for MixerBuilder {
                 ElementPadRef::pad(&aux_volume_id, "src"),
                 ElementPadRef::pad(&aux_level_id, "sink"),
             ));
+            internal_links.push((
+                ElementPadRef::pad(&aux_level_id, "src"),
+                ElementPadRef::pad(&aux_out_tee_id, "sink"),
+            ));
         }
 
         // ========================================================================
@@ -346,12 +398,12 @@ impl BlockBuilder for MixerBuilder {
         // ========================================================================
         for sg in 0..num_groups {
             let sg_mixer_id = format!("{}:group{}_mixer", instance_id, sg);
-            let sg_mixer = gst::ElementFactory::make("audiomixer")
-                .name(&sg_mixer_id)
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("group{}_mixer: {}", sg, e))
-                })?;
+            let sg_mixer = make_audiomixer(
+                &sg_mixer_id,
+                force_live,
+                latency_ms,
+                min_upstream_latency_ms,
+            )?;
             elements.push((sg_mixer_id.clone(), sg_mixer));
 
             let sg_fader = get_float_prop(properties, &format!("group{}_fader", sg + 1), 1.0);
@@ -379,7 +431,31 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((sg_level_id.clone(), sg_level));
 
-            // Link: group_mixer → group_volume → group_level → main audiomixer
+            // Group output tee - allows both external output AND feeding main mixer
+            // Also prevents NOT_LINKED when group_out isn't connected externally.
+            let sg_out_tee_id = format!("{}:group{}_out_tee", instance_id, sg);
+            let sg_out_tee = gst::ElementFactory::make("tee")
+                .name(&sg_out_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("group{}_out_tee: {}", sg, e))
+                })?;
+            elements.push((sg_out_tee_id.clone(), sg_out_tee));
+
+            // Queue between group tee and main mixer (isolates scheduling)
+            let sg_to_main_queue_id = format!("{}:group{}_to_main_queue", instance_id, sg);
+            let sg_to_main_queue = gst::ElementFactory::make("queue")
+                .name(&sg_to_main_queue_id)
+                .property("max-size-buffers", 3u32)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("group{}_to_main_queue: {}", sg, e))
+                })?;
+            elements.push((sg_to_main_queue_id.clone(), sg_to_main_queue));
+
+            // Link: group_mixer → group_volume → group_level → group_out_tee
+            //        group_out_tee → queue → main audiomixer
             internal_links.push((
                 ElementPadRef::pad(&sg_mixer_id, "src"),
                 ElementPadRef::pad(&sg_volume_id, "sink"),
@@ -390,6 +466,15 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::pad(&sg_level_id, "src"),
+                ElementPadRef::pad(&sg_out_tee_id, "sink"),
+            ));
+            // One branch from tee feeds the main mixer
+            internal_links.push((
+                ElementPadRef::element(&sg_out_tee_id),
+                ElementPadRef::pad(&sg_to_main_queue_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&sg_to_main_queue_id, "src"),
                 ElementPadRef::element(&mixer_id), // Request pad from main audiomixer
             ));
         }
@@ -923,7 +1008,46 @@ impl BlockBuilder for MixerBuilder {
 }
 
 // ============================================================================
-// Helper functions for element creation with LV2 fallback
+// Helper functions for element creation
+// ============================================================================
+
+/// Create a configured audiomixer element with force-live, latency, and start-time-selection.
+fn make_audiomixer(
+    name: &str,
+    force_live: bool,
+    latency_ms: u64,
+    min_upstream_latency_ms: u64,
+) -> Result<gst::Element, BlockBuildError> {
+    let mixer = gst::ElementFactory::make("audiomixer")
+        .name(name)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("audiomixer {}: {}", name, e)))?;
+
+    // force-live: operate in live mode even without live upstream sources.
+    // This prevents the mixer from hanging when not all inputs are connected.
+    if mixer.find_property("force-live").is_some() {
+        mixer.set_property("force-live", force_live);
+    }
+
+    // start-time-selection=first: use first buffer's timestamp as start time.
+    // Essential for PTP clock synchronization and prevents start-time mismatch.
+    mixer.set_property_from_str("start-time-selection", "first");
+
+    // latency: aggregator timeout in nanoseconds
+    let latency_ns = latency_ms * 1_000_000;
+    mixer.set_property_from_str("latency", &latency_ns.to_string());
+
+    // min-upstream-latency: reported to upstream elements
+    if mixer.find_property("min-upstream-latency").is_some() {
+        let min_upstream_ns = min_upstream_latency_ms * 1_000_000;
+        mixer.set_property_from_str("min-upstream-latency", &min_upstream_ns.to_string());
+    }
+
+    Ok(mixer)
+}
+
+// ============================================================================
+// Helper functions for LV2 fallback
 // ============================================================================
 
 /// Create a gate element, falling back to identity passthrough if LSP LV2 unavailable.
@@ -1542,6 +1666,46 @@ fn mixer_definition() -> BlockDefinition {
             },
         },
     ];
+
+    // ========================================================================
+    // Aggregator / live mode properties
+    // ========================================================================
+    exposed_properties.push(ExposedProperty {
+        name: "force_live".to_string(),
+        label: "Force Live".to_string(),
+        description: "Always operate in live mode. Prevents mixer from hanging when not all inputs are connected. Construction-time only.".to_string(),
+        property_type: PropertyType::Bool,
+        default_value: Some(PropertyValue::Bool(true)),
+        mapping: PropertyMapping {
+            element_id: "_block".to_string(),
+            property_name: "force_live".to_string(),
+            transform: None,
+        },
+    });
+    exposed_properties.push(ExposedProperty {
+        name: "latency".to_string(),
+        label: "Latency".to_string(),
+        description: "Mixer aggregator latency in milliseconds. Time to wait for slower inputs before producing output. Construction-time only.".to_string(),
+        property_type: PropertyType::Float,
+        default_value: Some(PropertyValue::Float(30.0)),
+        mapping: PropertyMapping {
+            element_id: "_block".to_string(),
+            property_name: "latency".to_string(),
+            transform: None,
+        },
+    });
+    exposed_properties.push(ExposedProperty {
+        name: "min_upstream_latency".to_string(),
+        label: "Min Upstream Latency".to_string(),
+        description: "Minimum upstream latency reported to upstream elements in milliseconds. Construction-time only.".to_string(),
+        property_type: PropertyType::Float,
+        default_value: Some(PropertyValue::Float(30.0)),
+        mapping: PropertyMapping {
+            element_id: "_block".to_string(),
+            property_name: "min_upstream_latency".to_string(),
+            transform: None,
+        },
+    });
 
     // ========================================================================
     // Main bus processing properties
@@ -2192,15 +2356,15 @@ fn mixer_definition() -> BlockDefinition {
                     name: "main_out".to_string(),
                     label: Some("Main".to_string()),
                     media_type: MediaType::Audio,
-                    internal_element_id: "main_level".to_string(),
-                    internal_pad_name: "src".to_string(),
+                    internal_element_id: "main_out_tee".to_string(),
+                    internal_pad_name: "src_%u".to_string(),
                 },
                 ExternalPad {
                     name: "pfl_out".to_string(),
                     label: Some("PFL".to_string()),
                     media_type: MediaType::Audio,
-                    internal_element_id: "pfl_level".to_string(),
-                    internal_pad_name: "src".to_string(),
+                    internal_element_id: "pfl_out_tee".to_string(),
+                    internal_pad_name: "src_%u".to_string(),
                 },
             ],
         },
