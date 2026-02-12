@@ -353,9 +353,7 @@ impl MixerEditor {
             let ch_num = ch.channel_num;
 
             // Label
-            if let Some(PropertyValue::String(s)) =
-                properties.get(&format!("ch{}_label", ch_num))
-            {
+            if let Some(PropertyValue::String(s)) = properties.get(&format!("ch{}_label", ch_num)) {
                 ch.label = s.clone();
             }
             // Input gain

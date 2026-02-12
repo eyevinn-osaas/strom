@@ -192,8 +192,11 @@ impl BlockBuilder for MixerBuilder {
         let main_limiter_enabled = get_bool_prop(properties, "main_limiter_enabled", false);
         let main_limiter_threshold = get_float_prop(properties, "main_limiter_threshold", -0.3);
         let main_limiter_id = format!("{}:main_limiter", instance_id);
-        let main_limiter =
-            make_limiter_element(&main_limiter_id, main_limiter_enabled, main_limiter_threshold)?;
+        let main_limiter = make_limiter_element(
+            &main_limiter_id,
+            main_limiter_enabled,
+            main_limiter_threshold,
+        )?;
         elements.push((main_limiter_id.clone(), main_limiter));
 
         // Main output volume (master fader)
@@ -467,12 +470,10 @@ impl BlockBuilder for MixerBuilder {
                 get_bool_prop(properties, &format!("ch{}_gate_enabled", ch_num), false);
             let gate_threshold =
                 get_float_prop(properties, &format!("ch{}_gate_threshold", ch_num), -40.0);
-            let gate_attack =
-                get_float_prop(properties, &format!("ch{}_gate_attack", ch_num), 5.0);
+            let gate_attack = get_float_prop(properties, &format!("ch{}_gate_attack", ch_num), 5.0);
             let gate_release =
                 get_float_prop(properties, &format!("ch{}_gate_release", ch_num), 100.0);
-            let gate_range =
-                get_float_prop(properties, &format!("ch{}_gate_range", ch_num), -80.0);
+            let gate_range = get_float_prop(properties, &format!("ch{}_gate_range", ch_num), -80.0);
 
             let gate_id = format!("{}:gate_{}", instance_id, ch);
             let gate = make_gate_element(
@@ -492,16 +493,13 @@ impl BlockBuilder for MixerBuilder {
                 get_bool_prop(properties, &format!("ch{}_comp_enabled", ch_num), false);
             let comp_threshold =
                 get_float_prop(properties, &format!("ch{}_comp_threshold", ch_num), -20.0);
-            let comp_ratio =
-                get_float_prop(properties, &format!("ch{}_comp_ratio", ch_num), 4.0);
+            let comp_ratio = get_float_prop(properties, &format!("ch{}_comp_ratio", ch_num), 4.0);
             let comp_attack =
                 get_float_prop(properties, &format!("ch{}_comp_attack", ch_num), 10.0);
             let comp_release =
                 get_float_prop(properties, &format!("ch{}_comp_release", ch_num), 100.0);
-            let comp_makeup =
-                get_float_prop(properties, &format!("ch{}_comp_makeup", ch_num), 0.0);
-            let comp_knee =
-                get_float_prop(properties, &format!("ch{}_comp_knee", ch_num), 3.0);
+            let comp_makeup = get_float_prop(properties, &format!("ch{}_comp_makeup", ch_num), 0.0);
+            let comp_knee = get_float_prop(properties, &format!("ch{}_comp_knee", ch_num), 3.0);
 
             let comp_id = format!("{}:comp_{}", instance_id, ch);
             let compressor = make_compressor_element(
@@ -522,15 +520,10 @@ impl BlockBuilder for MixerBuilder {
             // ----------------------------------------------------------------
             // EQ (LSP Parametric Equalizer x8 Stereo with fallback)
             // ----------------------------------------------------------------
-            let eq_enabled =
-                get_bool_prop(properties, &format!("ch{}_eq_enabled", ch_num), false);
+            let eq_enabled = get_bool_prop(properties, &format!("ch{}_eq_enabled", ch_num), false);
 
-            let eq_defaults: [(f64, f64); 4] = [
-                (80.0, 1.0),
-                (400.0, 1.0),
-                (2000.0, 1.0),
-                (8000.0, 1.0),
-            ];
+            let eq_defaults: [(f64, f64); 4] =
+                [(80.0, 1.0), (400.0, 1.0), (2000.0, 1.0), (8000.0, 1.0)];
             let eq_bands: [(f64, f64, f64); 4] = std::array::from_fn(|band| {
                 let (def_freq, def_q) = eq_defaults[band];
                 let freq = get_float_prop(
@@ -543,11 +536,8 @@ impl BlockBuilder for MixerBuilder {
                     &format!("ch{}_eq{}_gain", ch_num, band + 1),
                     0.0,
                 );
-                let q = get_float_prop(
-                    properties,
-                    &format!("ch{}_eq{}_q", ch_num, band + 1),
-                    def_q,
-                );
+                let q =
+                    get_float_prop(properties, &format!("ch{}_eq{}_q", ch_num, band + 1), def_q);
                 (freq, gain, q)
             });
 
@@ -793,8 +783,7 @@ impl BlockBuilder for MixerBuilder {
             // ----------------------------------------------------------------
 
             // Route to main mixer
-            let to_main_enabled =
-                get_bool_prop(properties, &format!("ch{}_to_main", ch_num), true);
+            let to_main_enabled = get_bool_prop(properties, &format!("ch{}_to_main", ch_num), true);
             let to_main_vol_id = format!("{}:to_main_vol_{}", instance_id, ch);
             let to_main_vol = gst::ElementFactory::make("volume")
                 .name(&to_main_vol_id)
@@ -1466,11 +1455,46 @@ fn mixer_definition() -> BlockDefinition {
         },
     });
     for (prop_suffix, label, gst_prop, default, desc, transform) in [
-        ("main_comp_threshold", "Main Comp Thresh", "al", -20.0, "Main bus compressor threshold in dB (-60 to 0)", Some("db_to_linear")),
-        ("main_comp_ratio", "Main Comp Ratio", "cr", 4.0, "Main bus compressor ratio (1:1 to 20:1)", None),
-        ("main_comp_attack", "Main Comp Atk", "at", 10.0, "Main bus compressor attack in ms (0-200)", None),
-        ("main_comp_release", "Main Comp Rel", "rt", 100.0, "Main bus compressor release in ms (10-1000)", None),
-        ("main_comp_makeup", "Main Comp Makeup", "mk", 0.0, "Main bus compressor makeup gain in dB (0 to 24)", Some("db_to_linear")),
+        (
+            "main_comp_threshold",
+            "Main Comp Thresh",
+            "al",
+            -20.0,
+            "Main bus compressor threshold in dB (-60 to 0)",
+            Some("db_to_linear"),
+        ),
+        (
+            "main_comp_ratio",
+            "Main Comp Ratio",
+            "cr",
+            4.0,
+            "Main bus compressor ratio (1:1 to 20:1)",
+            None,
+        ),
+        (
+            "main_comp_attack",
+            "Main Comp Atk",
+            "at",
+            10.0,
+            "Main bus compressor attack in ms (0-200)",
+            None,
+        ),
+        (
+            "main_comp_release",
+            "Main Comp Rel",
+            "rt",
+            100.0,
+            "Main bus compressor release in ms (10-1000)",
+            None,
+        ),
+        (
+            "main_comp_makeup",
+            "Main Comp Makeup",
+            "mk",
+            0.0,
+            "Main bus compressor makeup gain in dB (0 to 24)",
+            Some("db_to_linear"),
+        ),
     ] {
         exposed_properties.push(ExposedProperty {
             name: prop_suffix.to_string(),
@@ -1510,7 +1534,10 @@ fn mixer_definition() -> BlockDefinition {
         exposed_properties.push(ExposedProperty {
             name: format!("main_eq{}_freq", band_num),
             label: format!("Main EQ{} Freq", band_num),
-            description: format!("Main bus EQ band {} ({}) frequency in Hz", band_num, band_name),
+            description: format!(
+                "Main bus EQ band {} ({}) frequency in Hz",
+                band_num, band_name
+            ),
             property_type: PropertyType::Float,
             default_value: Some(PropertyValue::Float(*def_freq)),
             mapping: PropertyMapping {
