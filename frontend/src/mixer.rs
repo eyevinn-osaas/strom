@@ -73,6 +73,10 @@ struct ChannelStrip {
     aux_sends: [f32; MAX_AUX_BUSES],
     /// Aux send pre-fader mode (true=pre, false=post)
     aux_pre: [bool; MAX_AUX_BUSES],
+    /// HPF enabled
+    hpf_enabled: bool,
+    /// HPF cutoff frequency (Hz)
+    hpf_freq: f32,
     /// Gate enabled
     gate_enabled: bool,
     /// Gate threshold (dB)
@@ -141,6 +145,8 @@ impl ChannelStrip {
             to_grp: [false; MAX_GROUPS],
             aux_sends: [0.0; MAX_AUX_BUSES],
             aux_pre: [true, true, false, false], // aux 1-2 pre, 3-4 post
+            hpf_enabled: false,
+            hpf_freq: 80.0,
             gate_enabled: false,
             gate_threshold: -40.0,
             gate_attack: 5.0,
@@ -396,6 +402,16 @@ impl MixerEditor {
                 {
                     ch.aux_pre[aux] = *b;
                 }
+            }
+            // HPF
+            if let Some(PropertyValue::Bool(b)) =
+                properties.get(&format!("ch{}_hpf_enabled", ch_num))
+            {
+                ch.hpf_enabled = *b;
+            }
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_hpf_freq", ch_num))
+            {
+                ch.hpf_freq = *f as f32;
             }
             // Gate
             if let Some(PropertyValue::Bool(b)) =
@@ -1733,6 +1749,13 @@ impl MixerEditor {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
+                    // HPF section
+                    self.render_hpf_section(ui, ctx, index);
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(16.0);
+
                     // Gate section
                     self.render_gate_section(ui, ctx, index);
 
@@ -1751,6 +1774,49 @@ impl MixerEditor {
                     self.render_eq_section(ui, ctx, index);
                 });
             });
+    }
+
+    /// Render Gate controls.
+    /// Render HPF controls.
+    fn render_hpf_section(&mut self, ui: &mut Ui, ctx: &Context, index: usize) {
+        ui.vertical(|ui| {
+            let enabled = self.channels[index].hpf_enabled;
+            let header_color = if enabled {
+                Color32::from_rgb(150, 80, 150)
+            } else {
+                Color32::GRAY
+            };
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("HPF").color(header_color).strong());
+                if ui
+                    .checkbox(&mut self.channels[index].hpf_enabled, "")
+                    .changed()
+                {
+                    self.update_processing_param(ctx, index, "hpf", "enabled");
+                }
+            });
+
+            ui.add_space(4.0);
+            if !enabled {
+                ui.disable();
+            }
+
+            ui.horizontal(|ui| {
+                ui.label("Cutoff:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.channels[index].hpf_freq)
+                            .range(20.0..=500.0)
+                            .suffix(" Hz")
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
+                    self.update_processing_param(ctx, index, "hpf", "freq");
+                }
+            });
+        });
     }
 
     /// Render Gate controls.
@@ -2056,6 +2122,23 @@ impl MixerEditor {
         let channel = &self.channels[index];
 
         let (element_suffix, gst_prop, value) = match (processor, param) {
+            ("hpf", "enabled") => {
+                let cutoff = if channel.hpf_enabled {
+                    channel.hpf_freq
+                } else {
+                    1.0 // Bypass: set cutoff to minimum
+                };
+                (
+                    format!("hpf_{}", index),
+                    "cutoff".to_string(),
+                    PropertyValue::Float(cutoff as f64),
+                )
+            }
+            ("hpf", "freq") => (
+                format!("hpf_{}", index),
+                "cutoff".to_string(),
+                PropertyValue::Float(channel.hpf_freq as f64),
+            ),
             ("gate", "threshold") => (
                 format!("gate_{}", index),
                 "gt".to_string(),

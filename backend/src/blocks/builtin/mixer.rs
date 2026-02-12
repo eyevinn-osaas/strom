@@ -11,11 +11,12 @@
 //!
 //! Pipeline structure per channel:
 //! ```text
-//! input_N → audioconvert → capsfilter(F32LE) → gain → gate → compressor → EQ →
+//! input_N → audioconvert → capsfilter(F32LE) → gain → hpf → gate → compressor → EQ →
 //!           pre_fader_tee → audiopanorama_N → volume_N → post_fader_tee →
 //!           level_N → [group or main audiomixer]
 //!
-//! pre_fader_tee → pfl_volume_N → pfl_queue_N → pfl_mixer
+//! (pre_fader_tee | post_fader_tee) → solo_volume_N → solo_queue_N → pfl_mixer
+//!   (source depends on solo_mode: pfl=pre-fader, afl=post-fader)
 //! (pre_fader_tee | post_fader_tee) → aux_send_N_M → aux_queue_N_M → aux_M_mixer
 //! ```
 //!
@@ -54,7 +55,6 @@ impl BlockBuilder for MixerBuilder {
         let num_channels = parse_num_channels(properties);
         let num_aux_buses = parse_num_aux_buses(properties);
         let num_groups = parse_num_groups(properties);
-
         // Create input pads dynamically
         let inputs = (0..num_channels)
             .map(|i| ExternalPad {
@@ -122,9 +122,13 @@ impl BlockBuilder for MixerBuilder {
         let num_channels = parse_num_channels(properties);
         let num_aux_buses = parse_num_aux_buses(properties);
         let num_groups = parse_num_groups(properties);
+        let solo_mode_afl = get_string_prop(properties, "solo_mode", "pfl") == "afl";
         info!(
-            "Mixer config: {} channels, {} aux buses, {} groups",
-            num_channels, num_aux_buses, num_groups
+            "Mixer config: {} channels, {} aux buses, {} groups, solo={}",
+            num_channels,
+            num_aux_buses,
+            num_groups,
+            if solo_mode_afl { "afl" } else { "pfl" },
         );
 
         let mut elements = Vec::new();
@@ -464,6 +468,17 @@ impl BlockBuilder for MixerBuilder {
             elements.push((gain_id.clone(), gain_elem));
 
             // ----------------------------------------------------------------
+            // HPF (High-Pass Filter)
+            // ----------------------------------------------------------------
+            let hpf_enabled =
+                get_bool_prop(properties, &format!("ch{}_hpf_enabled", ch_num), false);
+            let hpf_freq = get_float_prop(properties, &format!("ch{}_hpf_freq", ch_num), 80.0);
+
+            let hpf_id = format!("{}:hpf_{}", instance_id, ch);
+            let hpf = make_hpf_element(&hpf_id, hpf_enabled, hpf_freq)?;
+            elements.push((hpf_id.clone(), hpf));
+
+            // ----------------------------------------------------------------
             // Gate (LSP Gate Stereo with fallback)
             // ----------------------------------------------------------------
             let gate_enabled =
@@ -715,7 +730,7 @@ impl BlockBuilder for MixerBuilder {
             // ----------------------------------------------------------------
             // Main chain links
             // ----------------------------------------------------------------
-            // Chain: convert → caps → gain → gate → comp → eq → pre_fader_tee
+            // Chain: convert → caps → gain → hpf → gate → comp → eq → pre_fader_tee
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
                 ElementPadRef::pad(&caps_id, "sink"),
@@ -726,6 +741,10 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::pad(&gain_id, "src"),
+                ElementPadRef::pad(&hpf_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&hpf_id, "src"),
                 ElementPadRef::pad(&gate_id, "sink"),
             ));
             internal_links.push((
@@ -763,9 +782,14 @@ impl BlockBuilder for MixerBuilder {
                 ElementPadRef::pad(&routing_tee_id, "sink"),
             ));
 
-            // PFL path: pre_fader_tee → pfl_volume → pfl_queue → pfl_mixer
+            // Solo path: PFL (pre-fader) or AFL (post-fader) based on solo_mode
+            let solo_source_tee_id = if solo_mode_afl {
+                &post_fader_tee_id
+            } else {
+                &pre_fader_tee_id
+            };
             internal_links.push((
-                ElementPadRef::element(&pre_fader_tee_id), // Request pad from tee
+                ElementPadRef::element(solo_source_tee_id),
                 ElementPadRef::pad(&pfl_volume_id, "sink"),
             ));
             internal_links.push((
@@ -1030,6 +1054,47 @@ fn make_limiter_element(
         .map_err(|e| BlockBuildError::ElementCreation(format!("limiter fallback {}: {}", name, e)))
 }
 
+/// Create a high-pass filter element. Uses audiocheblimit from gst-plugins-good,
+/// falls back to identity passthrough if unavailable.
+fn make_hpf_element(
+    name: &str,
+    enabled: bool,
+    cutoff_hz: f64,
+) -> Result<gst::Element, BlockBuildError> {
+    if let Ok(hpf) = gst::ElementFactory::make("audiocheblimit")
+        .name(name)
+        .build()
+    {
+        // mode: 0=low-pass, 1=high-pass
+        hpf.set_property("mode", 1i32);
+        hpf.set_property("cutoff", cutoff_hz as f32);
+        hpf.set_property("poles", 4i32); // 24dB/oct slope
+        if !enabled {
+            // Bypass by setting cutoff to minimum
+            hpf.set_property("cutoff", 1.0f32);
+        }
+        return Ok(hpf);
+    }
+    // Try audiowsinclimit as alternative
+    if let Ok(hpf) = gst::ElementFactory::make("audiowsinclimit")
+        .name(name)
+        .build()
+    {
+        hpf.set_property("mode", 1i32); // high-pass
+        hpf.set_property("cutoff", cutoff_hz as f32);
+        if !enabled {
+            hpf.set_property("cutoff", 1.0f32);
+        }
+        return Ok(hpf);
+    }
+    warn!("No HPF plugin available for {}, using passthrough", name);
+    gst::ElementFactory::make("identity")
+        .name(name)
+        .property("silent", true)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("hpf fallback {}: {}", name, e)))
+}
+
 // ============================================================================
 // Property parsing helpers
 // ============================================================================
@@ -1094,6 +1159,21 @@ fn get_bool_prop(properties: &HashMap<String, PropertyValue>, name: &str, defaul
         .get(name)
         .and_then(|v| match v {
             PropertyValue::Bool(b) => Some(*b),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+/// Get a string property with default.
+fn get_string_prop<'a>(
+    properties: &'a HashMap<String, PropertyValue>,
+    name: &str,
+    default: &'a str,
+) -> &'a str {
+    properties
+        .get(name)
+        .and_then(|v| match v {
+            PropertyValue::String(s) => Some(s.as_str()),
             _ => None,
         })
         .unwrap_or(default)
@@ -1428,12 +1508,36 @@ fn mixer_definition() -> BlockDefinition {
         ExposedProperty {
             name: "pfl_level".to_string(),
             label: "PFL Level".to_string(),
-            description: "PFL bus master level (0.0 to 2.0)".to_string(),
+            description: "PFL/AFL bus master level (0.0 to 2.0)".to_string(),
             property_type: PropertyType::Float,
             default_value: Some(PropertyValue::Float(1.0)),
             mapping: PropertyMapping {
                 element_id: "pfl_master_vol".to_string(),
                 property_name: "volume".to_string(),
+                transform: None,
+            },
+        },
+        // Solo mode (PFL or AFL)
+        ExposedProperty {
+            name: "solo_mode".to_string(),
+            label: "Solo Mode".to_string(),
+            description: "Solo listen mode: PFL (pre-fader) or AFL (after-fader)".to_string(),
+            property_type: PropertyType::Enum {
+                values: vec![
+                    EnumValue {
+                        value: "pfl".to_string(),
+                        label: Some("PFL".to_string()),
+                    },
+                    EnumValue {
+                        value: "afl".to_string(),
+                        label: Some("AFL".to_string()),
+                    },
+                ],
+            },
+            default_value: Some(PropertyValue::String("pfl".to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "solo_mode".to_string(),
                 transform: None,
             },
         },
@@ -1797,6 +1901,38 @@ fn mixer_definition() -> BlockDefinition {
                 },
             });
         }
+
+        // ============================================================
+        // HPF properties
+        // ============================================================
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_hpf_enabled", ch),
+            label: format!("Ch {} HPF", ch),
+            description: format!("Enable high-pass filter on channel {}", ch),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: format!("hpf_{}", ch - 1),
+                property_name: "cutoff".to_string(),
+                transform: None,
+            },
+        });
+
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_hpf_freq", ch),
+            label: format!("Ch {} HPF Freq", ch),
+            description: format!(
+                "Channel {} high-pass filter cutoff frequency in Hz (20-500)",
+                ch
+            ),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(80.0)),
+            mapping: PropertyMapping {
+                element_id: format!("hpf_{}", ch - 1),
+                property_name: "cutoff".to_string(),
+                transform: None,
+            },
+        });
 
         // ============================================================
         // Gate properties
