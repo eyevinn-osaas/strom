@@ -20,42 +20,6 @@ use crate::assets::WhepAssets;
 use crate::state::AppState;
 
 // ============================================================================
-// Shared Static Assets (served from embedded files)
-// ============================================================================
-
-/// Shared CSS styles for WHEP player pages (egui-inspired dark theme)
-pub async fn whep_css() -> impl IntoResponse {
-    match WhepAssets::get("whep.css") {
-        Some(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/css")
-            .header(header::CACHE_CONTROL, "public, max-age=3600")
-            .body(Body::from(content.data))
-            .unwrap(),
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("CSS not found"))
-            .unwrap(),
-    }
-}
-
-/// Shared JavaScript for WHEP WebRTC connections
-pub async fn whep_js() -> impl IntoResponse {
-    match WhepAssets::get("whep.js") {
-        Some(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "application/javascript")
-            .header(header::CACHE_CONTROL, "public, max-age=3600")
-            .body(Body::from(content.data))
-            .unwrap(),
-        None => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("JavaScript not found"))
-            .unwrap(),
-    }
-}
-
-// ============================================================================
 // Player Pages (served from embedded HTML templates)
 // ============================================================================
 
@@ -369,6 +333,8 @@ pub async fn list_whep_streams(State(state): State<AppState>) -> axum::Json<Whep
 pub struct IceServersResponse {
     /// List of ICE server configurations (STUN/TURN)
     pub ice_servers: Vec<IceServer>,
+    /// ICE transport policy ("all" or "relay")
+    pub ice_transport_policy: String,
 }
 
 /// ICE server configuration for WebRTC.
@@ -474,7 +440,10 @@ pub async fn get_ice_servers(State(state): State<AppState>) -> axum::Json<IceSer
         .map(|url| parse_ice_server(url))
         .collect();
 
-    axum::Json(IceServersResponse { ice_servers })
+    axum::Json(IceServersResponse {
+        ice_servers,
+        ice_transport_policy: state.ice_transport_policy().to_string(),
+    })
 }
 
 #[cfg(test)]

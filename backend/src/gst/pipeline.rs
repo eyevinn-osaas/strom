@@ -3,6 +3,7 @@
 use crate::blocks::BlockRegistry;
 use crate::events::EventBroadcaster;
 use crate::gst::thread_priority::{self, ThreadPriorityState};
+use crate::whip_registry::WhipRegistry;
 use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
@@ -186,6 +187,8 @@ pub struct PipelineManager {
     dynamic_pad_tees: std::sync::Arc<std::sync::RwLock<HashMap<String, HashMap<String, String>>>>,
     /// WHEP endpoints registered by blocks
     whep_endpoints: Vec<crate::blocks::WhepEndpointInfo>,
+    /// WHIP endpoints registered by blocks
+    whip_endpoints: Vec<crate::blocks::WhipEndpointInfo>,
     /// Dynamically created webrtcbins (from webrtcsink/whepserversink consumer-added callbacks).
     /// Maps block_id to list of (consumer_id, webrtcbin) pairs.
     dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore,
@@ -198,6 +201,8 @@ impl PipelineManager {
         events: EventBroadcaster,
         _block_registry: &BlockRegistry,
         ice_servers: Vec<String>,
+        ice_transport_policy: String,
+        whip_registry: Option<WhipRegistry>,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
         info!(
@@ -237,6 +242,7 @@ impl PipelineManager {
             ptp_stats_callback: None,
             dynamic_pad_tees: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
             whep_endpoints: Vec::new(),
+            whip_endpoints: Vec::new(),
             dynamic_webrtcbins: Arc::clone(&dynamic_webrtcbins),
         };
 
@@ -252,7 +258,9 @@ impl PipelineManager {
                     &flow.links,
                     &flow_id,
                     ice_servers,
+                    ice_transport_policy,
                     dynamic_webrtcbins,
+                    whip_registry,
                 )
                 .await;
                 info!("expand_blocks completed");
@@ -327,6 +335,15 @@ impl PipelineManager {
             );
         }
         manager.whep_endpoints = expanded.whep_endpoints;
+
+        // Store WHIP endpoints from blocks
+        if !expanded.whip_endpoints.is_empty() {
+            info!(
+                "Storing {} WHIP endpoint(s) from blocks",
+                expanded.whip_endpoints.len()
+            );
+        }
+        manager.whip_endpoints = expanded.whip_endpoints;
 
         // Analyze links and auto-insert tee elements where needed
         let all_links = expanded.links;
@@ -453,6 +470,28 @@ impl PipelineManager {
 
             match msg.view() {
                 MessageView::Error(err) => {
+                    // Drop errors from whipserversrc internals (nicesrc, dtlssrtpdec, etc).
+                    // When a WHIP client disconnects, these elements post errors that would
+                    // otherwise transition the pipeline to ERROR state, preventing reconnection.
+                    let is_whipsrc_internal = err.src().is_some_and(|s| {
+                        let mut parent = s.parent();
+                        while let Some(p) = parent {
+                            if p.name().as_str().contains("whipserversrc") {
+                                return true;
+                            }
+                            parent = p.parent();
+                        }
+                        false
+                    });
+                    if is_whipsrc_internal {
+                        let source = err.src().map(|s| s.name().to_string());
+                        warn!(
+                            "WHIP client error in flow '{}' (ignored): source={:?}",
+                            flow_name, source
+                        );
+                        return;
+                    }
+
                     let error_msg = err.error().to_string();
                     let debug_info = err.debug();
                     let source = err.src().map(|s| s.name().to_string());
@@ -1909,9 +1948,16 @@ impl PipelineManager {
     pub fn stop(&mut self) -> Result<PipelineState, PipelineError> {
         info!("Stopping pipeline: {}", self.flow_name);
 
-        self.pipeline
-            .set_state(gst::State::Null)
+        // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
+        // from within a runtime" panics. Some GStreamer elements (e.g. whipserversrc)
+        // internally call block_on() during state transitions, which is incompatible
+        // with being called from within a tokio runtime context.
+        let pipeline = self.pipeline.clone();
+        let result = std::thread::spawn(move || pipeline.set_state(gst::State::Null))
+            .join()
+            .map_err(|_| PipelineError::StateChange("set_state thread panicked".to_string()))?
             .map_err(|e| PipelineError::StateChange(format!("Failed to stop: {}", e)))?;
+        let _ = result;
 
         // Remove bus watch when stopped to free resources
         self.remove_bus_watch();
@@ -2079,6 +2125,11 @@ impl PipelineManager {
     /// Get WHEP endpoints registered by blocks in this pipeline.
     pub fn whep_endpoints(&self) -> &[crate::blocks::WhepEndpointInfo] {
         &self.whep_endpoints
+    }
+
+    /// Get WHIP endpoints registered by blocks in this pipeline.
+    pub fn whip_endpoints(&self) -> &[crate::blocks::WhipEndpointInfo] {
+        &self.whip_endpoints
     }
 
     /// Generate a DOT graph of the pipeline for debugging.
@@ -3776,7 +3827,11 @@ impl PipelineManager {
 impl Drop for PipelineManager {
     fn drop(&mut self) {
         debug!("Dropping pipeline for flow: {}", self.flow_name);
-        let _ = self.pipeline.set_state(gst::State::Null);
+        // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
+        // from within a runtime" panics when GStreamer elements (e.g. whipserversrc)
+        // internally call block_on() during cleanup.
+        let pipeline = self.pipeline.clone();
+        let _ = std::thread::spawn(move || pipeline.set_state(gst::State::Null)).join();
         self.stop_qos_broadcast_task();
     }
 }
@@ -3820,7 +3875,14 @@ mod tests {
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry, default_test_ice_servers());
+        let manager = PipelineManager::new(
+            &flow,
+            events,
+            &registry,
+            default_test_ice_servers(),
+            "all".to_string(),
+            None,
+        );
         assert!(manager.is_ok());
     }
 
@@ -3830,8 +3892,15 @@ mod tests {
         let flow = create_test_flow();
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let mut manager =
-            PipelineManager::new(&flow, events, &registry, default_test_ice_servers()).unwrap();
+        let mut manager = PipelineManager::new(
+            &flow,
+            events,
+            &registry,
+            default_test_ice_servers(),
+            "all".to_string(),
+            None,
+        )
+        .unwrap();
 
         // Start pipeline
         let state = manager.start();
@@ -3856,7 +3925,14 @@ mod tests {
 
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry, default_test_ice_servers());
+        let manager = PipelineManager::new(
+            &flow,
+            events,
+            &registry,
+            default_test_ice_servers(),
+            "all".to_string(),
+            None,
+        );
         assert!(manager.is_err());
     }
 
@@ -3902,7 +3978,14 @@ mod tests {
 
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager = PipelineManager::new(&flow, events, &registry, default_test_ice_servers());
+        let manager = PipelineManager::new(
+            &flow,
+            events,
+            &registry,
+            default_test_ice_servers(),
+            "all".to_string(),
+            None,
+        );
         assert!(manager.is_ok());
 
         let manager = manager.unwrap();
@@ -3920,8 +4003,15 @@ mod tests {
 
         let events = EventBroadcaster::default();
         let registry = BlockRegistry::new("test_blocks.json");
-        let manager =
-            PipelineManager::new(&flow, events, &registry, default_test_ice_servers()).unwrap();
+        let manager = PipelineManager::new(
+            &flow,
+            events,
+            &registry,
+            default_test_ice_servers(),
+            "all".to_string(),
+            None,
+        )
+        .unwrap();
 
         // Should have only 2 original elements, no tee
         assert_eq!(manager.elements.len(), 2);

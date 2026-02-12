@@ -1,0 +1,163 @@
+/* WHIP Ingest - page-specific styles (shared styles in webrtc.css) */
+
+/* Media settings (two-row layout) */
+.media-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+
+.media-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.media-settings label {
+    display: inline;
+    margin: 0;
+    color: #888;
+}
+
+.media-settings select {
+    width: auto;
+    padding: 4px 8px;
+}
+
+/* Camera flip button (mobile) */
+.flip-btn {
+    padding: 4px 10px;
+    font-size: 16px;
+    line-height: 1;
+    background: #2a2a2a;
+    border: 1px solid #3d3d3d;
+    color: #e0e0e0;
+    border-radius: 4px;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.flip-btn:hover {
+    background: #3a3a3a;
+}
+
+.flip-btn:active {
+    background: #4a4a4a;
+}
+
+/* Media toggle button (mute/video-off) */
+.media-toggle {
+    padding: 4px 10px;
+    font-size: 13px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid #555;
+    background: #333;
+    color: #888;
+    min-width: 70px;
+    text-align: center;
+    white-space: nowrap;
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.media-toggle.active {
+    background: #2a3a4a;
+    color: #ccc;
+    border-color: #5a7a9a;
+    text-decoration: none;
+    opacity: 1;
+}
+
+.media-toggle:hover {
+    filter: brightness(1.15);
+}
+
+/* Audio level meter */
+.audio-meter {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    height: 20px;
+}
+
+.meter-bar {
+    width: 100px;
+    height: 6px;
+    background: #1b1b1b;
+    border: 1px solid #3d3d3d;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.meter-fill {
+    height: 100%;
+    background: #5a8a5a;
+    width: 0%;
+}
+
+/* Video preview */
+.video-container {
+    margin-bottom: 12px;
+    max-width: 50%;
+}
+
+/* Stats panel */
+.stats-panel {
+    display: none;
+    margin-bottom: 16px;
+}
+
+.stats-panel.active {
+    display: block;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 6px;
+}
+
+.stat {
+    background: #1b1b1b;
+    border: 1px solid #3d3d3d;
+    border-radius: 2px;
+    padding: 8px 10px;
+}
+
+.stat-label {
+    color: #666;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.stat-value {
+    color: #e0e0e0;
+    font-size: 15px;
+    font-weight: bold;
+}
+
+.stat-value.warn {
+    color: #cc9966;
+}
+
+.stat-value.bad {
+    color: #cc7777;
+}
+
+/* Status bar margin */
+.status {
+    margin-bottom: 16px;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+
+    .stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}

@@ -3,7 +3,6 @@
 //! This module exposes the application builder for use in tests.
 
 use axum::extract::DefaultBodyLimit;
-#[cfg(not(debug_assertions))]
 use axum::http::HeaderValue;
 use axum::http::{header, HeaderName, Method};
 use axum::{
@@ -12,9 +11,7 @@ use axum::{
     Extension, Router,
 };
 use std::sync::Arc;
-#[cfg(debug_assertions)]
-use tower_http::cors::Any;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -42,8 +39,10 @@ pub mod stats;
 pub mod storage;
 pub mod system_monitor;
 pub mod thread_registry;
+pub mod tls;
 pub mod version;
 pub mod whep_registry;
+pub mod whip_registry;
 
 use state::AppState;
 
@@ -63,6 +62,18 @@ pub async fn create_app_with_state(state: AppState) -> Router {
 pub async fn create_app_with_state_and_auth(
     state: AppState,
     auth_config: auth::AuthConfig,
+) -> Router {
+    create_app_with_config(state, auth_config, Vec::new()).await
+}
+
+/// Create the Axum application router with a given state, auth configuration, and CORS origins.
+///
+/// If `cors_allowed_origins` is empty, any origin is allowed.
+/// Otherwise, only the specified origins are allowed.
+pub async fn create_app_with_config(
+    state: AppState,
+    auth_config: auth::AuthConfig,
+    cors_allowed_origins: Vec<String>,
 ) -> Router {
     // Note: GStreamer is already initialized in main.rs before this is called.
     // DO NOT call gst::init() here - it can corrupt internal state if pipelines
@@ -85,7 +96,8 @@ pub async fn create_app_with_state_and_auth(
     // Create session store (in-memory, sessions lost on restart)
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_expiry(Expiry::OnInactivity(Duration::hours(24)));
+        .with_expiry(Expiry::OnInactivity(Duration::hours(24)))
+        .with_secure(false);
 
     // Build protected API router (requires authentication)
     let protected_api_router = Router::new()
@@ -249,6 +261,13 @@ pub async fn create_app_with_state_and_auth(
         .route("/auth/status", get(auth::auth_status_handler))
         // WHEP streams list API (JSON)
         .route("/whep-streams", get(api::whep_player::list_whep_streams))
+        // WHIP endpoints list API (JSON)
+        .route(
+            "/whip-endpoints",
+            get(api::whip_ingest::list_whip_endpoints),
+        )
+        // Client-side log relay (WHIP/WHEP browser pages)
+        .route("/client-log", post(api::whip_ingest::client_log))
         // ICE servers for WebRTC connections
         .route("/ice-servers", get(api::whep_player::get_ice_servers))
         // MCP Streamable HTTP endpoint (has its own session management)
@@ -256,10 +275,12 @@ pub async fn create_app_with_state_and_auth(
         .route("/mcp", get(api::mcp::mcp_get))
         .route("/mcp", delete(api::mcp::mcp_delete));
 
-    // WHEP player pages (HTML) - outside /api
+    // Player/ingest pages (HTML) - outside /api
     let player_router = Router::new()
         .route("/whep", get(api::whep_player::whep_player))
-        .route("/whep-streams", get(api::whep_player::whep_streams_page));
+        .route("/whep-streams", get(api::whep_player::whep_streams_page))
+        .route("/whip-ingest", get(api::whip_ingest::whip_ingest_page))
+        .with_state(state.clone());
 
     // WHEP proxy routes - outside /api (acts as WHEP server endpoint)
     let whep_router = Router::new()
@@ -285,10 +306,67 @@ pub async fn create_app_with_state_and_auth(
         )
         .with_state(state.clone());
 
-    // Static assets for WHEP player
+    // WHIP proxy routes - outside /api (acts as WHIP server endpoint)
+    let whip_router = Router::new()
+        .route("/{endpoint_id}", post(api::whip_ingest::whip_post))
+        .route(
+            "/{endpoint_id}",
+            axum::routing::options(api::whip_ingest::whip_options),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            delete(api::whip_ingest::whip_resource_delete),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            patch(api::whip_ingest::whip_resource_patch),
+        )
+        .route(
+            "/{endpoint_id}/resource/{resource_id}",
+            axum::routing::options(api::whip_ingest::whip_resource_options),
+        )
+        .with_state(state.clone());
+
+    // Static assets for WHEP player and WHIP ingest
     let static_router = Router::new()
-        .route("/whep.css", get(api::whep_player::whep_css))
-        .route("/whep.js", get(api::whep_player::whep_js));
+        .route(
+            "/webrtc.css",
+            get(|| async {
+                serve_embedded_asset::<assets::WebrtcAssets>("webrtc.css", "text/css")
+            }),
+        )
+        .route(
+            "/webrtc.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WebrtcAssets>("webrtc.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/devices.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WebrtcAssets>("devices.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/whep.css",
+            get(|| async { serve_embedded_asset::<assets::WhepAssets>("whep.css", "text/css") }),
+        )
+        .route(
+            "/whep.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WhepAssets>("whep.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/whip.js",
+            get(|| async {
+                serve_embedded_asset::<assets::WhipAssets>("whip.js", "application/javascript")
+            }),
+        )
+        .route(
+            "/whip.css",
+            get(|| async { serve_embedded_asset::<assets::WhipAssets>("whip.css", "text/css") }),
+        );
 
     // Create MCP session manager
     let mcp_sessions = mcp::McpSessionManager::new();
@@ -309,6 +387,7 @@ pub async fn create_app_with_state_and_auth(
         .nest("/api", api_router)
         .nest("/player", player_router)
         .nest("/whep", whep_router)
+        .nest("/whip", whip_router)
         .nest("/static", static_router)
         .layer(session_layer)
         .layer({
@@ -330,17 +409,17 @@ pub async fn create_app_with_state_and_auth(
                 ])
                 .expose_headers([HeaderName::from_static("mcp-session-id")]);
 
-            // Debug builds: allow any origin for trunk serve and mobile testing
-            #[cfg(debug_assertions)]
-            let cors = cors.allow_origin(Any);
-
-            // Release builds: restrict to same origin
-            #[cfg(not(debug_assertions))]
-            let cors = cors
-                .allow_origin("http://localhost:8080".parse::<HeaderValue>().unwrap())
-                .allow_credentials(true);
-
-            cors
+            // If no origins specified, allow any origin
+            // Otherwise, restrict to the specified origins
+            if cors_allowed_origins.is_empty() {
+                cors.allow_origin(Any)
+            } else {
+                let origins: Vec<HeaderValue> = cors_allowed_origins
+                    .iter()
+                    .filter_map(|o| o.parse::<HeaderValue>().ok())
+                    .collect();
+                cors.allow_origin(origins).allow_credentials(true)
+            }
         })
         .with_state(state)
         // Serve embedded frontend for all other routes
@@ -350,4 +429,23 @@ pub async fn create_app_with_state_and_auth(
 /// Health check endpoint.
 async fn health() -> &'static str {
     "OK"
+}
+
+/// Serve an embedded static asset with the given content type.
+fn serve_embedded_asset<T: rust_embed::RustEmbed>(
+    file: &str,
+    content_type: &str,
+) -> axum::response::Response {
+    match T::get(file) {
+        Some(content) => axum::response::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, content_type)
+            .header(axum::http::header::CACHE_CONTROL, "no-cache")
+            .body(axum::body::Body::from(content.data))
+            .unwrap(),
+        None => axum::response::Response::builder()
+            .status(axum::http::StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("Not found"))
+            .unwrap(),
+    }
 }

@@ -28,10 +28,25 @@ struct ServerConfig {
     port: u16,
     #[serde(default = "default_ice_servers")]
     ice_servers: Vec<String>,
+    #[serde(default = "default_ice_transport_policy")]
+    ice_transport_policy: String,
+    /// CORS allowed origins. If empty, allows any origin.
+    #[serde(default)]
+    cors_allowed_origins: Vec<String>,
+    /// Path to TLS certificate file (PEM format).
+    #[serde(default)]
+    tls_cert: Option<PathBuf>,
+    /// Path to TLS private key file (PEM format).
+    #[serde(default)]
+    tls_key: Option<PathBuf>,
 }
 
 fn default_ice_servers() -> Vec<String> {
     vec!["stun:stun.l.google.com:19302".to_string()]
+}
+
+fn default_ice_transport_policy() -> String {
+    "all".to_string()
 }
 
 /// Normalize an ICE server URL to RFC 7064/7065 format.
@@ -122,9 +137,19 @@ pub struct Config {
     /// ICE servers for WebRTC NAT traversal (STUN/TURN)
     /// Format: stun:host:port or turn:user:pass@host:port
     pub ice_servers: Vec<String>,
+    /// ICE transport policy for WebRTC connections
+    /// "all" (default) = use all candidate types (host, srflx, relay)
+    /// "relay" = only use TURN relay candidates
+    pub ice_transport_policy: String,
     /// SAP multicast addresses to listen on and announce to.
     /// Default: ["239.255.255.255", "224.2.127.254"] (AES67 + global scope)
     pub sap_multicast_addresses: Vec<String>,
+    /// CORS allowed origins. If empty, allows any origin.
+    pub cors_allowed_origins: Vec<String>,
+    /// Path to TLS certificate file (PEM format). Enables HTTPS when paired with tls_key.
+    pub tls_cert: Option<PathBuf>,
+    /// Path to TLS private key file (PEM format). Enables HTTPS when paired with tls_cert.
+    pub tls_key: Option<PathBuf>,
 }
 
 impl Config {
@@ -134,6 +159,7 @@ impl Config {
     /// Config files are searched in this order:
     /// 1. `.strom.toml` in current directory
     /// 2. `config.toml` in user config directory (~/.config/strom/ on Linux)
+    #[allow(clippy::too_many_arguments)]
     pub fn from_figment(
         port: Option<u16>,
         data_dir: Option<PathBuf>,
@@ -141,6 +167,8 @@ impl Config {
         blocks_path: Option<PathBuf>,
         media_path: Option<PathBuf>,
         database_url: Option<String>,
+        tls_cert: Option<PathBuf>,
+        tls_key: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         // Find config file paths
         let local_config = std::env::current_dir().ok().map(|d| d.join(".strom.toml"));
@@ -155,6 +183,10 @@ impl Config {
             server: ServerConfig {
                 port: strom_types::DEFAULT_PORT,
                 ice_servers: default_ice_servers(),
+                ice_transport_policy: default_ice_transport_policy(),
+                cors_allowed_origins: Vec::new(),
+                tls_cert: None,
+                tls_key: None,
             },
             storage: StorageConfig::default(),
             logging: LoggingConfig::default(),
@@ -199,7 +231,22 @@ impl Config {
             }
         }
 
+        // 4c. Handle STROM_TLS_CERT / STROM_TLS_KEY specially
+        // (underscore in field name breaks the split("_") env mapping)
+        if let Ok(cert) = env::var("STROM_TLS_CERT") {
+            figment = figment.merge(Serialized::default("server.tls_cert", PathBuf::from(cert)));
+        }
+        if let Ok(key) = env::var("STROM_TLS_KEY") {
+            figment = figment.merge(Serialized::default("server.tls_key", PathBuf::from(key)));
+        }
+
         // 5. Merge CLI arguments (highest priority)
+        if let Some(ref cert) = tls_cert {
+            figment = figment.merge(Serialized::default("server.tls_cert", cert));
+        }
+        if let Some(ref key) = tls_key {
+            figment = figment.merge(Serialized::default("server.tls_key", key));
+        }
         if let Some(p) = port {
             figment = figment.merge(Serialized::default("server.port", p));
         }
@@ -240,8 +287,23 @@ impl Config {
             log_file: config_file.logging.log_file,
             log_level: config_file.logging.log_level,
             ice_servers: normalize_ice_servers(config_file.server.ice_servers),
+            ice_transport_policy: config_file.server.ice_transport_policy,
             sap_multicast_addresses: config_file.discovery.sap_multicast_addresses,
+            cors_allowed_origins: config_file.server.cors_allowed_origins,
+            tls_cert: config_file.server.tls_cert,
+            tls_key: config_file.server.tls_key,
         })
+    }
+
+    /// Returns TLS config paths if both cert and key are provided.
+    /// Returns error if only one of cert/key is set.
+    pub fn tls_paths(&self) -> anyhow::Result<Option<(&PathBuf, &PathBuf)>> {
+        match (&self.tls_cert, &self.tls_key) {
+            (Some(cert), Some(key)) => Ok(Some((cert, key))),
+            (None, None) => Ok(None),
+            (Some(_), None) => anyhow::bail!("--tls-cert provided but --tls-key is missing"),
+            (None, Some(_)) => anyhow::bail!("--tls-key provided but --tls-cert is missing"),
+        }
     }
 
     /// Create configuration from explicit values.
@@ -273,7 +335,11 @@ impl Config {
             log_file: None,
             log_level: None,
             ice_servers: default_ice_servers(),
+            ice_transport_policy: default_ice_transport_policy(),
             sap_multicast_addresses: default_sap_multicast_addresses(),
+            cors_allowed_origins: Vec::new(),
+            tls_cert: None,
+            tls_key: None,
         })
     }
 
@@ -318,7 +384,11 @@ impl Default for Config {
                 log_file: None,
                 log_level: None,
                 ice_servers: default_ice_servers(),
+                ice_transport_policy: default_ice_transport_policy(),
                 sap_multicast_addresses: default_sap_multicast_addresses(),
+                cors_allowed_origins: Vec::new(),
+                tls_cert: None,
+                tls_key: None,
             }
         })
     }
@@ -345,7 +415,7 @@ mod tests {
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None, None, None).unwrap();
 
         // Restore (ignore errors)
         let _ = std::env::set_current_dir(original_dir);
@@ -367,6 +437,8 @@ mod tests {
             Some(blocks.clone()),
             None,
             Some("postgresql://test".to_string()),
+            None,
+            None,
         )
         .unwrap();
 
@@ -400,7 +472,7 @@ database_url = "postgresql://localhost/test"
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None, None, None).unwrap();
 
         // Restore original directory (ignore errors if it fails)
         let _ = std::env::set_current_dir(original_dir);
@@ -431,7 +503,7 @@ database_url = "postgresql://localhost/test"
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None, None, None).unwrap();
 
         // Restore (restore dir before temp_dir is dropped, ignore errors)
         let _ = std::env::set_current_dir(&original_dir);
@@ -467,7 +539,8 @@ database_url = "postgresql://localhost/test"
         std::env::set_current_dir(&temp_dir).unwrap();
 
         // Pass CLI arg 9999
-        let config = Config::from_figment(Some(9999), None, None, None, None, None).unwrap();
+        let config =
+            Config::from_figment(Some(9999), None, None, None, None, None, None, None).unwrap();
 
         // Restore (restore dir before temp_dir is dropped, ignore errors)
         let _ = std::env::set_current_dir(&original_dir);
@@ -513,7 +586,7 @@ data_dir = "{}"
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&temp_dir).unwrap();
 
-        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None, None, None).unwrap();
 
         // Restore (ignore errors)
         let _ = std::env::set_current_dir(original_dir);
@@ -538,7 +611,7 @@ data_dir = "{}"
             "stun:stun.example.com:3478,turn:user:pass@turn.example.com:3478",
         );
 
-        let config = Config::from_figment(None, None, None, None, None, None).unwrap();
+        let config = Config::from_figment(None, None, None, None, None, None, None, None).unwrap();
 
         // Restore
         let _ = std::env::set_current_dir(&original_dir);

@@ -540,6 +540,9 @@ pub struct StromApp {
     /// Port number for backend connection (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     port: u16,
+    /// Whether the backend is using TLS (native mode only)
+    #[cfg(not(target_arch = "wasm32"))]
+    tls_enabled: bool,
     /// Auth token for native GUI authentication
     #[cfg(not(target_arch = "wasm32"))]
     auth_token: Option<String>,
@@ -710,9 +713,10 @@ impl StromApp {
 
     /// Create a new application instance for native mode.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn new(cc: &eframe::CreationContext<'_>, port: u16) -> Self {
-        let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, None, port, None)
+    pub fn new(cc: &eframe::CreationContext<'_>, port: u16, tls_enabled: bool) -> Self {
+        let scheme = if tls_enabled { "https" } else { "http" };
+        let api_base_url = format!("{}://localhost:{}/api", scheme, port);
+        Self::new_internal(cc, api_base_url, None, port, tls_enabled, None)
     }
 
     /// Internal constructor shared by all creation methods (WASM version).
@@ -855,6 +859,7 @@ impl StromApp {
         api_base_url: String,
         shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         port: u16,
+        tls_enabled: bool,
         auth_token: Option<String>,
     ) -> Self {
         // Install image loaders for egui (required for Image::from_bytes)
@@ -892,6 +897,7 @@ impl StromApp {
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             shutdown_flag,
             port,
+            tls_enabled,
             auth_token,
             meter_data: MeterDataStore::new(),
             latency_data: LatencyDataStore::new(),
@@ -977,10 +983,19 @@ impl StromApp {
     pub fn new_with_shutdown(
         cc: &eframe::CreationContext<'_>,
         port: u16,
+        tls_enabled: bool,
         shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
-        let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port, None)
+        let scheme = if tls_enabled { "https" } else { "http" };
+        let api_base_url = format!("{}://localhost:{}/api", scheme, port);
+        Self::new_internal(
+            cc,
+            api_base_url,
+            Some(shutdown_flag),
+            port,
+            tls_enabled,
+            None,
+        )
     }
 
     /// Create a new application instance with shutdown handler and auth token (native mode only).
@@ -988,11 +1003,20 @@ impl StromApp {
     pub fn new_with_shutdown_and_auth(
         cc: &eframe::CreationContext<'_>,
         port: u16,
+        tls_enabled: bool,
         shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
         auth_token: Option<String>,
     ) -> Self {
-        let api_base_url = format!("http://localhost:{}/api", port);
-        Self::new_internal(cc, api_base_url, Some(shutdown_flag), port, auth_token)
+        let scheme = if tls_enabled { "https" } else { "http" };
+        let api_base_url = format!("{}://localhost:{}/api", scheme, port);
+        Self::new_internal(
+            cc,
+            api_base_url,
+            Some(shutdown_flag),
+            port,
+            tls_enabled,
+            auth_token,
+        )
     }
 
     /// Apply the current theme preference to the UI context.
@@ -1048,7 +1072,10 @@ impl StromApp {
         };
 
         #[cfg(not(target_arch = "wasm32"))]
-        let ws_url = format!("ws://localhost:{}/api/ws", self.port);
+        let ws_url = {
+            let scheme = if self.tls_enabled { "wss" } else { "ws" };
+            format!("{}://localhost:{}/api/ws", scheme, self.port)
+        };
 
         tracing::info!("Connecting WebSocket to: {}", ws_url);
 
@@ -1314,7 +1341,10 @@ impl StromApp {
                 f.blocks.iter().any(|b| {
                     matches!(
                         b.block_definition_id.as_str(),
-                        "builtin.whep_input" | "builtin.whep_output" | "builtin.whip_output"
+                        "builtin.whep_input"
+                            | "builtin.whep_output"
+                            | "builtin.whip_output"
+                            | "builtin.whip_input"
                     )
                 })
             })
@@ -1331,14 +1361,12 @@ impl StromApp {
         spawn_task(async move {
             match api.get_webrtc_stats(flow_id).await {
                 Ok(stats) => {
-                    if !stats.connections.is_empty() {
-                        tracing::debug!(
-                            "Fetched WebRTC stats for flow {}: {} connections",
-                            flow_id,
-                            stats.connections.len()
-                        );
-                        let _ = tx.send(AppMessage::WebRtcStatsLoaded { flow_id, stats });
-                    }
+                    tracing::debug!(
+                        "Fetched WebRTC stats for flow {}: {} connections",
+                        flow_id,
+                        stats.connections.len()
+                    );
+                    let _ = tx.send(AppMessage::WebRtcStatsLoaded { flow_id, stats });
                 }
                 Err(e) => {
                     // Don't log errors for flows without WebRTC elements
@@ -2498,7 +2526,8 @@ impl StromApp {
                             .on_hover_text("Open the web interface in your browser")
                             .clicked()
                         {
-                            let url = format!("http://localhost:{}", self.port);
+                            let scheme = if self.tls_enabled { "https" } else { "http" };
+                            let url = format!("{}://localhost:{}", scheme, self.port);
                             ctx.open_url(egui::OpenUrl::new_tab(&url));
                         }
                     }
@@ -3743,6 +3772,19 @@ impl StromApp {
                             crate::clipboard::copy_text_with_ctx(ctx, &player_url);
                             self.status = "Player URL copied to clipboard".to_string();
                         }
+
+                        // Handle WHIP ingest request (for WHIP Input)
+                        if let Some(endpoint_id) = result.whip_ingest_url {
+                            let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
+                            ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
+                        }
+
+                        // Handle copy WHIP ingest URL to clipboard
+                        if let Some(endpoint_id) = result.copy_whip_url_requested {
+                            let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
+                            crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
+                            self.status = "Ingest URL copied to clipboard".to_string();
+                        }
                     } else {
                         ui.label("Block definition not found");
                     }
@@ -3890,6 +3932,7 @@ impl StromApp {
                             b.block_definition_id == "builtin.whep_input"
                                 || b.block_definition_id == "builtin.whep_output"
                                 || b.block_definition_id == "builtin.whip_output"
+                                || b.block_definition_id == "builtin.whip_input"
                         })
                         .map(|b| b.id.clone())
                         .collect();
@@ -5780,15 +5823,17 @@ impl eframe::App for StromApp {
                         }
                         StromEvent::FlowDeleted { flow_id } => {
                             tracing::info!("Flow deleted, triggering full refresh");
-                            // Clear QoS stats and start time for deleted flow
+                            // Clear QoS stats, WebRTC stats and start time for deleted flow
                             self.qos_stats.clear_flow(&flow_id);
+                            self.webrtc_stats.clear_flow(&flow_id);
                             self.flow_start_times.remove(&flow_id);
                             self.needs_refresh = true;
                         }
                         StromEvent::FlowStopped { flow_id } => {
                             tracing::info!("Flow {} stopped, clearing QoS stats", flow_id);
-                            // Clear QoS stats and start time when flow is stopped
+                            // Clear QoS stats, WebRTC stats and start time when flow is stopped
                             self.qos_stats.clear_flow(&flow_id);
+                            self.webrtc_stats.clear_flow(&flow_id);
                             // Refresh available channels (channels may have been removed)
                             self.refresh_available_channels();
                             self.flow_start_times.remove(&flow_id);
@@ -6593,6 +6638,8 @@ impl eframe::App for StromApp {
             let poll_interval = std::time::Duration::from_secs(1);
             if self.last_webrtc_poll.elapsed() >= poll_interval {
                 self.poll_webrtc_stats(ctx);
+                self.webrtc_stats
+                    .evict_stale(std::time::Duration::from_secs(3));
                 self.last_webrtc_poll = instant::Instant::now();
             }
         }
@@ -6700,6 +6747,43 @@ impl eframe::App for StromApp {
                     if let Some(endpoint_id) = endpoint_id {
                         let player_url = self.api.get_whep_player_url(&endpoint_id);
                         ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                    }
+                }
+            }
+        }
+
+        // Check for WHIP ingest open signal (double-click on WHIP Input)
+        if let Some(block_id) = get_local_storage("open_whip_ingest") {
+            remove_local_storage("open_whip_ingest");
+
+            if let Some(flow) = self.current_flow() {
+                if let Some(block) = flow.blocks.iter().find(|b| b.id == block_id) {
+                    // Get endpoint_id from runtime_data or properties
+                    let endpoint_id = block
+                        .runtime_data
+                        .as_ref()
+                        .and_then(|rd| rd.get("whip_endpoint_id").cloned())
+                        .or_else(|| {
+                            block.properties.get("endpoint_id").and_then(|v| {
+                                if let strom_types::PropertyValue::String(s) = v {
+                                    if !s.is_empty() {
+                                        Some(s.clone())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            })
+                        });
+
+                    if let Some(endpoint_id) = endpoint_id {
+                        let server_base = self.api.base_url().trim_end_matches("/api");
+                        let ingest_url = format!(
+                            "{}/player/whip-ingest?endpoint=/whip/{}",
+                            server_base, endpoint_id
+                        );
+                        ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
                     }
                 }
             }
