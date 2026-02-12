@@ -2,25 +2,27 @@
 //!
 //! This block provides a mixer similar to digital consoles like Behringer X32:
 //! - Configurable number of input channels (1-32)
-//! - Per-channel: gate, compressor, 4-band parametric EQ, pan, fader, mute
-//! - Aux sends (0-4 configurable aux buses)
-//! - Groups (0-4 configurable)
-//! - PFL (Pre-Fader Listen) bus
-//! - Main stereo bus with audiomixer
+//! - Per-channel: input gain, gate, compressor, 4-band parametric EQ, pan, fader, mute
+//! - Aux sends (0-4 configurable aux buses, switchable pre/post fader)
+//! - Groups (0-4 configurable, with output pads)
+//! - PFL (Pre-Fader Listen) bus with master level
+//! - Main stereo bus with compressor, EQ, limiter, and master fader
 //! - Per-channel and bus metering
 //!
 //! Pipeline structure per channel:
 //! ```text
-//! input_N → audioconvert → capsfilter(F32LE) → gate → compressor → EQ →
+//! input_N → audioconvert → capsfilter(F32LE) → gain → gate → compressor → EQ →
 //!           pre_fader_tee → audiopanorama_N → volume_N → post_fader_tee →
 //!           level_N → [group or main audiomixer]
 //!
 //! pre_fader_tee → pfl_volume_N → pfl_queue_N → pfl_mixer
-//! post_fader_tee → aux_send_N_M → aux_queue_N_M → aux_M_mixer
+//! (pre_fader_tee | post_fader_tee) → aux_send_N_M → aux_queue_N_M → aux_M_mixer
 //! ```
 //!
-//! Processing uses LSP LV2 plugins for professional-quality gate, compressor, and EQ.
-//! The audiomixer sink pads also have volume/mute properties that can be used.
+//! Main bus: audiomixer → main_comp → main_eq → main_limiter → main_volume → main_level
+//!
+//! Processing uses LSP LV2 plugins when available. Falls back to identity passthrough
+//! when LV2 plugins are not installed.
 
 use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use crate::events::EventBroadcaster;
@@ -30,7 +32,7 @@ use std::collections::HashMap;
 use strom_types::{
     block::*, element::ElementPadRef, EnumValue, FlowId, MediaType, PropertyValue, StromEvent,
 };
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 /// Maximum number of input channels
 const MAX_CHANNELS: usize = 32;
@@ -51,6 +53,7 @@ impl BlockBuilder for MixerBuilder {
     ) -> Option<ExternalPads> {
         let num_channels = parse_num_channels(properties);
         let num_aux_buses = parse_num_aux_buses(properties);
+        let num_groups = parse_num_groups(properties);
 
         // Create input pads dynamically
         let inputs = (0..num_channels)
@@ -94,6 +97,17 @@ impl BlockBuilder for MixerBuilder {
             });
         }
 
+        // Add group outputs
+        for sg in 0..num_groups {
+            outputs.push(ExternalPad {
+                name: format!("group_out_{}", sg + 1),
+                label: Some(format!("Grp{}", sg + 1)),
+                media_type: MediaType::Audio,
+                internal_element_id: format!("group{}_level", sg),
+                internal_pad_name: "src".to_string(),
+            });
+        }
+
         Some(ExternalPads { inputs, outputs })
     }
 
@@ -126,6 +140,62 @@ impl BlockBuilder for MixerBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("audiomixer: {}", e)))?;
         elements.push((mixer_id.clone(), audiomixer.clone()));
 
+        // ========================================================================
+        // Main bus processing: comp → EQ → limiter
+        // ========================================================================
+        let main_comp_enabled = get_bool_prop(properties, "main_comp_enabled", false);
+        let main_comp_threshold = get_float_prop(properties, "main_comp_threshold", -20.0);
+        let main_comp_ratio = get_float_prop(properties, "main_comp_ratio", 4.0);
+        let main_comp_attack = get_float_prop(properties, "main_comp_attack", 10.0);
+        let main_comp_release = get_float_prop(properties, "main_comp_release", 100.0);
+        let main_comp_makeup = get_float_prop(properties, "main_comp_makeup", 0.0);
+
+        let main_comp_id = format!("{}:main_comp", instance_id);
+        let main_comp = make_compressor_element(
+            &main_comp_id,
+            main_comp_enabled,
+            main_comp_threshold,
+            main_comp_ratio,
+            main_comp_attack,
+            main_comp_release,
+            main_comp_makeup,
+        )?;
+        elements.push((main_comp_id.clone(), main_comp));
+
+        let main_eq_enabled = get_bool_prop(properties, "main_eq_enabled", false);
+        let main_eq_bands = [
+            (
+                get_float_prop(properties, "main_eq1_freq", 80.0),
+                get_float_prop(properties, "main_eq1_gain", 0.0),
+                get_float_prop(properties, "main_eq1_q", 1.0),
+            ),
+            (
+                get_float_prop(properties, "main_eq2_freq", 400.0),
+                get_float_prop(properties, "main_eq2_gain", 0.0),
+                get_float_prop(properties, "main_eq2_q", 1.0),
+            ),
+            (
+                get_float_prop(properties, "main_eq3_freq", 2000.0),
+                get_float_prop(properties, "main_eq3_gain", 0.0),
+                get_float_prop(properties, "main_eq3_q", 1.0),
+            ),
+            (
+                get_float_prop(properties, "main_eq4_freq", 8000.0),
+                get_float_prop(properties, "main_eq4_gain", 0.0),
+                get_float_prop(properties, "main_eq4_q", 1.0),
+            ),
+        ];
+        let main_eq_id = format!("{}:main_eq", instance_id);
+        let main_eq = make_eq_element(&main_eq_id, main_eq_enabled, &main_eq_bands)?;
+        elements.push((main_eq_id.clone(), main_eq));
+
+        let main_limiter_enabled = get_bool_prop(properties, "main_limiter_enabled", false);
+        let main_limiter_threshold = get_float_prop(properties, "main_limiter_threshold", -0.3);
+        let main_limiter_id = format!("{}:main_limiter", instance_id);
+        let main_limiter =
+            make_limiter_element(&main_limiter_id, main_limiter_enabled, main_limiter_threshold)?;
+        elements.push((main_limiter_id.clone(), main_limiter));
+
         // Main output volume (master fader)
         let main_volume_id = format!("{}:main_volume", instance_id);
         let main_volume = gst::ElementFactory::make("volume")
@@ -154,9 +224,21 @@ impl BlockBuilder for MixerBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("main level: {}", e)))?;
         elements.push((main_level_id.clone(), main_level));
 
-        // Link: mixer → main_volume → main_level
+        // Link: mixer → main_comp → main_eq → main_limiter → main_volume → main_level
         internal_links.push((
             ElementPadRef::pad(&mixer_id, "src"),
+            ElementPadRef::pad(&main_comp_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&main_comp_id, "src"),
+            ElementPadRef::pad(&main_eq_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&main_eq_id, "src"),
+            ElementPadRef::pad(&main_limiter_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&main_limiter_id, "src"),
             ElementPadRef::pad(&main_volume_id, "sink"),
         ));
         internal_links.push((
@@ -165,7 +247,7 @@ impl BlockBuilder for MixerBuilder {
         ));
 
         // ========================================================================
-        // Create PFL (Pre-Fader Listen) bus
+        // Create PFL (Pre-Fader Listen) bus with master level
         // ========================================================================
         let pfl_mixer_id = format!("{}:pfl_mixer", instance_id);
         let pfl_mixer = gst::ElementFactory::make("audiomixer")
@@ -173,6 +255,16 @@ impl BlockBuilder for MixerBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_mixer: {}", e)))?;
         elements.push((pfl_mixer_id.clone(), pfl_mixer));
+
+        // PFL master volume
+        let pfl_master_vol_id = format!("{}:pfl_master_vol", instance_id);
+        let pfl_master_level = get_float_prop(properties, "pfl_level", 1.0);
+        let pfl_master_vol = gst::ElementFactory::make("volume")
+            .name(&pfl_master_vol_id)
+            .property("volume", pfl_master_level)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl master vol: {}", e)))?;
+        elements.push((pfl_master_vol_id.clone(), pfl_master_vol));
 
         let pfl_level_id = format!("{}:pfl_level", instance_id);
         let pfl_level = gst::ElementFactory::make("level")
@@ -183,9 +275,13 @@ impl BlockBuilder for MixerBuilder {
             .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_level: {}", e)))?;
         elements.push((pfl_level_id.clone(), pfl_level));
 
-        // Link: pfl_mixer → pfl_level
+        // Link: pfl_mixer → pfl_master_vol → pfl_level
         internal_links.push((
             ElementPadRef::pad(&pfl_mixer_id, "src"),
+            ElementPadRef::pad(&pfl_master_vol_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&pfl_master_vol_id, "src"),
             ElementPadRef::pad(&pfl_level_id, "sink"),
         ));
 
@@ -298,6 +394,8 @@ impl BlockBuilder for MixerBuilder {
             let ch_num = ch + 1; // 1-indexed for display
 
             // Get channel properties
+            let gain_db = get_float_prop(properties, &format!("ch{}_gain", ch_num), 0.0);
+
             let pan = properties
                 .get(&format!("ch{}_pan", ch_num))
                 .and_then(|v| match v {
@@ -349,106 +447,116 @@ impl BlockBuilder for MixerBuilder {
             elements.push((caps_id.clone(), capsfilter));
 
             // ----------------------------------------------------------------
-            // Gate (LSP Gate Stereo) - noise gate
+            // Input gain stage
+            // ----------------------------------------------------------------
+            let gain_id = format!("{}:gain_{}", instance_id, ch);
+            let gain_linear = db_to_linear(gain_db);
+            let gain_elem = gst::ElementFactory::make("volume")
+                .name(&gain_id)
+                .property("volume", gain_linear)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("gain ch{}: {}", ch_num, e))
+                })?;
+            elements.push((gain_id.clone(), gain_elem));
+
+            // ----------------------------------------------------------------
+            // Gate (LSP Gate Stereo with fallback)
             // ----------------------------------------------------------------
             let gate_enabled =
                 get_bool_prop(properties, &format!("ch{}_gate_enabled", ch_num), false);
             let gate_threshold =
                 get_float_prop(properties, &format!("ch{}_gate_threshold", ch_num), -40.0);
-            let gate_attack = get_float_prop(properties, &format!("ch{}_gate_attack", ch_num), 5.0);
+            let gate_attack =
+                get_float_prop(properties, &format!("ch{}_gate_attack", ch_num), 5.0);
             let gate_release =
                 get_float_prop(properties, &format!("ch{}_gate_release", ch_num), 100.0);
+            let gate_range =
+                get_float_prop(properties, &format!("ch{}_gate_range", ch_num), -80.0);
 
             let gate_id = format!("{}:gate_{}", instance_id, ch);
-            let gate = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-gate-stereo")
-                .name(&gate_id)
-                .property("enabled", gate_enabled)
-                .property("gt", db_to_linear(gate_threshold) as f32) // threshold in linear
-                .property("at", gate_attack as f32) // attack in ms
-                .property("rt", gate_release as f32) // release in ms
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("gate ch{}: {}", ch_num, e))
-                })?;
+            let gate = make_gate_element(
+                &gate_id,
+                gate_enabled,
+                gate_threshold,
+                gate_attack,
+                gate_release,
+                gate_range,
+            )?;
             elements.push((gate_id.clone(), gate));
 
             // ----------------------------------------------------------------
-            // Compressor (LSP Compressor Stereo)
+            // Compressor (LSP Compressor Stereo with fallback)
             // ----------------------------------------------------------------
             let comp_enabled =
                 get_bool_prop(properties, &format!("ch{}_comp_enabled", ch_num), false);
             let comp_threshold =
                 get_float_prop(properties, &format!("ch{}_comp_threshold", ch_num), -20.0);
-            let comp_ratio = get_float_prop(properties, &format!("ch{}_comp_ratio", ch_num), 4.0);
+            let comp_ratio =
+                get_float_prop(properties, &format!("ch{}_comp_ratio", ch_num), 4.0);
             let comp_attack =
                 get_float_prop(properties, &format!("ch{}_comp_attack", ch_num), 10.0);
             let comp_release =
                 get_float_prop(properties, &format!("ch{}_comp_release", ch_num), 100.0);
-            let comp_makeup = get_float_prop(properties, &format!("ch{}_comp_makeup", ch_num), 0.0);
+            let comp_makeup =
+                get_float_prop(properties, &format!("ch{}_comp_makeup", ch_num), 0.0);
+            let comp_knee =
+                get_float_prop(properties, &format!("ch{}_comp_knee", ch_num), 3.0);
 
             let comp_id = format!("{}:comp_{}", instance_id, ch);
-            let compressor = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-compressor-stereo")
-                .name(&comp_id)
-                .property("enabled", comp_enabled)
-                .property("al", db_to_linear(comp_threshold) as f32) // attack threshold
-                .property("cr", comp_ratio as f32) // ratio
-                .property("at", comp_attack as f32) // attack in ms
-                .property("rt", comp_release as f32) // release in ms
-                .property("mk", db_to_linear(comp_makeup) as f32) // makeup gain
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("compressor ch{}: {}", ch_num, e))
-                })?;
+            let compressor = make_compressor_element(
+                &comp_id,
+                comp_enabled,
+                comp_threshold,
+                comp_ratio,
+                comp_attack,
+                comp_release,
+                comp_makeup,
+            )?;
+            // Set knee if the element supports it (LSP property)
+            if compressor.find_property("kn").is_some() {
+                compressor.set_property("kn", comp_knee as f32);
+            }
             elements.push((comp_id.clone(), compressor));
 
             // ----------------------------------------------------------------
-            // EQ (LSP Parametric Equalizer x8 Stereo) - 4 bands used
+            // EQ (LSP Parametric Equalizer x8 Stereo with fallback)
             // ----------------------------------------------------------------
-            let eq_enabled = get_bool_prop(properties, &format!("ch{}_eq_enabled", ch_num), false);
+            let eq_enabled =
+                get_bool_prop(properties, &format!("ch{}_eq_enabled", ch_num), false);
 
-            let eq_id = format!("{}:eq_{}", instance_id, ch);
-            let eq = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-para-equalizer-x8-stereo")
-                .name(&eq_id)
-                .property("enabled", eq_enabled)
-                .build()
-                .map_err(|e| BlockBuildError::ElementCreation(format!("eq ch{}: {}", ch_num, e)))?;
-
-            // Configure 4 EQ bands (low, low-mid, high-mid, high)
-            // Default frequencies: 80Hz, 400Hz, 2kHz, 8kHz
-            let eq_defaults = [
-                (80.0f32, 1.0f32, 1.0f32),   // Band 0: Low
-                (400.0f32, 1.0f32, 1.0f32),  // Band 1: Low-mid
-                (2000.0f32, 1.0f32, 1.0f32), // Band 2: High-mid
-                (8000.0f32, 1.0f32, 1.0f32), // Band 3: High
+            let eq_defaults: [(f64, f64); 4] = [
+                (80.0, 1.0),
+                (400.0, 1.0),
+                (2000.0, 1.0),
+                (8000.0, 1.0),
             ];
-
-            for (band, (def_freq, _def_gain, def_q)) in eq_defaults.iter().enumerate() {
+            let eq_bands: [(f64, f64, f64); 4] = std::array::from_fn(|band| {
+                let (def_freq, def_q) = eq_defaults[band];
                 let freq = get_float_prop(
                     properties,
                     &format!("ch{}_eq{}_freq", ch_num, band + 1),
-                    *def_freq as f64,
+                    def_freq,
                 );
                 let gain = get_float_prop(
                     properties,
                     &format!("ch{}_eq{}_gain", ch_num, band + 1),
                     0.0,
-                ); // in dB
+                );
                 let q = get_float_prop(
                     properties,
                     &format!("ch{}_eq{}_q", ch_num, band + 1),
-                    *def_q as f64,
+                    def_q,
                 );
+                (freq, gain, q)
+            });
 
-                // Set filter type to "Bell" using string representation for enum
-                eq.set_property_from_str(&format!("ft-{}", band), "Bell");
-                eq.set_property(&format!("f-{}", band), freq as f32);
-                eq.set_property(&format!("g-{}", band), db_to_linear(gain) as f32);
-                eq.set_property(&format!("q-{}", band), q as f32);
-            }
+            let eq_id = format!("{}:eq_{}", instance_id, ch);
+            let eq = make_eq_element(&eq_id, eq_enabled, &eq_bands)?;
             elements.push((eq_id.clone(), eq));
 
             // ----------------------------------------------------------------
-            // Pre-fader tee (for PFL tap - after EQ, before pan)
+            // Pre-fader tee (for PFL tap and pre-fader aux sends)
             // ----------------------------------------------------------------
             let pre_fader_tee_id = format!("{}:pre_fader_tee_{}", instance_id, ch);
             let pre_fader_tee = gst::ElementFactory::make("tee")
@@ -484,7 +592,7 @@ impl BlockBuilder for MixerBuilder {
             elements.push((volume_id.clone(), volume));
 
             // ----------------------------------------------------------------
-            // Post-fader tee (for aux sends - after volume, before level)
+            // Post-fader tee (for post-fader aux sends)
             // ----------------------------------------------------------------
             let post_fader_tee_id = format!("{}:post_fader_tee_{}", instance_id, ch);
             let post_fader_tee = gst::ElementFactory::make("tee")
@@ -547,13 +655,18 @@ impl BlockBuilder for MixerBuilder {
             elements.push((pfl_queue_id.clone(), pfl_queue));
 
             // ----------------------------------------------------------------
-            // Aux send paths (post-fader)
+            // Aux send paths (pre or post fader)
             // ----------------------------------------------------------------
             for aux in 0..num_aux_buses {
                 let aux_send_level = get_float_prop(
                     properties,
                     &format!("ch{}_aux{}_level", ch_num, aux + 1),
                     0.0,
+                );
+                let aux_pre = get_bool_prop(
+                    properties,
+                    &format!("ch{}_aux{}_pre", ch_num, aux + 1),
+                    aux < 2, // Default: aux 1-2 pre-fader, aux 3-4 post-fader
                 );
 
                 let aux_send_id = format!("{}:aux_send_{}_{}", instance_id, ch, aux);
@@ -586,10 +699,17 @@ impl BlockBuilder for MixerBuilder {
                     })?;
                 elements.push((aux_queue_id.clone(), aux_queue));
 
-                // Link: post_fader_tee → aux_send → aux_queue → aux_mixer
+                // Source tee depends on pre/post setting
+                let source_tee_id = if aux_pre {
+                    &pre_fader_tee_id
+                } else {
+                    &post_fader_tee_id
+                };
+
+                // Link: (pre|post)_fader_tee → aux_send → aux_queue → aux_mixer
                 let aux_mixer_id = format!("{}:aux{}_mixer", instance_id, aux);
                 internal_links.push((
-                    ElementPadRef::element(&post_fader_tee_id), // Request pad from tee
+                    ElementPadRef::element(source_tee_id), // Request pad from tee
                     ElementPadRef::pad(&aux_send_id, "sink"),
                 ));
                 internal_links.push((
@@ -605,13 +725,17 @@ impl BlockBuilder for MixerBuilder {
             // ----------------------------------------------------------------
             // Main chain links
             // ----------------------------------------------------------------
-            // Chain: convert → caps → gate → comp → eq → pre_fader_tee
+            // Chain: convert → caps → gain → gate → comp → eq → pre_fader_tee
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
                 ElementPadRef::pad(&caps_id, "sink"),
             ));
             internal_links.push((
                 ElementPadRef::pad(&caps_id, "src"),
+                ElementPadRef::pad(&gain_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&gain_id, "src"),
                 ElementPadRef::pad(&gate_id, "sink"),
             ));
             internal_links.push((
@@ -669,7 +793,8 @@ impl BlockBuilder for MixerBuilder {
             // ----------------------------------------------------------------
 
             // Route to main mixer
-            let to_main_enabled = get_bool_prop(properties, &format!("ch{}_to_main", ch_num), true);
+            let to_main_enabled =
+                get_bool_prop(properties, &format!("ch{}_to_main", ch_num), true);
             let to_main_vol_id = format!("{}:to_main_vol_{}", instance_id, ch);
             let to_main_vol = gst::ElementFactory::make("volume")
                 .name(&to_main_vol_id)
@@ -760,8 +885,8 @@ impl BlockBuilder for MixerBuilder {
             }
 
             debug!(
-                "Channel {} created: pan={}, fader={}, mute={}, pfl={}, to_main={}",
-                ch_num, pan, fader, mute, pfl_enabled, to_main_enabled
+                "Channel {} created: gain={:.1}dB, pan={}, fader={}, mute={}, pfl={}, to_main={}",
+                ch_num, gain_db, pan, fader, mute, pfl_enabled, to_main_enabled
             );
         }
 
@@ -783,6 +908,142 @@ impl BlockBuilder for MixerBuilder {
         })
     }
 }
+
+// ============================================================================
+// Helper functions for element creation with LV2 fallback
+// ============================================================================
+
+/// Create a gate element, falling back to identity passthrough if LSP LV2 unavailable.
+fn make_gate_element(
+    name: &str,
+    enabled: bool,
+    threshold_db: f64,
+    attack_ms: f64,
+    release_ms: f64,
+    range_db: f64,
+) -> Result<gst::Element, BlockBuildError> {
+    if let Ok(gate) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-gate-stereo")
+        .name(name)
+        .build()
+    {
+        gate.set_property("enabled", enabled);
+        gate.set_property("gt", db_to_linear(threshold_db) as f32);
+        gate.set_property("at", attack_ms as f32);
+        gate.set_property("rt", release_ms as f32);
+        // Set range if the property exists
+        if gate.find_property("rr").is_some() {
+            gate.set_property("rr", db_to_linear(range_db) as f32);
+        }
+        return Ok(gate);
+    }
+    warn!(
+        "LSP gate plugin not available for {}, using passthrough",
+        name
+    );
+    gst::ElementFactory::make("identity")
+        .name(name)
+        .property("silent", true)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("gate fallback {}: {}", name, e)))
+}
+
+/// Create a compressor element, falling back to identity passthrough if LSP LV2 unavailable.
+fn make_compressor_element(
+    name: &str,
+    enabled: bool,
+    threshold_db: f64,
+    ratio: f64,
+    attack_ms: f64,
+    release_ms: f64,
+    makeup_db: f64,
+) -> Result<gst::Element, BlockBuildError> {
+    if let Ok(comp) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-compressor-stereo")
+        .name(name)
+        .build()
+    {
+        comp.set_property("enabled", enabled);
+        comp.set_property("al", db_to_linear(threshold_db) as f32);
+        comp.set_property("cr", ratio as f32);
+        comp.set_property("at", attack_ms as f32);
+        comp.set_property("rt", release_ms as f32);
+        comp.set_property("mk", db_to_linear(makeup_db) as f32);
+        return Ok(comp);
+    }
+    warn!(
+        "LSP compressor plugin not available for {}, using passthrough",
+        name
+    );
+    gst::ElementFactory::make("identity")
+        .name(name)
+        .property("silent", true)
+        .build()
+        .map_err(|e| {
+            BlockBuildError::ElementCreation(format!("compressor fallback {}: {}", name, e))
+        })
+}
+
+/// Create a parametric EQ element, falling back to identity passthrough if LSP LV2 unavailable.
+fn make_eq_element(
+    name: &str,
+    enabled: bool,
+    bands: &[(f64, f64, f64); 4],
+) -> Result<gst::Element, BlockBuildError> {
+    if let Ok(eq) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-para-equalizer-x8-stereo")
+        .name(name)
+        .build()
+    {
+        eq.set_property("enabled", enabled);
+        for (band, (freq, gain_db, q)) in bands.iter().enumerate() {
+            eq.set_property_from_str(&format!("ft-{}", band), "Bell");
+            eq.set_property(&format!("f-{}", band), *freq as f32);
+            eq.set_property(&format!("g-{}", band), db_to_linear(*gain_db) as f32);
+            eq.set_property(&format!("q-{}", band), *q as f32);
+        }
+        return Ok(eq);
+    }
+    warn!(
+        "LSP EQ plugin not available for {}, using passthrough",
+        name
+    );
+    gst::ElementFactory::make("identity")
+        .name(name)
+        .property("silent", true)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("eq fallback {}: {}", name, e)))
+}
+
+/// Create a limiter element, falling back to identity passthrough if LSP LV2 unavailable.
+fn make_limiter_element(
+    name: &str,
+    enabled: bool,
+    threshold_db: f64,
+) -> Result<gst::Element, BlockBuildError> {
+    if let Ok(lim) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-limiter-stereo")
+        .name(name)
+        .build()
+    {
+        if lim.find_property("enabled").is_some() {
+            lim.set_property("enabled", enabled);
+        }
+        if lim.find_property("th").is_some() {
+            lim.set_property("th", db_to_linear(threshold_db) as f32);
+        }
+        return Ok(lim);
+    }
+    warn!(
+        "LSP limiter plugin not available for {}, using passthrough",
+        name
+    );
+    gst::ElementFactory::make("identity")
+        .name(name)
+        .property("silent", true)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("limiter fallback {}: {}", name, e)))
+}
+
+// ============================================================================
+// Property parsing helpers
+// ============================================================================
 
 /// Parse number of channels from properties.
 fn parse_num_channels(properties: &HashMap<String, PropertyValue>) -> usize {
@@ -853,6 +1114,10 @@ fn get_bool_prop(properties: &HashMap<String, PropertyValue>, name: &str, defaul
 fn db_to_linear(db: f64) -> f64 {
     10.0_f64.powf(db / 20.0)
 }
+
+// ============================================================================
+// Metering
+// ============================================================================
 
 /// Extract f64 values from a GValueArray field in a GStreamer structure.
 fn extract_level_values(structure: &gst::StructureRef, field_name: &str) -> Vec<f64> {
@@ -1028,6 +1293,10 @@ fn connect_mixer_meter_handler(
     })
 }
 
+// ============================================================================
+// Block definition (metadata for UI/API)
+// ============================================================================
+
 /// Get metadata for Mixer block (for UI/API).
 pub fn get_blocks() -> Vec<BlockDefinition> {
     vec![mixer_definition()]
@@ -1166,7 +1435,141 @@ fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
         },
+        // PFL master level
+        ExposedProperty {
+            name: "pfl_level".to_string(),
+            label: "PFL Level".to_string(),
+            description: "PFL bus master level (0.0 to 2.0)".to_string(),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(1.0)),
+            mapping: PropertyMapping {
+                element_id: "pfl_master_vol".to_string(),
+                property_name: "volume".to_string(),
+                transform: None,
+            },
+        },
     ];
+
+    // ========================================================================
+    // Main bus processing properties
+    // ========================================================================
+    exposed_properties.push(ExposedProperty {
+        name: "main_comp_enabled".to_string(),
+        label: "Main Comp".to_string(),
+        description: "Enable compressor on main bus".to_string(),
+        property_type: PropertyType::Bool,
+        default_value: Some(PropertyValue::Bool(false)),
+        mapping: PropertyMapping {
+            element_id: "main_comp".to_string(),
+            property_name: "enabled".to_string(),
+            transform: None,
+        },
+    });
+    for (prop_suffix, label, gst_prop, default, desc, transform) in [
+        ("main_comp_threshold", "Main Comp Thresh", "al", -20.0, "Main bus compressor threshold in dB (-60 to 0)", Some("db_to_linear")),
+        ("main_comp_ratio", "Main Comp Ratio", "cr", 4.0, "Main bus compressor ratio (1:1 to 20:1)", None),
+        ("main_comp_attack", "Main Comp Atk", "at", 10.0, "Main bus compressor attack in ms (0-200)", None),
+        ("main_comp_release", "Main Comp Rel", "rt", 100.0, "Main bus compressor release in ms (10-1000)", None),
+        ("main_comp_makeup", "Main Comp Makeup", "mk", 0.0, "Main bus compressor makeup gain in dB (0 to 24)", Some("db_to_linear")),
+    ] {
+        exposed_properties.push(ExposedProperty {
+            name: prop_suffix.to_string(),
+            label: label.to_string(),
+            description: desc.to_string(),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(default)),
+            mapping: PropertyMapping {
+                element_id: "main_comp".to_string(),
+                property_name: gst_prop.to_string(),
+                transform: transform.map(|s| s.to_string()),
+            },
+        });
+    }
+
+    // Main EQ
+    exposed_properties.push(ExposedProperty {
+        name: "main_eq_enabled".to_string(),
+        label: "Main EQ".to_string(),
+        description: "Enable parametric EQ on main bus".to_string(),
+        property_type: PropertyType::Bool,
+        default_value: Some(PropertyValue::Bool(false)),
+        mapping: PropertyMapping {
+            element_id: "main_eq".to_string(),
+            property_name: "enabled".to_string(),
+            transform: None,
+        },
+    });
+    let main_eq_band_defaults = [
+        (80.0, "Low"),
+        (400.0, "Low-Mid"),
+        (2000.0, "Hi-Mid"),
+        (8000.0, "High"),
+    ];
+    for (band, (def_freq, band_name)) in main_eq_band_defaults.iter().enumerate() {
+        let band_num = band + 1;
+        exposed_properties.push(ExposedProperty {
+            name: format!("main_eq{}_freq", band_num),
+            label: format!("Main EQ{} Freq", band_num),
+            description: format!("Main bus EQ band {} ({}) frequency in Hz", band_num, band_name),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(*def_freq)),
+            mapping: PropertyMapping {
+                element_id: "main_eq".to_string(),
+                property_name: format!("f-{}", band),
+                transform: None,
+            },
+        });
+        exposed_properties.push(ExposedProperty {
+            name: format!("main_eq{}_gain", band_num),
+            label: format!("Main EQ{} Gain", band_num),
+            description: format!("Main bus EQ band {} gain in dB (-15 to +15)", band_num),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(0.0)),
+            mapping: PropertyMapping {
+                element_id: "main_eq".to_string(),
+                property_name: format!("g-{}", band),
+                transform: Some("db_to_linear".to_string()),
+            },
+        });
+        exposed_properties.push(ExposedProperty {
+            name: format!("main_eq{}_q", band_num),
+            label: format!("Main EQ{} Q", band_num),
+            description: format!("Main bus EQ band {} Q factor (0.1 to 10)", band_num),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(1.0)),
+            mapping: PropertyMapping {
+                element_id: "main_eq".to_string(),
+                property_name: format!("q-{}", band),
+                transform: None,
+            },
+        });
+    }
+
+    // Main limiter
+    exposed_properties.push(ExposedProperty {
+        name: "main_limiter_enabled".to_string(),
+        label: "Main Limiter".to_string(),
+        description: "Enable limiter on main bus".to_string(),
+        property_type: PropertyType::Bool,
+        default_value: Some(PropertyValue::Bool(false)),
+        mapping: PropertyMapping {
+            element_id: "main_limiter".to_string(),
+            property_name: "enabled".to_string(),
+            transform: None,
+        },
+    });
+    exposed_properties.push(ExposedProperty {
+        name: "main_limiter_threshold".to_string(),
+        label: "Main Lim Thresh".to_string(),
+        description: "Main bus limiter threshold in dB (-20 to 0)".to_string(),
+        property_type: PropertyType::Float,
+        default_value: Some(PropertyValue::Float(-0.3)),
+        mapping: PropertyMapping {
+            element_id: "main_limiter".to_string(),
+            property_name: "th".to_string(),
+            transform: Some("db_to_linear".to_string()),
+        },
+    });
 
     // Add aux bus master properties
     for aux in 1..=MAX_AUX_BUSES {
@@ -1226,6 +1629,34 @@ fn mixer_definition() -> BlockDefinition {
 
     // Add per-channel properties (we'll generate for max channels, UI will show based on num_channels)
     for ch in 1..=MAX_CHANNELS {
+        // Channel label
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_label", ch),
+            label: format!("Ch {} Label", ch),
+            description: format!("Channel {} display name", ch),
+            property_type: PropertyType::String,
+            default_value: Some(PropertyValue::String(format!("Ch {}", ch))),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: format!("ch{}_label", ch),
+                transform: None,
+            },
+        });
+
+        // Input gain
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_gain", ch),
+            label: format!("Ch {} Gain", ch),
+            description: format!("Channel {} input gain in dB (-20 to +20)", ch),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(0.0)),
+            mapping: PropertyMapping {
+                element_id: format!("gain_{}", ch - 1),
+                property_name: "volume".to_string(),
+                transform: Some("db_to_linear".to_string()),
+            },
+        });
+
         exposed_properties.push(ExposedProperty {
             name: format!("ch{}_pan", ch),
             label: format!("Ch {} Pan", ch),
@@ -1282,7 +1713,7 @@ fn mixer_definition() -> BlockDefinition {
         // Routing to main
         exposed_properties.push(ExposedProperty {
             name: format!("ch{}_to_main", ch),
-            label: format!("Ch {} → Main", ch),
+            label: format!("Ch {} -> Main", ch),
             description: format!("Route channel {} to main mix", ch),
             property_type: PropertyType::Bool,
             default_value: Some(PropertyValue::Bool(true)),
@@ -1297,7 +1728,7 @@ fn mixer_definition() -> BlockDefinition {
         for sg in 1..=MAX_GROUPS {
             exposed_properties.push(ExposedProperty {
                 name: format!("ch{}_to_grp{}", ch, sg),
-                label: format!("Ch {} → SG{}", ch, sg),
+                label: format!("Ch {} -> SG{}", ch, sg),
                 description: format!("Route channel {} to group {}", ch, sg),
                 property_type: PropertyType::Bool,
                 default_value: Some(PropertyValue::Bool(false)),
@@ -1309,7 +1740,7 @@ fn mixer_definition() -> BlockDefinition {
             });
         }
 
-        // Aux send levels (per aux bus)
+        // Aux send levels and pre/post toggle (per aux bus)
         for aux in 1..=MAX_AUX_BUSES {
             exposed_properties.push(ExposedProperty {
                 name: format!("ch{}_aux{}_level", ch, aux),
@@ -1320,6 +1751,21 @@ fn mixer_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: format!("aux_send_{}_{}", ch - 1, aux - 1),
                     property_name: "volume".to_string(),
+                    transform: None,
+                },
+            });
+            exposed_properties.push(ExposedProperty {
+                name: format!("ch{}_aux{}_pre", ch, aux),
+                label: format!("Ch {} Aux {} Pre", ch, aux),
+                description: format!(
+                    "Channel {} aux {} pre-fader (true) or post-fader (false)",
+                    ch, aux
+                ),
+                property_type: PropertyType::Bool,
+                default_value: Some(PropertyValue::Bool(aux <= 2)), // aux 1-2 pre, 3-4 post
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: format!("ch{}_aux{}_pre", ch, aux),
                     transform: None,
                 },
             });
@@ -1377,6 +1823,19 @@ fn mixer_definition() -> BlockDefinition {
                 element_id: format!("gate_{}", ch - 1),
                 property_name: "rt".to_string(),
                 transform: None,
+            },
+        });
+
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_gate_range", ch),
+            label: format!("Ch {} Gate Range", ch),
+            description: format!("Channel {} gate range in dB (-80 to 0)", ch),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(-80.0)),
+            mapping: PropertyMapping {
+                element_id: format!("gate_{}", ch - 1),
+                property_name: "rr".to_string(),
+                transform: Some("db_to_linear".to_string()),
             },
         });
 
@@ -1461,6 +1920,19 @@ fn mixer_definition() -> BlockDefinition {
             },
         });
 
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_comp_knee", ch),
+            label: format!("Ch {} Comp Knee", ch),
+            description: format!("Channel {} compressor knee in dB (0 to 12)", ch),
+            property_type: PropertyType::Float,
+            default_value: Some(PropertyValue::Float(3.0)),
+            mapping: PropertyMapping {
+                element_id: format!("comp_{}", ch - 1),
+                property_name: "kn".to_string(),
+                transform: None,
+            },
+        });
+
         // ============================================================
         // EQ properties - 4 bands
         // ============================================================
@@ -1537,7 +2009,7 @@ fn mixer_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.mixer".to_string(),
         name: "Audio Mixer".to_string(),
-        description: "Stereo audio mixer with per-channel pan, fader, mute and metering. Combines multiple audio inputs into a single stereo output.".to_string(),
+        description: "Stereo audio mixer with per-channel gain, gate, compressor, EQ, pan, fader, mute and metering. Main bus with compressor, EQ and limiter. Supports aux sends (pre/post) and subgroups.".to_string(),
         category: "Audio".to_string(),
         exposed_properties,
         // External pads are computed dynamically based on num_channels

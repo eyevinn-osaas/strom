@@ -55,6 +55,8 @@ struct ChannelStrip {
     channel_num: usize,
     /// Channel label
     label: String,
+    /// Input gain (dB)
+    gain: f32,
     /// Pan position (-1.0 to 1.0)
     pan: f32,
     /// Fader level (0.0 to 2.0)
@@ -69,6 +71,8 @@ struct ChannelStrip {
     to_grp: [bool; MAX_GROUPS],
     /// Aux send levels (up to 4 aux buses)
     aux_sends: [f32; MAX_AUX_BUSES],
+    /// Aux send pre-fader mode (true=pre, false=post)
+    aux_pre: [bool; MAX_AUX_BUSES],
     /// Gate enabled
     gate_enabled: bool,
     /// Gate threshold (dB)
@@ -77,6 +81,8 @@ struct ChannelStrip {
     gate_attack: f32,
     /// Gate release (ms)
     gate_release: f32,
+    /// Gate range (dB)
+    gate_range: f32,
     /// Compressor enabled
     comp_enabled: bool,
     /// Compressor threshold (dB)
@@ -89,6 +95,8 @@ struct ChannelStrip {
     comp_release: f32,
     /// Compressor makeup gain (dB)
     comp_makeup: f32,
+    /// Compressor knee (dB)
+    comp_knee: f32,
     /// EQ enabled
     eq_enabled: bool,
     /// EQ bands: (freq, gain_db, q) for 4 bands
@@ -124,6 +132,7 @@ impl ChannelStrip {
         Self {
             channel_num,
             label: format!("Ch {}", channel_num),
+            gain: 0.0,
             pan: 0.0,
             fader: DEFAULT_FADER,
             mute: false,
@@ -131,16 +140,19 @@ impl ChannelStrip {
             to_main: true,
             to_grp: [false; MAX_GROUPS],
             aux_sends: [0.0; MAX_AUX_BUSES],
+            aux_pre: [true, true, false, false], // aux 1-2 pre, 3-4 post
             gate_enabled: false,
             gate_threshold: -40.0,
             gate_attack: 5.0,
             gate_release: 100.0,
+            gate_range: -80.0,
             comp_enabled: false,
             comp_threshold: -20.0,
             comp_ratio: 4.0,
             comp_attack: 10.0,
             comp_release: 100.0,
             comp_makeup: 0.0,
+            comp_knee: 3.0,
             eq_enabled: false,
             eq_bands: [
                 (80.0, 0.0, 1.0),   // Low
@@ -340,6 +352,16 @@ impl MixerEditor {
         for ch in &mut self.channels {
             let ch_num = ch.channel_num;
 
+            // Label
+            if let Some(PropertyValue::String(s)) =
+                properties.get(&format!("ch{}_label", ch_num))
+            {
+                ch.label = s.clone();
+            }
+            // Input gain
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_gain", ch_num)) {
+                ch.gain = *f as f32;
+            }
             if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_pan", ch_num)) {
                 ch.pan = *f as f32;
             }
@@ -364,12 +386,17 @@ impl MixerEditor {
                     ch.to_grp[sg] = *b;
                 }
             }
-            // Aux send levels
+            // Aux send levels and pre/post
             for aux in 0..MAX_AUX_BUSES {
                 if let Some(PropertyValue::Float(f)) =
                     properties.get(&format!("ch{}_aux{}_level", ch_num, aux + 1))
                 {
                     ch.aux_sends[aux] = *f as f32;
+                }
+                if let Some(PropertyValue::Bool(b)) =
+                    properties.get(&format!("ch{}_aux{}_pre", ch_num, aux + 1))
+                {
+                    ch.aux_pre[aux] = *b;
                 }
             }
             // Gate
@@ -392,6 +419,11 @@ impl MixerEditor {
                 properties.get(&format!("ch{}_gate_release", ch_num))
             {
                 ch.gate_release = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_gate_range", ch_num))
+            {
+                ch.gate_range = *f as f32;
             }
             // Compressor
             if let Some(PropertyValue::Bool(b)) =
@@ -423,6 +455,11 @@ impl MixerEditor {
                 properties.get(&format!("ch{}_comp_makeup", ch_num))
             {
                 ch.comp_makeup = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_knee", ch_num))
+            {
+                ch.comp_knee = *f as f32;
             }
             // EQ
             if let Some(PropertyValue::Bool(b)) =
@@ -1787,6 +1824,21 @@ impl MixerEditor {
                     self.update_processing_param(ctx, index, "gate", "release");
                 }
             });
+
+            ui.horizontal(|ui| {
+                ui.label("Range:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.channels[index].gate_range)
+                            .range(-80.0..=0.0)
+                            .suffix(" dB")
+                            .speed(0.5),
+                    )
+                    .changed()
+                {
+                    self.update_processing_param(ctx, index, "gate", "range");
+                }
+            });
         });
     }
 
@@ -1891,6 +1943,21 @@ impl MixerEditor {
                     .changed()
                 {
                     self.update_processing_param(ctx, index, "comp", "makeup");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Knee:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.channels[index].comp_knee)
+                            .range(0.0..=12.0)
+                            .suffix(" dB")
+                            .speed(0.2),
+                    )
+                    .changed()
+                {
+                    self.update_processing_param(ctx, index, "comp", "knee");
                 }
             });
         });
@@ -2006,6 +2073,11 @@ impl MixerEditor {
                 "rt".to_string(),
                 PropertyValue::Float(channel.gate_release as f64),
             ),
+            ("gate", "range") => (
+                format!("gate_{}", index),
+                "rr".to_string(),
+                PropertyValue::Float(db_to_linear_f64(channel.gate_range as f64)),
+            ),
             ("comp", "threshold") => (
                 format!("comp_{}", index),
                 "al".to_string(),
@@ -2030,6 +2102,11 @@ impl MixerEditor {
                 format!("comp_{}", index),
                 "mk".to_string(),
                 PropertyValue::Float(db_to_linear_f64(channel.comp_makeup as f64)),
+            ),
+            ("comp", "knee") => (
+                format!("comp_{}", index),
+                "kn".to_string(),
+                PropertyValue::Float(channel.comp_knee as f64),
             ),
             _ => return,
         };
@@ -2156,6 +2233,11 @@ impl MixerEditor {
         // Map channel property to GStreamer element and property
         // The element_id format is "block_id:element_name"
         let (element_suffix, gst_prop, value) = match property {
+            "gain" => (
+                format!("gain_{}", index),
+                "volume",
+                PropertyValue::Float(db_to_linear_f64(channel.gain as f64)),
+            ),
             "pan" => (
                 format!("pan_{}", index),
                 "panorama",
