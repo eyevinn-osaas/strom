@@ -613,7 +613,7 @@ impl BlockBuilder for MixerBuilder {
             )?;
             // Set knee if the element supports it (LSP property)
             if compressor.find_property("kn").is_some() {
-                compressor.set_property("kn", comp_knee as f32);
+                compressor.set_property("kn", db_to_linear(comp_knee) as f32);
             }
             elements.push((comp_id.clone(), compressor));
 
@@ -1018,29 +1018,38 @@ fn make_audiomixer(
     latency_ms: u64,
     min_upstream_latency_ms: u64,
 ) -> Result<gst::Element, BlockBuildError> {
-    let mixer = gst::ElementFactory::make("audiomixer")
-        .name(name)
+    // Check if force-live is available (construct-only, must be set at build time)
+    let has_force_live = {
+        let probe = gst::ElementFactory::make("audiomixer")
+            .build()
+            .map_err(|e| {
+                BlockBuildError::ElementCreation(format!("audiomixer probe {}: {}", name, e))
+            })?;
+        probe.find_property("force-live").is_some()
+    };
+
+    let mut builder = gst::ElementFactory::make("audiomixer").name(name);
+    if has_force_live {
+        builder = builder.property("force-live", force_live);
+    }
+    let mixer = builder
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("audiomixer {}: {}", name, e)))?;
 
-    // force-live: operate in live mode even without live upstream sources.
-    // This prevents the mixer from hanging when not all inputs are connected.
-    if mixer.find_property("force-live").is_some() {
-        mixer.set_property("force-live", force_live);
-    }
-
-    // start-time-selection=first: use first buffer's timestamp as start time.
-    // Essential for PTP clock synchronization and prevents start-time mismatch.
+    // start-time-selection=first: use first buffer's timestamp as start time
     mixer.set_property_from_str("start-time-selection", "first");
 
     // latency: aggregator timeout in nanoseconds
     let latency_ns = latency_ms * 1_000_000;
-    mixer.set_property_from_str("latency", &latency_ns.to_string());
+    mixer.set_property("latency", latency_ns * gst::ClockTime::NSECOND);
 
     // min-upstream-latency: reported to upstream elements
     if mixer.find_property("min-upstream-latency").is_some() {
         let min_upstream_ns = min_upstream_latency_ms * 1_000_000;
-        mixer.set_property_from_str("min-upstream-latency", &min_upstream_ns.to_string());
+        mixer.set_property(
+            "min-upstream-latency",
+            min_upstream_ns * gst::ClockTime::NSECOND,
+        );
     }
 
     Ok(mixer)
@@ -1057,7 +1066,7 @@ fn make_gate_element(
     threshold_db: f64,
     attack_ms: f64,
     release_ms: f64,
-    range_db: f64,
+    _range_db: f64,
 ) -> Result<gst::Element, BlockBuildError> {
     if let Ok(gate) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-gate-stereo")
         .name(name)
@@ -1067,10 +1076,9 @@ fn make_gate_element(
         gate.set_property("gt", db_to_linear(threshold_db) as f32);
         gate.set_property("at", attack_ms as f32);
         gate.set_property("rt", release_ms as f32);
-        // Set range if the property exists
-        if gate.find_property("rr").is_some() {
-            gate.set_property("rr", db_to_linear(range_db) as f32);
-        }
+        // Note: LSP gate has no settable "range" parameter.
+        // "gr" is a read-only reduction meter, "gz" is zone size (different concept).
+        // Gate range is not supported by this plugin.
         return Ok(gate);
     }
     warn!(
