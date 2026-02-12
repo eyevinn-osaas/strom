@@ -1372,14 +1372,15 @@ impl MixerEditor {
                 });
             });
 
-        // Detect click on strip background (after widgets, so buttons take priority)
+        // Detect click on strip background for selection.
+        // Use pointer query instead of ui.interact() to avoid stealing
+        // double-click events from child widgets (like faders).
         let strip_rect = frame_response.response.rect;
-        let bg_click = ui.interact(
-            strip_rect,
-            ui.id().with(("strip_click", index)),
-            Sense::click(),
-        );
-        if bg_click.clicked() {
+        if ui.input(|i| i.pointer.any_pressed())
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|pos| strip_rect.contains(pos))
+        {
             self.selection = Some(Selection::Channel(index));
         }
     }
