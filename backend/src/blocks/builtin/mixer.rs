@@ -162,6 +162,7 @@ impl BlockBuilder for MixerBuilder {
         let main_comp_attack = get_float_prop(properties, "main_comp_attack", 10.0);
         let main_comp_release = get_float_prop(properties, "main_comp_release", 100.0);
         let main_comp_makeup = get_float_prop(properties, "main_comp_makeup", 0.0);
+        let main_comp_knee = get_float_prop(properties, "main_comp_knee", -6.0);
 
         let main_comp_id = format!("{}:main_comp", instance_id);
         let main_comp = make_compressor_element(
@@ -173,6 +174,10 @@ impl BlockBuilder for MixerBuilder {
             main_comp_release,
             main_comp_makeup,
         )?;
+        if main_comp.find_property("kn").is_some() {
+            let kn_val = db_to_linear(main_comp_knee).clamp(0.0631, 1.0) as f32;
+            main_comp.set_property("kn", kn_val);
+        }
         elements.push((main_comp_id.clone(), main_comp));
 
         let main_eq_enabled = get_bool_prop(properties, "main_eq_enabled", false);
@@ -203,7 +208,7 @@ impl BlockBuilder for MixerBuilder {
         elements.push((main_eq_id.clone(), main_eq));
 
         let main_limiter_enabled = get_bool_prop(properties, "main_limiter_enabled", false);
-        let main_limiter_threshold = get_float_prop(properties, "main_limiter_threshold", -0.3);
+        let main_limiter_threshold = get_float_prop(properties, "main_limiter_threshold", -3.0);
         let main_limiter_id = format!("{}:main_limiter", instance_id);
         let main_limiter = make_limiter_element(
             &main_limiter_id,
@@ -502,7 +507,7 @@ impl BlockBuilder for MixerBuilder {
                     PropertyValue::Float(f) => Some(*f),
                     _ => None,
                 })
-                .unwrap_or(0.75); // Default ~-6dB
+                .unwrap_or(1.0); // Default 0 dB (unity)
 
             let mute = properties
                 .get(&format!("ch{}_mute", ch_num))

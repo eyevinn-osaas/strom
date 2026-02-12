@@ -14,8 +14,8 @@ use strom_types::{FlowId, PropertyValue};
 use crate::api::ApiClient;
 use crate::meter::{MeterData, MeterDataStore};
 
-/// Default fader value (~-6dB)
-const DEFAULT_FADER: f32 = 0.75;
+/// Default fader value (0 dB unity)
+const DEFAULT_FADER: f32 = 1.0;
 
 /// Maximum number of aux buses
 const MAX_AUX_BUSES: usize = 4;
@@ -203,6 +203,13 @@ enum ActiveControl {
     MainFader,
 }
 
+/// What is currently selected in the mixer.
+#[derive(Debug, Clone, PartialEq)]
+enum Selection {
+    Channel(usize),
+    Main,
+}
+
 /// Mixer editor state.
 pub struct MixerEditor {
     /// Flow ID
@@ -224,8 +231,8 @@ pub struct MixerEditor {
     /// Aux masters
     aux_masters: Vec<AuxMaster>,
 
-    /// Currently selected channel (for keyboard control)
-    selected_channel: Option<usize>,
+    /// Currently selected strip (channel or bus)
+    selection: Option<Selection>,
     /// Currently active control (for value display)
     active_control: ActiveControl,
 
@@ -233,6 +240,28 @@ pub struct MixerEditor {
     main_fader: f32,
     /// Main mute
     main_mute: bool,
+    /// Main bus compressor enabled
+    main_comp_enabled: bool,
+    /// Main bus compressor threshold (dB)
+    main_comp_threshold: f32,
+    /// Main bus compressor ratio
+    main_comp_ratio: f32,
+    /// Main bus compressor attack (ms)
+    main_comp_attack: f32,
+    /// Main bus compressor release (ms)
+    main_comp_release: f32,
+    /// Main bus compressor makeup gain (dB)
+    main_comp_makeup: f32,
+    /// Main bus compressor knee (dB)
+    main_comp_knee: f32,
+    /// Main bus EQ enabled
+    main_eq_enabled: bool,
+    /// Main bus EQ bands: (freq, gain_db, q) for 4 bands
+    main_eq_bands: [(f32, f32, f32); 4],
+    /// Main bus limiter enabled
+    main_limiter_enabled: bool,
+    /// Main bus limiter threshold (dB)
+    main_limiter_threshold: f32,
 
     /// API client
     api: ApiClient,
@@ -246,6 +275,10 @@ pub struct MixerEditor {
     live_updates: bool,
     /// Last update time (for throttling)
     last_update: instant::Instant,
+    /// Save requested (checked by app to persist properties)
+    save_requested: bool,
+    /// True after reset — next save writes only structural properties
+    is_reset: bool,
 }
 
 impl MixerEditor {
@@ -262,15 +295,33 @@ impl MixerEditor {
             channels,
             groups: Vec::new(),
             aux_masters: Vec::new(),
-            selected_channel: None,
+            selection: None,
             active_control: ActiveControl::None,
             main_fader: 1.0,
             main_mute: false,
+            main_comp_enabled: false,
+            main_comp_threshold: -20.0,
+            main_comp_ratio: 4.0,
+            main_comp_attack: 10.0,
+            main_comp_release: 100.0,
+            main_comp_makeup: 0.0,
+            main_comp_knee: -6.0,
+            main_eq_enabled: false,
+            main_eq_bands: [
+                (80.0, 0.0, 1.0),
+                (400.0, 0.0, 1.0),
+                (2000.0, 0.0, 1.0),
+                (8000.0, 0.0, 1.0),
+            ],
+            main_limiter_enabled: false,
+            main_limiter_threshold: -3.0,
             api,
             status: String::new(),
             error: None,
             live_updates: true,
             last_update: instant::Instant::now(),
+            save_requested: false,
+            is_reset: false,
         }
     }
 
@@ -295,6 +346,55 @@ impl MixerEditor {
         // Load main fader
         if let Some(PropertyValue::Float(f)) = properties.get("main_fader") {
             self.main_fader = *f as f32;
+        }
+
+        // Load main bus processing
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_comp_enabled") {
+            self.main_comp_enabled = *b;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_threshold") {
+            self.main_comp_threshold = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_ratio") {
+            self.main_comp_ratio = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_attack") {
+            self.main_comp_attack = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_release") {
+            self.main_comp_release = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_makeup") {
+            self.main_comp_makeup = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_knee") {
+            self.main_comp_knee = *f as f32;
+        }
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_eq_enabled") {
+            self.main_eq_enabled = *b;
+        }
+        for band in 0..4 {
+            let band_num = band + 1;
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("main_eq{}_freq", band_num))
+            {
+                self.main_eq_bands[band].0 = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("main_eq{}_gain", band_num))
+            {
+                self.main_eq_bands[band].1 = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("main_eq{}_q", band_num))
+            {
+                self.main_eq_bands[band].2 = *f as f32;
+            }
+        }
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_limiter_enabled") {
+            self.main_limiter_enabled = *b;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_limiter_threshold") {
+            self.main_limiter_threshold = *f as f32;
         }
 
         // Load number of aux buses
@@ -507,16 +607,351 @@ impl MixerEditor {
         &self.block_id
     }
 
+    /// Get the flow ID.
+    pub fn flow_id(&self) -> FlowId {
+        self.flow_id
+    }
+
+    /// Check if a save was requested (Ctrl+S or Save button).
+    pub fn needs_save(&self) -> bool {
+        self.save_requested
+    }
+
+    /// Clear the save-requested flag.
+    pub fn clear_save(&mut self) {
+        self.save_requested = false;
+        self.is_reset = false;
+    }
+
+    /// True if this save is a reset (only structural properties should be saved).
+    pub fn is_reset(&self) -> bool {
+        self.is_reset
+    }
+
+    /// Collect all current mixer state as block properties.
+    pub fn collect_properties(&self) -> HashMap<String, PropertyValue> {
+        let mut props = HashMap::new();
+
+        // Structural properties
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::Int(self.num_channels as i64),
+        );
+        props.insert(
+            "num_aux_buses".to_string(),
+            PropertyValue::Int(self.num_aux_buses as i64),
+        );
+        props.insert(
+            "num_groups".to_string(),
+            PropertyValue::Int(self.num_groups as i64),
+        );
+
+        // Main bus
+        props.insert(
+            "main_fader".to_string(),
+            PropertyValue::Float(self.main_fader as f64),
+        );
+        props.insert(
+            "main_comp_enabled".to_string(),
+            PropertyValue::Bool(self.main_comp_enabled),
+        );
+        props.insert(
+            "main_comp_threshold".to_string(),
+            PropertyValue::Float(self.main_comp_threshold as f64),
+        );
+        props.insert(
+            "main_comp_ratio".to_string(),
+            PropertyValue::Float(self.main_comp_ratio as f64),
+        );
+        props.insert(
+            "main_comp_attack".to_string(),
+            PropertyValue::Float(self.main_comp_attack as f64),
+        );
+        props.insert(
+            "main_comp_release".to_string(),
+            PropertyValue::Float(self.main_comp_release as f64),
+        );
+        props.insert(
+            "main_comp_makeup".to_string(),
+            PropertyValue::Float(self.main_comp_makeup as f64),
+        );
+        props.insert(
+            "main_comp_knee".to_string(),
+            PropertyValue::Float(self.main_comp_knee as f64),
+        );
+        props.insert(
+            "main_eq_enabled".to_string(),
+            PropertyValue::Bool(self.main_eq_enabled),
+        );
+        for (band, (freq, gain, q)) in self.main_eq_bands.iter().enumerate() {
+            let b = band + 1;
+            props.insert(
+                format!("main_eq{}_freq", b),
+                PropertyValue::Float(*freq as f64),
+            );
+            props.insert(
+                format!("main_eq{}_gain", b),
+                PropertyValue::Float(*gain as f64),
+            );
+            props.insert(format!("main_eq{}_q", b), PropertyValue::Float(*q as f64));
+        }
+        props.insert(
+            "main_limiter_enabled".to_string(),
+            PropertyValue::Bool(self.main_limiter_enabled),
+        );
+        props.insert(
+            "main_limiter_threshold".to_string(),
+            PropertyValue::Float(self.main_limiter_threshold as f64),
+        );
+
+        // Aux masters
+        for aux in &self.aux_masters {
+            let n = aux.index + 1;
+            props.insert(
+                format!("aux{}_fader", n),
+                PropertyValue::Float(aux.fader as f64),
+            );
+            props.insert(format!("aux{}_mute", n), PropertyValue::Bool(aux.mute));
+        }
+
+        // Groups
+        for sg in &self.groups {
+            let n = sg.index + 1;
+            props.insert(
+                format!("group{}_fader", n),
+                PropertyValue::Float(sg.fader as f64),
+            );
+            props.insert(format!("group{}_mute", n), PropertyValue::Bool(sg.mute));
+        }
+
+        // Per-channel
+        for ch in &self.channels {
+            let n = ch.channel_num;
+            props.insert(
+                format!("ch{}_label", n),
+                PropertyValue::String(ch.label.clone()),
+            );
+            props.insert(
+                format!("ch{}_gain", n),
+                PropertyValue::Float(ch.gain as f64),
+            );
+            props.insert(format!("ch{}_pan", n), PropertyValue::Float(ch.pan as f64));
+            props.insert(
+                format!("ch{}_fader", n),
+                PropertyValue::Float(ch.fader as f64),
+            );
+            props.insert(format!("ch{}_mute", n), PropertyValue::Bool(ch.mute));
+            props.insert(format!("ch{}_pfl", n), PropertyValue::Bool(ch.pfl));
+            props.insert(format!("ch{}_to_main", n), PropertyValue::Bool(ch.to_main));
+            for (sg, &enabled) in ch.to_grp.iter().enumerate().take(self.num_groups) {
+                props.insert(
+                    format!("ch{}_to_grp{}", n, sg + 1),
+                    PropertyValue::Bool(enabled),
+                );
+            }
+            for aux in 0..self.num_aux_buses {
+                props.insert(
+                    format!("ch{}_aux{}_level", n, aux + 1),
+                    PropertyValue::Float(ch.aux_sends[aux] as f64),
+                );
+                props.insert(
+                    format!("ch{}_aux{}_pre", n, aux + 1),
+                    PropertyValue::Bool(ch.aux_pre[aux]),
+                );
+            }
+            // HPF
+            props.insert(
+                format!("ch{}_hpf_enabled", n),
+                PropertyValue::Bool(ch.hpf_enabled),
+            );
+            props.insert(
+                format!("ch{}_hpf_freq", n),
+                PropertyValue::Float(ch.hpf_freq as f64),
+            );
+            // Gate
+            props.insert(
+                format!("ch{}_gate_enabled", n),
+                PropertyValue::Bool(ch.gate_enabled),
+            );
+            props.insert(
+                format!("ch{}_gate_threshold", n),
+                PropertyValue::Float(ch.gate_threshold as f64),
+            );
+            props.insert(
+                format!("ch{}_gate_attack", n),
+                PropertyValue::Float(ch.gate_attack as f64),
+            );
+            props.insert(
+                format!("ch{}_gate_release", n),
+                PropertyValue::Float(ch.gate_release as f64),
+            );
+            props.insert(
+                format!("ch{}_gate_range", n),
+                PropertyValue::Float(ch.gate_range as f64),
+            );
+            // Compressor
+            props.insert(
+                format!("ch{}_comp_enabled", n),
+                PropertyValue::Bool(ch.comp_enabled),
+            );
+            props.insert(
+                format!("ch{}_comp_threshold", n),
+                PropertyValue::Float(ch.comp_threshold as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_ratio", n),
+                PropertyValue::Float(ch.comp_ratio as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_attack", n),
+                PropertyValue::Float(ch.comp_attack as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_release", n),
+                PropertyValue::Float(ch.comp_release as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_makeup", n),
+                PropertyValue::Float(ch.comp_makeup as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_knee", n),
+                PropertyValue::Float(ch.comp_knee as f64),
+            );
+            // EQ
+            props.insert(
+                format!("ch{}_eq_enabled", n),
+                PropertyValue::Bool(ch.eq_enabled),
+            );
+            for (band, (freq, gain, q)) in ch.eq_bands.iter().enumerate() {
+                let b = band + 1;
+                props.insert(
+                    format!("ch{}_eq{}_freq", n, b),
+                    PropertyValue::Float(*freq as f64),
+                );
+                props.insert(
+                    format!("ch{}_eq{}_gain", n, b),
+                    PropertyValue::Float(*gain as f64),
+                );
+                props.insert(
+                    format!("ch{}_eq{}_q", n, b),
+                    PropertyValue::Float(*q as f64),
+                );
+            }
+        }
+
+        props
+    }
+
+    /// Reset all mixer parameters to defaults.
+    /// Resets in-memory state and sets `reset_properties` so the save
+    /// only writes structural keys, letting backend defaults take over.
+    fn reset_to_defaults(&mut self) {
+        // Main bus
+        self.main_fader = 1.0;
+        self.main_mute = false;
+        self.main_comp_enabled = false;
+        self.main_comp_threshold = -20.0;
+        self.main_comp_ratio = 4.0;
+        self.main_comp_attack = 10.0;
+        self.main_comp_release = 100.0;
+        self.main_comp_makeup = 0.0;
+        self.main_comp_knee = -6.0;
+        self.main_eq_enabled = false;
+        self.main_eq_bands = [
+            (80.0, 0.0, 1.0),
+            (400.0, 0.0, 1.0),
+            (2000.0, 0.0, 1.0),
+            (8000.0, 0.0, 1.0),
+        ];
+        self.main_limiter_enabled = false;
+        self.main_limiter_threshold = -3.0;
+
+        // Aux masters
+        for aux in &mut self.aux_masters {
+            aux.fader = 1.0;
+            aux.mute = false;
+        }
+
+        // Groups
+        for sg in &mut self.groups {
+            sg.fader = 1.0;
+            sg.mute = false;
+        }
+
+        // Channels
+        for ch in &mut self.channels {
+            ch.gain = 0.0;
+            ch.pan = 0.0;
+            ch.fader = DEFAULT_FADER;
+            ch.mute = false;
+            ch.pfl = false;
+            ch.to_main = true;
+            ch.to_grp = [false; MAX_GROUPS];
+            ch.aux_sends = [0.0; MAX_AUX_BUSES];
+            ch.aux_pre = [true, true, false, false];
+            ch.hpf_enabled = false;
+            ch.hpf_freq = 80.0;
+            ch.gate_enabled = false;
+            ch.gate_threshold = -40.0;
+            ch.gate_attack = 5.0;
+            ch.gate_release = 100.0;
+            ch.gate_range = -80.0;
+            ch.comp_enabled = false;
+            ch.comp_threshold = -20.0;
+            ch.comp_ratio = 4.0;
+            ch.comp_attack = 10.0;
+            ch.comp_release = 100.0;
+            ch.comp_makeup = 0.0;
+            ch.comp_knee = -6.0;
+            ch.eq_enabled = false;
+            ch.eq_bands = [
+                (80.0, 0.0, 1.0),
+                (400.0, 0.0, 1.0),
+                (2000.0, 0.0, 1.0),
+                (8000.0, 0.0, 1.0),
+            ];
+        }
+
+        self.selection = None;
+        self.is_reset = true;
+    }
+
+    /// Collect only structural properties (after reset).
+    /// Backend uses its own matching defaults for everything else.
+    pub fn collect_structural_properties(&self) -> HashMap<String, PropertyValue> {
+        let mut props = HashMap::new();
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::Int(self.num_channels as i64),
+        );
+        props.insert(
+            "num_aux_buses".to_string(),
+            PropertyValue::Int(self.num_aux_buses as i64),
+        );
+        props.insert(
+            "num_groups".to_string(),
+            PropertyValue::Int(self.num_groups as i64),
+        );
+        props
+    }
+
     /// Show the mixer in fullscreen mode.
     pub fn show_fullscreen(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
+        // Check for save result from async task
+        if let Some(status) = crate::app::get_local_storage("mixer_save_status") {
+            crate::app::remove_local_storage("mixer_save_status");
+            if status == "ok" {
+                self.status = "Mixer state saved".to_string();
+            } else {
+                self.error = Some(format!("Save failed: {}", status));
+            }
+        }
+
         self.handle_keyboard(ui, ctx);
 
         let available_height = ui.available_height();
-        let detail_panel_height = if self.selected_channel.is_some() {
-            180.0
-        } else {
-            0.0
-        };
+        let detail_panel_height = if self.selection.is_some() { 180.0 } else { 0.0 };
         let status_bar_height = 30.0;
         let channel_area_height = (available_height
             - BUS_ROW_MIN_HEIGHT
@@ -587,7 +1022,7 @@ impl MixerEditor {
                     );
 
                     // ── Row 3: Detail panel (Gate/Comp/EQ) ──
-                    if self.selected_channel.is_some() {
+                    if self.selection.is_some() {
                         ui.separator();
                         egui::ScrollArea::horizontal()
                             .id_salt("detail_h_scroll")
@@ -606,10 +1041,25 @@ impl MixerEditor {
                             ui.label(&self.status);
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if let Some(ch) = self.selected_channel {
-                                ui.label(format!("Selected: Ch {}", ch + 1));
+                            match &self.selection {
+                                Some(Selection::Channel(ch)) => {
+                                    ui.label(format!("Selected: Ch {}", ch + 1));
+                                }
+                                Some(Selection::Main) => {
+                                    ui.label("Selected: MAIN");
+                                }
+                                None => {}
                             }
                             ui.checkbox(&mut self.live_updates, "Live");
+                            if ui.button("Save").clicked() {
+                                self.save_requested = true;
+                                self.status = "Saving mixer state...".to_string();
+                            }
+                            if ui.button("Reset").clicked() {
+                                self.reset_to_defaults();
+                                self.save_requested = true;
+                                self.status = "Reset to defaults, saving...".to_string();
+                            }
                         });
                     });
                 });
@@ -632,7 +1082,7 @@ impl MixerEditor {
         let channel_gate = self.channels[index].gate_enabled;
         let channel_comp = self.channels[index].comp_enabled;
         let channel_eq = self.channels[index].eq_enabled;
-        let is_selected = self.selected_channel == Some(index);
+        let is_selected = self.selection == Some(Selection::Channel(index));
 
         let frame_color = if is_selected {
             Color32::from_rgb(50, 65, 80)
@@ -641,7 +1091,6 @@ impl MixerEditor {
         };
 
         let strip_inner = self.strip_inner();
-        let mut should_select = false;
 
         let frame_response = egui::Frame::default()
             .fill(frame_color)
@@ -651,23 +1100,42 @@ impl MixerEditor {
                 ui.set_min_width(strip_inner);
                 ui.set_max_width(strip_inner);
 
-                let bg_rect = ui.available_rect_before_wrap();
-                let bg_response =
-                    ui.interact(bg_rect, ui.id().with(("strip_bg", index)), Sense::click());
-                if bg_response.clicked() {
-                    should_select = true;
-                }
-
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
 
                     // ── Label ──
                     ui.label(egui::RichText::new(&channel_label).strong().size(11.0));
 
-                    // ── G / C / E buttons ──
-                    let gce_btn_w = (strip_inner - 8.0) / 3.0;
+                    // ── H / G / C / E buttons ──
+                    let hgce_btn_w = (strip_inner - 10.0) / 4.0;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
+
+                        // HPF button
+                        let channel_hpf = self.channels[index].hpf_enabled;
+                        let hpf_fill = if channel_hpf {
+                            Color32::from_rgb(150, 80, 150)
+                        } else {
+                            Color32::from_rgb(48, 48, 52)
+                        };
+                        let hpf_text = if channel_hpf {
+                            Color32::WHITE
+                        } else {
+                            Color32::from_gray(120)
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("H").small().color(hpf_text))
+                                    .fill(hpf_fill)
+                                    .min_size(Vec2::new(hgce_btn_w, SMALL_BTN_H)),
+                            )
+                            .clicked()
+                        {
+                            self.channels[index].hpf_enabled = !self.channels[index].hpf_enabled;
+                            self.update_processing_param(ctx, index, "hpf", "enabled");
+                        }
+
+                        // G / C / E buttons
                         for (label, enabled, active_color, prop) in [
                             (
                                 "G",
@@ -704,7 +1172,7 @@ impl MixerEditor {
                                         egui::RichText::new(label).small().color(text_col),
                                     )
                                     .fill(fill)
-                                    .min_size(Vec2::new(gce_btn_w, SMALL_BTN_H)),
+                                    .min_size(Vec2::new(hgce_btn_w, SMALL_BTN_H)),
                                 )
                                 .clicked()
                             {
@@ -814,7 +1282,12 @@ impl MixerEditor {
                             let lvl = self.channels[index].aux_sends[*aux];
                             format!("A{} {}", aux + 1, format_db(lvl))
                         }
-                        _ => format_pan(channel_pan),
+                        ActiveControl::Pan(ch) if *ch == index => format_pan(channel_pan),
+                        _ => {
+                            let db_str = format_db(channel_fader);
+                            let pan_str = format_pan(channel_pan);
+                            format!("{} {}", pan_str, db_str)
+                        }
                     };
                     self.render_lcd(ui, &display_text, strip_inner - 4.0, LCD_H);
 
@@ -839,7 +1312,9 @@ impl MixerEditor {
                             self.render_db_scale(ui, FADER_HEIGHT);
                             ui.add_space(1.0);
                             let fader_response = self.render_fader(ui, index, FADER_HEIGHT);
-                            if fader_response.dragged() {
+                            if fader_response.double_clicked() {
+                                self.update_channel_property(ctx, index, "fader");
+                            } else if fader_response.dragged() {
                                 self.active_control = ActiveControl::Fader(index);
                                 self.update_channel_property(ctx, index, "fader");
                             } else if fader_response.drag_stopped() {
@@ -897,24 +1372,46 @@ impl MixerEditor {
                 });
             });
 
-        if should_select {
-            self.selected_channel = Some(index);
+        // Detect click on strip background (after widgets, so buttons take priority)
+        let strip_rect = frame_response.response.rect;
+        let bg_click = ui.interact(
+            strip_rect,
+            ui.id().with(("strip_click", index)),
+            Sense::click(),
+        );
+        if bg_click.clicked() {
+            self.selection = Some(Selection::Channel(index));
         }
-        let _ = frame_response;
     }
 
     /// Render the main/master strip (compact, for bus row).
     fn render_main_strip(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
         let main_meter_key = format!("{}:meter:main", self.block_id);
         let main_meter_data = meter_store.get(&self.flow_id, &main_meter_key);
+        let is_selected = self.selection == Some(Selection::Main);
 
-        egui::Frame::default()
-            .fill(Color32::from_rgb(45, 45, 55))
+        let frame_color = if is_selected {
+            Color32::from_rgb(55, 55, 75)
+        } else {
+            Color32::from_rgb(45, 45, 55)
+        };
+
+        let mut should_select = false;
+
+        let frame_response = egui::Frame::default()
+            .fill(frame_color)
             .corner_radius(CornerRadius::same(3))
             .inner_margin(STRIP_MARGIN)
             .show(ui, |ui| {
                 ui.set_min_width(BUS_STRIP_INNER);
                 ui.set_max_width(BUS_STRIP_INNER);
+
+                let bg_rect = ui.available_rect_before_wrap();
+                let bg_response =
+                    ui.interact(bg_rect, ui.id().with("main_strip_bg"), Sense::click());
+                if bg_response.clicked() {
+                    should_select = true;
+                }
 
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
@@ -948,9 +1445,18 @@ impl MixerEditor {
                             let mut main_fader_db = linear_to_db(self.main_fader as f64) as f32;
                             let (rect, response) = ui.allocate_exact_size(
                                 Vec2::new(20.0, BUS_FADER_HEIGHT),
-                                Sense::drag(),
+                                Sense::click_and_drag(),
                             );
-                            if response.dragged() {
+                            if response.double_clicked() {
+                                if (main_fader_db - 0.0).abs() < 0.5 {
+                                    self.main_fader = 0.0;
+                                    main_fader_db = -60.0;
+                                } else {
+                                    self.main_fader = 1.0;
+                                    main_fader_db = 0.0;
+                                }
+                                self.update_main_fader(ctx);
+                            } else if response.dragged() {
                                 self.active_control = ActiveControl::MainFader;
                                 let delta = -response.drag_delta().y;
                                 let db_per_pixel = 66.0 / (BUS_FADER_HEIGHT - 10.0);
@@ -1018,6 +1524,11 @@ impl MixerEditor {
                     }
                 });
             });
+
+        if should_select {
+            self.selection = Some(Selection::Main);
+        }
+        let _ = frame_response;
     }
 
     /// Render the group strips section (compact, for bus row).
@@ -1067,7 +1578,9 @@ impl MixerEditor {
                                 ui.add_space(1.0);
                                 let fader_response =
                                     self.render_group_fader(ui, sg_idx, BUS_FADER_HEIGHT);
-                                if fader_response.dragged() {
+                                if fader_response.double_clicked() {
+                                    self.update_group_fader(ctx, sg_idx);
+                                } else if fader_response.dragged() {
                                     self.active_control = ActiveControl::GroupFader(sg_idx);
                                     self.update_group_fader(ctx, sg_idx);
                                 } else if fader_response.drag_stopped() {
@@ -1152,7 +1665,9 @@ impl MixerEditor {
                                 ui.add_space(1.0);
                                 let fader_response =
                                     self.render_aux_master_fader(ui, aux_idx, BUS_FADER_HEIGHT);
-                                if fader_response.dragged() {
+                                if fader_response.double_clicked() {
+                                    self.update_aux_master_fader(ctx, aux_idx);
+                                } else if fader_response.dragged() {
                                     self.active_control = ActiveControl::AuxMasterFader(aux_idx);
                                     self.update_aux_master_fader(ctx, aux_idx);
                                 } else if fader_response.drag_stopped() {
@@ -1194,9 +1709,18 @@ impl MixerEditor {
         let fader_val = self.groups[sg_idx].fader;
         let mut fader_db = linear_to_db(fader_val as f64) as f32;
 
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(16.0, height), Sense::drag());
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(16.0, height), Sense::click_and_drag());
 
-        if response.dragged() {
+        if response.double_clicked() {
+            if (fader_db - 0.0).abs() < 0.5 {
+                self.groups[sg_idx].fader = 0.0;
+                fader_db = -60.0;
+            } else {
+                self.groups[sg_idx].fader = 1.0;
+                fader_db = 0.0;
+            }
+        } else if response.dragged() {
             let delta = -response.drag_delta().y;
             let db_per_pixel = 66.0 / (height - 10.0);
             fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
@@ -1236,9 +1760,18 @@ impl MixerEditor {
         let fader_val = self.aux_masters[aux_idx].fader;
         let mut fader_db = linear_to_db(fader_val as f64) as f32;
 
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(16.0, height), Sense::drag());
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(16.0, height), Sense::click_and_drag());
 
-        if response.dragged() {
+        if response.double_clicked() {
+            if (fader_db - 0.0).abs() < 0.5 {
+                self.aux_masters[aux_idx].fader = 0.0;
+                fader_db = -60.0;
+            } else {
+                self.aux_masters[aux_idx].fader = 1.0;
+                fader_db = 0.0;
+            }
+        } else if response.dragged() {
             let delta = -response.drag_delta().y;
             let db_per_pixel = 66.0 / (height - 10.0);
             fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
@@ -1543,9 +2076,19 @@ impl MixerEditor {
         let mut fader_db = linear_to_db(channel.fader as f64) as f32;
 
         // Allocate exact size for the fader
-        let (rect, response) = ui.allocate_exact_size(Vec2::new(16.0, height), Sense::drag());
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::new(16.0, height), Sense::click_and_drag());
 
-        if response.dragged() {
+        // Double-click: toggle between 0 dB and -inf
+        if response.double_clicked() {
+            if (fader_db - 0.0).abs() < 0.5 {
+                channel.fader = 0.0;
+                fader_db = -60.0;
+            } else {
+                channel.fader = 1.0;
+                fader_db = 0.0;
+            }
+        } else if response.dragged() {
             // Calculate new dB value based on drag position
             let delta = -response.drag_delta().y; // Negative because y increases downward
             let db_per_pixel = 66.0 / (height - 10.0); // -60 to +6 = 66 dB range
@@ -1724,11 +2267,21 @@ impl MixerEditor {
         }
     }
 
-    /// Render the detail panel for the selected channel (Gate/Comp/EQ controls).
+    /// Render the detail panel for the current selection.
     fn render_detail_panel(&mut self, ui: &mut Ui, ctx: &Context) {
-        let Some(index) = self.selected_channel else {
-            return;
-        };
+        match self.selection.clone() {
+            Some(Selection::Channel(index)) => {
+                self.render_channel_detail_panel(ui, ctx, index);
+            }
+            Some(Selection::Main) => {
+                self.render_main_detail_panel(ui, ctx);
+            }
+            None => {}
+        }
+    }
+
+    /// Render the detail panel for a selected channel (HPF/Gate/Comp/EQ).
+    fn render_channel_detail_panel(&mut self, ui: &mut Ui, ctx: &Context, index: usize) {
         let ch_num = index + 1;
 
         egui::Frame::default()
@@ -1741,7 +2294,7 @@ impl MixerEditor {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Close").clicked() {
-                            self.selected_channel = None;
+                            self.selection = None;
                         }
                     });
                 });
@@ -1749,6 +2302,13 @@ impl MixerEditor {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
+                    // Gain section
+                    self.render_gain_section(ui, ctx, index);
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(16.0);
+
                     // HPF section
                     self.render_hpf_section(ui, ctx, index);
 
@@ -1776,7 +2336,307 @@ impl MixerEditor {
             });
     }
 
+    /// Render the detail panel for the main bus (Comp/EQ/Limiter).
+    fn render_main_detail_panel(&mut self, ui: &mut Ui, ctx: &Context) {
+        egui::Frame::default()
+            .fill(Color32::from_rgb(35, 35, 40))
+            .inner_margin(8.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("MAIN - Processing")
+                            .strong()
+                            .color(Color32::from_rgb(200, 200, 255)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            self.selection = None;
+                        }
+                    });
+                });
+
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    // Compressor section
+                    self.render_main_comp_section(ui, ctx);
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(16.0);
+
+                    // EQ section
+                    self.render_main_eq_section(ui, ctx);
+
+                    ui.add_space(16.0);
+                    ui.separator();
+                    ui.add_space(16.0);
+
+                    // Limiter section
+                    self.render_main_limiter_section(ui, ctx);
+                });
+            });
+    }
+
+    /// Render main bus compressor controls.
+    fn render_main_comp_section(&mut self, ui: &mut Ui, ctx: &Context) {
+        ui.vertical(|ui| {
+            let enabled = self.main_comp_enabled;
+            let header_color = if enabled {
+                Color32::from_rgb(180, 100, 0)
+            } else {
+                Color32::GRAY
+            };
+
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("COMPRESSOR")
+                        .color(header_color)
+                        .strong(),
+                );
+                if ui.checkbox(&mut self.main_comp_enabled, "").changed() {
+                    self.update_main_processing_param(ctx, "comp", "enabled");
+                }
+            });
+
+            ui.add_space(4.0);
+            if !enabled {
+                ui.disable();
+            }
+
+            ui.horizontal(|ui| {
+                ui.label("Thresh:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_comp_threshold)
+                            .range(-60.0..=0.0)
+                            .suffix(" dB")
+                            .speed(0.5),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "comp", "threshold");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Ratio:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_comp_ratio)
+                            .range(1.0..=20.0)
+                            .suffix(":1")
+                            .speed(0.1),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "comp", "ratio");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Attack:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_comp_attack)
+                            .range(0.1..=200.0)
+                            .suffix(" ms")
+                            .speed(0.5),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "comp", "attack");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Release:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_comp_release)
+                            .range(10.0..=1000.0)
+                            .suffix(" ms")
+                            .speed(1.0),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "comp", "release");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Makeup:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_comp_makeup)
+                            .range(0.0..=24.0)
+                            .suffix(" dB")
+                            .speed(0.2),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "comp", "makeup");
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label("Knee:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_comp_knee)
+                            .range(-24.0..=0.0)
+                            .suffix(" dB")
+                            .speed(0.2),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "comp", "knee");
+                }
+            });
+        });
+    }
+
+    /// Render main bus EQ controls.
+    fn render_main_eq_section(&mut self, ui: &mut Ui, ctx: &Context) {
+        ui.vertical(|ui| {
+            let enabled = self.main_eq_enabled;
+            let header_color = if enabled {
+                Color32::from_rgb(0, 100, 180)
+            } else {
+                Color32::GRAY
+            };
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("EQ").color(header_color).strong());
+                if ui.checkbox(&mut self.main_eq_enabled, "").changed() {
+                    self.update_main_processing_param(ctx, "eq", "enabled");
+                }
+            });
+
+            ui.add_space(4.0);
+            if !enabled {
+                ui.disable();
+            }
+
+            let band_names = ["Low", "Lo-Mid", "Hi-Mid", "High"];
+
+            ui.horizontal(|ui| {
+                for (band, name) in band_names.iter().enumerate() {
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new(*name).small());
+
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.main_eq_bands[band].0)
+                                    .range(20.0..=20000.0)
+                                    .suffix(" Hz")
+                                    .speed(10.0),
+                            )
+                            .changed()
+                        {
+                            self.update_main_eq_param(ctx, band, "freq");
+                        }
+
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.main_eq_bands[band].1)
+                                    .range(-15.0..=15.0)
+                                    .suffix(" dB")
+                                    .speed(0.1),
+                            )
+                            .changed()
+                        {
+                            self.update_main_eq_param(ctx, band, "gain");
+                        }
+
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut self.main_eq_bands[band].2)
+                                    .range(0.1..=10.0)
+                                    .prefix("Q ")
+                                    .speed(0.05),
+                            )
+                            .changed()
+                        {
+                            self.update_main_eq_param(ctx, band, "q");
+                        }
+                    });
+
+                    if band < 3 {
+                        ui.add_space(8.0);
+                    }
+                }
+            });
+        });
+    }
+
+    /// Render main bus limiter controls.
+    fn render_main_limiter_section(&mut self, ui: &mut Ui, ctx: &Context) {
+        ui.vertical(|ui| {
+            let enabled = self.main_limiter_enabled;
+            let header_color = if enabled {
+                Color32::from_rgb(200, 60, 60)
+            } else {
+                Color32::GRAY
+            };
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("LIMITER").color(header_color).strong());
+                if ui.checkbox(&mut self.main_limiter_enabled, "").changed() {
+                    self.update_main_processing_param(ctx, "limiter", "enabled");
+                }
+            });
+
+            ui.add_space(4.0);
+            if !enabled {
+                ui.disable();
+            }
+
+            ui.horizontal(|ui| {
+                ui.label("Thresh:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.main_limiter_threshold)
+                            .range(-20.0..=0.0)
+                            .suffix(" dB")
+                            .speed(0.2),
+                    )
+                    .changed()
+                {
+                    self.update_main_processing_param(ctx, "limiter", "threshold");
+                }
+            });
+        });
+    }
+
     /// Render Gate controls.
+    /// Render HPF controls.
+    /// Render input gain control.
+    fn render_gain_section(&mut self, ui: &mut Ui, ctx: &Context, index: usize) {
+        ui.vertical(|ui| {
+            ui.label(
+                egui::RichText::new("GAIN")
+                    .color(Color32::from_rgb(200, 200, 200))
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Gain:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.channels[index].gain)
+                            .range(-20.0..=20.0)
+                            .suffix(" dB")
+                            .speed(0.2),
+                    )
+                    .changed()
+                {
+                    self.update_channel_property(ctx, index, "gain");
+                }
+            });
+        });
+    }
+
     /// Render HPF controls.
     fn render_hpf_section(&mut self, ui: &mut Ui, ctx: &Context, index: usize) {
         ui.vertical(|ui| {
@@ -2235,8 +3095,120 @@ impl MixerEditor {
         });
     }
 
+    /// Update a main bus processing parameter via API.
+    fn update_main_processing_param(&mut self, ctx: &Context, processor: &str, param: &str) {
+        if !self.live_updates {
+            return;
+        }
+
+        let (element_suffix, gst_prop, value) = match (processor, param) {
+            ("comp", "enabled") => (
+                "main_comp".to_string(),
+                "enabled".to_string(),
+                PropertyValue::Bool(self.main_comp_enabled),
+            ),
+            ("comp", "threshold") => (
+                "main_comp".to_string(),
+                "al".to_string(),
+                PropertyValue::Float(db_to_linear_f64(self.main_comp_threshold as f64)),
+            ),
+            ("comp", "ratio") => (
+                "main_comp".to_string(),
+                "cr".to_string(),
+                PropertyValue::Float(self.main_comp_ratio as f64),
+            ),
+            ("comp", "attack") => (
+                "main_comp".to_string(),
+                "at".to_string(),
+                PropertyValue::Float(self.main_comp_attack as f64),
+            ),
+            ("comp", "release") => (
+                "main_comp".to_string(),
+                "rt".to_string(),
+                PropertyValue::Float(self.main_comp_release as f64),
+            ),
+            ("comp", "makeup") => (
+                "main_comp".to_string(),
+                "mk".to_string(),
+                PropertyValue::Float(db_to_linear_f64(self.main_comp_makeup as f64)),
+            ),
+            ("comp", "knee") => (
+                "main_comp".to_string(),
+                "kn".to_string(),
+                PropertyValue::Float(
+                    db_to_linear_f64(self.main_comp_knee as f64).clamp(0.0631, 1.0),
+                ),
+            ),
+            ("eq", "enabled") => (
+                "main_eq".to_string(),
+                "enabled".to_string(),
+                PropertyValue::Bool(self.main_eq_enabled),
+            ),
+            ("limiter", "enabled") => (
+                "main_limiter".to_string(),
+                "enabled".to_string(),
+                PropertyValue::Bool(self.main_limiter_enabled),
+            ),
+            ("limiter", "threshold") => (
+                "main_limiter".to_string(),
+                "th".to_string(),
+                PropertyValue::Float(db_to_linear_f64(self.main_limiter_threshold as f64)),
+            ),
+            _ => return,
+        };
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:{}", self.block_id, element_suffix);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, &gst_prop, value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update a main bus EQ band parameter via API.
+    fn update_main_eq_param(&mut self, ctx: &Context, band: usize, param: &str) {
+        if !self.live_updates {
+            return;
+        }
+
+        let (freq, gain, q) = self.main_eq_bands[band];
+
+        let (gst_prop, value) = match param {
+            "freq" => (format!("f-{}", band), PropertyValue::Float(freq as f64)),
+            "gain" => (
+                format!("g-{}", band),
+                PropertyValue::Float(db_to_linear_f64(gain as f64)),
+            ),
+            "q" => (format!("q-{}", band), PropertyValue::Float(q as f64)),
+            _ => return,
+        };
+
+        let api = self.api.clone();
+        let flow_id = self.flow_id;
+        let element_id = format!("{}:main_eq", self.block_id);
+        let ctx = ctx.clone();
+
+        crate::app::spawn_task(async move {
+            let _ = api
+                .update_element_property(&flow_id, &element_id, &gst_prop, value)
+                .await;
+            ctx.request_repaint();
+        });
+    }
+
     /// Handle keyboard shortcuts.
     fn handle_keyboard(&mut self, ui: &mut Ui, ctx: &Context) {
+        // Ctrl+S = Save mixer state
+        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::S)) {
+            self.save_requested = true;
+            self.status = "Saving mixer state...".to_string();
+        }
+
         // Number keys 1-9, 0 for channel selection
         for (key, ch) in [
             (egui::Key::Num1, 0),
@@ -2251,13 +3223,19 @@ impl MixerEditor {
             (egui::Key::Num0, 9),
         ] {
             if ui.input(|i| i.key_pressed(key)) && ch < self.channels.len() {
-                self.selected_channel = Some(ch);
+                self.selection = Some(Selection::Channel(ch));
             }
         }
 
+        // Extract selected channel index for channel-specific shortcuts
+        let selected_ch = match self.selection {
+            Some(Selection::Channel(ch)) => Some(ch),
+            _ => None,
+        };
+
         // M = Mute selected channel
         if ui.input(|i| i.key_pressed(egui::Key::M)) {
-            if let Some(ch) = self.selected_channel {
+            if let Some(ch) = selected_ch {
                 self.channels[ch].mute = !self.channels[ch].mute;
                 self.update_channel_property(ctx, ch, "mute");
             }
@@ -2265,13 +3243,13 @@ impl MixerEditor {
 
         // P = PFL selected channel
         if ui.input(|i| i.key_pressed(egui::Key::P)) {
-            if let Some(ch) = self.selected_channel {
+            if let Some(ch) = selected_ch {
                 self.channels[ch].pfl = !self.channels[ch].pfl;
             }
         }
 
         // Up/Down = Adjust fader
-        if let Some(ch) = self.selected_channel {
+        if let Some(ch) = selected_ch {
             let fader_step = 0.05;
             if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
                 self.channels[ch].fader = (self.channels[ch].fader + fader_step).min(2.0);
@@ -2724,7 +3702,11 @@ fn db_to_linear_f64(db: f64) -> f64 {
 
 /// Convert dB to linear scale (f32).
 fn db_to_linear_f32(db: f32) -> f32 {
-    10.0_f32.powf(db / 20.0)
+    if db <= -60.0 {
+        0.0
+    } else {
+        10.0_f32.powf(db / 20.0)
+    }
 }
 
 /// Convert linear to dB scale.
