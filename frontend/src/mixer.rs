@@ -2154,11 +2154,9 @@ impl MixerEditor {
                 "rt".to_string(),
                 PropertyValue::Float(channel.gate_release as f64),
             ),
-            ("gate", "range") => (
-                format!("gate_{}", index),
-                "rr".to_string(),
-                PropertyValue::Float(db_to_linear_f64(channel.gate_range as f64)),
-            ),
+            // Note: LSP gate does not have a settable range property
+            // ("rr" doesn't exist, "gr" is read-only reduction meter)
+            ("gate", "range") => return,
             ("comp", "threshold") => (
                 format!("comp_{}", index),
                 "al".to_string(),
@@ -2352,18 +2350,18 @@ impl MixerEditor {
             }
             "gate_enabled" => (
                 format!("gate_{}", index),
-                "enabled",
-                PropertyValue::Bool(channel.gate_enabled),
+                "bypass",
+                PropertyValue::Bool(!channel.gate_enabled),
             ),
             "comp_enabled" => (
                 format!("comp_{}", index),
-                "enabled",
-                PropertyValue::Bool(channel.comp_enabled),
+                "bypass",
+                PropertyValue::Bool(!channel.comp_enabled),
             ),
             "eq_enabled" => (
                 format!("eq_{}", index),
-                "enabled",
-                PropertyValue::Bool(channel.eq_enabled),
+                "bypass",
+                PropertyValue::Bool(!channel.eq_enabled),
             ),
             "pfl" => (
                 format!("pfl_volume_{}", index),

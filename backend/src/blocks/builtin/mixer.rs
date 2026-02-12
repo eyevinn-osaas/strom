@@ -1072,7 +1072,7 @@ fn make_gate_element(
         .name(name)
         .build()
     {
-        gate.set_property("enabled", enabled);
+        gate.set_property("bypass", !enabled);
         gate.set_property("gt", db_to_linear(threshold_db) as f32);
         gate.set_property("at", attack_ms as f32);
         gate.set_property("rt", release_ms as f32);
@@ -1106,7 +1106,7 @@ fn make_compressor_element(
         .name(name)
         .build()
     {
-        comp.set_property("enabled", enabled);
+        comp.set_property("bypass", !enabled);
         comp.set_property("al", db_to_linear(threshold_db) as f32);
         comp.set_property("cr", ratio as f32);
         comp.set_property("at", attack_ms as f32);
@@ -1137,7 +1137,7 @@ fn make_eq_element(
         .name(name)
         .build()
     {
-        eq.set_property("enabled", enabled);
+        eq.set_property("bypass", !enabled);
         for (band, (freq, gain_db, q)) in bands.iter().enumerate() {
             eq.set_property_from_str(&format!("ft-{}", band), "Bell");
             eq.set_property(&format!("f-{}", band), *freq as f32);
@@ -1167,8 +1167,8 @@ fn make_limiter_element(
         .name(name)
         .build()
     {
-        if lim.find_property("enabled").is_some() {
-            lim.set_property("enabled", enabled);
+        if lim.find_property("bypass").is_some() {
+            lim.set_property("bypass", !enabled);
         }
         if lim.find_property("th").is_some() {
             lim.set_property("th", db_to_linear(threshold_db) as f32);
@@ -1726,8 +1726,8 @@ fn mixer_definition() -> BlockDefinition {
         default_value: Some(PropertyValue::Bool(false)),
         mapping: PropertyMapping {
             element_id: "main_comp".to_string(),
-            property_name: "enabled".to_string(),
-            transform: None,
+            property_name: "bypass".to_string(),
+            transform: Some("bool_invert".to_string()),
         },
     });
     for (prop_suffix, label, gst_prop, default, desc, transform) in [
@@ -1795,8 +1795,8 @@ fn mixer_definition() -> BlockDefinition {
         default_value: Some(PropertyValue::Bool(false)),
         mapping: PropertyMapping {
             element_id: "main_eq".to_string(),
-            property_name: "enabled".to_string(),
-            transform: None,
+            property_name: "bypass".to_string(),
+            transform: Some("bool_invert".to_string()),
         },
     });
     let main_eq_band_defaults = [
@@ -1857,8 +1857,8 @@ fn mixer_definition() -> BlockDefinition {
         default_value: Some(PropertyValue::Bool(false)),
         mapping: PropertyMapping {
             element_id: "main_limiter".to_string(),
-            property_name: "enabled".to_string(),
-            transform: None,
+            property_name: "bypass".to_string(),
+            transform: Some("bool_invert".to_string()),
         },
     });
     exposed_properties.push(ExposedProperty {
@@ -2117,8 +2117,8 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: format!("gate_{}", ch - 1),
-                property_name: "enabled".to_string(),
-                transform: None,
+                property_name: "bypass".to_string(),
+                transform: Some("bool_invert".to_string()),
             },
         });
 
@@ -2161,18 +2161,8 @@ fn mixer_definition() -> BlockDefinition {
             },
         });
 
-        exposed_properties.push(ExposedProperty {
-            name: format!("ch{}_gate_range", ch),
-            label: format!("Ch {} Gate Range", ch),
-            description: format!("Channel {} gate range in dB (-80 to 0)", ch),
-            property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(-80.0)),
-            mapping: PropertyMapping {
-                element_id: format!("gate_{}", ch - 1),
-                property_name: "rr".to_string(),
-                transform: Some("db_to_linear".to_string()),
-            },
-        });
+        // Note: LSP gate has no settable range property
+        // ("rr" doesn't exist, "gr" is a read-only reduction meter)
 
         // ============================================================
         // Compressor properties
@@ -2185,8 +2175,8 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
-                property_name: "enabled".to_string(),
-                transform: None,
+                property_name: "bypass".to_string(),
+                transform: Some("bool_invert".to_string()),
             },
         });
 
@@ -2279,8 +2269,8 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: format!("eq_{}", ch - 1),
-                property_name: "enabled".to_string(),
-                transform: None,
+                property_name: "bypass".to_string(),
+                transform: Some("bool_invert".to_string()),
             },
         });
 
