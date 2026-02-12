@@ -4,7 +4,7 @@
 //! - Configurable number of input channels (1-32)
 //! - Per-channel: gate, compressor, 4-band parametric EQ, pan, fader, mute
 //! - Aux sends (0-4 configurable aux buses)
-//! - Subgroups (0-4 configurable)
+//! - Groups (0-4 configurable)
 //! - PFL (Pre-Fader Listen) bus
 //! - Main stereo bus with audiomixer
 //! - Per-channel and bus metering
@@ -13,7 +13,7 @@
 //! ```text
 //! input_N → audioconvert → capsfilter(F32LE) → gate → compressor → EQ →
 //!           pre_fader_tee → audiopanorama_N → volume_N → post_fader_tee →
-//!           level_N → [subgroup or main audiomixer]
+//!           level_N → [group or main audiomixer]
 //!
 //! pre_fader_tee → pfl_volume_N → pfl_queue_N → pfl_mixer
 //! post_fader_tee → aux_send_N_M → aux_queue_N_M → aux_M_mixer
@@ -38,8 +38,8 @@ const MAX_CHANNELS: usize = 32;
 const DEFAULT_CHANNELS: usize = 8;
 /// Maximum number of aux buses
 const MAX_AUX_BUSES: usize = 4;
-/// Maximum number of subgroups
-const MAX_SUBGROUPS: usize = 4;
+/// Maximum number of groups
+const MAX_GROUPS: usize = 4;
 
 /// Mixer block builder.
 pub struct MixerBuilder;
@@ -107,10 +107,10 @@ impl BlockBuilder for MixerBuilder {
 
         let num_channels = parse_num_channels(properties);
         let num_aux_buses = parse_num_aux_buses(properties);
-        let num_subgroups = parse_num_subgroups(properties);
+        let num_groups = parse_num_groups(properties);
         info!(
-            "Mixer config: {} channels, {} aux buses, {} subgroups",
-            num_channels, num_aux_buses, num_subgroups
+            "Mixer config: {} channels, {} aux buses, {} groups",
+            num_channels, num_aux_buses, num_groups
         );
 
         let mut elements = Vec::new();
@@ -239,44 +239,44 @@ impl BlockBuilder for MixerBuilder {
         }
 
         // ========================================================================
-        // Create Subgroups
+        // Create Groups
         // ========================================================================
-        for sg in 0..num_subgroups {
-            let sg_mixer_id = format!("{}:subgroup{}_mixer", instance_id, sg);
+        for sg in 0..num_groups {
+            let sg_mixer_id = format!("{}:group{}_mixer", instance_id, sg);
             let sg_mixer = gst::ElementFactory::make("audiomixer")
                 .name(&sg_mixer_id)
                 .build()
                 .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("subgroup{}_mixer: {}", sg, e))
+                    BlockBuildError::ElementCreation(format!("group{}_mixer: {}", sg, e))
                 })?;
             elements.push((sg_mixer_id.clone(), sg_mixer));
 
-            let sg_fader = get_float_prop(properties, &format!("subgroup{}_fader", sg + 1), 1.0);
-            let sg_mute = get_bool_prop(properties, &format!("subgroup{}_mute", sg + 1), false);
+            let sg_fader = get_float_prop(properties, &format!("group{}_fader", sg + 1), 1.0);
+            let sg_mute = get_bool_prop(properties, &format!("group{}_mute", sg + 1), false);
             let sg_volume_val = if sg_mute { 0.0 } else { sg_fader };
 
-            let sg_volume_id = format!("{}:subgroup{}_volume", instance_id, sg);
+            let sg_volume_id = format!("{}:group{}_volume", instance_id, sg);
             let sg_volume = gst::ElementFactory::make("volume")
                 .name(&sg_volume_id)
                 .property("volume", sg_volume_val)
                 .build()
                 .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("subgroup{}_volume: {}", sg, e))
+                    BlockBuildError::ElementCreation(format!("group{}_volume: {}", sg, e))
                 })?;
             elements.push((sg_volume_id.clone(), sg_volume));
 
-            let sg_level_id = format!("{}:subgroup{}_level", instance_id, sg);
+            let sg_level_id = format!("{}:group{}_level", instance_id, sg);
             let sg_level = gst::ElementFactory::make("level")
                 .name(&sg_level_id)
                 .property("interval", 100_000_000u64)
                 .property("post-messages", true)
                 .build()
                 .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("subgroup{}_level: {}", sg, e))
+                    BlockBuildError::ElementCreation(format!("group{}_level: {}", sg, e))
                 })?;
             elements.push((sg_level_id.clone(), sg_level));
 
-            // Link: subgroup_mixer → subgroup_volume → subgroup_level → main audiomixer
+            // Link: group_mixer → group_volume → group_level → main audiomixer
             internal_links.push((
                 ElementPadRef::pad(&sg_mixer_id, "src"),
                 ElementPadRef::pad(&sg_volume_id, "sink"),
@@ -664,7 +664,7 @@ impl BlockBuilder for MixerBuilder {
             ));
 
             // ----------------------------------------------------------------
-            // Multi-destination routing (Main + Subgroups)
+            // Multi-destination routing (Main + Groups)
             // Each destination has a volume element to enable/disable routing
             // ----------------------------------------------------------------
 
@@ -704,58 +704,58 @@ impl BlockBuilder for MixerBuilder {
                 ElementPadRef::element(&mixer_id),
             ));
 
-            // Route to subgroups
-            for sg in 0..num_subgroups {
-                let to_sg_enabled =
-                    get_bool_prop(properties, &format!("ch{}_to_sg{}", ch_num, sg + 1), false);
+            // Route to groups
+            for sg in 0..num_groups {
+                let to_grp_enabled =
+                    get_bool_prop(properties, &format!("ch{}_to_grp{}", ch_num, sg + 1), false);
 
-                let to_sg_vol_id = format!("{}:to_sg{}_vol_{}", instance_id, sg, ch);
-                let to_sg_vol = gst::ElementFactory::make("volume")
-                    .name(&to_sg_vol_id)
-                    .property("volume", if to_sg_enabled { 1.0 } else { 0.0 })
+                let to_grp_vol_id = format!("{}:to_grp{}_vol_{}", instance_id, sg, ch);
+                let to_grp_vol = gst::ElementFactory::make("volume")
+                    .name(&to_grp_vol_id)
+                    .property("volume", if to_grp_enabled { 1.0 } else { 0.0 })
                     .build()
                     .map_err(|e| {
                         BlockBuildError::ElementCreation(format!(
-                            "to_sg{}_vol ch{}: {}",
+                            "to_grp{}_vol ch{}: {}",
                             sg + 1,
                             ch_num,
                             e
                         ))
                     })?;
-                elements.push((to_sg_vol_id.clone(), to_sg_vol));
+                elements.push((to_grp_vol_id.clone(), to_grp_vol));
 
-                let to_sg_queue_id = format!("{}:to_sg{}_queue_{}", instance_id, sg, ch);
-                let to_sg_queue = gst::ElementFactory::make("queue")
-                    .name(&to_sg_queue_id)
+                let to_grp_queue_id = format!("{}:to_grp{}_queue_{}", instance_id, sg, ch);
+                let to_grp_queue = gst::ElementFactory::make("queue")
+                    .name(&to_grp_queue_id)
                     .property("max-size-buffers", 3u32)
                     .build()
                     .map_err(|e| {
                         BlockBuildError::ElementCreation(format!(
-                            "to_sg{}_queue ch{}: {}",
+                            "to_grp{}_queue ch{}: {}",
                             sg + 1,
                             ch_num,
                             e
                         ))
                     })?;
-                elements.push((to_sg_queue_id.clone(), to_sg_queue));
+                elements.push((to_grp_queue_id.clone(), to_grp_queue));
 
-                // Link: routing_tee → to_sg_vol → to_sg_queue → subgroup_mixer
-                let sg_mixer_id = format!("{}:subgroup{}_mixer", instance_id, sg);
+                // Link: routing_tee → to_grp_vol → to_grp_queue → group_mixer
+                let sg_mixer_id = format!("{}:group{}_mixer", instance_id, sg);
                 internal_links.push((
                     ElementPadRef::element(&routing_tee_id),
-                    ElementPadRef::pad(&to_sg_vol_id, "sink"),
+                    ElementPadRef::pad(&to_grp_vol_id, "sink"),
                 ));
                 internal_links.push((
-                    ElementPadRef::pad(&to_sg_vol_id, "src"),
-                    ElementPadRef::pad(&to_sg_queue_id, "sink"),
+                    ElementPadRef::pad(&to_grp_vol_id, "src"),
+                    ElementPadRef::pad(&to_grp_queue_id, "sink"),
                 ));
                 internal_links.push((
-                    ElementPadRef::pad(&to_sg_queue_id, "src"),
+                    ElementPadRef::pad(&to_grp_queue_id, "src"),
                     ElementPadRef::element(&sg_mixer_id),
                 ));
 
-                if to_sg_enabled {
-                    debug!("Channel {} routed to subgroup {}", ch_num, sg + 1);
+                if to_grp_enabled {
+                    debug!("Channel {} routed to group {}", ch_num, sg + 1);
                 }
             }
 
@@ -812,10 +812,10 @@ fn parse_num_aux_buses(properties: &HashMap<String, PropertyValue>) -> usize {
         .clamp(0, MAX_AUX_BUSES)
 }
 
-/// Parse number of subgroups from properties.
-fn parse_num_subgroups(properties: &HashMap<String, PropertyValue>) -> usize {
+/// Parse number of groups from properties.
+fn parse_num_groups(properties: &HashMap<String, PropertyValue>) -> usize {
     properties
-        .get("num_subgroups")
+        .get("num_groups")
         .and_then(|v| match v {
             PropertyValue::Int(i) => Some(*i as usize),
             PropertyValue::UInt(u) => Some(*u as usize),
@@ -823,7 +823,7 @@ fn parse_num_subgroups(properties: &HashMap<String, PropertyValue>) -> usize {
             _ => None,
         })
         .unwrap_or(0)
-        .clamp(0, MAX_SUBGROUPS)
+        .clamp(0, MAX_GROUPS)
 }
 
 /// Get a float property with default.
@@ -885,7 +885,7 @@ fn connect_mixer_meter_handler(
     let main_level_id = format!("{}:main_level", instance_id);
     let pfl_level_id = format!("{}:pfl_level", instance_id);
     let aux_level_prefix = format!("{}:aux", instance_id);
-    let subgroup_level_prefix = format!("{}:subgroup", instance_id);
+    let group_level_prefix = format!("{}:group", instance_id);
 
     bus.connect_message(None, move |_bus, msg| {
         if let MessageView::Element(element_msg) = msg.view() {
@@ -962,24 +962,24 @@ fn connect_mixer_meter_handler(
                             }
                         }
 
-                        // Check if this is a subgroup level meter
-                        // Format: "instance_id:subgroupN_level"
-                        if source_name.starts_with(&subgroup_level_prefix)
+                        // Check if this is a group level meter
+                        // Format: "instance_id:groupN_level"
+                        if source_name.starts_with(&group_level_prefix)
                             && source_name.contains("_level")
                         {
                             if let Some(sg_part) =
-                                source_name.strip_prefix(&format!("{}:subgroup", instance_id))
+                                source_name.strip_prefix(&format!("{}:group", instance_id))
                             {
                                 if let Some(sg_num_str) = sg_part.strip_suffix("_level") {
                                     if let Ok(sg_num) = sg_num_str.parse::<usize>() {
                                         trace!(
-                                            "Mixer subgroup{} meter: rms={:?}, peak={:?}",
+                                            "Mixer group{} meter: rms={:?}, peak={:?}",
                                             sg_num + 1,
                                             rms,
                                             peak
                                         );
                                         let element_id =
-                                            format!("{}:meter:subgroup{}", instance_id, sg_num + 1);
+                                            format!("{}:meter:group{}", instance_id, sg_num + 1);
                                         events.broadcast(StromEvent::MeterData {
                                             flow_id,
                                             element_id,
@@ -1130,11 +1130,11 @@ fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
         },
-        // Number of subgroups
+        // Number of groups
         ExposedProperty {
-            name: "num_subgroups".to_string(),
-            label: "Subgroups".to_string(),
-            description: "Number of subgroup buses (0-4)".to_string(),
+            name: "num_groups".to_string(),
+            label: "Groups".to_string(),
+            description: "Number of group buses (0-4)".to_string(),
             property_type: PropertyType::Enum {
                 values: vec![
                     EnumValue {
@@ -1162,7 +1162,7 @@ fn mixer_definition() -> BlockDefinition {
             default_value: Some(PropertyValue::String("0".to_string())),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
-                property_name: "num_subgroups".to_string(),
+                property_name: "num_groups".to_string(),
                 transform: None,
             },
         },
@@ -1196,29 +1196,29 @@ fn mixer_definition() -> BlockDefinition {
         });
     }
 
-    // Add subgroup properties
-    for sg in 1..=MAX_SUBGROUPS {
+    // Add group properties
+    for sg in 1..=MAX_GROUPS {
         exposed_properties.push(ExposedProperty {
-            name: format!("subgroup{}_fader", sg),
-            label: format!("Subgroup {} Fader", sg),
-            description: format!("Subgroup {} level (0.0 to 2.0)", sg),
+            name: format!("group{}_fader", sg),
+            label: format!("Group {} Fader", sg),
+            description: format!("Group {} level (0.0 to 2.0)", sg),
             property_type: PropertyType::Float,
             default_value: Some(PropertyValue::Float(1.0)),
             mapping: PropertyMapping {
-                element_id: format!("subgroup{}_volume", sg - 1),
+                element_id: format!("group{}_volume", sg - 1),
                 property_name: "volume".to_string(),
                 transform: None,
             },
         });
         exposed_properties.push(ExposedProperty {
-            name: format!("subgroup{}_mute", sg),
-            label: format!("Subgroup {} Mute", sg),
-            description: format!("Mute subgroup {}", sg),
+            name: format!("group{}_mute", sg),
+            label: format!("Group {} Mute", sg),
+            description: format!("Mute group {}", sg),
             property_type: PropertyType::Bool,
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
-                property_name: format!("subgroup{}_mute", sg),
+                property_name: format!("group{}_mute", sg),
                 transform: None,
             },
         });
@@ -1293,16 +1293,16 @@ fn mixer_definition() -> BlockDefinition {
             },
         });
 
-        // Routing to subgroups
-        for sg in 1..=MAX_SUBGROUPS {
+        // Routing to groups
+        for sg in 1..=MAX_GROUPS {
             exposed_properties.push(ExposedProperty {
-                name: format!("ch{}_to_sg{}", ch, sg),
+                name: format!("ch{}_to_grp{}", ch, sg),
                 label: format!("Ch {} → SG{}", ch, sg),
-                description: format!("Route channel {} to subgroup {}", ch, sg),
+                description: format!("Route channel {} to group {}", ch, sg),
                 property_type: PropertyType::Bool,
                 default_value: Some(PropertyValue::Bool(false)),
                 mapping: PropertyMapping {
-                    element_id: format!("to_sg{}_vol_{}", sg - 1, ch - 1),
+                    element_id: format!("to_grp{}_vol_{}", sg - 1, ch - 1),
                     property_name: "volume".to_string(),
                     transform: Some("bool_to_volume".to_string()),
                 },

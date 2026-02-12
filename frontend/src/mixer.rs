@@ -5,8 +5,7 @@
 //! - Real-time metering
 //! - Keyboard shortcuts for quick mixing
 //!
-//! Phase 1: Basic faders, pan, mute, metering
-//! Future: Gate, compressor, EQ, aux sends, subgroups, PFL
+//! Per-channel gate, compressor, 4-band EQ, aux sends, groups, PFL
 
 use egui::{Color32, Context, CornerRadius, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
@@ -20,8 +19,34 @@ const DEFAULT_FADER: f32 = 0.75;
 
 /// Maximum number of aux buses
 const MAX_AUX_BUSES: usize = 4;
-/// Maximum number of subgroups
-const MAX_SUBGROUPS: usize = 4;
+/// Maximum number of groups
+const MAX_GROUPS: usize = 4;
+
+// ── Layout constants ─────────────────────────────────────────────────
+/// Gap between strips
+const STRIP_GAP: f32 = 2.0;
+/// Inner margin inside each strip frame
+const STRIP_MARGIN: f32 = 3.0;
+/// Preferred knob diameter
+const KNOB_SIZE: f32 = 22.0;
+/// Small button height (G/C/E, routing)
+const SMALL_BTN_H: f32 = 18.0;
+/// Standard button height (mute, PFL)
+const BTN_H: f32 = 20.0;
+/// LCD display height
+const LCD_H: f32 = 16.0;
+/// Pan knob diameter
+const PAN_KNOB_SIZE: f32 = 24.0;
+/// Height of the fader + meter area
+const FADER_HEIGHT: f32 = 220.0;
+/// Minimum usable inner width (for 0 aux sends)
+const MIN_STRIP_INNER: f32 = 42.0;
+/// Height of bus master faders (shorter than channel faders)
+const BUS_FADER_HEIGHT: f32 = 120.0;
+/// Fixed inner width for bus master strips
+const BUS_STRIP_INNER: f32 = 52.0;
+/// Minimum height for the bus master row
+const BUS_ROW_MIN_HEIGHT: f32 = 200.0;
 
 /// A single channel strip in the mixer.
 #[derive(Debug, Clone)]
@@ -40,8 +65,8 @@ struct ChannelStrip {
     pfl: bool,
     /// Route to main mix
     to_main: bool,
-    /// Route to subgroups (up to 4)
-    to_sg: [bool; MAX_SUBGROUPS],
+    /// Route to groups (up to 4)
+    to_grp: [bool; MAX_GROUPS],
     /// Aux send levels (up to 4 aux buses)
     aux_sends: [f32; MAX_AUX_BUSES],
     /// Gate enabled
@@ -72,10 +97,10 @@ struct ChannelStrip {
     pending_update: bool,
 }
 
-/// Subgroup strip state.
+/// Group strip state.
 #[derive(Debug, Clone)]
-struct SubgroupStrip {
-    /// Subgroup index (0-based)
+struct GroupStrip {
+    /// Group index (0-based)
     index: usize,
     /// Fader level (0.0 to 2.0)
     fader: f32,
@@ -104,7 +129,7 @@ impl ChannelStrip {
             mute: false,
             pfl: false,
             to_main: true,
-            to_sg: [false; MAX_SUBGROUPS],
+            to_grp: [false; MAX_GROUPS],
             aux_sends: [0.0; MAX_AUX_BUSES],
             gate_enabled: false,
             gate_threshold: -40.0,
@@ -128,7 +153,7 @@ impl ChannelStrip {
     }
 }
 
-impl SubgroupStrip {
+impl GroupStrip {
     fn new(index: usize) -> Self {
         Self {
             index,
@@ -155,7 +180,7 @@ enum ActiveControl {
     Pan(usize),            // Channel index
     Fader(usize),          // Channel index
     AuxSend(usize, usize), // (Channel index, Aux index)
-    SubgroupFader(usize),  // Subgroup index
+    GroupFader(usize),     // Group index
     AuxMasterFader(usize), // Aux master index
     MainFader,
 }
@@ -171,13 +196,13 @@ pub struct MixerEditor {
     num_channels: usize,
     /// Number of aux buses
     num_aux_buses: usize,
-    /// Number of subgroups
-    num_subgroups: usize,
+    /// Number of groups
+    num_groups: usize,
 
     /// Channel strips
     channels: Vec<ChannelStrip>,
-    /// Subgroup strips
-    subgroups: Vec<SubgroupStrip>,
+    /// Group strips
+    groups: Vec<GroupStrip>,
     /// Aux masters
     aux_masters: Vec<AuxMaster>,
 
@@ -215,9 +240,9 @@ impl MixerEditor {
             block_id,
             num_channels,
             num_aux_buses: 0,
-            num_subgroups: 0,
+            num_groups: 0,
             channels,
-            subgroups: Vec::new(),
+            groups: Vec::new(),
             aux_masters: Vec::new(),
             selected_channel: None,
             active_control: ActiveControl::None,
@@ -229,6 +254,22 @@ impl MixerEditor {
             live_updates: true,
             last_update: instant::Instant::now(),
         }
+    }
+
+    /// Compute the usable inner width of a strip based on number of aux buses.
+    /// The aux knob row is typically the widest element.
+    fn strip_inner(&self) -> f32 {
+        if self.num_aux_buses == 0 {
+            return MIN_STRIP_INNER;
+        }
+        let knob_row =
+            self.num_aux_buses as f32 * KNOB_SIZE + (self.num_aux_buses as f32 - 1.0) * 2.0;
+        knob_row.max(MIN_STRIP_INNER)
+    }
+
+    /// Total strip width including margins.
+    fn strip_width(&self) -> f32 {
+        self.strip_inner() + STRIP_MARGIN * 2.0
     }
 
     /// Load channel values from block properties.
@@ -249,28 +290,28 @@ impl MixerEditor {
             .unwrap_or(0)
             .min(MAX_AUX_BUSES);
 
-        // Load number of subgroups
-        self.num_subgroups = properties
-            .get("num_subgroups")
+        // Load number of groups
+        self.num_groups = properties
+            .get("num_groups")
             .and_then(|v| match v {
                 PropertyValue::Int(i) => Some(*i as usize),
                 PropertyValue::String(s) => s.parse().ok(),
                 _ => None,
             })
             .unwrap_or(0)
-            .min(MAX_SUBGROUPS);
+            .min(MAX_GROUPS);
 
-        // Initialize subgroups
-        self.subgroups = (0..self.num_subgroups)
+        // Initialize groups
+        self.groups = (0..self.num_groups)
             .map(|i| {
-                let mut sg = SubgroupStrip::new(i);
+                let mut sg = GroupStrip::new(i);
                 if let Some(PropertyValue::Float(f)) =
-                    properties.get(&format!("subgroup{}_fader", i + 1))
+                    properties.get(&format!("group{}_fader", i + 1))
                 {
                     sg.fader = *f as f32;
                 }
                 if let Some(PropertyValue::Bool(b)) =
-                    properties.get(&format!("subgroup{}_mute", i + 1))
+                    properties.get(&format!("group{}_mute", i + 1))
                 {
                     sg.mute = *b;
                 }
@@ -315,12 +356,12 @@ impl MixerEditor {
             if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_to_main", ch_num)) {
                 ch.to_main = *b;
             }
-            // Routing to subgroups
-            for sg in 0..MAX_SUBGROUPS {
+            // Routing to groups
+            for sg in 0..MAX_GROUPS {
                 if let Some(PropertyValue::Bool(b)) =
-                    properties.get(&format!("ch{}_to_sg{}", ch_num, sg + 1))
+                    properties.get(&format!("ch{}_to_grp{}", ch_num, sg + 1))
                 {
-                    ch.to_sg[sg] = *b;
+                    ch.to_grp[sg] = *b;
                 }
             }
             // Aux send levels
@@ -417,10 +458,8 @@ impl MixerEditor {
 
     /// Show the mixer in fullscreen mode.
     pub fn show_fullscreen(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
-        // Handle keyboard shortcuts
         self.handle_keyboard(ui, ctx);
 
-        // Main layout - use available height for channel strips, reserve space for detail panel
         let available_height = ui.available_height();
         let detail_panel_height = if self.selected_channel.is_some() {
             180.0
@@ -428,77 +467,102 @@ impl MixerEditor {
             0.0
         };
         let status_bar_height = 30.0;
-        let channel_area_height = available_height - detail_panel_height - status_bar_height - 20.0;
+        let channel_area_height = (available_height
+            - BUS_ROW_MIN_HEIGHT
+            - detail_panel_height
+            - status_bar_height
+            - 16.0)
+            .max(300.0);
 
-        ui.vertical(|ui| {
-            // Channel strips area (scrollable horizontally, fixed height)
-            ui.allocate_ui_with_layout(
-                Vec2::new(ui.available_width(), channel_area_height.max(200.0)),
-                egui::Layout::left_to_right(egui::Align::Min),
-                |ui| {
-                    egui::ScrollArea::horizontal()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                // Render channel strips
-                                for i in 0..self.channels.len() {
-                                    let meter_key = format!("{}:meter:{}", self.block_id, i + 1);
-                                    let meter_data = meter_store.get(&self.flow_id, &meter_key);
+        // Outer vertical scroll wraps the entire mixer
+        egui::ScrollArea::vertical()
+            .id_salt("mixer_v_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.vertical(|ui| {
+                    // ── Row 1: Channel strips ──
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), channel_area_height),
+                        egui::Layout::left_to_right(egui::Align::Min),
+                        |ui| {
+                            egui::ScrollArea::horizontal()
+                                .id_salt("ch_h_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        for i in 0..self.channels.len() {
+                                            let meter_key =
+                                                format!("{}:meter:{}", self.block_id, i + 1);
+                                            let meter_data =
+                                                meter_store.get(&self.flow_id, &meter_key);
+                                            self.render_channel_strip(ui, ctx, i, meter_data);
+                                            ui.add_space(STRIP_GAP);
+                                        }
+                                    });
+                                });
+                        },
+                    );
 
-                                    self.render_channel_strip(ui, ctx, i, meter_data);
-                                    ui.add_space(4.0);
-                                }
+                    ui.separator();
 
-                                // Aux master section (if configured)
-                                if self.num_aux_buses > 0 {
-                                    ui.add_space(16.0);
-                                    ui.separator();
-                                    ui.add_space(16.0);
-                                    self.render_aux_masters(ui, ctx, meter_store);
-                                }
+                    // ── Row 2: Bus masters (aux + groups + main) ──
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), BUS_ROW_MIN_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Min),
+                        |ui| {
+                            egui::ScrollArea::horizontal()
+                                .id_salt("bus_h_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        if self.num_aux_buses > 0 {
+                                            self.render_aux_masters(ui, ctx, meter_store);
+                                            ui.add_space(8.0);
+                                            ui.separator();
+                                            ui.add_space(8.0);
+                                        }
 
-                                // Subgroup strips (if configured)
-                                if self.num_subgroups > 0 {
-                                    ui.add_space(16.0);
-                                    ui.separator();
-                                    ui.add_space(16.0);
-                                    self.render_subgroup_strips(ui, ctx, meter_store);
-                                }
+                                        if self.num_groups > 0 {
+                                            self.render_group_strips(ui, ctx, meter_store);
+                                            ui.add_space(8.0);
+                                            ui.separator();
+                                            ui.add_space(8.0);
+                                        }
 
-                                ui.add_space(16.0);
-                                ui.separator();
-                                ui.add_space(16.0);
+                                        self.render_main_strip(ui, ctx, meter_store);
+                                    });
+                                });
+                        },
+                    );
 
-                                // Main/Master section
-                                self.render_main_strip(ui, ctx, meter_store);
+                    // ── Row 3: Detail panel (Gate/Comp/EQ) ──
+                    if self.selected_channel.is_some() {
+                        ui.separator();
+                        egui::ScrollArea::horizontal()
+                            .id_salt("detail_h_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                self.render_detail_panel(ui, ctx);
                             });
-                        });
-                },
-            );
-
-            // Detail panel for selected channel (Gate/Comp/EQ)
-            if self.selected_channel.is_some() {
-                ui.separator();
-                self.render_detail_panel(ui, ctx);
-            }
-
-            // Status bar
-            ui.separator();
-            ui.horizontal(|ui| {
-                if let Some(error) = &self.error {
-                    ui.colored_label(Color32::RED, error);
-                } else if !self.status.is_empty() {
-                    ui.label(&self.status);
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if let Some(ch) = self.selected_channel {
-                        ui.label(format!("Selected: Ch {}", ch + 1));
                     }
-                    ui.checkbox(&mut self.live_updates, "Live");
+
+                    // ── Status bar ──
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if let Some(error) = &self.error {
+                            ui.colored_label(Color32::RED, error);
+                        } else if !self.status.is_empty() {
+                            ui.label(&self.status);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(ch) = self.selected_channel {
+                                ui.label(format!("Selected: Ch {}", ch + 1));
+                            }
+                            ui.checkbox(&mut self.live_updates, "Live");
+                        });
+                    });
                 });
             });
-        });
     }
 
     /// Render a single channel strip.
@@ -509,7 +573,6 @@ impl MixerEditor {
         index: usize,
         meter_data: Option<&MeterData>,
     ) {
-        // Extract values from channel to avoid borrow issues
         let channel_label = self.channels[index].label.clone();
         let channel_pan = self.channels[index].pan;
         let channel_fader = self.channels[index].fader;
@@ -519,28 +582,24 @@ impl MixerEditor {
         let channel_comp = self.channels[index].comp_enabled;
         let channel_eq = self.channels[index].eq_enabled;
         let is_selected = self.selected_channel == Some(index);
-        let strip_width = 60.0;
 
-        // Channel strip frame
         let frame_color = if is_selected {
-            Color32::from_rgb(60, 80, 100)
+            Color32::from_rgb(50, 65, 80)
         } else {
-            Color32::from_rgb(40, 40, 45)
+            Color32::from_rgb(38, 38, 42)
         };
 
-        // Track if we should select this channel (set by background click, but only if no button was clicked)
+        let strip_inner = self.strip_inner();
         let mut should_select = false;
 
         let frame_response = egui::Frame::default()
             .fill(frame_color)
-            .corner_radius(CornerRadius::same(4))
-            .inner_margin(4.0)
+            .corner_radius(CornerRadius::same(3))
+            .inner_margin(STRIP_MARGIN)
             .show(ui, |ui| {
-                ui.set_min_width(strip_width);
-                ui.set_max_width(strip_width);
+                ui.set_min_width(strip_inner);
+                ui.set_max_width(strip_inner);
 
-                // Background click detector - FIRST so it has lowest priority
-                // Buttons rendered after will override this
                 let bg_rect = ui.available_rect_before_wrap();
                 let bg_response =
                     ui.interact(bg_rect, ui.id().with(("strip_bg", index)), Sense::click());
@@ -549,280 +608,186 @@ impl MixerEditor {
                 }
 
                 ui.vertical_centered(|ui| {
-                    // Channel label
-                    ui.label(egui::RichText::new(&channel_label).strong());
+                    ui.spacing_mut().item_spacing.y = 2.0;
 
-                    ui.add_space(4.0);
+                    // ── Label ──
+                    ui.label(egui::RichText::new(&channel_label).strong().size(11.0));
 
-                    // Gate / Comp / EQ toggle buttons
+                    // ── G / C / E buttons ──
+                    let gce_btn_w = (strip_inner - 8.0) / 3.0;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-
-                        // Gate button
-                        let gate_color = if channel_gate {
-                            Color32::from_rgb(0, 150, 0)
-                        } else {
-                            Color32::from_rgb(50, 50, 55)
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("G").small().color(
-                                    if channel_gate {
-                                        Color32::WHITE
-                                    } else {
-                                        Color32::GRAY
-                                    },
-                                ))
-                                .fill(gate_color)
-                                .min_size(Vec2::new(20.0, 18.0)),
-                            )
-                            .clicked()
-                        {
-                            self.channels[index].gate_enabled = !self.channels[index].gate_enabled;
-                            self.update_channel_property(ctx, index, "gate_enabled");
-                        }
-
-                        // Compressor button
-                        let comp_color = if channel_comp {
-                            Color32::from_rgb(180, 100, 0)
-                        } else {
-                            Color32::from_rgb(50, 50, 55)
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("C").small().color(
-                                    if channel_comp {
-                                        Color32::WHITE
-                                    } else {
-                                        Color32::GRAY
-                                    },
-                                ))
-                                .fill(comp_color)
-                                .min_size(Vec2::new(20.0, 18.0)),
-                            )
-                            .clicked()
-                        {
-                            self.channels[index].comp_enabled = !self.channels[index].comp_enabled;
-                            self.update_channel_property(ctx, index, "comp_enabled");
-                        }
-
-                        // EQ button
-                        let eq_color = if channel_eq {
-                            Color32::from_rgb(0, 100, 180)
-                        } else {
-                            Color32::from_rgb(50, 50, 55)
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("E").small().color(
-                                    if channel_eq {
-                                        Color32::WHITE
-                                    } else {
-                                        Color32::GRAY
-                                    },
-                                ))
-                                .fill(eq_color)
-                                .min_size(Vec2::new(20.0, 18.0)),
-                            )
-                            .clicked()
-                        {
-                            self.channels[index].eq_enabled = !self.channels[index].eq_enabled;
-                            self.update_channel_property(ctx, index, "eq_enabled");
+                        for (label, enabled, active_color, prop) in [
+                            (
+                                "G",
+                                channel_gate,
+                                Color32::from_rgb(0, 150, 0),
+                                "gate_enabled",
+                            ),
+                            (
+                                "C",
+                                channel_comp,
+                                Color32::from_rgb(180, 100, 0),
+                                "comp_enabled",
+                            ),
+                            (
+                                "E",
+                                channel_eq,
+                                Color32::from_rgb(0, 100, 180),
+                                "eq_enabled",
+                            ),
+                        ] {
+                            let fill = if enabled {
+                                active_color
+                            } else {
+                                Color32::from_rgb(48, 48, 52)
+                            };
+                            let text_col = if enabled {
+                                Color32::WHITE
+                            } else {
+                                Color32::from_gray(120)
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(label).small().color(text_col),
+                                    )
+                                    .fill(fill)
+                                    .min_size(Vec2::new(gce_btn_w, SMALL_BTN_H)),
+                                )
+                                .clicked()
+                            {
+                                match prop {
+                                    "gate_enabled" => {
+                                        self.channels[index].gate_enabled =
+                                            !self.channels[index].gate_enabled
+                                    }
+                                    "comp_enabled" => {
+                                        self.channels[index].comp_enabled =
+                                            !self.channels[index].comp_enabled
+                                    }
+                                    "eq_enabled" => {
+                                        self.channels[index].eq_enabled =
+                                            !self.channels[index].eq_enabled
+                                    }
+                                    _ => {}
+                                }
+                                self.update_channel_property(ctx, index, prop);
+                            }
                         }
                     });
 
-                    // Aux sends (small knobs) - only show if aux buses configured
+                    // ── Aux send knobs ──
                     if self.num_aux_buses > 0 {
-                        ui.add_space(2.0);
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 2.0;
+                            ui.spacing_mut().item_spacing.x = 1.0;
                             for aux_idx in 0..self.num_aux_buses.min(MAX_AUX_BUSES) {
-                                let aux_level = self.channels[index].aux_sends[aux_idx];
-                                let aux_color = if aux_level > 0.01 {
-                                    Color32::from_rgb(100, 150, 200)
-                                } else {
-                                    Color32::from_rgb(50, 50, 55)
-                                };
-                                let response = ui.add(
-                                    egui::Button::new(
-                                        egui::RichText::new(format!("{}", aux_idx + 1))
-                                            .small()
-                                            .color(if aux_level > 0.01 {
-                                                Color32::WHITE
-                                            } else {
-                                                Color32::GRAY
-                                            }),
-                                    )
-                                    .fill(aux_color)
-                                    .min_size(Vec2::new(14.0, 14.0)),
-                                );
-                                if response.clicked() {
-                                    // Toggle aux send between 0 and 1
-                                    self.channels[index].aux_sends[aux_idx] =
-                                        if aux_level > 0.01 { 0.0 } else { 1.0 };
-                                    self.update_aux_send(ctx, index, aux_idx);
+                                let response = self.render_knob(ui, index, aux_idx);
+                                if response.dragged() {
+                                    self.active_control = ActiveControl::AuxSend(index, aux_idx);
+                                } else if response.drag_stopped() {
+                                    self.active_control = ActiveControl::None;
                                 }
-                                response.on_hover_text(format!(
-                                    "Aux {} send: {:.0}%",
-                                    aux_idx + 1,
-                                    aux_level * 100.0
-                                ));
                             }
                         });
                     }
 
-                    // Routing buttons - Main and Subgroups
-                    // Always show Main button, show SG buttons if subgroups configured
-                    ui.add_space(2.0);
-
-                    // Calculate button width based on number of destinations
-                    let num_destinations = 1 + self.num_subgroups;
-                    let button_width = if num_destinations <= 2 {
-                        (strip_width - 14.0) / num_destinations as f32
-                    } else {
-                        // For many destinations, use smaller buttons in a grid
-                        (strip_width - 14.0) / 2.0
-                    };
-
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
-
-                        // Main routing button
-                        let to_main = self.channels[index].to_main;
-                        let main_color = if to_main {
-                            Color32::from_rgb(80, 120, 80)
-                        } else {
-                            Color32::from_rgb(40, 40, 45)
-                        };
-                        let response = ui.add(
-                            egui::Button::new(egui::RichText::new("M").small().color(if to_main {
+                    // ── Routing buttons (M + group numbers) ──
+                    {
+                        let num_dest = 1 + self.num_groups;
+                        let btn_w =
+                            (strip_inner - 4.0 - (num_dest as f32 - 1.0) * 2.0) / num_dest as f32;
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            // Main
+                            let to_main = self.channels[index].to_main;
+                            let fill = if to_main {
+                                Color32::from_rgb(70, 110, 70)
+                            } else {
+                                Color32::from_rgb(48, 48, 52)
+                            };
+                            let text_col = if to_main {
                                 Color32::WHITE
                             } else {
-                                Color32::GRAY
-                            }))
-                            .fill(main_color)
-                            .min_size(Vec2::new(button_width, 14.0)),
-                        );
-                        if response.clicked() {
-                            self.channels[index].to_main = !to_main;
-                            self.update_routing(ctx, index);
-                        }
-                        response.on_hover_text(if to_main {
-                            "Routed to Main"
-                        } else {
-                            "Not routed to Main"
-                        });
-
-                        // Subgroup routing buttons
-                        for sg in 0..self.num_subgroups.min(MAX_SUBGROUPS) {
-                            let to_sg = self.channels[index].to_sg[sg];
-                            let sg_color = if to_sg {
-                                Color32::from_rgb(150, 100, 150)
-                            } else {
-                                Color32::from_rgb(40, 40, 45)
+                                Color32::from_gray(100)
                             };
-                            let response = ui.add(
-                                egui::Button::new(
-                                    egui::RichText::new(format!("{}", sg + 1))
-                                        .small()
-                                        .color(if to_sg { Color32::WHITE } else { Color32::GRAY }),
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("M").small().color(text_col),
+                                    )
+                                    .fill(fill)
+                                    .min_size(Vec2::new(btn_w, SMALL_BTN_H)),
                                 )
-                                .fill(sg_color)
-                                .min_size(Vec2::new(button_width, 14.0)),
-                            );
-                            if response.clicked() {
-                                self.channels[index].to_sg[sg] = !to_sg;
+                                .clicked()
+                            {
+                                self.channels[index].to_main = !to_main;
                                 self.update_routing(ctx, index);
                             }
-                            response.on_hover_text(if to_sg {
-                                format!("Routed to Subgroup {}", sg + 1)
-                            } else {
-                                format!("Not routed to Subgroup {}", sg + 1)
-                            });
-                        }
-                    });
+                            // Groups
+                            for g in 0..self.num_groups.min(MAX_GROUPS) {
+                                let on = self.channels[index].to_grp[g];
+                                let fill = if on {
+                                    Color32::from_rgb(140, 90, 140)
+                                } else {
+                                    Color32::from_rgb(48, 48, 52)
+                                };
+                                let text_col = if on {
+                                    Color32::WHITE
+                                } else {
+                                    Color32::from_gray(100)
+                                };
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new(format!("{}", g + 1))
+                                                .small()
+                                                .color(text_col),
+                                        )
+                                        .fill(fill)
+                                        .min_size(Vec2::new(btn_w, SMALL_BTN_H)),
+                                    )
+                                    .clicked()
+                                {
+                                    self.channels[index].to_grp[g] = !on;
+                                    self.update_routing(ctx, index);
+                                }
+                            }
+                        });
+                    }
 
-                    ui.add_space(4.0);
-
-                    // Value display - shows pan normally, or fader dB when adjusting
+                    // ── LCD display ──
                     let display_text = match &self.active_control {
-                        ActiveControl::Fader(ch) if *ch == index => {
-                            // Show fader dB when adjusting
-                            if channel_fader <= 0.001 {
-                                "-inf dB".to_string()
-                            } else {
-                                format!("{:.1} dB", 20.0 * channel_fader.log10())
-                            }
+                        ActiveControl::Fader(ch) if *ch == index => format_db(channel_fader),
+                        ActiveControl::AuxSend(ch, aux) if *ch == index => {
+                            let lvl = self.channels[index].aux_sends[*aux];
+                            format!("A{} {}", aux + 1, format_db(lvl))
                         }
-                        _ => {
-                            // Show pan value normally
-                            if channel_pan < -0.01 {
-                                format!("L{:.0}", (-channel_pan * 100.0))
-                            } else if channel_pan > 0.01 {
-                                format!("R{:.0}", (channel_pan * 100.0))
-                            } else {
-                                "C".to_string()
-                            }
-                        }
+                        _ => format_pan(channel_pan),
                     };
+                    self.render_lcd(ui, &display_text, strip_inner - 4.0, LCD_H);
 
-                    // Styled display box (like small LCD)
-                    let display_rect = ui
-                        .allocate_exact_size(Vec2::new(strip_width - 12.0, 18.0), Sense::hover())
-                        .0;
-                    let painter = ui.painter();
-                    painter.rect_filled(
-                        display_rect,
-                        CornerRadius::same(2),
-                        Color32::from_rgb(20, 25, 30),
-                    );
-                    painter.rect_stroke(
-                        display_rect,
-                        CornerRadius::same(2),
-                        Stroke::new(1.0, Color32::from_rgb(50, 55, 60)),
-                        egui::epaint::StrokeKind::Inside,
-                    );
-                    painter.text(
-                        display_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        &display_text,
-                        egui::FontId::monospace(11.0),
-                        Color32::from_rgb(100, 200, 100), // Green LCD-like color
-                    );
-
-                    ui.add_space(2.0);
-
-                    // Pan control
-                    let pan_response = self.render_pan_control(ui, index);
+                    // ── Pan knob ──
+                    let pan_response = self.render_pan_knob(ui, index);
                     if pan_response.dragged() {
                         self.active_control = ActiveControl::Pan(index);
+                        self.update_channel_property(ctx, index, "pan");
                     } else if pan_response.drag_stopped() {
                         self.active_control = ActiveControl::None;
                     }
-                    if pan_response.changed() {
-                        self.update_channel_property(ctx, index, "pan");
-                    }
 
-                    ui.add_space(4.0);
+                    ui.add_space(2.0);
 
-                    // Fader with meter and scale - use fixed height container
-                    let fader_height = 180.0;
+                    // ── Fader + meter + scale ──
                     ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), fader_height),
+                        Vec2::new(ui.available_width(), FADER_HEIGHT),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
-                            // Stereo meter (L/R)
-                            self.render_stereo_meter(ui, meter_data, fader_height);
-
-                            ui.add_space(2.0);
-
-                            // dB scale
-                            self.render_db_scale(ui, fader_height);
-
-                            ui.add_space(2.0);
-
-                            // Fader
-                            let fader_response = self.render_fader(ui, index, fader_height);
+                            self.render_stereo_meter(ui, meter_data, FADER_HEIGHT);
+                            ui.add_space(1.0);
+                            self.render_db_scale(ui, FADER_HEIGHT);
+                            ui.add_space(1.0);
+                            let fader_response = self.render_fader(ui, index, FADER_HEIGHT);
                             if fader_response.dragged() {
                                 self.active_control = ActiveControl::Fader(index);
                                 self.update_channel_property(ctx, index, "fader");
@@ -832,22 +797,21 @@ impl MixerEditor {
                         },
                     );
 
-                    ui.add_space(4.0);
+                    ui.add_space(2.0);
 
-                    // Mute button
-                    let mute_text = "M";
+                    // ── Mute button ──
                     let mute_color = if channel_mute {
-                        Color32::RED
+                        Color32::from_rgb(200, 50, 50)
                     } else {
-                        Color32::from_rgb(60, 60, 65)
+                        Color32::from_rgb(55, 55, 60)
                     };
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(mute_text).color(Color32::WHITE).small(),
+                                egui::RichText::new("MUTE").small().color(Color32::WHITE),
                             )
                             .fill(mute_color)
-                            .min_size(Vec2::new(strip_width - 8.0, 20.0)),
+                            .min_size(Vec2::new(strip_inner - 4.0, BTN_H)),
                         )
                         .clicked()
                     {
@@ -855,183 +819,146 @@ impl MixerEditor {
                         self.update_channel_property(ctx, index, "mute");
                     }
 
-                    // PFL button (not yet implemented - requires PFL bus)
-                    ui.add_space(2.0);
+                    // ── PFL button ──
                     let pfl_color = if channel_pfl {
-                        Color32::YELLOW
+                        Color32::from_rgb(200, 200, 0)
                     } else {
-                        Color32::from_rgb(50, 50, 55)
+                        Color32::from_rgb(48, 48, 52)
                     };
-                    let pfl_btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("PFL")
-                                .color(if channel_pfl {
-                                    Color32::BLACK
-                                } else {
-                                    Color32::from_gray(100)
-                                })
-                                .small(),
+                    let pfl_text_col = if channel_pfl {
+                        Color32::BLACK
+                    } else {
+                        Color32::from_gray(100)
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("PFL").small().color(pfl_text_col),
+                            )
+                            .fill(pfl_color)
+                            .min_size(Vec2::new(strip_inner - 4.0, BTN_H)),
                         )
-                        .fill(pfl_color)
-                        .min_size(Vec2::new(strip_width - 8.0, 18.0)),
-                    );
-                    if pfl_btn.clicked() {
+                        .clicked()
+                    {
                         self.channels[index].pfl = !self.channels[index].pfl;
                         self.update_channel_property(ctx, index, "pfl");
                     }
-                    pfl_btn.on_hover_text("Pre-Fader Listen");
                 });
             });
 
-        // Select channel if background was clicked (and no button consumed the click)
         if should_select {
             self.selected_channel = Some(index);
         }
-        // Suppress unused variable warning
         let _ = frame_response;
     }
 
-    /// Render the main/master strip.
+    /// Render the main/master strip (compact, for bus row).
     fn render_main_strip(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
-        let strip_width = 120.0;
-
-        // Get main meter data
         let main_meter_key = format!("{}:meter:main", self.block_id);
         let main_meter_data = meter_store.get(&self.flow_id, &main_meter_key);
 
         egui::Frame::default()
-            .fill(Color32::from_rgb(50, 50, 60))
-            .corner_radius(CornerRadius::same(4))
-            .inner_margin(8.0)
+            .fill(Color32::from_rgb(45, 45, 55))
+            .corner_radius(CornerRadius::same(3))
+            .inner_margin(STRIP_MARGIN)
             .show(ui, |ui| {
-                ui.set_min_width(strip_width);
-                ui.set_max_width(strip_width);
+                ui.set_min_width(BUS_STRIP_INNER);
+                ui.set_max_width(BUS_STRIP_INNER);
 
                 ui.vertical_centered(|ui| {
-                    ui.label(egui::RichText::new("MAIN").strong().size(16.0));
+                    ui.spacing_mut().item_spacing.y = 2.0;
 
-                    ui.add_space(8.0);
-
-                    // Value display (shows dB)
-                    let db = if self.main_fader > 0.0 {
-                        20.0 * self.main_fader.log10()
-                    } else {
-                        -60.0
-                    };
-                    let display_text = if db <= -59.0 {
-                        "-inf dB".to_string()
-                    } else {
-                        format!("{:.1} dB", db)
-                    };
-
-                    // Styled display box (like small LCD)
-                    let display_rect = ui
-                        .allocate_exact_size(Vec2::new(strip_width - 20.0, 22.0), Sense::hover())
-                        .0;
-                    let painter = ui.painter();
-                    painter.rect_filled(
-                        display_rect,
-                        CornerRadius::same(2),
-                        Color32::from_rgb(20, 25, 30),
-                    );
-                    painter.rect_stroke(
-                        display_rect,
-                        CornerRadius::same(2),
-                        Stroke::new(1.0, Color32::from_rgb(50, 55, 60)),
-                        egui::epaint::StrokeKind::Inside,
-                    );
-                    painter.text(
-                        display_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        &display_text,
-                        egui::FontId::monospace(12.0),
-                        Color32::from_rgb(100, 200, 100), // Green LCD-like color
+                    ui.label(
+                        egui::RichText::new("MAIN")
+                            .strong()
+                            .size(12.0)
+                            .color(Color32::from_rgb(200, 200, 255)),
                     );
 
-                    ui.add_space(8.0);
+                    self.render_lcd(
+                        ui,
+                        &format_db(self.main_fader),
+                        BUS_STRIP_INNER - 4.0,
+                        LCD_H,
+                    );
 
-                    // Main fader with stereo meter and scale - use fixed height container
-                    let fader_height = 180.0;
+                    ui.add_space(2.0);
+
+                    // Fader + meter + scale
                     ui.allocate_ui_with_layout(
-                        Vec2::new(ui.available_width(), fader_height),
+                        Vec2::new(ui.available_width(), BUS_FADER_HEIGHT),
                         egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
-                            // Stereo meter
-                            self.render_stereo_meter(ui, main_meter_data, fader_height);
+                            self.render_stereo_meter(ui, main_meter_data, BUS_FADER_HEIGHT);
+                            ui.add_space(1.0);
+                            self.render_db_scale(ui, BUS_FADER_HEIGHT);
+                            ui.add_space(1.0);
 
-                            ui.add_space(2.0);
-
-                            // dB scale
-                            self.render_db_scale(ui, fader_height);
-
-                            ui.add_space(2.0);
-
-                            // Main fader - custom widget in dB scale
                             let mut main_fader_db = linear_to_db(self.main_fader as f64) as f32;
-
-                            let (rect, response) = ui
-                                .allocate_exact_size(Vec2::new(20.0, fader_height), Sense::drag());
-
+                            let (rect, response) = ui.allocate_exact_size(
+                                Vec2::new(20.0, BUS_FADER_HEIGHT),
+                                Sense::drag(),
+                            );
                             if response.dragged() {
                                 self.active_control = ActiveControl::MainFader;
                                 let delta = -response.drag_delta().y;
-                                let db_per_pixel = 66.0 / fader_height;
+                                let db_per_pixel = 66.0 / (BUS_FADER_HEIGHT - 10.0);
                                 main_fader_db =
                                     (main_fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
                                 self.main_fader = db_to_linear_f32(main_fader_db);
                             } else if response.drag_stopped() {
                                 self.active_control = ActiveControl::None;
                             }
-
-                            // Draw fader track
                             let painter = ui.painter();
-                            let track_width = 4.0;
                             let track_rect = Rect::from_center_size(
                                 rect.center(),
-                                Vec2::new(track_width, fader_height - 10.0),
+                                Vec2::new(4.0, BUS_FADER_HEIGHT - 10.0),
                             );
                             painter.rect_filled(
                                 track_rect,
                                 CornerRadius::same(2),
-                                Color32::from_gray(60),
+                                Color32::from_gray(55),
                             );
-
-                            // Draw fader handle
-                            let normalized = (main_fader_db - (-60.0)) / 66.0;
-                            let handle_y = rect.max.y - 5.0 - (normalized * (fader_height - 10.0));
+                            let handle_y = db_to_y(main_fader_db, rect.min.y, rect.max.y);
                             let handle_rect = Rect::from_center_size(
                                 egui::pos2(rect.center().x, handle_y),
-                                Vec2::new(18.0, 10.0),
+                                Vec2::new(14.0, 30.0),
                             );
                             let handle_color = if response.dragged() {
-                                Color32::from_rgb(100, 150, 255)
+                                Color32::from_rgb(100, 140, 240)
                             } else if response.hovered() {
-                                Color32::from_rgb(200, 200, 200)
+                                Color32::from_rgb(190, 190, 200)
                             } else {
-                                Color32::from_rgb(160, 160, 160)
+                                Color32::from_rgb(155, 155, 165)
                             };
-                            painter.rect_filled(handle_rect, CornerRadius::same(2), handle_color);
-
+                            painter.rect_filled(handle_rect, CornerRadius::same(3), handle_color);
+                            painter.line_segment(
+                                [
+                                    egui::pos2(handle_rect.left() + 2.0, handle_y),
+                                    egui::pos2(handle_rect.right() - 2.0, handle_y),
+                                ],
+                                Stroke::new(1.5, Color32::from_gray(40)),
+                            );
                             if response.drag_stopped() || response.dragged() {
                                 self.update_main_fader(ctx);
                             }
                         },
                     );
 
-                    ui.add_space(8.0);
+                    ui.add_space(2.0);
 
-                    // Main mute
-                    let mute_text = if self.main_mute { "MUTE" } else { "M" };
                     let mute_color = if self.main_mute {
-                        Color32::RED
+                        Color32::from_rgb(200, 50, 50)
                     } else {
-                        Color32::GRAY
+                        Color32::from_rgb(55, 55, 60)
                     };
                     if ui
                         .add(
-                            egui::Button::new(egui::RichText::new(mute_text).color(Color32::WHITE))
-                                .fill(mute_color)
-                                .min_size(Vec2::new(strip_width - 16.0, 30.0)),
+                            egui::Button::new(
+                                egui::RichText::new("MUTE").small().color(Color32::WHITE),
+                            )
+                            .fill(mute_color)
+                            .min_size(Vec2::new(BUS_STRIP_INNER - 4.0, BTN_H)),
                         )
                         .clicked()
                     {
@@ -1042,247 +969,138 @@ impl MixerEditor {
             });
     }
 
-    /// Render the subgroup strips section.
-    fn render_subgroup_strips(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
-        for sg_idx in 0..self.num_subgroups.min(MAX_SUBGROUPS) {
-            // Ensure we have data for this subgroup
-            while self.subgroups.len() <= sg_idx {
-                self.subgroups
-                    .push(SubgroupStrip::new(self.subgroups.len()));
+    /// Render the group strips section (compact, for bus row).
+    fn render_group_strips(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
+        for sg_idx in 0..self.num_groups.min(MAX_GROUPS) {
+            while self.groups.len() <= sg_idx {
+                self.groups.push(GroupStrip::new(self.groups.len()));
             }
 
-            let strip_width = 60.0;
-            let fader_height = 180.0;
-
-            // Get meter data
-            let meter_key = format!("{}:meter:subgroup{}", self.block_id, sg_idx + 1);
+            let meter_key = format!("{}:meter:group{}", self.block_id, sg_idx + 1);
             let meter_data = meter_store.get(&self.flow_id, &meter_key);
 
             egui::Frame::default()
-                .fill(Color32::from_rgb(50, 45, 55))
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(4.0)
+                .fill(Color32::from_rgb(42, 38, 48))
+                .corner_radius(CornerRadius::same(3))
+                .inner_margin(STRIP_MARGIN)
                 .show(ui, |ui| {
-                    ui.set_min_width(strip_width);
-                    ui.set_max_width(strip_width);
+                    ui.set_min_width(BUS_STRIP_INNER);
+                    ui.set_max_width(BUS_STRIP_INNER);
 
                     ui.vertical_centered(|ui| {
-                        // Label
+                        ui.spacing_mut().item_spacing.y = 2.0;
+
                         ui.label(
-                            egui::RichText::new(format!("SG{}", sg_idx + 1))
+                            egui::RichText::new(format!("GRP{}", sg_idx + 1))
                                 .strong()
+                                .size(11.0)
                                 .color(Color32::from_rgb(200, 150, 200)),
                         );
 
-                        // Spacer to align with channel G/C/E buttons
-                        ui.add_space(22.0);
-
-                        // Spacer for aux sends row
-                        if self.num_aux_buses > 0 {
-                            ui.add_space(18.0);
-                        }
-
-                        // Spacer for subgroup button row
-                        ui.add_space(22.0);
-
-                        // Value display (dB)
-                        let fader_val = self.subgroups[sg_idx].fader;
-                        let db = if fader_val > 0.0 {
-                            20.0 * fader_val.log10()
-                        } else {
-                            -60.0
-                        };
-                        let display_text = if db <= -59.0 {
-                            "-inf dB".to_string()
-                        } else {
-                            format!("{:.1} dB", db)
-                        };
-
-                        let display_rect = ui
-                            .allocate_exact_size(
-                                Vec2::new(strip_width - 12.0, 18.0),
-                                Sense::hover(),
-                            )
-                            .0;
-                        let painter = ui.painter();
-                        painter.rect_filled(
-                            display_rect,
-                            CornerRadius::same(2),
-                            Color32::from_rgb(20, 25, 30),
-                        );
-                        painter.text(
-                            display_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            &display_text,
-                            egui::FontId::monospace(11.0),
-                            Color32::from_rgb(100, 200, 100),
+                        self.render_lcd(
+                            ui,
+                            &format_db(self.groups[sg_idx].fader),
+                            BUS_STRIP_INNER - 4.0,
+                            LCD_H,
                         );
 
                         ui.add_space(2.0);
 
-                        // Spacer for pan control
-                        ui.add_space(22.0);
-
-                        ui.add_space(4.0);
-
-                        // Fader with meter and scale
                         ui.allocate_ui_with_layout(
-                            Vec2::new(ui.available_width(), fader_height),
+                            Vec2::new(ui.available_width(), BUS_FADER_HEIGHT),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                // Meter
-                                self.render_stereo_meter(ui, meter_data, fader_height);
-                                ui.add_space(2.0);
-
-                                // dB scale
-                                self.render_db_scale(ui, fader_height);
-                                ui.add_space(2.0);
-
-                                // Fader
+                                self.render_stereo_meter(ui, meter_data, BUS_FADER_HEIGHT);
+                                ui.add_space(1.0);
+                                self.render_db_scale(ui, BUS_FADER_HEIGHT);
+                                ui.add_space(1.0);
                                 let fader_response =
-                                    self.render_subgroup_fader(ui, sg_idx, fader_height);
+                                    self.render_group_fader(ui, sg_idx, BUS_FADER_HEIGHT);
                                 if fader_response.dragged() {
-                                    self.active_control = ActiveControl::SubgroupFader(sg_idx);
-                                    self.update_subgroup_fader(ctx, sg_idx);
+                                    self.active_control = ActiveControl::GroupFader(sg_idx);
+                                    self.update_group_fader(ctx, sg_idx);
                                 } else if fader_response.drag_stopped() {
                                     self.active_control = ActiveControl::None;
                                 }
                             },
                         );
 
-                        ui.add_space(4.0);
+                        ui.add_space(2.0);
 
-                        // Mute button
-                        let mute = self.subgroups[sg_idx].mute;
+                        let mute = self.groups[sg_idx].mute;
                         let mute_color = if mute {
-                            Color32::RED
+                            Color32::from_rgb(200, 50, 50)
                         } else {
-                            Color32::from_rgb(60, 60, 65)
+                            Color32::from_rgb(55, 55, 60)
                         };
                         if ui
                             .add(
                                 egui::Button::new(
-                                    egui::RichText::new("M").color(Color32::WHITE).small(),
+                                    egui::RichText::new("MUTE").small().color(Color32::WHITE),
                                 )
                                 .fill(mute_color)
-                                .min_size(Vec2::new(strip_width - 8.0, 20.0)),
+                                .min_size(Vec2::new(BUS_STRIP_INNER - 4.0, BTN_H)),
                             )
                             .clicked()
                         {
-                            self.subgroups[sg_idx].mute = !self.subgroups[sg_idx].mute;
-                            self.update_subgroup_mute(ctx, sg_idx);
+                            self.groups[sg_idx].mute = !self.groups[sg_idx].mute;
+                            self.update_group_mute(ctx, sg_idx);
                         }
-
-                        // Spacer to align with PFL button
-                        ui.add_space(22.0);
                     });
                 });
 
-            ui.add_space(4.0);
+            ui.add_space(STRIP_GAP);
         }
     }
 
-    /// Render the aux master section.
+    /// Render the aux master section (compact, for bus row).
     fn render_aux_masters(&mut self, ui: &mut Ui, ctx: &Context, meter_store: &MeterDataStore) {
         for aux_idx in 0..self.num_aux_buses.min(MAX_AUX_BUSES) {
-            // Ensure we have data for this aux
             while self.aux_masters.len() <= aux_idx {
                 self.aux_masters
                     .push(AuxMaster::new(self.aux_masters.len()));
             }
 
-            let strip_width = 60.0;
-            let fader_height = 180.0;
-
-            // Get meter data
             let meter_key = format!("{}:meter:aux{}", self.block_id, aux_idx + 1);
             let meter_data = meter_store.get(&self.flow_id, &meter_key);
 
             egui::Frame::default()
-                .fill(Color32::from_rgb(45, 50, 60))
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(4.0)
+                .fill(Color32::from_rgb(38, 42, 50))
+                .corner_radius(CornerRadius::same(3))
+                .inner_margin(STRIP_MARGIN)
                 .show(ui, |ui| {
-                    ui.set_min_width(strip_width);
-                    ui.set_max_width(strip_width);
+                    ui.set_min_width(BUS_STRIP_INNER);
+                    ui.set_max_width(BUS_STRIP_INNER);
 
                     ui.vertical_centered(|ui| {
-                        // Label
+                        ui.spacing_mut().item_spacing.y = 2.0;
+
                         ui.label(
-                            egui::RichText::new(format!("AX{}", aux_idx + 1))
+                            egui::RichText::new(format!("AUX{}", aux_idx + 1))
                                 .strong()
+                                .size(11.0)
                                 .color(Color32::from_rgb(150, 200, 255)),
                         );
 
-                        // Spacer to align with channel G/C/E buttons
-                        ui.add_space(22.0);
-
-                        // Spacer for aux sends row
-                        if self.num_aux_buses > 0 {
-                            ui.add_space(18.0);
-                        }
-
-                        // Spacer for subgroup button row
-                        if self.num_subgroups > 0 {
-                            ui.add_space(22.0);
-                        }
-
-                        // Value display (dB)
-                        let fader_val = self.aux_masters[aux_idx].fader;
-                        let db = if fader_val > 0.0 {
-                            20.0 * fader_val.log10()
-                        } else {
-                            -60.0
-                        };
-                        let display_text = if db <= -59.0 {
-                            "-inf dB".to_string()
-                        } else {
-                            format!("{:.1} dB", db)
-                        };
-
-                        let display_rect = ui
-                            .allocate_exact_size(
-                                Vec2::new(strip_width - 12.0, 18.0),
-                                Sense::hover(),
-                            )
-                            .0;
-                        let painter = ui.painter();
-                        painter.rect_filled(
-                            display_rect,
-                            CornerRadius::same(2),
-                            Color32::from_rgb(20, 25, 30),
-                        );
-                        painter.text(
-                            display_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            &display_text,
-                            egui::FontId::monospace(11.0),
-                            Color32::from_rgb(100, 200, 100),
+                        self.render_lcd(
+                            ui,
+                            &format_db(self.aux_masters[aux_idx].fader),
+                            BUS_STRIP_INNER - 4.0,
+                            LCD_H,
                         );
 
                         ui.add_space(2.0);
 
-                        // Spacer for pan control
-                        ui.add_space(22.0);
-
-                        ui.add_space(4.0);
-
-                        // Fader with meter and scale
                         ui.allocate_ui_with_layout(
-                            Vec2::new(ui.available_width(), fader_height),
+                            Vec2::new(ui.available_width(), BUS_FADER_HEIGHT),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                // Meter
-                                self.render_stereo_meter(ui, meter_data, fader_height);
-                                ui.add_space(2.0);
-
-                                // dB scale
-                                self.render_db_scale(ui, fader_height);
-                                ui.add_space(2.0);
-
-                                // Fader
+                                self.render_stereo_meter(ui, meter_data, BUS_FADER_HEIGHT);
+                                ui.add_space(1.0);
+                                self.render_db_scale(ui, BUS_FADER_HEIGHT);
+                                ui.add_space(1.0);
                                 let fader_response =
-                                    self.render_aux_master_fader(ui, aux_idx, fader_height);
+                                    self.render_aux_master_fader(ui, aux_idx, BUS_FADER_HEIGHT);
                                 if fader_response.dragged() {
                                     self.active_control = ActiveControl::AuxMasterFader(aux_idx);
                                     self.update_aux_master_fader(ctx, aux_idx);
@@ -1292,50 +1110,46 @@ impl MixerEditor {
                             },
                         );
 
-                        ui.add_space(4.0);
+                        ui.add_space(2.0);
 
-                        // Mute button
                         let mute = self.aux_masters[aux_idx].mute;
                         let mute_color = if mute {
-                            Color32::RED
+                            Color32::from_rgb(200, 50, 50)
                         } else {
-                            Color32::from_rgb(60, 60, 65)
+                            Color32::from_rgb(55, 55, 60)
                         };
                         if ui
                             .add(
                                 egui::Button::new(
-                                    egui::RichText::new("M").color(Color32::WHITE).small(),
+                                    egui::RichText::new("MUTE").small().color(Color32::WHITE),
                                 )
                                 .fill(mute_color)
-                                .min_size(Vec2::new(strip_width - 8.0, 20.0)),
+                                .min_size(Vec2::new(BUS_STRIP_INNER - 4.0, BTN_H)),
                             )
                             .clicked()
                         {
                             self.aux_masters[aux_idx].mute = !self.aux_masters[aux_idx].mute;
                             self.update_aux_master_mute(ctx, aux_idx);
                         }
-
-                        // Spacer to align with PFL button
-                        ui.add_space(22.0);
                     });
                 });
 
-            ui.add_space(4.0);
+            ui.add_space(STRIP_GAP);
         }
     }
 
-    /// Render a subgroup fader.
-    fn render_subgroup_fader(&mut self, ui: &mut Ui, sg_idx: usize, height: f32) -> Response {
-        let fader_val = self.subgroups[sg_idx].fader;
+    /// Render a group fader.
+    fn render_group_fader(&mut self, ui: &mut Ui, sg_idx: usize, height: f32) -> Response {
+        let fader_val = self.groups[sg_idx].fader;
         let mut fader_db = linear_to_db(fader_val as f64) as f32;
 
         let (rect, response) = ui.allocate_exact_size(Vec2::new(16.0, height), Sense::drag());
 
         if response.dragged() {
             let delta = -response.drag_delta().y;
-            let db_per_pixel = 66.0 / height;
+            let db_per_pixel = 66.0 / (height - 10.0);
             fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
-            self.subgroups[sg_idx].fader = db_to_linear_f32(fader_db);
+            self.groups[sg_idx].fader = db_to_linear_f32(fader_db);
         }
 
         // Draw fader track
@@ -1344,10 +1158,9 @@ impl MixerEditor {
         painter.rect_filled(track_rect, CornerRadius::same(2), Color32::from_gray(60));
 
         // Draw handle
-        let normalized = (fader_db - (-60.0)) / 66.0;
-        let handle_y = rect.max.y - 5.0 - (normalized * (height - 10.0));
+        let handle_y = db_to_y(fader_db, rect.min.y, rect.max.y);
         let handle_rect =
-            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(14.0, 8.0));
+            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(12.0, 30.0));
         let handle_color = if response.dragged() {
             Color32::from_rgb(200, 150, 200)
         } else if response.hovered() {
@@ -1355,7 +1168,14 @@ impl MixerEditor {
         } else {
             Color32::from_rgb(160, 160, 160)
         };
-        painter.rect_filled(handle_rect, CornerRadius::same(2), handle_color);
+        painter.rect_filled(handle_rect, CornerRadius::same(3), handle_color);
+        painter.line_segment(
+            [
+                egui::pos2(handle_rect.left() + 2.0, handle_y),
+                egui::pos2(handle_rect.right() - 2.0, handle_y),
+            ],
+            Stroke::new(1.5, Color32::from_gray(40)),
+        );
 
         response
     }
@@ -1369,7 +1189,7 @@ impl MixerEditor {
 
         if response.dragged() {
             let delta = -response.drag_delta().y;
-            let db_per_pixel = 66.0 / height;
+            let db_per_pixel = 66.0 / (height - 10.0);
             fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
             self.aux_masters[aux_idx].fader = db_to_linear_f32(fader_db);
         }
@@ -1380,10 +1200,9 @@ impl MixerEditor {
         painter.rect_filled(track_rect, CornerRadius::same(2), Color32::from_gray(60));
 
         // Draw handle
-        let normalized = (fader_db - (-60.0)) / 66.0;
-        let handle_y = rect.max.y - 5.0 - (normalized * (height - 10.0));
+        let handle_y = db_to_y(fader_db, rect.min.y, rect.max.y);
         let handle_rect =
-            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(14.0, 8.0));
+            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(12.0, 30.0));
         let handle_color = if response.dragged() {
             Color32::from_rgb(150, 200, 255)
         } else if response.hovered() {
@@ -1391,30 +1210,277 @@ impl MixerEditor {
         } else {
             Color32::from_rgb(160, 160, 160)
         };
-        painter.rect_filled(handle_rect, CornerRadius::same(2), handle_color);
+        painter.rect_filled(handle_rect, CornerRadius::same(3), handle_color);
+        painter.line_segment(
+            [
+                egui::pos2(handle_rect.left() + 2.0, handle_y),
+                egui::pos2(handle_rect.right() - 2.0, handle_y),
+            ],
+            Stroke::new(1.5, Color32::from_gray(40)),
+        );
 
         response
     }
 
-    /// Render a pan control (horizontal slider).
-    fn render_pan_control(&mut self, ui: &mut Ui, index: usize) -> Response {
-        let channel = &mut self.channels[index];
+    /// Render a pan knob. Center (0.0) at 12 o'clock, L at 7:30, R at 4:30.
+    fn render_pan_knob(&mut self, ui: &mut Ui, index: usize) -> Response {
+        let pan = self.channels[index].pan;
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::splat(PAN_KNOB_SIZE), Sense::click_and_drag());
 
-        // Compact pan slider
-        ui.add_sized(
-            Vec2::new(50.0, 18.0),
-            egui::Slider::new(&mut channel.pan, -1.0..=1.0)
-                .custom_formatter(|v, _| {
-                    if v < -0.01 {
-                        format!("L{:.0}", (-v * 100.0))
-                    } else if v > 0.01 {
-                        format!("R{:.0}", (v * 100.0))
-                    } else {
-                        "C".to_string()
-                    }
-                })
-                .show_value(false),
-        )
+        if response.dragged() {
+            let delta = -response.drag_delta().y * 0.01;
+            self.channels[index].pan = (self.channels[index].pan + delta).clamp(-1.0, 1.0);
+        }
+
+        // Double-click: reset to center
+        if response.double_clicked() {
+            self.channels[index].pan = 0.0;
+        }
+
+        let painter = ui.painter();
+        let center = rect.center();
+        let radius = PAN_KNOB_SIZE * 0.5 - 1.0;
+
+        // Background circle
+        painter.circle_filled(center, radius, Color32::from_rgb(28, 28, 32));
+
+        // Pan maps: -1.0 → 0.0 (7:30), 0.0 → 0.5 (12 o'clock), 1.0 → 1.0 (4:30)
+        let normalized = (pan + 1.0) * 0.5;
+
+        let arc_start = std::f32::consts::PI * 1.75; // 7:30
+        let arc_sweep = std::f32::consts::PI * 1.5; // 270°
+
+        // Draw arc from center (12 o'clock) to current pan position
+        let center_norm = 0.5;
+        let (from_norm, to_norm) = if normalized < center_norm {
+            (normalized, center_norm)
+        } else {
+            (center_norm, normalized)
+        };
+
+        if (to_norm - from_norm) > 0.005 {
+            let from_angle = arc_start + from_norm * arc_sweep;
+            let to_angle = arc_start + to_norm * arc_sweep;
+            let sweep = to_angle - from_angle;
+            let segments = (sweep.abs() / arc_sweep * 24.0).max(4.0) as usize;
+            let arc_color = if response.dragged() {
+                Color32::from_rgb(255, 180, 100)
+            } else {
+                Color32::from_rgb(200, 140, 70)
+            };
+            let arc_r = radius - 1.5;
+            for i in 0..segments {
+                let t0 = i as f32 / segments as f32;
+                let t1 = (i + 1) as f32 / segments as f32;
+                let a0 = from_angle + sweep * t0;
+                let a1 = from_angle + sweep * t1;
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x - a0.cos() * arc_r, center.y - a0.sin() * arc_r),
+                        egui::pos2(center.x - a1.cos() * arc_r, center.y - a1.sin() * arc_r),
+                    ],
+                    Stroke::new(2.5, arc_color),
+                );
+            }
+        }
+
+        // Center marker tick at 12 o'clock
+        let center_angle = arc_start + 0.5 * arc_sweep;
+        let tick_inner = radius - 3.5;
+        let tick_outer = radius + 0.5;
+        painter.line_segment(
+            [
+                egui::pos2(
+                    center.x - center_angle.cos() * tick_inner,
+                    center.y - center_angle.sin() * tick_inner,
+                ),
+                egui::pos2(
+                    center.x - center_angle.cos() * tick_outer,
+                    center.y - center_angle.sin() * tick_outer,
+                ),
+            ],
+            Stroke::new(1.0, Color32::from_gray(90)),
+        );
+
+        // Pointer line
+        let pointer_angle = arc_start + normalized * arc_sweep;
+        let inner_r = radius * 0.25;
+        let outer_r = radius - 3.0;
+        let pointer_color = Color32::WHITE;
+        painter.line_segment(
+            [
+                egui::pos2(
+                    center.x - pointer_angle.cos() * inner_r,
+                    center.y - pointer_angle.sin() * inner_r,
+                ),
+                egui::pos2(
+                    center.x - pointer_angle.cos() * outer_r,
+                    center.y - pointer_angle.sin() * outer_r,
+                ),
+            ],
+            Stroke::new(1.5, pointer_color),
+        );
+
+        // Border
+        let border_color = if response.hovered() || response.dragged() {
+            Color32::from_rgb(200, 150, 80)
+        } else {
+            Color32::from_gray(55)
+        };
+        painter.circle_stroke(center, radius, Stroke::new(1.0, border_color));
+
+        // Tooltip
+        let resp = response.on_hover_text(format!("Pan: {}", format_pan(pan)));
+        resp
+    }
+
+    /// Render a styled LCD display box.
+    fn render_lcd(&self, ui: &mut Ui, text: &str, width: f32, height: f32) {
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
+        let painter = ui.painter();
+        painter.rect_filled(rect, CornerRadius::same(2), Color32::from_rgb(18, 22, 28));
+        painter.rect_stroke(
+            rect,
+            CornerRadius::same(2),
+            Stroke::new(1.0, Color32::from_rgb(45, 50, 55)),
+            egui::epaint::StrokeKind::Inside,
+        );
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::monospace(10.0),
+            Color32::from_rgb(90, 200, 90),
+        );
+    }
+
+    /// Render an aux send rotary knob for a channel.
+    ///
+    /// dB-scaled arc: -inf at 7:30 (CCW), 0 dB (unity) at 12 o'clock, +6 dB at 4:30 (CW).
+    /// The first half of the 270° arc covers -60..0 dB, the second half covers 0..+6 dB.
+    fn render_knob(&mut self, ui: &mut Ui, ch_idx: usize, aux_idx: usize) -> Response {
+        let aux_level = self.channels[ch_idx].aux_sends[aux_idx];
+        let (rect, response) =
+            ui.allocate_exact_size(Vec2::splat(KNOB_SIZE), Sense::click_and_drag());
+
+        // Drag in dB space for natural feel
+        if response.dragged() {
+            let current_db = linear_to_db(aux_level as f64) as f32;
+            // Sensitivity: ~1 dB per 3 pixels
+            let db_delta = -response.drag_delta().y * 0.35;
+            let new_db = (current_db + db_delta).clamp(-60.0, 6.0);
+            self.channels[ch_idx].aux_sends[aux_idx] = db_to_linear_f32(new_db);
+            self.update_aux_send(ui.ctx(), ch_idx, aux_idx);
+        }
+
+        // Double-click: toggle between off and unity
+        if response.double_clicked() {
+            self.channels[ch_idx].aux_sends[aux_idx] = if aux_level > 0.01 { 0.0 } else { 1.0 };
+            self.update_aux_send(ui.ctx(), ch_idx, aux_idx);
+        }
+
+        let painter = ui.painter();
+        let center = rect.center();
+        let radius = KNOB_SIZE * 0.5 - 1.0;
+
+        // Background
+        painter.circle_filled(center, radius, Color32::from_rgb(28, 28, 32));
+
+        // Convert level to arc position (dB-scaled, 0 dB at center)
+        let level = self.channels[ch_idx].aux_sends[aux_idx];
+        let normalized = knob_linear_to_normalized(level);
+
+        // Arc geometry: 270° sweep starting at 7:30 (bottom-left)
+        // In our coord system (x = cx - cos*r, y = cy - sin*r):
+        //   12 o'clock = π/2, clockwise = increasing angle
+        //   7:30 = 7π/4, 4:30 = 5π/4 + 2π = 13π/4
+        let arc_start = std::f32::consts::PI * 1.75; // 7:30 position
+        let arc_sweep = std::f32::consts::PI * 1.5; // 270°
+
+        // Draw filled arc up to current level
+        if normalized > 0.005 {
+            let sweep = normalized * arc_sweep;
+            let segments = (normalized * 24.0).max(4.0) as usize;
+            let arc_color = if response.dragged() {
+                Color32::from_rgb(130, 190, 255)
+            } else {
+                Color32::from_rgb(90, 145, 200)
+            };
+            let arc_r = radius - 1.5;
+            for i in 0..segments {
+                let t0 = i as f32 / segments as f32;
+                let t1 = (i + 1) as f32 / segments as f32;
+                let a0 = arc_start + sweep * t0;
+                let a1 = arc_start + sweep * t1;
+                painter.line_segment(
+                    [
+                        egui::pos2(center.x - a0.cos() * arc_r, center.y - a0.sin() * arc_r),
+                        egui::pos2(center.x - a1.cos() * arc_r, center.y - a1.sin() * arc_r),
+                    ],
+                    Stroke::new(2.5, arc_color),
+                );
+            }
+        }
+
+        // Unity marker (small tick at 12 o'clock = center of arc)
+        let unity_angle = arc_start + 0.5 * arc_sweep; // 12 o'clock
+        let tick_inner = radius - 3.5;
+        let tick_outer = radius + 0.5;
+        painter.line_segment(
+            [
+                egui::pos2(
+                    center.x - unity_angle.cos() * tick_inner,
+                    center.y - unity_angle.sin() * tick_inner,
+                ),
+                egui::pos2(
+                    center.x - unity_angle.cos() * tick_outer,
+                    center.y - unity_angle.sin() * tick_outer,
+                ),
+            ],
+            Stroke::new(1.0, Color32::from_gray(90)),
+        );
+
+        // Pointer indicator line
+        let pointer_angle = arc_start + normalized * arc_sweep;
+        let inner_r = radius * 0.25;
+        let outer_r = radius - 3.0;
+        let pointer_color = if level > 0.01 {
+            Color32::WHITE
+        } else {
+            Color32::from_gray(70)
+        };
+        painter.line_segment(
+            [
+                egui::pos2(
+                    center.x - pointer_angle.cos() * inner_r,
+                    center.y - pointer_angle.sin() * inner_r,
+                ),
+                egui::pos2(
+                    center.x - pointer_angle.cos() * outer_r,
+                    center.y - pointer_angle.sin() * outer_r,
+                ),
+            ],
+            Stroke::new(1.5, pointer_color),
+        );
+
+        // Border
+        let border_color = if response.hovered() || response.dragged() {
+            Color32::from_rgb(90, 140, 200)
+        } else {
+            Color32::from_gray(55)
+        };
+        painter.circle_stroke(center, radius, Stroke::new(1.0, border_color));
+
+        // Hover tooltip
+        let db_str = if level > 0.001 {
+            format!("{:.1} dB", 20.0 * level.log10())
+        } else {
+            "-inf".to_string()
+        };
+        let resp = response.on_hover_text(format!("Aux {} send: {}", aux_idx + 1, db_str));
+
+        resp
     }
 
     /// Render a vertical fader using dB scale.
@@ -1431,7 +1497,7 @@ impl MixerEditor {
         if response.dragged() {
             // Calculate new dB value based on drag position
             let delta = -response.drag_delta().y; // Negative because y increases downward
-            let db_per_pixel = 66.0 / height; // -60 to +6 = 66 dB range
+            let db_per_pixel = 66.0 / (height - 10.0); // -60 to +6 = 66 dB range
             fader_db = (fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
             channel.fader = db_to_linear_f32(fader_db);
         }
@@ -1444,10 +1510,9 @@ impl MixerEditor {
         painter.rect_filled(track_rect, CornerRadius::same(2), Color32::from_gray(60));
 
         // Draw fader handle
-        let normalized = (fader_db - (-60.0)) / 66.0; // 0.0 to 1.0
-        let handle_y = rect.max.y - 5.0 - (normalized * (height - 10.0));
+        let handle_y = db_to_y(fader_db, rect.min.y, rect.max.y);
         let handle_rect =
-            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(14.0, 8.0));
+            Rect::from_center_size(egui::pos2(rect.center().x, handle_y), Vec2::new(14.0, 36.0));
         let handle_color = if response.dragged() {
             Color32::from_rgb(100, 150, 255)
         } else if response.hovered() {
@@ -1455,7 +1520,15 @@ impl MixerEditor {
         } else {
             Color32::from_rgb(160, 160, 160)
         };
-        painter.rect_filled(handle_rect, CornerRadius::same(2), handle_color);
+        painter.rect_filled(handle_rect, CornerRadius::same(3), handle_color);
+        // Center line indicating exact value
+        painter.line_segment(
+            [
+                egui::pos2(handle_rect.left() + 2.0, handle_y),
+                egui::pos2(handle_rect.right() - 2.0, handle_y),
+            ],
+            Stroke::new(1.5, Color32::from_gray(40)),
+        );
 
         response
     }
@@ -1500,12 +1573,14 @@ impl MixerEditor {
                 return;
             };
 
+            let bottom_y = db_to_y(-60.0, rect.min.y, rect.max.y);
+
             // Draw left channel
             let left_level = db_to_level(left_peak);
-            let left_bar_height = height * left_level;
+            let left_top_y = db_to_y(left_peak as f32, rect.min.y, rect.max.y);
             let left_bar_rect = Rect::from_min_max(
-                egui::pos2(left_rect.min.x, left_rect.max.y - left_bar_height),
-                left_rect.max,
+                egui::pos2(left_rect.min.x, left_top_y),
+                egui::pos2(left_rect.max.x, bottom_y),
             );
             painter.rect_filled(
                 left_bar_rect,
@@ -1515,10 +1590,10 @@ impl MixerEditor {
 
             // Draw right channel
             let right_level = db_to_level(right_peak);
-            let right_bar_height = height * right_level;
+            let right_top_y = db_to_y(right_peak as f32, rect.min.y, rect.max.y);
             let right_bar_rect = Rect::from_min_max(
-                egui::pos2(right_rect.min.x, right_rect.max.y - right_bar_height),
-                right_rect.max,
+                egui::pos2(right_rect.min.x, right_top_y),
+                egui::pos2(right_rect.max.x, bottom_y),
             );
             painter.rect_filled(
                 right_bar_rect,
@@ -1528,8 +1603,7 @@ impl MixerEditor {
 
             // Draw decay lines if available
             if data.decay.len() >= 2 {
-                let left_decay = db_to_level(data.decay[0]);
-                let left_decay_y = left_rect.max.y - height * left_decay;
+                let left_decay_y = db_to_y(data.decay[0] as f32, rect.min.y, rect.max.y);
                 painter.line_segment(
                     [
                         egui::pos2(left_rect.min.x, left_decay_y),
@@ -1538,8 +1612,7 @@ impl MixerEditor {
                     Stroke::new(1.0, Color32::WHITE),
                 );
 
-                let right_decay = db_to_level(data.decay[1]);
-                let right_decay_y = right_rect.max.y - height * right_decay;
+                let right_decay_y = db_to_y(data.decay[1] as f32, rect.min.y, rect.max.y);
                 painter.line_segment(
                     [
                         egui::pos2(right_rect.min.x, right_decay_y),
@@ -1573,20 +1646,11 @@ impl MixerEditor {
 
         let painter = ui.painter();
 
-        // dB marks with equal visual spacing
-        // Range: -60 dB to +6 dB (66 dB total range)
-        let min_db = -60.0_f32;
-        let max_db = 6.0_f32;
-        let db_range = max_db - min_db;
-
         let marks: &[f32] = &[6.0, 0.0, -6.0, -12.0, -20.0, -30.0, -40.0, -60.0];
-
         let text_color = Color32::from_gray(140);
 
         for &db in marks {
-            // Map dB to position (equal dB spacing = equal visual spacing)
-            let normalized = (db - min_db) / db_range; // 0.0 to 1.0
-            let y = rect.max.y - (normalized * height);
+            let y = db_to_y(db, rect.min.y, rect.max.y);
 
             let label = if db > 0.0 {
                 format!("+{}", db as i32)
@@ -1594,13 +1658,11 @@ impl MixerEditor {
                 format!("{}", db as i32)
             };
 
-            // Draw tick mark
             painter.line_segment(
                 [egui::pos2(rect.max.x - 3.0, y), egui::pos2(rect.max.x, y)],
                 Stroke::new(1.0, Color32::from_gray(100)),
             );
 
-            // Draw label
             painter.text(
                 egui::pos2(rect.min.x, y),
                 egui::Align2::LEFT_CENTER,
@@ -2253,8 +2315,8 @@ impl MixerEditor {
         }
 
         let to_main = self.channels[ch_idx].to_main;
-        let to_sg = self.channels[ch_idx].to_sg;
-        let num_subgroups = self.num_subgroups;
+        let to_grp = self.channels[ch_idx].to_grp;
+        let num_groups = self.num_groups;
 
         let api = self.api.clone();
         let flow_id = self.flow_id;
@@ -2279,10 +2341,10 @@ impl MixerEditor {
             ctx_clone.request_repaint();
         });
 
-        // Update each subgroup route volume
-        for (sg, &enabled) in to_sg.iter().enumerate().take(num_subgroups) {
+        // Update each group route volume
+        for (sg, &enabled) in to_grp.iter().enumerate().take(num_groups) {
             let route_sg_vol = if enabled { 1.0 } else { 0.0 };
-            let to_sg_id = format!("{}:to_sg{}_vol_{}", block_id, sg, ch_idx);
+            let to_grp_id = format!("{}:to_grp{}_vol_{}", block_id, sg, ch_idx);
 
             let api_clone = api.clone();
             let flow_id_clone = flow_id;
@@ -2291,7 +2353,7 @@ impl MixerEditor {
                 let _ = api_clone
                     .update_element_property(
                         &flow_id_clone,
-                        &to_sg_id,
+                        &to_grp_id,
                         "volume",
                         PropertyValue::Float(route_sg_vol),
                     )
@@ -2305,9 +2367,9 @@ impl MixerEditor {
         if to_main {
             routes.push("Main".to_string());
         }
-        for (sg, &enabled) in to_sg.iter().enumerate().take(num_subgroups) {
+        for (sg, &enabled) in to_grp.iter().enumerate().take(num_groups) {
             if enabled {
-                routes.push(format!("SG{}", sg + 1));
+                routes.push(format!("GRP{}", sg + 1));
             }
         }
         let routes_str = if routes.is_empty() {
@@ -2318,8 +2380,8 @@ impl MixerEditor {
         tracing::info!("Routing updated: Ch {} -> {}", ch_idx + 1, routes_str);
     }
 
-    /// Update subgroup fader via API.
-    fn update_subgroup_fader(&mut self, ctx: &Context, sg_idx: usize) {
+    /// Update group fader via API.
+    fn update_group_fader(&mut self, ctx: &Context, sg_idx: usize) {
         if !self.live_updates {
             return;
         }
@@ -2330,16 +2392,16 @@ impl MixerEditor {
         }
         self.last_update = instant::Instant::now();
 
-        let mute = self.subgroups[sg_idx].mute;
+        let mute = self.groups[sg_idx].mute;
         let effective_volume = if mute {
             0.0
         } else {
-            self.subgroups[sg_idx].fader as f64
+            self.groups[sg_idx].fader as f64
         };
 
         let api = self.api.clone();
         let flow_id = self.flow_id;
-        let element_id = format!("{}:subgroup{}_volume", self.block_id, sg_idx);
+        let element_id = format!("{}:group{}_volume", self.block_id, sg_idx);
         let value = PropertyValue::Float(effective_volume);
         let ctx = ctx.clone();
 
@@ -2351,22 +2413,22 @@ impl MixerEditor {
         });
     }
 
-    /// Update subgroup mute via API.
-    fn update_subgroup_mute(&mut self, ctx: &Context, sg_idx: usize) {
+    /// Update group mute via API.
+    fn update_group_mute(&mut self, ctx: &Context, sg_idx: usize) {
         if !self.live_updates {
             return;
         }
 
-        let mute = self.subgroups[sg_idx].mute;
+        let mute = self.groups[sg_idx].mute;
         let effective_volume = if mute {
             0.0
         } else {
-            self.subgroups[sg_idx].fader as f64
+            self.groups[sg_idx].fader as f64
         };
 
         let api = self.api.clone();
         let flow_id = self.flow_id;
-        let element_id = format!("{}:subgroup{}_volume", self.block_id, sg_idx);
+        let element_id = format!("{}:group{}_volume", self.block_id, sg_idx);
         let value = PropertyValue::Float(effective_volume);
         let ctx = ctx.clone();
 
@@ -2439,10 +2501,45 @@ impl MixerEditor {
     }
 }
 
+/// Format a linear fader value as dB string.
+fn format_db(linear: f32) -> String {
+    if linear <= 0.001 {
+        "-inf dB".to_string()
+    } else {
+        let db = 20.0 * linear.log10();
+        if db <= -59.0 {
+            "-inf dB".to_string()
+        } else {
+            format!("{:.1} dB", db)
+        }
+    }
+}
+
+/// Format a pan value as string.
+fn format_pan(pan: f32) -> String {
+    if pan < -0.01 {
+        format!("L{:.0}", (-pan * 100.0))
+    } else if pan > 0.01 {
+        format!("R{:.0}", (pan * 100.0))
+    } else {
+        "C".to_string()
+    }
+}
+
+/// Map a dB value to a y-coordinate within a vertical range.
+/// All faders, meters, and scales share this mapping for alignment.
+/// Range: -60 dB at bottom (y_max - 5px) to +6 dB at top (y_min + 5px).
+fn db_to_y(db: f32, y_min: f32, y_max: f32) -> f32 {
+    let normalized = ((db - (-60.0)) / 66.0).clamp(0.0, 1.0);
+    let margin = 5.0;
+    let usable = (y_max - y_min) - margin * 2.0;
+    y_max - margin - normalized * usable
+}
+
 /// Convert dB to linear level (0.0-1.0).
 fn db_to_level(db: f64) -> f32 {
     let min_db = -60.0;
-    let max_db = 0.0;
+    let max_db = 6.0;
     ((db - min_db) / (max_db - min_db)).clamp(0.0, 1.0) as f32
 }
 
@@ -2472,8 +2569,28 @@ fn db_to_linear_f32(db: f32) -> f32 {
 /// Convert linear to dB scale.
 fn linear_to_db(linear: f64) -> f64 {
     if linear <= 0.0001 {
-        -60.0 // Clamp to -60dB for very small values
+        -60.0
     } else {
         20.0 * linear.log10()
+    }
+}
+
+/// Convert a linear level (0.0–2.0) to a knob arc position (0.0–1.0).
+///
+/// dB-scaled: first half of arc = -60..0 dB, second half = 0..+6 dB.
+/// This puts unity (0 dB, linear 1.0) at the center of the arc (12 o'clock).
+fn knob_linear_to_normalized(linear: f32) -> f32 {
+    if linear <= 0.001 {
+        return 0.0;
+    }
+    let db = 20.0 * linear.log10();
+    if db <= -60.0 {
+        0.0
+    } else if db <= 0.0 {
+        // -60..0 dB maps to 0.0..0.5
+        0.5 * (db + 60.0) / 60.0
+    } else {
+        // 0..+6 dB maps to 0.5..1.0
+        (0.5 + 0.5 * db / 6.0).min(1.0)
     }
 }
