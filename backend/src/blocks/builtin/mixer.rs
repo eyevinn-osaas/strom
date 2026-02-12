@@ -2411,3 +2411,535 @@ fn mixer_definition() -> BlockDefinition {
         }),
     }
 }
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn init_gst() {
+        let _ = gst::init();
+    }
+
+    fn is_element_available(name: &str) -> bool {
+        gst::ElementFactory::make(name).build().is_ok()
+    }
+
+    // ---- Pure function tests (no GStreamer needed) ----
+
+    #[test]
+    fn test_db_to_linear_unity() {
+        let result = db_to_linear(0.0);
+        assert!((result - 1.0).abs() < 1e-10, "0 dB should be 1.0 linear");
+    }
+
+    #[test]
+    fn test_db_to_linear_minus_6() {
+        let result = db_to_linear(-6.0);
+        assert!(
+            (result - 0.5012).abs() < 0.001,
+            "-6 dB should be ~0.501, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_db_to_linear_minus_20() {
+        let result = db_to_linear(-20.0);
+        assert!(
+            (result - 0.1).abs() < 1e-10,
+            "-20 dB should be 0.1, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_db_to_linear_minus_60() {
+        let result = db_to_linear(-60.0);
+        assert!(
+            (result - 0.001).abs() < 1e-10,
+            "-60 dB should be 0.001, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_db_to_linear_plus_6() {
+        let result = db_to_linear(6.0);
+        assert!(
+            (result - 1.9953).abs() < 0.001,
+            "+6 dB should be ~1.995, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_parse_num_channels_default() {
+        let props = HashMap::new();
+        assert_eq!(parse_num_channels(&props), DEFAULT_CHANNELS);
+    }
+
+    #[test]
+    fn test_parse_num_channels_from_string() {
+        let mut props = HashMap::new();
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::String("4".to_string()),
+        );
+        assert_eq!(parse_num_channels(&props), 4);
+    }
+
+    #[test]
+    fn test_parse_num_channels_clamped() {
+        let mut props = HashMap::new();
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::String("100".to_string()),
+        );
+        assert_eq!(parse_num_channels(&props), MAX_CHANNELS);
+
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::String("0".to_string()),
+        );
+        assert_eq!(parse_num_channels(&props), 1);
+    }
+
+    #[test]
+    fn test_parse_num_aux_buses_default() {
+        let props = HashMap::new();
+        assert_eq!(parse_num_aux_buses(&props), 0);
+    }
+
+    #[test]
+    fn test_parse_num_aux_buses_clamped() {
+        let mut props = HashMap::new();
+        props.insert(
+            "num_aux_buses".to_string(),
+            PropertyValue::String("10".to_string()),
+        );
+        assert_eq!(parse_num_aux_buses(&props), MAX_AUX_BUSES);
+    }
+
+    #[test]
+    fn test_parse_num_groups_default() {
+        let props = HashMap::new();
+        assert_eq!(parse_num_groups(&props), 0);
+    }
+
+    #[test]
+    fn test_get_float_prop_default() {
+        let props = HashMap::new();
+        assert_eq!(get_float_prop(&props, "volume", 0.5), 0.5);
+    }
+
+    #[test]
+    fn test_get_float_prop_value() {
+        let mut props = HashMap::new();
+        props.insert("volume".to_string(), PropertyValue::Float(0.75));
+        assert_eq!(get_float_prop(&props, "volume", 0.5), 0.75);
+    }
+
+    #[test]
+    fn test_get_float_prop_from_int() {
+        let mut props = HashMap::new();
+        props.insert("volume".to_string(), PropertyValue::Int(3));
+        assert_eq!(get_float_prop(&props, "volume", 0.5), 3.0);
+    }
+
+    #[test]
+    fn test_get_bool_prop_default() {
+        let props = HashMap::new();
+        assert!(!get_bool_prop(&props, "mute", false));
+        assert!(get_bool_prop(&props, "mute", true));
+    }
+
+    #[test]
+    fn test_get_bool_prop_value() {
+        let mut props = HashMap::new();
+        props.insert("mute".to_string(), PropertyValue::Bool(true));
+        assert!(get_bool_prop(&props, "mute", false));
+    }
+
+    #[test]
+    fn test_get_string_prop_default() {
+        let props = HashMap::new();
+        assert_eq!(get_string_prop(&props, "mode", "pfl"), "pfl");
+    }
+
+    #[test]
+    fn test_get_string_prop_value() {
+        let mut props = HashMap::new();
+        props.insert("mode".to_string(), PropertyValue::String("afl".to_string()));
+        assert_eq!(get_string_prop(&props, "mode", "pfl"), "afl");
+    }
+
+    #[test]
+    fn test_comp_knee_db_to_linear_in_range() {
+        // Default knee -6 dB should map to ~0.5 (within LSP range 0.0631..1.0)
+        let kn = db_to_linear(-6.0).clamp(0.0631, 1.0);
+        assert!(kn > 0.49 && kn < 0.52, "Knee -6dB = {}, expected ~0.5", kn);
+
+        // 0 dB should map to 1.0 (max)
+        let kn = db_to_linear(0.0).clamp(0.0631, 1.0);
+        assert!((kn - 1.0).abs() < 1e-6, "Knee 0dB = {}, expected 1.0", kn);
+
+        // -24 dB should map to ~0.063 (near min)
+        let kn = db_to_linear(-24.0).clamp(0.0631, 1.0);
+        assert!(kn >= 0.0631, "Knee -24dB = {}, should be >= 0.0631", kn);
+
+        // +6 dB would exceed max, should clamp to 1.0
+        let kn = db_to_linear(6.0).clamp(0.0631, 1.0);
+        assert!((kn - 1.0).abs() < 1e-6, "Knee +6dB should clamp to 1.0");
+    }
+
+    // ---- Property mapping tests ----
+
+    #[test]
+    fn test_mixer_definition_has_bypass_mappings() {
+        let def = mixer_definition();
+        let bypass_props = [
+            "main_comp_enabled",
+            "main_eq_enabled",
+            "main_limiter_enabled",
+        ];
+        for prop_name in &bypass_props {
+            let prop = def
+                .exposed_properties
+                .iter()
+                .find(|p| p.name == *prop_name)
+                .unwrap_or_else(|| panic!("Missing property: {}", prop_name));
+            assert_eq!(
+                prop.mapping.property_name, "bypass",
+                "{} should map to 'bypass', got '{}'",
+                prop_name, prop.mapping.property_name
+            );
+            assert_eq!(
+                prop.mapping.transform,
+                Some("bool_invert".to_string()),
+                "{} should have 'bool_invert' transform",
+                prop_name
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixer_definition_channel_bypass_mappings() {
+        let def = mixer_definition();
+        // Check that per-channel gate/comp/eq enabled properties map to bypass
+        for suffix in &["gate_enabled", "comp_enabled", "eq_enabled"] {
+            let prop_name = format!("ch1_{}", suffix);
+            let prop = def
+                .exposed_properties
+                .iter()
+                .find(|p| p.name == prop_name)
+                .unwrap_or_else(|| panic!("Missing property: {}", prop_name));
+            assert_eq!(
+                prop.mapping.property_name, "bypass",
+                "{} should map to 'bypass', got '{}'",
+                prop_name, prop.mapping.property_name
+            );
+            assert_eq!(
+                prop.mapping.transform,
+                Some("bool_invert".to_string()),
+                "{} should have 'bool_invert' transform",
+                prop_name
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixer_definition_no_gate_range_property() {
+        let def = mixer_definition();
+        // There should be no gate range exposed property (LSP doesn't support it)
+        let gate_range = def
+            .exposed_properties
+            .iter()
+            .find(|p| p.name.contains("gate_range"));
+        assert!(
+            gate_range.is_none(),
+            "Gate range property should not exist (LSP has no settable range)"
+        );
+    }
+
+    #[test]
+    fn test_mixer_definition_comp_knee_defaults() {
+        let def = mixer_definition();
+        let knee = def
+            .exposed_properties
+            .iter()
+            .find(|p| p.name == "ch1_comp_knee")
+            .expect("Missing ch1_comp_knee");
+        match &knee.default_value {
+            Some(PropertyValue::Float(v)) => assert!(
+                (*v - (-6.0)).abs() < 1e-6,
+                "Knee default should be -6.0 dB, got {}",
+                v
+            ),
+            other => panic!("Knee default should be Float(-6.0), got {:?}", other),
+        }
+        assert_eq!(
+            knee.mapping.transform,
+            Some("db_to_linear".to_string()),
+            "Knee should have db_to_linear transform"
+        );
+    }
+
+    #[test]
+    fn test_mixer_definition_db_to_linear_transforms() {
+        let def = mixer_definition();
+        // Properties that should have db_to_linear transform
+        let db_props = [
+            "ch1_gate_threshold",
+            "ch1_comp_threshold",
+            "ch1_comp_makeup",
+            "ch1_comp_knee",
+            "main_comp_threshold",
+            "main_comp_makeup",
+        ];
+        for prop_name in &db_props {
+            let prop = def
+                .exposed_properties
+                .iter()
+                .find(|p| p.name == *prop_name)
+                .unwrap_or_else(|| panic!("Missing property: {}", prop_name));
+            assert_eq!(
+                prop.mapping.transform,
+                Some("db_to_linear".to_string()),
+                "{} should have 'db_to_linear' transform, got {:?}",
+                prop_name,
+                prop.mapping.transform
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixer_definition_channel_count() {
+        let def = mixer_definition();
+        // Default is 8 channels, should have properties for ch1..ch8
+        let ch8_fader = def
+            .exposed_properties
+            .iter()
+            .find(|p| p.name == "ch8_fader");
+        assert!(
+            ch8_fader.is_some(),
+            "Should have ch8_fader for default 8 channels"
+        );
+    }
+
+    #[test]
+    fn test_mixer_definition_aux_group_outputs() {
+        let def = mixer_definition();
+        // Should have main, PFL, aux, and group output pads
+        let pads = &def.external_pads;
+        assert!(
+            pads.outputs.iter().any(|p| p.name == "main_out"),
+            "Should have main_out pad"
+        );
+        assert!(
+            pads.outputs.iter().any(|p| p.name == "pfl_out"),
+            "Should have pfl_out pad"
+        );
+    }
+
+    // ---- GStreamer element tests (conditional on plugin availability) ----
+
+    #[test]
+    fn test_make_gate_element_lsp() {
+        init_gst();
+        if !is_element_available("lsp-plug-in-plugins-lv2-gate-stereo") {
+            println!("LSP gate not available, skipping");
+            return;
+        }
+        let gate = make_gate_element("test_gate", true, -40.0, 5.0, 100.0, -80.0);
+        assert!(gate.is_ok(), "Should create gate element");
+        let gate = gate.unwrap();
+
+        // Verify bypass property was set (enabled=true means bypass=false)
+        if gate.find_property("bypass").is_some() {
+            let bypass: bool = gate.property("bypass");
+            assert!(!bypass, "Gate enabled=true should set bypass=false");
+        }
+    }
+
+    #[test]
+    fn test_make_gate_element_disabled() {
+        init_gst();
+        if !is_element_available("lsp-plug-in-plugins-lv2-gate-stereo") {
+            println!("LSP gate not available, skipping");
+            return;
+        }
+        let gate = make_gate_element("test_gate_off", false, -40.0, 5.0, 100.0, -80.0);
+        assert!(gate.is_ok());
+        let gate = gate.unwrap();
+
+        if gate.find_property("bypass").is_some() {
+            let bypass: bool = gate.property("bypass");
+            assert!(bypass, "Gate enabled=false should set bypass=true");
+        }
+    }
+
+    #[test]
+    fn test_make_compressor_element_lsp() {
+        init_gst();
+        if !is_element_available("lsp-plug-in-plugins-lv2-compressor-stereo") {
+            println!("LSP compressor not available, skipping");
+            return;
+        }
+        let comp = make_compressor_element("test_comp", true, -20.0, 4.0, 10.0, 100.0, 0.0);
+        assert!(comp.is_ok(), "Should create compressor element");
+        let comp = comp.unwrap();
+
+        if comp.find_property("bypass").is_some() {
+            let bypass: bool = comp.property("bypass");
+            assert!(!bypass, "Comp enabled=true should set bypass=false");
+        }
+
+        // Verify threshold was converted to linear
+        if comp.find_property("al").is_some() {
+            let al: f32 = comp.property("al");
+            let expected = db_to_linear(-20.0) as f32;
+            assert!(
+                (al - expected).abs() < 0.001,
+                "Threshold -20dB: expected {}, got {}",
+                expected,
+                al
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_eq_element_lsp() {
+        init_gst();
+        if !is_element_available("lsp-plug-in-plugins-lv2-para-equalizer-x8-stereo") {
+            println!("LSP EQ not available, skipping");
+            return;
+        }
+        let bands = [
+            (1000.0, 0.0, 1.0),
+            (2000.0, 3.0, 1.0),
+            (4000.0, -3.0, 1.0),
+            (8000.0, 0.0, 1.0),
+        ];
+        let eq = make_eq_element("test_eq", true, &bands);
+        assert!(eq.is_ok(), "Should create EQ element");
+        let eq = eq.unwrap();
+
+        if eq.find_property("bypass").is_some() {
+            let bypass: bool = eq.property("bypass");
+            assert!(!bypass, "EQ enabled=true should set bypass=false");
+        }
+
+        // Verify first band frequency
+        if eq.find_property("f-0").is_some() {
+            let f0: f32 = eq.property("f-0");
+            assert!(
+                (f0 - 1000.0).abs() < 1.0,
+                "Band 0 freq should be 1000, got {}",
+                f0
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_limiter_element_lsp() {
+        init_gst();
+        if !is_element_available("lsp-plug-in-plugins-lv2-limiter-stereo") {
+            println!("LSP limiter not available, skipping");
+            return;
+        }
+        let lim = make_limiter_element("test_lim", true, -3.0);
+        assert!(lim.is_ok(), "Should create limiter element");
+    }
+
+    #[test]
+    fn test_make_hpf_element() {
+        init_gst();
+        if !is_element_available("audiocheblimit") && !is_element_available("audiowsinclimit") {
+            println!("No HPF element available, skipping");
+            return;
+        }
+        let hpf = make_hpf_element("test_hpf", true, 80.0);
+        assert!(hpf.is_ok(), "Should create HPF element");
+    }
+
+    #[test]
+    fn test_make_hpf_element_disabled_uses_min_cutoff() {
+        init_gst();
+        if !is_element_available("audiocheblimit") {
+            println!("audiocheblimit not available, skipping");
+            return;
+        }
+        let hpf = make_hpf_element("test_hpf_off", false, 80.0);
+        assert!(hpf.is_ok());
+        let hpf = hpf.unwrap();
+
+        if hpf.find_property("cutoff").is_some() {
+            let cutoff: f32 = hpf.property("cutoff");
+            assert!(
+                (cutoff - 1.0).abs() < 0.1,
+                "Disabled HPF should have cutoff=1.0, got {}",
+                cutoff
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_audiomixer() {
+        init_gst();
+        if !is_element_available("audiomixer") {
+            println!("audiomixer not available, skipping");
+            return;
+        }
+        let mixer = make_audiomixer("test_mixer", true, 30, 30);
+        assert!(mixer.is_ok(), "Should create audiomixer: {:?}", mixer.err());
+    }
+
+    #[test]
+    fn test_make_gate_fallback_to_identity() {
+        init_gst();
+        // If LSP is available this just tests normal path, but it shouldn't panic
+        let gate = make_gate_element("test_gate_fb", true, -40.0, 5.0, 100.0, -80.0);
+        assert!(
+            gate.is_ok(),
+            "Gate should succeed (LSP or identity fallback)"
+        );
+    }
+
+    #[test]
+    fn test_make_compressor_fallback_to_identity() {
+        init_gst();
+        let comp = make_compressor_element("test_comp_fb", true, -20.0, 4.0, 10.0, 100.0, 0.0);
+        assert!(
+            comp.is_ok(),
+            "Compressor should succeed (LSP or identity fallback)"
+        );
+    }
+
+    #[test]
+    fn test_make_eq_fallback_to_identity() {
+        init_gst();
+        let bands = [
+            (100.0, 0.0, 1.0),
+            (1000.0, 0.0, 1.0),
+            (5000.0, 0.0, 1.0),
+            (10000.0, 0.0, 1.0),
+        ];
+        let eq = make_eq_element("test_eq_fb", true, &bands);
+        assert!(eq.is_ok(), "EQ should succeed (LSP or identity fallback)");
+    }
+
+    #[test]
+    fn test_extract_level_values_empty() {
+        init_gst();
+        let structure = gst::Structure::builder("level").build();
+        let values = extract_level_values(structure.as_ref(), "peak");
+        assert!(
+            values.is_empty(),
+            "Should return empty vec for missing field"
+        );
+    }
+}
