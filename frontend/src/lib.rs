@@ -40,7 +40,7 @@ pub use app::StromApp;
 
 /// Load the app icon for native windows
 #[cfg(not(target_arch = "wasm32"))]
-fn load_icon() -> Option<egui::IconData> {
+pub fn load_icon() -> Option<egui::IconData> {
     let icon_bytes = include_bytes!("icon.png");
     let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
@@ -49,6 +49,21 @@ fn load_icon() -> Option<egui::IconData> {
         width,
         height,
     })
+}
+
+/// Select the preferred renderer per platform.
+/// macOS: wgpu (Metal) to avoid OpenGL conflicts with GStreamer.
+/// Others: glow (OpenGL) as the stable default.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn preferred_renderer() -> eframe::Renderer {
+    #[cfg(target_os = "macos")]
+    {
+        eframe::Renderer::Wgpu
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        eframe::Renderer::Glow
+    }
 }
 
 // Re-export the native entry point (without tracing init - parent should handle that)
@@ -69,6 +84,7 @@ pub fn run_native_gui(port: u16, tls_enabled: bool) -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport,
+        renderer: preferred_renderer(),
         ..Default::default()
     };
 
@@ -105,6 +121,7 @@ pub fn run_native_gui_with_shutdown(
 
     let native_options = eframe::NativeOptions {
         viewport,
+        renderer: preferred_renderer(),
         ..Default::default()
     };
 
