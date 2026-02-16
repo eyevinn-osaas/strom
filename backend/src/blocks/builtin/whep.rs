@@ -173,7 +173,7 @@ fn build_whepsrc(
                 None
             }
         })
-        .unwrap_or(40);
+        .unwrap_or(DEFAULT_JITTERBUFFER_LATENCY_MS as u32);
 
     // Create namespaced element IDs
     let instance_id_owned = instance_id.to_string();
@@ -407,7 +407,7 @@ fn build_whepclientsrc(
                 None
             }
         })
-        .unwrap_or(40);
+        .unwrap_or(DEFAULT_JITTERBUFFER_LATENCY_MS as u32);
 
     // Create namespaced element IDs
     let instance_id_owned = instance_id.to_string();
@@ -1773,7 +1773,7 @@ fn whep_input_definition() -> BlockDefinition {
                 label: "Jitterbuffer Latency (ms)".to_string(),
                 description: "WebRTC jitterbuffer latency in milliseconds (default 200ms). Lower values reduce delay but increase sensitivity to network jitter. For LAN use, 40-80ms is recommended.".to_string(),
                 property_type: PropertyType::Int,
-                default_value: Some(PropertyValue::Int(40)),
+                default_value: Some(PropertyValue::Int(DEFAULT_JITTERBUFFER_LATENCY_MS)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "jitterbuffer_latency_ms".to_string(),
