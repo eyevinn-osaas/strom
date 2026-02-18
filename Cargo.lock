@@ -1376,7 +1376,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2595,8 +2595,8 @@ dependencies = [
 
 [[package]]
 name = "gst-plugins-lsp"
-version = "0.1.0"
-source = "git+https://github.com/srperens/lsp-plugins-rs#774ddf1df09428533b8e6222c686f4c97458ec9f"
+version = "1.2.1"
+source = "git+https://github.com/srperens/lsp-plugins-rs?tag=v1.2.1#12a7c2eaf35ea621ff226723265361af8aaa98dc"
 dependencies = [
  "gstreamer 0.24.4",
  "gstreamer-audio 0.24.4",
@@ -3847,10 +3847,10 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "lsp-dsp-lib"
-version = "0.1.0"
-source = "git+https://github.com/srperens/lsp-plugins-rs#774ddf1df09428533b8e6222c686f4c97458ec9f"
+version = "1.2.1"
+source = "git+https://github.com/srperens/lsp-plugins-rs?tag=v1.2.1#12a7c2eaf35ea621ff226723265361af8aaa98dc"
 dependencies = [
- "cc",
+ "multiversion",
  "num-complex",
  "realfft",
  "rustfft",
@@ -3859,11 +3859,10 @@ dependencies = [
 
 [[package]]
 name = "lsp-dsp-units"
-version = "0.1.0"
-source = "git+https://github.com/srperens/lsp-plugins-rs#774ddf1df09428533b8e6222c686f4c97458ec9f"
+version = "1.2.1"
+source = "git+https://github.com/srperens/lsp-plugins-rs?tag=v1.2.1#12a7c2eaf35ea621ff226723265361af8aaa98dc"
 dependencies = [
  "bitflags 2.10.0",
- "cc",
  "lsp-dsp-lib",
  "thiserror 2.0.18",
 ]
@@ -4040,6 +4039,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "multiversion"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7edb7f0ff51249dfda9ab96b5823695e15a052dc15074c9dbf3d118afaf2c201"
+dependencies = [
+ "multiversion-macros",
+ "target-features",
+]
+
+[[package]]
+name = "multiversion-macros"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b093064383341eb3271f42e381cb8f10a01459478446953953c75d24bd339fc0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "target-features",
+]
+
+[[package]]
 name = "naga"
 version = "27.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4168,7 +4189,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5464,7 +5485,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6469,6 +6490,12 @@ dependencies = [
  "toml 0.9.10+spec-1.1.0",
  "version-compare",
 ]
+
+[[package]]
+name = "target-features"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1bbb9f3c5c463a01705937a24fdabc5047929ac764b2d5b9cf681c1f5041ed5"
 
 [[package]]
 name = "target-lexicon"
