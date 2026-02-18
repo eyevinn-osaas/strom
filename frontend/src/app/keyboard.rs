@@ -1,45 +1,9 @@
-#[allow(unused_imports)]
-use crate::api::{ApiClient, AuthStatusResponse};
-#[allow(unused_imports)]
-use crate::audiorouter::RoutingMatrixEditor;
-#[allow(unused_imports)]
-use crate::compositor_editor::CompositorEditor;
-#[allow(unused_imports)]
-use crate::graph::GraphEditor;
-#[allow(unused_imports)]
-use crate::info_page::{
-    current_time_millis, format_datetime_local, format_uptime, parse_iso8601_to_millis,
-};
-#[allow(unused_imports)]
-use crate::latency::LatencyDataStore;
-#[allow(unused_imports)]
-use crate::login::LoginScreen;
-#[allow(unused_imports)]
-use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
-#[allow(unused_imports)]
-use crate::meter::MeterDataStore;
-#[allow(unused_imports)]
-use crate::palette::ElementPalette;
-#[allow(unused_imports)]
-use crate::properties::PropertyInspector;
-#[allow(unused_imports)]
-use crate::state::{AppMessage, AppStateChannels, ConnectionState};
-#[allow(unused_imports)]
-use crate::system_monitor::SystemMonitorStore;
-#[allow(unused_imports)]
-use crate::thread_monitor::ThreadMonitorStore;
-#[allow(unused_imports)]
-use crate::webrtc_stats::WebRtcStatsStore;
-#[allow(unused_imports)]
-use crate::ws::WebSocketClient;
-#[allow(unused_imports)]
-use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
-#[allow(unused_imports)]
+use crate::state::AppMessage;
+use egui::Context;
 use strom_types::{Flow, PipelineState};
 
 use super::FocusTarget;
 use super::*;
-
 impl StromApp {
     /// Format keyboard shortcut for display (adapts to platform).
     pub(super) fn format_shortcut(shortcut: &str) -> String {
