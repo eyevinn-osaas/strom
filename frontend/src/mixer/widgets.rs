@@ -322,13 +322,11 @@ impl MixerEditor {
             let db_delta = -response.drag_delta().y * 0.35;
             let new_db = (current_db + db_delta).clamp(-60.0, 6.0);
             self.channels[ch_idx].aux_sends[aux_idx] = db_to_linear_f32(new_db);
-            self.update_aux_send(ui.ctx(), ch_idx, aux_idx);
         }
 
         // Double-click: toggle between off and unity
         if response.double_clicked() {
             self.channels[ch_idx].aux_sends[aux_idx] = if aux_level > 0.01 { 0.0 } else { 1.0 };
-            self.update_aux_send(ui.ctx(), ch_idx, aux_idx);
         }
 
         let painter = ui.painter();

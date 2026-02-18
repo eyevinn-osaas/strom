@@ -267,8 +267,11 @@ impl MixerEditor {
                             ui.spacing_mut().item_spacing.x = 1.0;
                             for aux_idx in 0..self.num_aux_buses.min(MAX_AUX_BUSES) {
                                 let response = self.render_knob(ui, index, aux_idx);
-                                if response.dragged() {
+                                if response.double_clicked() {
+                                    self.update_aux_send(ctx, index, aux_idx);
+                                } else if response.dragged() {
                                     self.active_control = ActiveControl::AuxSend(index, aux_idx);
+                                    self.update_aux_send(ctx, index, aux_idx);
                                 } else if response.drag_stopped() {
                                     self.active_control = ActiveControl::None;
                                 }
@@ -358,7 +361,9 @@ impl MixerEditor {
 
                     // ── Pan knob ──
                     let pan_response = self.render_pan_knob(ui, index);
-                    if pan_response.dragged() {
+                    if pan_response.double_clicked() {
+                        self.update_channel_property(ctx, index, "pan");
+                    } else if pan_response.dragged() {
                         self.active_control = ActiveControl::Pan(index);
                         self.update_channel_property(ctx, index, "pan");
                     } else if pan_response.drag_stopped() {

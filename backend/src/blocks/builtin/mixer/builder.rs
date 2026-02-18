@@ -4,7 +4,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
 use strom_types::{block::*, element::ElementPadRef, FlowId, MediaType, PropertyValue};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::elements::*;
 use super::metering::connect_mixer_meter_handler;
@@ -90,6 +90,17 @@ impl BlockBuilder for MixerBuilder {
         let num_aux_buses = parse_num_aux_buses(properties);
         let num_groups = parse_num_groups(properties);
         let dsp_backend = get_string_prop(properties, "dsp_backend", "rust");
+        if dsp_backend != "rust" && dsp_backend != "lv2" {
+            warn!(
+                "Unrecognized dsp_backend '{}', falling back to 'rust'",
+                dsp_backend
+            );
+        }
+        let dsp_backend = if dsp_backend == "rust" || dsp_backend == "lv2" {
+            dsp_backend
+        } else {
+            "rust"
+        };
         let solo_mode_afl = get_string_prop(properties, "solo_mode", "pfl") == "afl";
         info!(
             "Mixer config: {} channels, {} aux buses, {} groups, solo={}, dsp={}",
@@ -548,8 +559,6 @@ impl BlockBuilder for MixerBuilder {
             let gate_attack = get_float_prop(properties, &format!("ch{}_gate_attack", ch_num), 5.0);
             let gate_release =
                 get_float_prop(properties, &format!("ch{}_gate_release", ch_num), 100.0);
-            let gate_range = get_float_prop(properties, &format!("ch{}_gate_range", ch_num), -80.0);
-
             let gate_id = format!("{}:gate_{}", instance_id, ch);
             let gate = make_gate_element(
                 &gate_id,
@@ -557,7 +566,6 @@ impl BlockBuilder for MixerBuilder {
                 gate_threshold,
                 gate_attack,
                 gate_release,
-                gate_range,
                 dsp_backend,
             )?;
             elements.push((gate_id.clone(), gate));

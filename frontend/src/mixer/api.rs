@@ -13,6 +13,12 @@ impl MixerEditor {
             return;
         }
 
+        // Throttle continuous drag updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
+
         let channel = &self.channels[index];
 
         let (element_suffix, gst_prop, value) = match (processor, param) {
@@ -90,9 +96,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, &gst_prop, value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -108,6 +117,12 @@ impl MixerEditor {
         if !self.live_updates {
             return;
         }
+
+        // Throttle continuous drag updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
 
         let channel = &self.channels[index];
         let (freq, gain, q) = channel.eq_bands[band];
@@ -128,9 +143,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, &gst_prop, value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -145,6 +163,12 @@ impl MixerEditor {
         if !self.live_updates {
             return;
         }
+
+        // Throttle continuous drag updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
 
         let (element_suffix, gst_prop, value) = match (processor, param) {
             ("comp", "enabled") => (
@@ -208,9 +232,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, &gst_prop, value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -220,6 +247,12 @@ impl MixerEditor {
         if !self.live_updates {
             return;
         }
+
+        // Throttle continuous drag updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
 
         let (freq, gain, q) = self.main_eq_bands[band];
 
@@ -239,9 +272,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, &gst_prop, value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -329,9 +365,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, &gst_prop, value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -362,9 +401,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -389,9 +431,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -402,6 +447,12 @@ impl MixerEditor {
             return;
         }
 
+        // Throttle continuous drag updates
+        if self.last_update.elapsed().as_millis() < 50 {
+            return;
+        }
+        self.last_update = instant::Instant::now();
+
         let level = self.channels[ch_idx].aux_sends[aux_idx] as f64;
 
         let api = self.api.clone();
@@ -411,9 +462,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -442,14 +496,17 @@ impl MixerEditor {
         let api_clone = api.clone();
         let ctx_clone = ctx.clone();
         crate::app::spawn_task(async move {
-            let _ = api_clone
+            if let Err(e) = api_clone
                 .update_element_property(
                     &flow_id,
                     &to_main_id,
                     "volume",
                     PropertyValue::Float(to_main_vol),
                 )
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer routing update failed: {}", e);
+            }
             ctx_clone.request_repaint();
         });
 
@@ -462,14 +519,17 @@ impl MixerEditor {
             let flow_id_clone = flow_id;
             let ctx_clone = ctx.clone();
             crate::app::spawn_task(async move {
-                let _ = api_clone
+                if let Err(e) = api_clone
                     .update_element_property(
                         &flow_id_clone,
                         &to_grp_id,
                         "volume",
                         PropertyValue::Float(route_sg_vol),
                     )
-                    .await;
+                    .await
+                {
+                    tracing::warn!("Mixer group routing update failed: {}", e);
+                }
                 ctx_clone.request_repaint();
             });
         }
@@ -518,9 +578,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -545,9 +608,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -578,9 +644,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }
@@ -605,9 +674,12 @@ impl MixerEditor {
         let ctx = ctx.clone();
 
         crate::app::spawn_task(async move {
-            let _ = api
+            if let Err(e) = api
                 .update_element_property(&flow_id, &element_id, "volume", value)
-                .await;
+                .await
+            {
+                tracing::warn!("Mixer API update failed: {}", e);
+            }
             ctx.request_repaint();
         });
     }

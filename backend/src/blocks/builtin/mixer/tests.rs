@@ -337,7 +337,7 @@ fn test_make_gate_element_lsp() {
         println!("LSP gate not available, skipping");
         return;
     }
-    let gate = make_gate_element("test_gate", true, -40.0, 5.0, 100.0, -80.0, "lv2");
+    let gate = make_gate_element("test_gate", true, -40.0, 5.0, 100.0, "lv2");
     assert!(gate.is_ok(), "Should create gate element");
     let gate = gate.unwrap();
 
@@ -355,7 +355,7 @@ fn test_make_gate_element_disabled() {
         println!("LSP gate not available, skipping");
         return;
     }
-    let gate = make_gate_element("test_gate_off", false, -40.0, 5.0, 100.0, -80.0, "lv2");
+    let gate = make_gate_element("test_gate_off", false, -40.0, 5.0, 100.0, "lv2");
     assert!(gate.is_ok());
     let gate = gate.unwrap();
 
@@ -485,7 +485,7 @@ fn test_make_audiomixer() {
 fn test_make_gate_fallback_to_identity() {
     init_gst();
     // If LSP is available this just tests normal path, but it shouldn't panic
-    let gate = make_gate_element("test_gate_fb", true, -40.0, 5.0, 100.0, -80.0, "lv2");
+    let gate = make_gate_element("test_gate_fb", true, -40.0, 5.0, 100.0, "lv2");
     assert!(
         gate.is_ok(),
         "Gate should succeed (LSP or identity fallback)"
@@ -531,7 +531,7 @@ fn test_extract_level_values_empty() {
 #[test]
 fn test_make_gate_element_rust() {
     init_gst();
-    let gate = make_gate_element("test_gate_rs", true, -40.0, 5.0, 100.0, -80.0, "rust");
+    let gate = make_gate_element("test_gate_rs", true, -40.0, 5.0, 100.0, "rust");
     assert!(
         gate.is_ok(),
         "Should create gate element (rust or fallback): {:?}",
@@ -554,7 +554,7 @@ fn test_make_gate_element_rust() {
 #[test]
 fn test_make_gate_element_rust_disabled() {
     init_gst();
-    let gate = make_gate_element("test_gate_rs_off", false, -40.0, 5.0, 100.0, -80.0, "rust");
+    let gate = make_gate_element("test_gate_rs_off", false, -40.0, 5.0, 100.0, "rust");
     assert!(gate.is_ok());
     let gate = gate.unwrap();
     if gate.find_property("open-threshold").is_some() {

@@ -482,18 +482,16 @@ impl MixerEditor {
             });
 
             ui.horizontal(|ui| {
-                ui.label("Range:");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.channels[index].gate_range)
-                            .range(-80.0..=0.0)
-                            .suffix(" dB")
-                            .speed(0.5),
-                    )
-                    .changed()
-                {
-                    self.update_processing_param(ctx, index, "gate", "range");
-                }
+                ui.label("Range:")
+                    .on_hover_text("Saved with preset but not adjustable during playback");
+                ui.add_enabled(
+                    false,
+                    egui::DragValue::new(&mut self.channels[index].gate_range)
+                        .range(-80.0..=0.0)
+                        .suffix(" dB")
+                        .speed(0.5),
+                )
+                .on_disabled_hover_text("Gate range cannot be adjusted live (LSP limitation)");
             });
         });
     }

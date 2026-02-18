@@ -1,9 +1,13 @@
 use crate::blocks::BlockBuildError;
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use std::sync::OnceLock;
 use tracing::{error, warn};
 
 use super::properties::db_to_linear;
+
+/// Cached result of checking whether audiomixer supports the force-live property.
+static AUDIOMIXER_HAS_FORCE_LIVE: OnceLock<bool> = OnceLock::new();
 
 /// Create a configured audiomixer element with force-live, latency, and start-time-selection.
 pub(super) fn make_audiomixer(
@@ -13,14 +17,12 @@ pub(super) fn make_audiomixer(
     min_upstream_latency_ms: u64,
 ) -> Result<gst::Element, BlockBuildError> {
     // Check if force-live is available (construct-only, must be set at build time)
-    let has_force_live = {
-        let probe = gst::ElementFactory::make("audiomixer")
+    let has_force_live = *AUDIOMIXER_HAS_FORCE_LIVE.get_or_init(|| {
+        gst::ElementFactory::make("audiomixer")
             .build()
-            .map_err(|e| {
-                BlockBuildError::ElementCreation(format!("audiomixer probe {}: {}", name, e))
-            })?;
-        probe.find_property("force-live").is_some()
-    };
+            .map(|probe| probe.find_property("force-live").is_some())
+            .unwrap_or(false)
+    });
 
     let mut builder = gst::ElementFactory::make("audiomixer").name(name);
     if has_force_live {
@@ -56,7 +58,6 @@ pub(super) fn make_gate_element(
     threshold_db: f64,
     attack_ms: f64,
     release_ms: f64,
-    _range_db: f64,
     backend: &str,
 ) -> Result<gst::Element, BlockBuildError> {
     if backend == "rust" {
