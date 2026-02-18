@@ -17,6 +17,7 @@ mod widgets;
 
 use egui::{Color32, Context, CornerRadius, Rect, Response, Sense, Stroke, Ui, Vec2};
 use std::collections::HashMap;
+use strom_types::mixer::*;
 use strom_types::{FlowId, PropertyValue};
 
 use crate::api::ApiClient;
@@ -24,13 +25,8 @@ use crate::meter::{MeterData, MeterDataStore};
 
 use util::*;
 
-/// Default fader value (0 dB unity)
-const DEFAULT_FADER: f32 = 1.0;
-
-/// Maximum number of aux buses
-const MAX_AUX_BUSES: usize = 4;
-/// Maximum number of groups
-const MAX_GROUPS: usize = 4;
+/// Minimum knee value in linear scale (corresponds to -24 dB)
+const MIN_KNEE_LINEAR: f64 = 0.0631;
 
 // ── Layout constants ─────────────────────────────────────────────────
 /// Gap between strips
@@ -95,8 +91,6 @@ struct ChannelStrip {
     gate_attack: f32,
     /// Gate release (ms)
     gate_release: f32,
-    /// Gate range (dB)
-    gate_range: f32,
     /// Compressor enabled
     comp_enabled: bool,
     /// Compressor threshold (dB)
@@ -146,8 +140,8 @@ impl ChannelStrip {
         Self {
             channel_num,
             label: format!("Ch {}", channel_num),
-            gain: 0.0,
-            pan: 0.0,
+            gain: DEFAULT_GAIN,
+            pan: DEFAULT_PAN,
             fader: DEFAULT_FADER,
             mute: false,
             pfl: false,
@@ -156,26 +150,20 @@ impl ChannelStrip {
             aux_sends: [0.0; MAX_AUX_BUSES],
             aux_pre: [true, true, false, false], // aux 1-2 pre, 3-4 post
             hpf_enabled: false,
-            hpf_freq: 80.0,
+            hpf_freq: DEFAULT_HPF_FREQ,
             gate_enabled: false,
-            gate_threshold: -40.0,
-            gate_attack: 5.0,
-            gate_release: 100.0,
-            gate_range: -80.0,
+            gate_threshold: DEFAULT_GATE_THRESHOLD,
+            gate_attack: DEFAULT_GATE_ATTACK,
+            gate_release: DEFAULT_GATE_RELEASE,
             comp_enabled: false,
-            comp_threshold: -20.0,
-            comp_ratio: 4.0,
-            comp_attack: 10.0,
-            comp_release: 100.0,
-            comp_makeup: 0.0,
-            comp_knee: -6.0,
+            comp_threshold: DEFAULT_COMP_THRESHOLD,
+            comp_ratio: DEFAULT_COMP_RATIO,
+            comp_attack: DEFAULT_COMP_ATTACK,
+            comp_release: DEFAULT_COMP_RELEASE,
+            comp_makeup: DEFAULT_COMP_MAKEUP,
+            comp_knee: DEFAULT_COMP_KNEE,
             eq_enabled: false,
-            eq_bands: [
-                (80.0, 0.0, 1.0),   // Low
-                (400.0, 0.0, 1.0),  // Low-mid
-                (2000.0, 0.0, 1.0), // High-mid
-                (8000.0, 0.0, 1.0), // High
-            ],
+            eq_bands: DEFAULT_EQ_BANDS,
             pending_update: false,
         }
     }

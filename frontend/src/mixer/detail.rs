@@ -131,6 +131,22 @@ impl MixerEditor {
                 if ui.checkbox(&mut self.main_comp_enabled, "").changed() {
                     self.update_main_processing_param(ctx, "comp", "enabled");
                 }
+                if ui.small_button("Reset").clicked() {
+                    self.main_comp_enabled = false;
+                    self.main_comp_threshold = DEFAULT_COMP_THRESHOLD;
+                    self.main_comp_ratio = DEFAULT_COMP_RATIO;
+                    self.main_comp_attack = DEFAULT_COMP_ATTACK;
+                    self.main_comp_release = DEFAULT_COMP_RELEASE;
+                    self.main_comp_makeup = DEFAULT_COMP_MAKEUP;
+                    self.main_comp_knee = DEFAULT_COMP_KNEE;
+                    self.update_main_processing_param(ctx, "comp", "enabled");
+                    self.update_main_processing_param(ctx, "comp", "threshold");
+                    self.update_main_processing_param(ctx, "comp", "ratio");
+                    self.update_main_processing_param(ctx, "comp", "attack");
+                    self.update_main_processing_param(ctx, "comp", "release");
+                    self.update_main_processing_param(ctx, "comp", "makeup");
+                    self.update_main_processing_param(ctx, "comp", "knee");
+                }
             });
 
             ui.add_space(4.0);
@@ -245,6 +261,16 @@ impl MixerEditor {
                 if ui.checkbox(&mut self.main_eq_enabled, "").changed() {
                     self.update_main_processing_param(ctx, "eq", "enabled");
                 }
+                if ui.small_button("Reset").clicked() {
+                    self.main_eq_enabled = false;
+                    self.main_eq_bands = DEFAULT_EQ_BANDS;
+                    self.update_main_processing_param(ctx, "eq", "enabled");
+                    for band in 0..4 {
+                        self.update_main_eq_param(ctx, band, "freq");
+                        self.update_main_eq_param(ctx, band, "gain");
+                        self.update_main_eq_param(ctx, band, "q");
+                    }
+                }
             });
 
             ui.add_space(4.0);
@@ -319,6 +345,12 @@ impl MixerEditor {
                 if ui.checkbox(&mut self.main_limiter_enabled, "").changed() {
                     self.update_main_processing_param(ctx, "limiter", "enabled");
                 }
+                if ui.small_button("Reset").clicked() {
+                    self.main_limiter_enabled = false;
+                    self.main_limiter_threshold = DEFAULT_LIMITER_THRESHOLD;
+                    self.update_main_processing_param(ctx, "limiter", "enabled");
+                    self.update_main_processing_param(ctx, "limiter", "threshold");
+                }
             });
 
             ui.add_space(4.0);
@@ -346,11 +378,17 @@ impl MixerEditor {
     /// Render input gain control.
     pub(super) fn render_gain_section(&mut self, ui: &mut Ui, ctx: &Context, index: usize) {
         ui.vertical(|ui| {
-            ui.label(
-                egui::RichText::new("GAIN")
-                    .color(Color32::from_rgb(200, 200, 200))
-                    .strong(),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("GAIN")
+                        .color(Color32::from_rgb(200, 200, 200))
+                        .strong(),
+                );
+                if ui.small_button("Reset").clicked() {
+                    self.channels[index].gain = DEFAULT_GAIN;
+                    self.update_channel_property(ctx, index, "gain");
+                }
+            });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label("Gain:");
@@ -385,6 +423,11 @@ impl MixerEditor {
                     .checkbox(&mut self.channels[index].hpf_enabled, "")
                     .changed()
                 {
+                    self.update_processing_param(ctx, index, "hpf", "enabled");
+                }
+                if ui.small_button("Reset").clicked() {
+                    self.channels[index].hpf_enabled = false;
+                    self.channels[index].hpf_freq = DEFAULT_HPF_FREQ;
                     self.update_processing_param(ctx, index, "hpf", "enabled");
                 }
             });
@@ -428,6 +471,16 @@ impl MixerEditor {
                     .changed()
                 {
                     self.update_channel_property(ctx, index, "gate_enabled");
+                }
+                if ui.small_button("Reset").clicked() {
+                    self.channels[index].gate_enabled = false;
+                    self.channels[index].gate_threshold = DEFAULT_GATE_THRESHOLD;
+                    self.channels[index].gate_attack = DEFAULT_GATE_ATTACK;
+                    self.channels[index].gate_release = DEFAULT_GATE_RELEASE;
+                    self.update_channel_property(ctx, index, "gate_enabled");
+                    self.update_processing_param(ctx, index, "gate", "threshold");
+                    self.update_processing_param(ctx, index, "gate", "attack");
+                    self.update_processing_param(ctx, index, "gate", "release");
                 }
             });
 
@@ -480,19 +533,6 @@ impl MixerEditor {
                     self.update_processing_param(ctx, index, "gate", "release");
                 }
             });
-
-            ui.horizontal(|ui| {
-                ui.label("Range:")
-                    .on_hover_text("Saved with preset but not adjustable during playback");
-                ui.add_enabled(
-                    false,
-                    egui::DragValue::new(&mut self.channels[index].gate_range)
-                        .range(-80.0..=0.0)
-                        .suffix(" dB")
-                        .speed(0.5),
-                )
-                .on_disabled_hover_text("Gate range cannot be adjusted live (LSP limitation)");
-            });
         });
     }
 
@@ -517,6 +557,22 @@ impl MixerEditor {
                     .changed()
                 {
                     self.update_channel_property(ctx, index, "comp_enabled");
+                }
+                if ui.small_button("Reset").clicked() {
+                    self.channels[index].comp_enabled = false;
+                    self.channels[index].comp_threshold = DEFAULT_COMP_THRESHOLD;
+                    self.channels[index].comp_ratio = DEFAULT_COMP_RATIO;
+                    self.channels[index].comp_attack = DEFAULT_COMP_ATTACK;
+                    self.channels[index].comp_release = DEFAULT_COMP_RELEASE;
+                    self.channels[index].comp_makeup = DEFAULT_COMP_MAKEUP;
+                    self.channels[index].comp_knee = DEFAULT_COMP_KNEE;
+                    self.update_channel_property(ctx, index, "comp_enabled");
+                    self.update_processing_param(ctx, index, "comp", "threshold");
+                    self.update_processing_param(ctx, index, "comp", "ratio");
+                    self.update_processing_param(ctx, index, "comp", "attack");
+                    self.update_processing_param(ctx, index, "comp", "release");
+                    self.update_processing_param(ctx, index, "comp", "makeup");
+                    self.update_processing_param(ctx, index, "comp", "knee");
                 }
             });
 
@@ -634,6 +690,16 @@ impl MixerEditor {
                     .changed()
                 {
                     self.update_channel_property(ctx, index, "eq_enabled");
+                }
+                if ui.small_button("Reset").clicked() {
+                    self.channels[index].eq_enabled = false;
+                    self.channels[index].eq_bands = DEFAULT_EQ_BANDS;
+                    self.update_channel_property(ctx, index, "eq_enabled");
+                    for band in 0..4 {
+                        self.update_eq_param(ctx, index, band, "freq");
+                        self.update_eq_param(ctx, index, band, "gain");
+                        self.update_eq_param(ctx, index, band, "q");
+                    }
                 }
             });
 

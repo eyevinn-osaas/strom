@@ -1,0 +1,45 @@
+//! Default values for the audio mixer block.
+//!
+//! Single source of truth shared by both backend and frontend.
+
+// ── Channel / Main bus processing defaults ──────────────────────────
+pub const DEFAULT_FADER: f32 = 1.0;
+pub const DEFAULT_GAIN: f32 = 0.0;
+pub const DEFAULT_PAN: f32 = 0.0;
+
+// HPF
+pub const DEFAULT_HPF_FREQ: f32 = 80.0;
+
+// Gate
+pub const DEFAULT_GATE_THRESHOLD: f32 = -40.0;
+pub const DEFAULT_GATE_ATTACK: f32 = 5.0;
+pub const DEFAULT_GATE_RELEASE: f32 = 100.0;
+
+// Compressor (shared between channel and main bus)
+pub const DEFAULT_COMP_THRESHOLD: f32 = -20.0;
+pub const DEFAULT_COMP_RATIO: f32 = 4.0;
+pub const DEFAULT_COMP_ATTACK: f32 = 10.0;
+pub const DEFAULT_COMP_RELEASE: f32 = 100.0;
+pub const DEFAULT_COMP_MAKEUP: f32 = 0.0;
+pub const DEFAULT_COMP_KNEE: f32 = -6.0;
+
+// EQ bands: (freq Hz, gain dB, Q)
+pub const DEFAULT_EQ_BANDS: [(f32, f32, f32); 4] = [
+    (80.0, 0.0, 1.0),   // Low
+    (400.0, 0.0, 1.0),  // Low-mid
+    (2000.0, 0.0, 1.0), // High-mid
+    (8000.0, 0.0, 1.0), // High
+];
+
+// Limiter
+pub const DEFAULT_LIMITER_THRESHOLD: f32 = -3.0;
+
+// ── Structural defaults ─────────────────────────────────────────────
+pub const DEFAULT_CHANNELS: usize = 8;
+pub const MAX_CHANNELS: usize = 32;
+pub const MAX_AUX_BUSES: usize = 4;
+pub const MAX_GROUPS: usize = 4;
+
+// ── Latency / live defaults ─────────────────────────────────────────
+pub const DEFAULT_LATENCY_MS: u64 = 30;
+pub const DEFAULT_MIN_UPSTREAM_LATENCY_MS: u64 = 30;

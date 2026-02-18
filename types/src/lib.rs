@@ -11,6 +11,7 @@ pub mod block;
 pub mod element;
 pub mod events;
 pub mod flow;
+pub mod mixer;
 pub mod network;
 pub mod state;
 pub mod stats;

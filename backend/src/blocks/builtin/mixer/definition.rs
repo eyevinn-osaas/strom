@@ -1,6 +1,5 @@
+use strom_types::mixer::*;
 use strom_types::{block::*, EnumValue, MediaType, PropertyValue};
-
-use super::{DEFAULT_CHANNELS, MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS};
 
 /// Get metadata for Mixer block (for UI/API).
 pub fn get_blocks() -> Vec<BlockDefinition> {
@@ -86,7 +85,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: "Main Fader".to_string(),
             description: "Main output level (0.0 to 2.0)".to_string(),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(1.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_FADER as f64)),
             mapping: PropertyMapping {
                 element_id: "main_volume".to_string(),
                 property_name: "volume".to_string(),
@@ -224,7 +223,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         label: "Latency".to_string(),
         description: "Mixer aggregator latency in milliseconds. Time to wait for slower inputs before producing output. Construction-time only.".to_string(),
         property_type: PropertyType::Float,
-        default_value: Some(PropertyValue::Float(30.0)),
+        default_value: Some(PropertyValue::Float(DEFAULT_LATENCY_MS as f64)),
         mapping: PropertyMapping {
             element_id: "_block".to_string(),
             property_name: "latency".to_string(),
@@ -236,7 +235,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         label: "Min Upstream Latency".to_string(),
         description: "Minimum upstream latency reported to upstream elements in milliseconds. Construction-time only.".to_string(),
         property_type: PropertyType::Float,
-        default_value: Some(PropertyValue::Float(30.0)),
+        default_value: Some(PropertyValue::Float(DEFAULT_MIN_UPSTREAM_LATENCY_MS as f64)),
         mapping: PropertyMapping {
             element_id: "_block".to_string(),
             property_name: "min_upstream_latency".to_string(),
@@ -264,7 +263,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             "main_comp_threshold",
             "Main Comp Thresh",
             "al",
-            -20.0,
+            DEFAULT_COMP_THRESHOLD as f64,
             "Main bus compressor threshold in dB (-60 to 0)",
             Some("db_to_linear"),
         ),
@@ -272,7 +271,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             "main_comp_ratio",
             "Main Comp Ratio",
             "cr",
-            4.0,
+            DEFAULT_COMP_RATIO as f64,
             "Main bus compressor ratio (1:1 to 20:1)",
             None,
         ),
@@ -280,7 +279,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             "main_comp_attack",
             "Main Comp Atk",
             "at",
-            10.0,
+            DEFAULT_COMP_ATTACK as f64,
             "Main bus compressor attack in ms (0-200)",
             None,
         ),
@@ -288,7 +287,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             "main_comp_release",
             "Main Comp Rel",
             "rt",
-            100.0,
+            DEFAULT_COMP_RELEASE as f64,
             "Main bus compressor release in ms (10-1000)",
             None,
         ),
@@ -296,7 +295,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             "main_comp_makeup",
             "Main Comp Makeup",
             "mk",
-            0.0,
+            DEFAULT_COMP_MAKEUP as f64,
             "Main bus compressor makeup gain in dB (0 to 24)",
             Some("db_to_linear"),
         ),
@@ -328,13 +327,9 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             transform: None,
         },
     });
-    let main_eq_band_defaults = [
-        (80.0, "Low"),
-        (400.0, "Low-Mid"),
-        (2000.0, "Hi-Mid"),
-        (8000.0, "High"),
-    ];
-    for (band, (def_freq, band_name)) in main_eq_band_defaults.iter().enumerate() {
+    let eq_band_names = ["Low", "Low-Mid", "Hi-Mid", "High"];
+    for (band, band_name) in eq_band_names.iter().enumerate() {
+        let def_freq = DEFAULT_EQ_BANDS[band].0 as f64;
         let band_num = band + 1;
         exposed_properties.push(ExposedProperty {
             name: format!("main_eq{}_freq", band_num),
@@ -344,7 +339,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 band_num, band_name
             ),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(*def_freq)),
+            default_value: Some(PropertyValue::Float(def_freq)),
             mapping: PropertyMapping {
                 element_id: "main_eq".to_string(),
                 property_name: format!("f-{}", band),
@@ -395,7 +390,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         label: "Main Lim Thresh".to_string(),
         description: "Main bus limiter threshold in dB (-20 to 0)".to_string(),
         property_type: PropertyType::Float,
-        default_value: Some(PropertyValue::Float(-3.0)),
+        default_value: Some(PropertyValue::Float(DEFAULT_LIMITER_THRESHOLD as f64)),
         mapping: PropertyMapping {
             element_id: "main_limiter".to_string(),
             property_name: "th".to_string(),
@@ -627,7 +622,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 ch
             ),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(80.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_HPF_FREQ as f64)),
             mapping: PropertyMapping {
                 element_id: format!("hpf_{}", ch - 1),
                 property_name: "cutoff".to_string(),
@@ -656,7 +651,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Gate Thresh", ch),
             description: format!("Channel {} gate threshold in dB (-60 to 0)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(-40.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_GATE_THRESHOLD as f64)),
             mapping: PropertyMapping {
                 element_id: format!("gate_{}", ch - 1),
                 property_name: "gt".to_string(),
@@ -669,7 +664,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Gate Atk", ch),
             description: format!("Channel {} gate attack in ms (0-200)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(5.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_GATE_ATTACK as f64)),
             mapping: PropertyMapping {
                 element_id: format!("gate_{}", ch - 1),
                 property_name: "at".to_string(),
@@ -682,7 +677,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Gate Rel", ch),
             description: format!("Channel {} gate release in ms (10-1000)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(100.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_GATE_RELEASE as f64)),
             mapping: PropertyMapping {
                 element_id: format!("gate_{}", ch - 1),
                 property_name: "rt".to_string(),
@@ -714,7 +709,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Comp Thresh", ch),
             description: format!("Channel {} compressor threshold in dB (-60 to 0)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(-20.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_COMP_THRESHOLD as f64)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "al".to_string(),
@@ -727,7 +722,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Comp Ratio", ch),
             description: format!("Channel {} compressor ratio (1:1 to 20:1)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(4.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_COMP_RATIO as f64)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "cr".to_string(),
@@ -740,7 +735,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Comp Atk", ch),
             description: format!("Channel {} compressor attack in ms (0-200)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(10.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_COMP_ATTACK as f64)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "at".to_string(),
@@ -753,7 +748,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Comp Rel", ch),
             description: format!("Channel {} compressor release in ms (10-1000)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(100.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_COMP_RELEASE as f64)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "rt".to_string(),
@@ -766,7 +761,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Comp Makeup", ch),
             description: format!("Channel {} compressor makeup gain in dB (0 to 24)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(0.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_COMP_MAKEUP as f64)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "mk".to_string(),
@@ -779,7 +774,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Comp Knee", ch),
             description: format!("Channel {} compressor knee in dB (-24 to 0)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(-6.0)),
+            default_value: Some(PropertyValue::Float(DEFAULT_COMP_KNEE as f64)),
             mapping: PropertyMapping {
                 element_id: format!("comp_{}", ch - 1),
                 property_name: "kn".to_string(),
@@ -803,14 +798,10 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             },
         });
 
-        // 4 EQ bands with default frequencies: 80Hz, 400Hz, 2kHz, 8kHz
-        let eq_band_defaults = [
-            (80.0, "Low"),
-            (400.0, "Low-Mid"),
-            (2000.0, "Hi-Mid"),
-            (8000.0, "High"),
-        ];
-        for (band, (def_freq, band_name)) in eq_band_defaults.iter().enumerate() {
+        // 4 EQ bands with default frequencies from shared constants
+        let ch_eq_band_names = ["Low", "Low-Mid", "Hi-Mid", "High"];
+        for (band, band_name) in ch_eq_band_names.iter().enumerate() {
+            let def_freq = DEFAULT_EQ_BANDS[band].0 as f64;
             let band_num = band + 1;
 
             exposed_properties.push(ExposedProperty {
@@ -821,7 +812,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     ch, band_num, band_name
                 ),
                 property_type: PropertyType::Float,
-                default_value: Some(PropertyValue::Float(*def_freq)),
+                default_value: Some(PropertyValue::Float(def_freq)),
                 mapping: PropertyMapping {
                     element_id: format!("eq_{}", ch - 1),
                     property_name: format!("f-{}", band),

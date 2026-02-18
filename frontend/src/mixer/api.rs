@@ -92,7 +92,9 @@ impl MixerEditor {
             ("comp", "knee") => (
                 format!("comp_{}", index),
                 "kn".to_string(),
-                PropertyValue::Float(db_to_linear_f64(channel.comp_knee as f64).clamp(0.0631, 1.0)),
+                PropertyValue::Float(
+                    db_to_linear_f64(channel.comp_knee as f64).clamp(MIN_KNEE_LINEAR, 1.0),
+                ),
             ),
             _ => return,
         };
@@ -212,7 +214,7 @@ impl MixerEditor {
                 "main_comp".to_string(),
                 "kn".to_string(),
                 PropertyValue::Float(
-                    db_to_linear_f64(self.main_comp_knee as f64).clamp(0.0631, 1.0),
+                    db_to_linear_f64(self.main_comp_knee as f64).clamp(MIN_KNEE_LINEAR, 1.0),
                 ),
             ),
             ("eq", "enabled") => (

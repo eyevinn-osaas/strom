@@ -17,6 +17,7 @@
 - When working in or near a file that exceeds 1500 lines, proactively suggest splitting it into focused sub-modules (following the pattern used for `pipeline.rs` and `app.rs`)
 - Each sub-module should have a single clear responsibility (e.g. construction, lifecycle, linking, properties)
 - Check for large files with: `find backend/src frontend/src -name "*.rs" | xargs wc -l | sort -rn | head -20`
+- Default values and constants shared between frontend and backend must be defined in `strom-types` (e.g. `strom_types::mixer` for mixer defaults). Never duplicate defaults across crates.
 
 ## Build
 - Always build with `cargo check`, `cargo build`, or `cargo run` — never use the `-p` flag

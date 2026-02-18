@@ -37,14 +37,15 @@ mod properties;
 #[cfg(test)]
 mod tests;
 
-/// Maximum number of input channels
-const MAX_CHANNELS: usize = 32;
-/// Default number of channels
-const DEFAULT_CHANNELS: usize = 8;
-/// Maximum number of aux buses
-const MAX_AUX_BUSES: usize = 4;
-/// Maximum number of groups
-const MAX_GROUPS: usize = 4;
+use strom_types::mixer::{DEFAULT_CHANNELS, MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS};
+/// Level meter interval in nanoseconds (100ms)
+const METER_INTERVAL_NS: u64 = 100_000_000;
+/// Minimum knee value in linear scale (corresponds to -24 dB)
+const MIN_KNEE_LINEAR: f64 = 0.0631;
+/// Maximum queue buffers for internal queues
+const QUEUE_MAX_BUFFERS: u32 = 3;
+/// EQ band type for Peaking/Bell filter (lsp-rs-equalizer enum value)
+const EQ_BAND_TYPE_BELL: i32 = 7;
 
 // Public API
 pub use builder::MixerBuilder;

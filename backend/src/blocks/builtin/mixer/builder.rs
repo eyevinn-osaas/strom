@@ -9,6 +9,7 @@ use tracing::{debug, info, warn};
 use super::elements::*;
 use super::metering::connect_mixer_meter_handler;
 use super::properties::*;
+use super::{METER_INTERVAL_NS, MIN_KNEE_LINEAR, QUEUE_MAX_BUFFERS};
 
 /// Mixer block builder.
 pub struct MixerBuilder;
@@ -152,10 +153,10 @@ impl BlockBuilder for MixerBuilder {
         )?;
         // Set knee - Rust backend uses "knee" (linear), LV2 uses "kn" (linear)
         if main_comp.find_property("knee").is_some() {
-            let kn_val = db_to_linear(main_comp_knee).clamp(0.0631, 1.0) as f32;
+            let kn_val = db_to_linear(main_comp_knee).clamp(MIN_KNEE_LINEAR, 1.0) as f32;
             main_comp.set_property("knee", kn_val);
         } else if main_comp.find_property("kn").is_some() {
-            let kn_val = db_to_linear(main_comp_knee).clamp(0.0631, 1.0) as f32;
+            let kn_val = db_to_linear(main_comp_knee).clamp(MIN_KNEE_LINEAR, 1.0) as f32;
             main_comp.set_property("kn", kn_val);
         }
         elements.push((main_comp_id.clone(), main_comp));
@@ -220,7 +221,7 @@ impl BlockBuilder for MixerBuilder {
         let main_level_id = format!("{}:main_level", instance_id);
         let main_level = gst::ElementFactory::make("level")
             .name(&main_level_id)
-            .property("interval", 100_000_000u64) // 100ms
+            .property("interval", METER_INTERVAL_NS) // 100ms
             .property("post-messages", true)
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("main level: {}", e)))?;
@@ -286,7 +287,7 @@ impl BlockBuilder for MixerBuilder {
         let pfl_level_id = format!("{}:pfl_level", instance_id);
         let pfl_level = gst::ElementFactory::make("level")
             .name(&pfl_level_id)
-            .property("interval", 100_000_000u64)
+            .property("interval", METER_INTERVAL_NS)
             .property("post-messages", true)
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_level: {}", e)))?;
@@ -345,7 +346,7 @@ impl BlockBuilder for MixerBuilder {
             let aux_level_id = format!("{}:aux{}_level", instance_id, aux);
             let aux_level = gst::ElementFactory::make("level")
                 .name(&aux_level_id)
-                .property("interval", 100_000_000u64)
+                .property("interval", METER_INTERVAL_NS)
                 .property("post-messages", true)
                 .build()
                 .map_err(|e| {
@@ -409,7 +410,7 @@ impl BlockBuilder for MixerBuilder {
             let sg_level_id = format!("{}:group{}_level", instance_id, sg);
             let sg_level = gst::ElementFactory::make("level")
                 .name(&sg_level_id)
-                .property("interval", 100_000_000u64)
+                .property("interval", METER_INTERVAL_NS)
                 .property("post-messages", true)
                 .build()
                 .map_err(|e| {
@@ -433,7 +434,7 @@ impl BlockBuilder for MixerBuilder {
             let sg_to_main_queue_id = format!("{}:group{}_to_main_queue", instance_id, sg);
             let sg_to_main_queue = gst::ElementFactory::make("queue")
                 .name(&sg_to_main_queue_id)
-                .property("max-size-buffers", 3u32)
+                .property("max-size-buffers", QUEUE_MAX_BUFFERS)
                 .build()
                 .map_err(|e| {
                     BlockBuildError::ElementCreation(format!("group{}_to_main_queue: {}", sg, e))
@@ -599,10 +600,10 @@ impl BlockBuilder for MixerBuilder {
             // Set knee - Rust backend uses "knee" (linear), LV2 uses "kn" (linear)
             // kn range: 0.0631..1.0 (linear gain, default ~0.5 = -6dB)
             if compressor.find_property("knee").is_some() {
-                let kn_val = db_to_linear(comp_knee).clamp(0.0631, 1.0) as f32;
+                let kn_val = db_to_linear(comp_knee).clamp(MIN_KNEE_LINEAR, 1.0) as f32;
                 compressor.set_property("knee", kn_val);
             } else if compressor.find_property("kn").is_some() {
-                let kn_val = db_to_linear(comp_knee).clamp(0.0631, 1.0) as f32;
+                let kn_val = db_to_linear(comp_knee).clamp(MIN_KNEE_LINEAR, 1.0) as f32;
                 compressor.set_property("kn", kn_val);
             }
             elements.push((comp_id.clone(), compressor));
@@ -688,7 +689,7 @@ impl BlockBuilder for MixerBuilder {
             let level_id = format!("{}:level_{}", instance_id, ch);
             let level = gst::ElementFactory::make("level")
                 .name(&level_id)
-                .property("interval", 100_000_000u64) // 100ms
+                .property("interval", METER_INTERVAL_NS) // 100ms
                 .property("post-messages", true)
                 .build()
                 .map_err(|e| {
@@ -727,7 +728,7 @@ impl BlockBuilder for MixerBuilder {
             let pfl_queue_id = format!("{}:pfl_queue_{}", instance_id, ch);
             let pfl_queue = gst::ElementFactory::make("queue")
                 .name(&pfl_queue_id)
-                .property("max-size-buffers", 3u32)
+                .property("max-size-buffers", QUEUE_MAX_BUFFERS)
                 .build()
                 .map_err(|e| {
                     BlockBuildError::ElementCreation(format!("pfl_queue ch{}: {}", ch_num, e))
@@ -767,7 +768,7 @@ impl BlockBuilder for MixerBuilder {
                 let aux_queue_id = format!("{}:aux_queue_{}_{}", instance_id, ch, aux);
                 let aux_queue = gst::ElementFactory::make("queue")
                     .name(&aux_queue_id)
-                    .property("max-size-buffers", 3u32)
+                    .property("max-size-buffers", QUEUE_MAX_BUFFERS)
                     .build()
                     .map_err(|e| {
                         BlockBuildError::ElementCreation(format!(
@@ -896,7 +897,7 @@ impl BlockBuilder for MixerBuilder {
             let to_main_queue_id = format!("{}:to_main_queue_{}", instance_id, ch);
             let to_main_queue = gst::ElementFactory::make("queue")
                 .name(&to_main_queue_id)
-                .property("max-size-buffers", 3u32)
+                .property("max-size-buffers", QUEUE_MAX_BUFFERS)
                 .build()
                 .map_err(|e| {
                     BlockBuildError::ElementCreation(format!("to_main_queue ch{}: {}", ch_num, e))
@@ -940,7 +941,7 @@ impl BlockBuilder for MixerBuilder {
                 let to_grp_queue_id = format!("{}:to_grp{}_queue_{}", instance_id, sg, ch);
                 let to_grp_queue = gst::ElementFactory::make("queue")
                     .name(&to_grp_queue_id)
-                    .property("max-size-buffers", 3u32)
+                    .property("max-size-buffers", QUEUE_MAX_BUFFERS)
                     .build()
                     .map_err(|e| {
                         BlockBuildError::ElementCreation(format!(

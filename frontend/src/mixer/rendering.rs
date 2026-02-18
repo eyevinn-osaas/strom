@@ -105,6 +105,14 @@ impl MixerEditor {
                         } else if !self.status.is_empty() {
                             ui.label(&self.status);
                         }
+                        // Keyboard shortcuts legend
+                        ui.label(
+                            egui::RichText::new(
+                                "1-0: Select ch | M: Mute | P: PFL | Arrows: Fader/Pan",
+                            )
+                            .small()
+                            .color(Color32::from_gray(90)),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             match &self.selection {
                                 Some(Selection::Channel(ch)) => {
@@ -120,7 +128,7 @@ impl MixerEditor {
                                 self.save_requested = true;
                                 self.status = "Saving mixer state...".to_string();
                             }
-                            if ui.button("Reset").clicked() {
+                            if ui.button("Reset All").clicked() {
                                 self.reset_to_defaults();
                                 self.save_requested = true;
                                 self.status = "Reset to defaults, saving...".to_string();

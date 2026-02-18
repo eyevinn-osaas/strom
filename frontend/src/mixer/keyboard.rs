@@ -49,15 +49,17 @@ impl MixerEditor {
             }
         }
 
-        // Up/Down = Adjust fader
+        // Up/Down = Adjust fader (1 dB steps in dB space)
         if let Some(ch) = selected_ch {
-            let fader_step = 0.05;
+            let db_step: f64 = 1.0;
             if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
-                self.channels[ch].fader = (self.channels[ch].fader + fader_step).min(2.0);
+                let db = linear_to_db(self.channels[ch].fader as f64) + db_step;
+                self.channels[ch].fader = db_to_linear_f32(db as f32).clamp(0.0, 2.0);
                 self.update_channel_property(ctx, ch, "fader");
             }
             if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-                self.channels[ch].fader = (self.channels[ch].fader - fader_step).max(0.0);
+                let db = linear_to_db(self.channels[ch].fader as f64) - db_step;
+                self.channels[ch].fader = db_to_linear_f32(db as f32).clamp(0.0, 2.0);
                 self.update_channel_property(ctx, ch, "fader");
             }
 

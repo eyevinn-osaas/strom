@@ -16,24 +16,19 @@ impl MixerEditor {
             aux_masters: Vec::new(),
             selection: None,
             active_control: ActiveControl::None,
-            main_fader: 1.0,
+            main_fader: DEFAULT_FADER,
             main_mute: false,
             main_comp_enabled: false,
-            main_comp_threshold: -20.0,
-            main_comp_ratio: 4.0,
-            main_comp_attack: 10.0,
-            main_comp_release: 100.0,
-            main_comp_makeup: 0.0,
-            main_comp_knee: -6.0,
+            main_comp_threshold: DEFAULT_COMP_THRESHOLD,
+            main_comp_ratio: DEFAULT_COMP_RATIO,
+            main_comp_attack: DEFAULT_COMP_ATTACK,
+            main_comp_release: DEFAULT_COMP_RELEASE,
+            main_comp_makeup: DEFAULT_COMP_MAKEUP,
+            main_comp_knee: DEFAULT_COMP_KNEE,
             main_eq_enabled: false,
-            main_eq_bands: [
-                (80.0, 0.0, 1.0),
-                (400.0, 0.0, 1.0),
-                (2000.0, 0.0, 1.0),
-                (8000.0, 0.0, 1.0),
-            ],
+            main_eq_bands: DEFAULT_EQ_BANDS,
             main_limiter_enabled: false,
-            main_limiter_threshold: -3.0,
+            main_limiter_threshold: DEFAULT_LIMITER_THRESHOLD,
             api,
             status: String::new(),
             error: None,
@@ -239,11 +234,6 @@ impl MixerEditor {
                 properties.get(&format!("ch{}_gate_release", ch_num))
             {
                 ch.gate_release = *f as f32;
-            }
-            if let Some(PropertyValue::Float(f)) =
-                properties.get(&format!("ch{}_gate_range", ch_num))
-            {
-                ch.gate_range = *f as f32;
             }
             // Compressor
             if let Some(PropertyValue::Bool(b)) =
@@ -466,10 +456,6 @@ impl MixerEditor {
                 format!("ch{}_gate_release", n),
                 PropertyValue::Float(ch.gate_release as f64),
             );
-            props.insert(
-                format!("ch{}_gate_range", n),
-                PropertyValue::Float(ch.gate_range as f64),
-            );
             // Compressor
             props.insert(
                 format!("ch{}_comp_enabled", n),
@@ -529,41 +515,36 @@ impl MixerEditor {
     /// only writes structural keys, letting backend defaults take over.
     pub(super) fn reset_to_defaults(&mut self) {
         // Main bus
-        self.main_fader = 1.0;
+        self.main_fader = DEFAULT_FADER;
         self.main_mute = false;
         self.main_comp_enabled = false;
-        self.main_comp_threshold = -20.0;
-        self.main_comp_ratio = 4.0;
-        self.main_comp_attack = 10.0;
-        self.main_comp_release = 100.0;
-        self.main_comp_makeup = 0.0;
-        self.main_comp_knee = -6.0;
+        self.main_comp_threshold = DEFAULT_COMP_THRESHOLD;
+        self.main_comp_ratio = DEFAULT_COMP_RATIO;
+        self.main_comp_attack = DEFAULT_COMP_ATTACK;
+        self.main_comp_release = DEFAULT_COMP_RELEASE;
+        self.main_comp_makeup = DEFAULT_COMP_MAKEUP;
+        self.main_comp_knee = DEFAULT_COMP_KNEE;
         self.main_eq_enabled = false;
-        self.main_eq_bands = [
-            (80.0, 0.0, 1.0),
-            (400.0, 0.0, 1.0),
-            (2000.0, 0.0, 1.0),
-            (8000.0, 0.0, 1.0),
-        ];
+        self.main_eq_bands = DEFAULT_EQ_BANDS;
         self.main_limiter_enabled = false;
-        self.main_limiter_threshold = -3.0;
+        self.main_limiter_threshold = DEFAULT_LIMITER_THRESHOLD;
 
         // Aux masters
         for aux in &mut self.aux_masters {
-            aux.fader = 1.0;
+            aux.fader = DEFAULT_FADER;
             aux.mute = false;
         }
 
         // Groups
         for sg in &mut self.groups {
-            sg.fader = 1.0;
+            sg.fader = DEFAULT_FADER;
             sg.mute = false;
         }
 
         // Channels
         for ch in &mut self.channels {
-            ch.gain = 0.0;
-            ch.pan = 0.0;
+            ch.gain = DEFAULT_GAIN;
+            ch.pan = DEFAULT_PAN;
             ch.fader = DEFAULT_FADER;
             ch.mute = false;
             ch.pfl = false;
@@ -572,26 +553,20 @@ impl MixerEditor {
             ch.aux_sends = [0.0; MAX_AUX_BUSES];
             ch.aux_pre = [true, true, false, false];
             ch.hpf_enabled = false;
-            ch.hpf_freq = 80.0;
+            ch.hpf_freq = DEFAULT_HPF_FREQ;
             ch.gate_enabled = false;
-            ch.gate_threshold = -40.0;
-            ch.gate_attack = 5.0;
-            ch.gate_release = 100.0;
-            ch.gate_range = -80.0;
+            ch.gate_threshold = DEFAULT_GATE_THRESHOLD;
+            ch.gate_attack = DEFAULT_GATE_ATTACK;
+            ch.gate_release = DEFAULT_GATE_RELEASE;
             ch.comp_enabled = false;
-            ch.comp_threshold = -20.0;
-            ch.comp_ratio = 4.0;
-            ch.comp_attack = 10.0;
-            ch.comp_release = 100.0;
-            ch.comp_makeup = 0.0;
-            ch.comp_knee = -6.0;
+            ch.comp_threshold = DEFAULT_COMP_THRESHOLD;
+            ch.comp_ratio = DEFAULT_COMP_RATIO;
+            ch.comp_attack = DEFAULT_COMP_ATTACK;
+            ch.comp_release = DEFAULT_COMP_RELEASE;
+            ch.comp_makeup = DEFAULT_COMP_MAKEUP;
+            ch.comp_knee = DEFAULT_COMP_KNEE;
             ch.eq_enabled = false;
-            ch.eq_bands = [
-                (80.0, 0.0, 1.0),
-                (400.0, 0.0, 1.0),
-                (2000.0, 0.0, 1.0),
-                (8000.0, 0.0, 1.0),
-            ];
+            ch.eq_bands = DEFAULT_EQ_BANDS;
         }
 
         self.selection = None;

@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 use tracing::{error, warn};
 
 use super::properties::db_to_linear;
+use super::EQ_BAND_TYPE_BELL;
 
 /// Cached result of checking whether audiomixer supports the force-live property.
 static AUDIOMIXER_HAS_FORCE_LIVE: OnceLock<bool> = OnceLock::new();
@@ -184,7 +185,7 @@ pub(super) fn make_eq_element(
             eq.set_property("enabled", enabled);
             eq.set_property("num-bands", 4u32);
             for (band, (freq, gain_db, q)) in bands.iter().enumerate() {
-                eq.set_property(&format!("band{}-type", band), 7i32); // 7 = Peaking/Bell
+                eq.set_property(&format!("band{}-type", band), EQ_BAND_TYPE_BELL);
                 eq.set_property(&format!("band{}-frequency", band), *freq as f32);
                 eq.set_property(&format!("band{}-gain", band), *gain_db as f32); // dB directly
                 eq.set_property(&format!("band{}-q", band), *q as f32);
