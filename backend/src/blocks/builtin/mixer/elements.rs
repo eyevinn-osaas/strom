@@ -48,6 +48,11 @@ pub(super) fn make_audiomixer(
         );
     }
 
+    // ignore-inactive-pads: skip pads that aren't receiving data
+    if mixer.find_property("ignore-inactive-pads").is_some() {
+        mixer.set_property("ignore-inactive-pads", true);
+    }
+
     Ok(mixer)
 }
 

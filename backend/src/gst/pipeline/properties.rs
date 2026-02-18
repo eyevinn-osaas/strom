@@ -164,33 +164,29 @@ impl PipelineManager {
 
         // Translate property name/value for lsp-rs elements (they use different
         // property names than the LV2 equivalents used in ExposedProperty mappings)
-        let (actual_prop_name, actual_value);
-        if let Some((translated_name, translated_value)) =
-            crate::blocks::builtin::mixer::translate_property_for_element(
-                element,
-                property_name,
-                value,
-            )
-        {
-            debug!(
-                "Translated property {}.{} -> {}.{} for lsp-rs element",
-                element_id, property_name, element_id, translated_name
-            );
-            actual_prop_name = translated_name;
-            actual_value = translated_value;
+        let translations = crate::blocks::builtin::mixer::translate_property_for_element(
+            element,
+            property_name,
+            value,
+        );
+
+        if translations.is_empty() {
+            // No translation needed, use original property
+            self.validate_property_mutability(element, element_id, property_name, state)?;
+            self.set_property(element, element_id, property_name, value)?;
         } else {
-            actual_prop_name = property_name.to_string();
-            actual_value = value.clone();
+            for (translated_name, translated_value) in &translations {
+                debug!(
+                    "Translated property {}.{} -> {}.{} for lsp-rs element",
+                    element_id, property_name, element_id, translated_name
+                );
+                self.validate_property_mutability(element, element_id, translated_name, state)?;
+                self.set_property(element, element_id, translated_name, translated_value)?;
+            }
         }
 
-        // Validate property is mutable in current state
-        self.validate_property_mutability(element, element_id, &actual_prop_name, state)?;
-
-        // Set the property (reuse existing set_property method)
-        self.set_property(element, element_id, &actual_prop_name, &actual_value)?;
-
         info!(
-            "Successfully updated property {}.{} to {:?}",
+            "Successfully updated element property {}.{} to {:?}",
             element_id, property_name, value
         );
 

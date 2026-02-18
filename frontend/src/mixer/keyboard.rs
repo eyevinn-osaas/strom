@@ -45,6 +45,7 @@ impl MixerEditor {
         if ui.input(|i| i.key_pressed(egui::Key::P)) {
             if let Some(ch) = selected_ch {
                 self.channels[ch].pfl = !self.channels[ch].pfl;
+                self.update_channel_property(ctx, ch, "pfl");
             }
         }
 

@@ -268,6 +268,7 @@ impl MixerEditor {
                             for aux_idx in 0..self.num_aux_buses.min(MAX_AUX_BUSES) {
                                 let response = self.render_knob(ui, index, aux_idx);
                                 if response.double_clicked() {
+                                    self.bypass_throttle();
                                     self.update_aux_send(ctx, index, aux_idx);
                                 } else if response.dragged() {
                                     self.active_control = ActiveControl::AuxSend(index, aux_idx);
@@ -362,6 +363,7 @@ impl MixerEditor {
                     // ── Pan knob ──
                     let pan_response = self.render_pan_knob(ui, index);
                     if pan_response.double_clicked() {
+                        self.bypass_throttle();
                         self.update_channel_property(ctx, index, "pan");
                     } else if pan_response.dragged() {
                         self.active_control = ActiveControl::Pan(index);
@@ -383,6 +385,7 @@ impl MixerEditor {
                             ui.add_space(1.0);
                             let fader_response = self.render_fader(ui, index, FADER_HEIGHT);
                             if fader_response.double_clicked() {
+                                self.bypass_throttle();
                                 self.update_channel_property(ctx, index, "fader");
                             } else if fader_response.dragged() {
                                 self.active_control = ActiveControl::Fader(index);
@@ -531,6 +534,7 @@ impl MixerEditor {
                                     self.main_fader = 1.0;
                                     main_fader_db = 0.0;
                                 }
+                                self.bypass_throttle();
                                 self.update_main_fader(ctx);
                             } else if response.dragged() {
                                 self.active_control = ActiveControl::MainFader;
@@ -539,8 +543,10 @@ impl MixerEditor {
                                 main_fader_db =
                                     (main_fader_db + delta * db_per_pixel).clamp(-60.0, 6.0);
                                 self.main_fader = db_to_linear_f32(main_fader_db);
+                                self.update_main_fader(ctx);
                             } else if response.drag_stopped() {
                                 self.active_control = ActiveControl::None;
+                                self.update_main_fader(ctx);
                             }
                             let painter = ui.painter();
                             let track_rect = Rect::from_center_size(
@@ -572,9 +578,6 @@ impl MixerEditor {
                                 ],
                                 Stroke::new(1.5, Color32::from_gray(40)),
                             );
-                            if response.drag_stopped() || response.dragged() {
-                                self.update_main_fader(ctx);
-                            }
                         },
                     );
 
@@ -660,6 +663,7 @@ impl MixerEditor {
                                 let fader_response =
                                     self.render_group_fader(ui, sg_idx, BUS_FADER_HEIGHT);
                                 if fader_response.double_clicked() {
+                                    self.bypass_throttle();
                                     self.update_group_fader(ctx, sg_idx);
                                 } else if fader_response.dragged() {
                                     self.active_control = ActiveControl::GroupFader(sg_idx);
@@ -752,6 +756,7 @@ impl MixerEditor {
                                 let fader_response =
                                     self.render_aux_master_fader(ui, aux_idx, BUS_FADER_HEIGHT);
                                 if fader_response.double_clicked() {
+                                    self.bypass_throttle();
                                     self.update_aux_master_fader(ctx, aux_idx);
                                 } else if fader_response.dragged() {
                                     self.active_control = ActiveControl::AuxMasterFader(aux_idx);

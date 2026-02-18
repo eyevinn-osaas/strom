@@ -1,6 +1,13 @@
 use super::*;
 
 impl MixerEditor {
+    /// Reset the update throttle so the next update call goes through immediately.
+    /// Call this before update methods when a discrete action (e.g. double-click reset)
+    /// must not be dropped by the 50ms throttle.
+    pub(super) fn bypass_throttle(&mut self) {
+        self.last_update = instant::Instant::now() - std::time::Duration::from_millis(100);
+    }
+
     /// Update a processing parameter (gate/comp).
     pub(super) fn update_processing_param(
         &mut self,

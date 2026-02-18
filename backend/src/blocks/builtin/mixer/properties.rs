@@ -114,97 +114,89 @@ pub(super) fn linear_to_db(linear: f64) -> f64 {
 /// When the target element is from lsp-plugins-rs, this function translates the property name
 /// and adjusts the value format where needed (e.g., LV2 uses linear gain, Rust uses dB).
 ///
-/// Returns (translated_prop_name, translated_value) or None if no translation needed.
+/// Returns a list of (translated_prop_name, translated_value) pairs, or empty if no translation needed.
+/// May return multiple pairs when one LV2 property maps to multiple Rust properties.
 pub fn translate_property_for_element(
     element: &gst::Element,
     prop_name: &str,
     value: &PropertyValue,
-) -> Option<(String, PropertyValue)> {
+) -> Vec<(String, PropertyValue)> {
     // Use GObject type name instead of factory() which can SIGSEGV
     // when static plugins and LV2 plugins coexist.
     let type_name = element.type_().name();
 
     if type_name == "LspRsGate" {
-        let (new_name, new_value) = match prop_name {
+        let pairs = match prop_name {
             "gt" => {
                 // LV2: gt is linear (already transformed by db_to_linear).
-                // Rust: open-threshold is dB. Reverse the transform.
+                // Rust: open-threshold/close-threshold are dB. Reverse the transform.
                 let db_val = match value {
                     PropertyValue::Float(v) => linear_to_db(*v),
-                    _ => return None,
+                    _ => return vec![],
                 };
-                ("open-threshold".to_string(), PropertyValue::Float(db_val))
+                vec![
+                    ("open-threshold".to_string(), PropertyValue::Float(db_val)),
+                    ("close-threshold".to_string(), PropertyValue::Float(db_val)),
+                ]
             }
-            "at" => ("attack".to_string(), value.clone()),
-            "rt" => ("release".to_string(), value.clone()),
-            "enabled" => return None, // same name, no translation needed
-            _ => return None,
+            "at" => vec![("attack".to_string(), value.clone())],
+            "rt" => vec![("release".to_string(), value.clone())],
+            "enabled" => return vec![], // same name, no translation needed
+            _ => return vec![],
         };
-        return Some((new_name, new_value));
+        return pairs;
     }
 
     if type_name == "LspRsCompressor" {
-        let (new_name, new_value) = match prop_name {
-            "al" => {
-                // Both use linear, same transform
-                ("threshold".to_string(), value.clone())
-            }
+        let pair = match prop_name {
+            "al" => ("threshold".to_string(), value.clone()),
             "cr" => ("ratio".to_string(), value.clone()),
             "at" => ("attack".to_string(), value.clone()),
             "rt" => ("release".to_string(), value.clone()),
-            "mk" => {
-                // Both use linear, same transform
-                ("makeup-gain".to_string(), value.clone())
-            }
-            "kn" => {
-                // Both use linear, same transform
-                ("knee".to_string(), value.clone())
-            }
-            "enabled" => return None,
-            _ => return None,
+            "mk" => ("makeup-gain".to_string(), value.clone()),
+            "kn" => ("knee".to_string(), value.clone()),
+            "enabled" => return vec![],
+            _ => return vec![],
         };
-        return Some((new_name, new_value));
+        return vec![pair];
     }
 
     if type_name == "LspRsEqualizer" {
         // EQ band properties: f-N -> bandN-frequency, g-N -> bandN-gain, q-N -> bandN-q
         if let Some(band) = prop_name.strip_prefix("f-") {
-            return Some((format!("band{}-frequency", band), value.clone()));
+            return vec![(format!("band{}-frequency", band), value.clone())];
         }
         if let Some(band) = prop_name.strip_prefix("g-") {
             // LV2: g-N is linear (already transformed by db_to_linear).
             // Rust: bandN-gain is dB. Reverse the transform.
             let db_val = match value {
                 PropertyValue::Float(v) => linear_to_db(*v),
-                _ => return None,
+                _ => return vec![],
             };
-            return Some((format!("band{}-gain", band), PropertyValue::Float(db_val)));
+            return vec![(format!("band{}-gain", band), PropertyValue::Float(db_val))];
         }
         if let Some(band) = prop_name.strip_prefix("q-") {
-            return Some((format!("band{}-q", band), value.clone()));
+            return vec![(format!("band{}-q", band), value.clone())];
         }
-        if prop_name == "enabled" {
-            return None;
-        }
-        return None;
+        return vec![];
     }
 
     if type_name == "LspRsLimiter" {
-        let (new_name, new_value) = match prop_name {
+        let pair = match prop_name {
             "th" => {
                 // LV2: th is linear (already transformed by db_to_linear).
                 // Rust: threshold is dB. Reverse the transform.
                 let db_val = match value {
                     PropertyValue::Float(v) => linear_to_db(*v),
-                    _ => return None,
+                    _ => return vec![],
                 };
                 ("threshold".to_string(), PropertyValue::Float(db_val))
             }
-            "enabled" => return None,
-            _ => return None,
+            "enabled" => return vec![],
+            _ => return vec![],
         };
-        return Some((new_name, new_value));
+        return vec![pair];
     }
 
-    None
+    vec![]
 }

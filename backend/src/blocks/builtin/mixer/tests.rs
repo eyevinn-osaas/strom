@@ -678,19 +678,26 @@ fn test_translate_gate_property() {
         .build()
         .unwrap();
 
-    // gt (linear) -> open-threshold (dB): 0.1 linear = -20 dB
+    // gt (linear) -> open-threshold + close-threshold (dB): 0.1 linear = -20 dB
     let result = translate_property_for_element(&gate, "gt", &PropertyValue::Float(0.1));
-    assert!(result.is_some(), "Should translate 'gt' for lsp-rs-gate");
-    let (name, value) = result.unwrap();
-    assert_eq!(name, "open-threshold");
-    if let PropertyValue::Float(v) = value {
-        assert!(
-            (v - (-20.0)).abs() < 0.1,
-            "0.1 linear should translate to -20 dB, got {}",
-            v
-        );
-    } else {
-        panic!("Expected Float value");
+    assert_eq!(
+        result.len(),
+        2,
+        "gt should translate to both open-threshold and close-threshold"
+    );
+    assert_eq!(result[0].0, "open-threshold");
+    assert_eq!(result[1].0, "close-threshold");
+    for (name, value) in &result {
+        if let PropertyValue::Float(v) = value {
+            assert!(
+                (v - (-20.0)).abs() < 0.1,
+                "0.1 linear should translate to -20 dB for {}, got {}",
+                name,
+                v
+            );
+        } else {
+            panic!("Expected Float value for {}", name);
+        }
     }
 }
 
@@ -708,19 +715,17 @@ fn test_translate_compressor_property() {
 
     // al -> threshold (both linear, no value change)
     let result = translate_property_for_element(&comp, "al", &PropertyValue::Float(0.1));
-    assert!(result.is_some());
-    let (name, _) = result.unwrap();
-    assert_eq!(name, "threshold");
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, "threshold");
 
     // cr -> ratio
     let result = translate_property_for_element(&comp, "cr", &PropertyValue::Float(4.0));
-    assert!(result.is_some());
-    let (name, _) = result.unwrap();
-    assert_eq!(name, "ratio");
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, "ratio");
 
     // enabled -> no translation needed
     let result = translate_property_for_element(&comp, "enabled", &PropertyValue::Bool(true));
-    assert!(result.is_none(), "enabled should not need translation");
+    assert!(result.is_empty(), "enabled should not need translation");
 }
 
 #[test]
@@ -737,16 +742,14 @@ fn test_translate_eq_property() {
 
     // f-0 -> band0-frequency
     let result = translate_property_for_element(&eq, "f-0", &PropertyValue::Float(1000.0));
-    assert!(result.is_some());
-    let (name, _) = result.unwrap();
-    assert_eq!(name, "band0-frequency");
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, "band0-frequency");
 
     // g-0 (linear) -> band0-gain (dB)
     let result = translate_property_for_element(&eq, "g-0", &PropertyValue::Float(1.0));
-    assert!(result.is_some());
-    let (name, value) = result.unwrap();
-    assert_eq!(name, "band0-gain");
-    if let PropertyValue::Float(v) = value {
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, "band0-gain");
+    if let PropertyValue::Float(v) = &result[0].1 {
         assert!(
             v.abs() < 0.1,
             "1.0 linear should translate to 0 dB, got {}",
@@ -769,10 +772,9 @@ fn test_translate_limiter_property() {
 
     // th (linear) -> threshold (dB)
     let result = translate_property_for_element(&lim, "th", &PropertyValue::Float(0.1));
-    assert!(result.is_some());
-    let (name, value) = result.unwrap();
-    assert_eq!(name, "threshold");
-    if let PropertyValue::Float(v) = value {
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, "threshold");
+    if let PropertyValue::Float(v) = &result[0].1 {
         assert!(
             (v - (-20.0)).abs() < 0.1,
             "0.1 linear should translate to -20 dB, got {}",
@@ -791,7 +793,7 @@ fn test_translate_no_translation_for_lv2() {
     {
         let result = translate_property_for_element(&elem, "gt", &PropertyValue::Float(0.1));
         assert!(
-            result.is_none(),
+            result.is_empty(),
             "Should not translate properties for non-lsp-rs elements"
         );
     }

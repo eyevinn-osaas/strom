@@ -395,7 +395,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         label: "Main Lim Thresh".to_string(),
         description: "Main bus limiter threshold in dB (-20 to 0)".to_string(),
         property_type: PropertyType::Float,
-        default_value: Some(PropertyValue::Float(-0.3)),
+        default_value: Some(PropertyValue::Float(-3.0)),
         mapping: PropertyMapping {
             element_id: "main_limiter".to_string(),
             property_name: "th".to_string(),
