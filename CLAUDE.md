@@ -3,6 +3,9 @@ compiles to both native and WASM
 - **Backend** (`strom-backend`): Axum server + GUI that can run the
   native GUI and serve the embedded WASM version
 
+## Language
+- All code, comments, commit messages, PR titles, PR descriptions, and documentation must be in English
+
 ## Security
 - Always anonymize sensitive data (IP addresses, hostnames, credentials, internal server names) before including in commits, PRs, or documentation
 - Use example.com, 192.0.2.x, or placeholder values instead of real infrastructure data
