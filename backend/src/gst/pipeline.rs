@@ -2264,15 +2264,36 @@ impl PipelineManager {
         // Get current pipeline state
         let state = self.get_state();
 
+        // Translate property name/value for lsp-rs elements (they use different
+        // property names than the LV2 equivalents used in ExposedProperty mappings)
+        let (actual_prop_name, actual_value);
+        if let Some((translated_name, translated_value)) =
+            crate::blocks::builtin::mixer::translate_property_for_element(
+                element,
+                property_name,
+                value,
+            )
+        {
+            debug!(
+                "Translated property {}.{} -> {}.{} for lsp-rs element",
+                element_id, property_name, element_id, translated_name
+            );
+            actual_prop_name = translated_name;
+            actual_value = translated_value;
+        } else {
+            actual_prop_name = property_name.to_string();
+            actual_value = value.clone();
+        }
+
         // Validate property is mutable in current state
-        self.validate_property_mutability(element, element_id, property_name, state)?;
+        self.validate_property_mutability(element, element_id, &actual_prop_name, state)?;
 
         // Set the property (reuse existing set_property method)
-        self.set_property(element, element_id, property_name, value)?;
+        self.set_property(element, element_id, &actual_prop_name, &actual_value)?;
 
         info!(
             "Successfully updated property {}.{} to {:?}",
-            element_id, property_name, value
+            element_id, actual_prop_name, actual_value
         );
 
         Ok(())

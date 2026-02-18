@@ -127,13 +127,15 @@ impl BlockBuilder for MixerBuilder {
         let num_channels = parse_num_channels(properties);
         let num_aux_buses = parse_num_aux_buses(properties);
         let num_groups = parse_num_groups(properties);
+        let dsp_backend = get_string_prop(properties, "dsp_backend", "lv2");
         let solo_mode_afl = get_string_prop(properties, "solo_mode", "pfl") == "afl";
         info!(
-            "Mixer config: {} channels, {} aux buses, {} groups, solo={}",
+            "Mixer config: {} channels, {} aux buses, {} groups, solo={}, dsp={}",
             num_channels,
             num_aux_buses,
             num_groups,
             if solo_mode_afl { "afl" } else { "pfl" },
+            dsp_backend,
         );
 
         let mut elements = Vec::new();
@@ -173,8 +175,13 @@ impl BlockBuilder for MixerBuilder {
             main_comp_attack,
             main_comp_release,
             main_comp_makeup,
+            dsp_backend,
         )?;
-        if main_comp.find_property("kn").is_some() {
+        // Set knee - Rust backend uses "knee" (linear), LV2 uses "kn" (linear)
+        if main_comp.find_property("knee").is_some() {
+            let kn_val = db_to_linear(main_comp_knee).clamp(0.0631, 1.0) as f32;
+            main_comp.set_property("knee", kn_val);
+        } else if main_comp.find_property("kn").is_some() {
             let kn_val = db_to_linear(main_comp_knee).clamp(0.0631, 1.0) as f32;
             main_comp.set_property("kn", kn_val);
         }
@@ -204,7 +211,7 @@ impl BlockBuilder for MixerBuilder {
             ),
         ];
         let main_eq_id = format!("{}:main_eq", instance_id);
-        let main_eq = make_eq_element(&main_eq_id, main_eq_enabled, &main_eq_bands)?;
+        let main_eq = make_eq_element(&main_eq_id, main_eq_enabled, &main_eq_bands, dsp_backend)?;
         elements.push((main_eq_id.clone(), main_eq));
 
         let main_limiter_enabled = get_bool_prop(properties, "main_limiter_enabled", false);
@@ -214,6 +221,7 @@ impl BlockBuilder for MixerBuilder {
             &main_limiter_id,
             main_limiter_enabled,
             main_limiter_threshold,
+            dsp_backend,
         )?;
         elements.push((main_limiter_id.clone(), main_limiter));
 
@@ -588,6 +596,7 @@ impl BlockBuilder for MixerBuilder {
                 gate_attack,
                 gate_release,
                 gate_range,
+                dsp_backend,
             )?;
             elements.push((gate_id.clone(), gate));
 
@@ -615,10 +624,14 @@ impl BlockBuilder for MixerBuilder {
                 comp_attack,
                 comp_release,
                 comp_makeup,
+                dsp_backend,
             )?;
-            // Set knee if the element supports it (LSP property)
+            // Set knee - Rust backend uses "knee" (linear), LV2 uses "kn" (linear)
             // kn range: 0.0631..1.0 (linear gain, default ~0.5 = -6dB)
-            if compressor.find_property("kn").is_some() {
+            if compressor.find_property("knee").is_some() {
+                let kn_val = db_to_linear(comp_knee).clamp(0.0631, 1.0) as f32;
+                compressor.set_property("knee", kn_val);
+            } else if compressor.find_property("kn").is_some() {
                 let kn_val = db_to_linear(comp_knee).clamp(0.0631, 1.0) as f32;
                 compressor.set_property("kn", kn_val);
             }
@@ -649,7 +662,7 @@ impl BlockBuilder for MixerBuilder {
             });
 
             let eq_id = format!("{}:eq_{}", instance_id, ch);
-            let eq = make_eq_element(&eq_id, eq_enabled, &eq_bands)?;
+            let eq = make_eq_element(&eq_id, eq_enabled, &eq_bands, dsp_backend)?;
             elements.push((eq_id.clone(), eq));
 
             // ----------------------------------------------------------------
@@ -1066,7 +1079,7 @@ fn make_audiomixer(
 // Helper functions for LV2 fallback
 // ============================================================================
 
-/// Create a gate element, falling back to identity passthrough if LSP LV2 unavailable.
+/// Create a gate element, falling back to identity passthrough if unavailable.
 fn make_gate_element(
     name: &str,
     enabled: bool,
@@ -1074,7 +1087,22 @@ fn make_gate_element(
     attack_ms: f64,
     release_ms: f64,
     _range_db: f64,
+    backend: &str,
 ) -> Result<gst::Element, BlockBuildError> {
+    if backend == "rust" {
+        if let Ok(gate) = gst::ElementFactory::make("lsp-rs-gate").name(name).build() {
+            gate.set_property("enabled", enabled);
+            gate.set_property("open-threshold", threshold_db as f32);
+            gate.set_property("close-threshold", threshold_db as f32);
+            gate.set_property("attack", attack_ms as f32);
+            gate.set_property("release", release_ms as f32);
+            return Ok(gate);
+        }
+        warn!(
+            "lsp-rs-gate not available for {}, trying LV2 fallback",
+            name
+        );
+    }
     if let Ok(gate) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-gate-stereo")
         .name(name)
         .build()
@@ -1091,15 +1119,9 @@ fn make_gate_element(
         if gate.find_property("rt").is_some() {
             gate.set_property("rt", release_ms as f32);
         }
-        // Note: LSP gate has no settable "range" parameter.
-        // "gr" is a read-only reduction meter, "gz" is zone size (different concept).
-        // Gate range is not supported by this plugin.
         return Ok(gate);
     }
-    warn!(
-        "LSP gate plugin not available for {}, using passthrough",
-        name
-    );
+    warn!("No gate plugin available for {}, using passthrough", name);
     gst::ElementFactory::make("identity")
         .name(name)
         .property("silent", true)
@@ -1107,7 +1129,8 @@ fn make_gate_element(
         .map_err(|e| BlockBuildError::ElementCreation(format!("gate fallback {}: {}", name, e)))
 }
 
-/// Create a compressor element, falling back to identity passthrough if LSP LV2 unavailable.
+/// Create a compressor element, falling back to identity passthrough if unavailable.
+#[allow(clippy::too_many_arguments)]
 fn make_compressor_element(
     name: &str,
     enabled: bool,
@@ -1116,7 +1139,26 @@ fn make_compressor_element(
     attack_ms: f64,
     release_ms: f64,
     makeup_db: f64,
+    backend: &str,
 ) -> Result<gst::Element, BlockBuildError> {
+    if backend == "rust" {
+        if let Ok(comp) = gst::ElementFactory::make("lsp-rs-compressor")
+            .name(name)
+            .build()
+        {
+            comp.set_property("enabled", enabled);
+            comp.set_property("threshold", db_to_linear(threshold_db) as f32);
+            comp.set_property("ratio", ratio as f32);
+            comp.set_property("attack", attack_ms as f32);
+            comp.set_property("release", release_ms as f32);
+            comp.set_property("makeup-gain", db_to_linear(makeup_db) as f32);
+            return Ok(comp);
+        }
+        warn!(
+            "lsp-rs-compressor not available for {}, trying LV2 fallback",
+            name
+        );
+    }
     if let Ok(comp) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-compressor-stereo")
         .name(name)
         .build()
@@ -1142,7 +1184,7 @@ fn make_compressor_element(
         return Ok(comp);
     }
     warn!(
-        "LSP compressor plugin not available for {}, using passthrough",
+        "No compressor plugin available for {}, using passthrough",
         name
     );
     gst::ElementFactory::make("identity")
@@ -1154,12 +1196,34 @@ fn make_compressor_element(
         })
 }
 
-/// Create a parametric EQ element, falling back to identity passthrough if LSP LV2 unavailable.
+/// Create a parametric EQ element, falling back to identity passthrough if unavailable.
 fn make_eq_element(
     name: &str,
     enabled: bool,
     bands: &[(f64, f64, f64); 4],
+    backend: &str,
 ) -> Result<gst::Element, BlockBuildError> {
+    if backend == "rust" {
+        if let Ok(eq) = gst::ElementFactory::make("lsp-rs-equalizer")
+            .name(name)
+            .build()
+        {
+            eq.set_property("enabled", enabled);
+            eq.set_property("num-bands", 4u32);
+            for (band, (freq, gain_db, q)) in bands.iter().enumerate() {
+                eq.set_property(&format!("band{}-type", band), 7i32); // 7 = Peaking/Bell
+                eq.set_property(&format!("band{}-frequency", band), *freq as f32);
+                eq.set_property(&format!("band{}-gain", band), *gain_db as f32); // dB directly
+                eq.set_property(&format!("band{}-q", band), *q as f32);
+                eq.set_property(&format!("band{}-enabled", band), true);
+            }
+            return Ok(eq);
+        }
+        warn!(
+            "lsp-rs-equalizer not available for {}, trying LV2 fallback",
+            name
+        );
+    }
     if let Ok(eq) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-para-equalizer-x8-stereo")
         .name(name)
         .build()
@@ -1187,10 +1251,7 @@ fn make_eq_element(
         }
         return Ok(eq);
     }
-    warn!(
-        "LSP EQ plugin not available for {}, using passthrough",
-        name
-    );
+    warn!("No EQ plugin available for {}, using passthrough", name);
     gst::ElementFactory::make("identity")
         .name(name)
         .property("silent", true)
@@ -1198,12 +1259,27 @@ fn make_eq_element(
         .map_err(|e| BlockBuildError::ElementCreation(format!("eq fallback {}: {}", name, e)))
 }
 
-/// Create a limiter element, falling back to identity passthrough if LSP LV2 unavailable.
+/// Create a limiter element, falling back to identity passthrough if unavailable.
 fn make_limiter_element(
     name: &str,
     enabled: bool,
     threshold_db: f64,
+    backend: &str,
 ) -> Result<gst::Element, BlockBuildError> {
+    if backend == "rust" {
+        if let Ok(lim) = gst::ElementFactory::make("lsp-rs-limiter")
+            .name(name)
+            .build()
+        {
+            lim.set_property("enabled", enabled);
+            lim.set_property("threshold", threshold_db as f32); // dB directly
+            return Ok(lim);
+        }
+        warn!(
+            "lsp-rs-limiter not available for {}, trying LV2 fallback",
+            name
+        );
+    }
     if let Ok(lim) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-limiter-stereo")
         .name(name)
         .build()
@@ -1217,7 +1293,7 @@ fn make_limiter_element(
         return Ok(lim);
     }
     warn!(
-        "LSP limiter plugin not available for {}, using passthrough",
+        "No limiter plugin available for {}, using passthrough",
         name
     );
     gst::ElementFactory::make("identity")
@@ -1355,6 +1431,116 @@ fn get_string_prop<'a>(
 /// Convert dB to linear scale.
 fn db_to_linear(db: f64) -> f64 {
     10.0_f64.powf(db / 20.0)
+}
+
+/// Translate a property name and value from LV2 conventions to lsp-rs conventions.
+///
+/// The ExposedProperty mappings use LV2 property names (gt, at, rt, al, cr, mk, kn, th, f-N, g-N, q-N).
+/// When the target element is from lsp-plugins-rs, this function translates the property name
+/// and adjusts the value format where needed (e.g., LV2 uses linear gain, Rust uses dB).
+///
+/// Returns (translated_prop_name, translated_value) or None if no translation needed.
+pub fn translate_property_for_element(
+    element: &gst::Element,
+    prop_name: &str,
+    value: &PropertyValue,
+) -> Option<(String, PropertyValue)> {
+    // Use GObject type name instead of factory() which can SIGSEGV
+    // when static plugins and LV2 plugins coexist.
+    let type_name = element.type_().name();
+
+    if type_name == "LspRsGate" {
+        let (new_name, new_value) = match prop_name {
+            "gt" => {
+                // LV2: gt is linear (already transformed by db_to_linear).
+                // Rust: open-threshold is dB. Reverse the transform.
+                let db_val = match value {
+                    PropertyValue::Float(v) => linear_to_db(*v),
+                    _ => return None,
+                };
+                ("open-threshold".to_string(), PropertyValue::Float(db_val))
+            }
+            "at" => ("attack".to_string(), value.clone()),
+            "rt" => ("release".to_string(), value.clone()),
+            "enabled" => return None, // same name, no translation needed
+            _ => return None,
+        };
+        return Some((new_name, new_value));
+    }
+
+    if type_name == "LspRsCompressor" {
+        let (new_name, new_value) = match prop_name {
+            "al" => {
+                // Both use linear, same transform
+                ("threshold".to_string(), value.clone())
+            }
+            "cr" => ("ratio".to_string(), value.clone()),
+            "at" => ("attack".to_string(), value.clone()),
+            "rt" => ("release".to_string(), value.clone()),
+            "mk" => {
+                // Both use linear, same transform
+                ("makeup-gain".to_string(), value.clone())
+            }
+            "kn" => {
+                // Both use linear, same transform
+                ("knee".to_string(), value.clone())
+            }
+            "enabled" => return None,
+            _ => return None,
+        };
+        return Some((new_name, new_value));
+    }
+
+    if type_name == "LspRsEqualizer" {
+        // EQ band properties: f-N -> bandN-frequency, g-N -> bandN-gain, q-N -> bandN-q
+        if let Some(band) = prop_name.strip_prefix("f-") {
+            return Some((format!("band{}-frequency", band), value.clone()));
+        }
+        if let Some(band) = prop_name.strip_prefix("g-") {
+            // LV2: g-N is linear (already transformed by db_to_linear).
+            // Rust: bandN-gain is dB. Reverse the transform.
+            let db_val = match value {
+                PropertyValue::Float(v) => linear_to_db(*v),
+                _ => return None,
+            };
+            return Some((format!("band{}-gain", band), PropertyValue::Float(db_val)));
+        }
+        if let Some(band) = prop_name.strip_prefix("q-") {
+            return Some((format!("band{}-q", band), value.clone()));
+        }
+        if prop_name == "enabled" {
+            return None;
+        }
+        return None;
+    }
+
+    if type_name == "LspRsLimiter" {
+        let (new_name, new_value) = match prop_name {
+            "th" => {
+                // LV2: th is linear (already transformed by db_to_linear).
+                // Rust: threshold is dB. Reverse the transform.
+                let db_val = match value {
+                    PropertyValue::Float(v) => linear_to_db(*v),
+                    _ => return None,
+                };
+                ("threshold".to_string(), PropertyValue::Float(db_val))
+            }
+            "enabled" => return None,
+            _ => return None,
+        };
+        return Some((new_name, new_value));
+    }
+
+    None
+}
+
+/// Convert linear scale to dB.
+fn linear_to_db(linear: f64) -> f64 {
+    if linear <= 0.0 {
+        -120.0 // floor
+    } else {
+        20.0 * linear.log10()
+    }
 }
 
 // ============================================================================
@@ -1589,6 +1775,31 @@ fn mixer_definition() -> BlockDefinition {
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "num_channels".to_string(),
+                transform: None,
+            },
+        },
+        // DSP Backend selection
+        ExposedProperty {
+            name: "dsp_backend".to_string(),
+            label: "DSP Backend".to_string(),
+            description: "LV2 uses external C++ LSP plugins, Rust uses built-in lsp-plugins-rs"
+                .to_string(),
+            property_type: PropertyType::Enum {
+                values: vec![
+                    EnumValue {
+                        value: "lv2".to_string(),
+                        label: Some("LV2".to_string()),
+                    },
+                    EnumValue {
+                        value: "rust".to_string(),
+                        label: Some("Rust".to_string()),
+                    },
+                ],
+            },
+            default_value: Some(PropertyValue::String("lv2".to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "dsp_backend".to_string(),
                 transform: None,
             },
         },
@@ -2427,6 +2638,7 @@ mod tests {
 
     fn init_gst() {
         let _ = gst::init();
+        let _ = gst_plugins_lsp::plugin_register_static();
     }
 
     fn is_element_available(name: &str) -> bool {
@@ -2757,7 +2969,7 @@ mod tests {
             println!("LSP gate not available, skipping");
             return;
         }
-        let gate = make_gate_element("test_gate", true, -40.0, 5.0, 100.0, -80.0);
+        let gate = make_gate_element("test_gate", true, -40.0, 5.0, 100.0, -80.0, "lv2");
         assert!(gate.is_ok(), "Should create gate element");
         let gate = gate.unwrap();
 
@@ -2775,7 +2987,7 @@ mod tests {
             println!("LSP gate not available, skipping");
             return;
         }
-        let gate = make_gate_element("test_gate_off", false, -40.0, 5.0, 100.0, -80.0);
+        let gate = make_gate_element("test_gate_off", false, -40.0, 5.0, 100.0, -80.0, "lv2");
         assert!(gate.is_ok());
         let gate = gate.unwrap();
 
@@ -2792,7 +3004,7 @@ mod tests {
             println!("LSP compressor not available, skipping");
             return;
         }
-        let comp = make_compressor_element("test_comp", true, -20.0, 4.0, 10.0, 100.0, 0.0);
+        let comp = make_compressor_element("test_comp", true, -20.0, 4.0, 10.0, 100.0, 0.0, "lv2");
         assert!(comp.is_ok(), "Should create compressor element");
         let comp = comp.unwrap();
 
@@ -2827,7 +3039,7 @@ mod tests {
             (4000.0, -3.0, 1.0),
             (8000.0, 0.0, 1.0),
         ];
-        let eq = make_eq_element("test_eq", true, &bands);
+        let eq = make_eq_element("test_eq", true, &bands, "lv2");
         assert!(eq.is_ok(), "Should create EQ element");
         let eq = eq.unwrap();
 
@@ -2854,7 +3066,7 @@ mod tests {
             println!("LSP limiter not available, skipping");
             return;
         }
-        let lim = make_limiter_element("test_lim", true, -3.0);
+        let lim = make_limiter_element("test_lim", true, -3.0, "lv2");
         assert!(lim.is_ok(), "Should create limiter element");
     }
 
@@ -2905,7 +3117,7 @@ mod tests {
     fn test_make_gate_fallback_to_identity() {
         init_gst();
         // If LSP is available this just tests normal path, but it shouldn't panic
-        let gate = make_gate_element("test_gate_fb", true, -40.0, 5.0, 100.0, -80.0);
+        let gate = make_gate_element("test_gate_fb", true, -40.0, 5.0, 100.0, -80.0, "lv2");
         assert!(
             gate.is_ok(),
             "Gate should succeed (LSP or identity fallback)"
@@ -2915,7 +3127,8 @@ mod tests {
     #[test]
     fn test_make_compressor_fallback_to_identity() {
         init_gst();
-        let comp = make_compressor_element("test_comp_fb", true, -20.0, 4.0, 10.0, 100.0, 0.0);
+        let comp =
+            make_compressor_element("test_comp_fb", true, -20.0, 4.0, 10.0, 100.0, 0.0, "lv2");
         assert!(
             comp.is_ok(),
             "Compressor should succeed (LSP or identity fallback)"
@@ -2931,7 +3144,7 @@ mod tests {
             (5000.0, 0.0, 1.0),
             (10000.0, 0.0, 1.0),
         ];
-        let eq = make_eq_element("test_eq_fb", true, &bands);
+        let eq = make_eq_element("test_eq_fb", true, &bands, "lv2");
         assert!(eq.is_ok(), "EQ should succeed (LSP or identity fallback)");
     }
 
@@ -2944,5 +3157,302 @@ mod tests {
             values.is_empty(),
             "Should return empty vec for missing field"
         );
+    }
+
+    // ---- Rust backend (lsp-plugins-rs) tests ----
+
+    #[test]
+    fn test_make_gate_element_rust() {
+        init_gst();
+        let gate = make_gate_element("test_gate_rs", true, -40.0, 5.0, 100.0, -80.0, "rust");
+        assert!(
+            gate.is_ok(),
+            "Should create gate element (rust or fallback): {:?}",
+            gate.err()
+        );
+        let gate = gate.unwrap();
+        // Use find_property to check element type (factory() can SIGSEGV in test context)
+        if gate.find_property("open-threshold").is_some() {
+            let enabled_val: bool = gate.property("enabled");
+            assert!(enabled_val, "Gate should be enabled");
+            let thresh: f32 = gate.property("open-threshold");
+            assert!(
+                (thresh - (-40.0)).abs() < 0.1,
+                "Threshold should be -40 dB, got {}",
+                thresh
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_gate_element_rust_disabled() {
+        init_gst();
+        let gate = make_gate_element("test_gate_rs_off", false, -40.0, 5.0, 100.0, -80.0, "rust");
+        assert!(gate.is_ok());
+        let gate = gate.unwrap();
+        if gate.find_property("open-threshold").is_some() {
+            let enabled_val: bool = gate.property("enabled");
+            assert!(!enabled_val, "Gate should be disabled");
+        }
+    }
+
+    #[test]
+    fn test_make_compressor_element_rust() {
+        init_gst();
+        let comp =
+            make_compressor_element("test_comp_rs", true, -20.0, 4.0, 10.0, 100.0, 6.0, "rust");
+        assert!(
+            comp.is_ok(),
+            "Should create compressor element (rust or fallback): {:?}",
+            comp.err()
+        );
+        let comp = comp.unwrap();
+        if comp.find_property("ratio").is_some() {
+            let enabled_val: bool = comp.property("enabled");
+            assert!(enabled_val, "Compressor should be enabled");
+            let ratio: f32 = comp.property("ratio");
+            assert!(
+                (ratio - 4.0).abs() < 0.1,
+                "Ratio should be 4.0, got {}",
+                ratio
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_eq_element_rust() {
+        init_gst();
+        let bands = [
+            (1000.0, 3.0, 1.0),
+            (2000.0, -3.0, 2.0),
+            (4000.0, 0.0, 1.0),
+            (8000.0, 6.0, 0.7),
+        ];
+        let eq = make_eq_element("test_eq_rs", true, &bands, "rust");
+        assert!(
+            eq.is_ok(),
+            "Should create EQ element (rust or fallback): {:?}",
+            eq.err()
+        );
+        let eq = eq.unwrap();
+        if eq.find_property("band0-frequency").is_some() {
+            let enabled_val: bool = eq.property("enabled");
+            assert!(enabled_val, "EQ should be enabled");
+            let f0: f32 = eq.property("band0-frequency");
+            assert!(
+                (f0 - 1000.0).abs() < 1.0,
+                "Band 0 freq should be 1000, got {}",
+                f0
+            );
+            // Rust EQ gain is dB directly
+            let g0: f32 = eq.property("band0-gain");
+            assert!(
+                (g0 - 3.0).abs() < 0.1,
+                "Band 0 gain should be 3.0 dB, got {}",
+                g0
+            );
+        }
+    }
+
+    #[test]
+    fn test_make_limiter_element_rust() {
+        init_gst();
+        let lim = make_limiter_element("test_lim_rs", true, -3.0, "rust");
+        assert!(
+            lim.is_ok(),
+            "Should create limiter element (rust or fallback): {:?}",
+            lim.err()
+        );
+        let lim = lim.unwrap();
+        if lim.find_property("lookahead").is_some() {
+            let enabled_val: bool = lim.property("enabled");
+            assert!(enabled_val, "Limiter should be enabled");
+            let thresh: f32 = lim.property("threshold");
+            assert!(
+                (thresh - (-3.0)).abs() < 0.1,
+                "Threshold should be -3 dB, got {}",
+                thresh
+            );
+        }
+    }
+
+    // ---- Property translation tests ----
+
+    #[test]
+    fn test_linear_to_db() {
+        assert!(
+            (linear_to_db(1.0) - 0.0).abs() < 1e-6,
+            "1.0 linear should be 0 dB"
+        );
+        assert!(
+            (linear_to_db(0.1) - (-20.0)).abs() < 1e-6,
+            "0.1 linear should be -20 dB"
+        );
+    }
+
+    #[test]
+    fn test_linear_to_db_zero() {
+        let result = linear_to_db(0.0);
+        assert!(
+            result <= -120.0,
+            "0.0 linear should be <= -120 dB, got {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_translate_gate_property() {
+        init_gst();
+        if !is_element_available("lsp-rs-gate") {
+            println!("lsp-rs-gate not available, skipping translation test");
+            return;
+        }
+        let gate = gst::ElementFactory::make("lsp-rs-gate")
+            .name("translate_test_gate")
+            .build()
+            .unwrap();
+
+        // gt (linear) -> open-threshold (dB): 0.1 linear = -20 dB
+        let result = translate_property_for_element(&gate, "gt", &PropertyValue::Float(0.1));
+        assert!(result.is_some(), "Should translate 'gt' for lsp-rs-gate");
+        let (name, value) = result.unwrap();
+        assert_eq!(name, "open-threshold");
+        if let PropertyValue::Float(v) = value {
+            assert!(
+                (v - (-20.0)).abs() < 0.1,
+                "0.1 linear should translate to -20 dB, got {}",
+                v
+            );
+        } else {
+            panic!("Expected Float value");
+        }
+    }
+
+    #[test]
+    fn test_translate_compressor_property() {
+        init_gst();
+        if !is_element_available("lsp-rs-compressor") {
+            println!("lsp-rs-compressor not available, skipping translation test");
+            return;
+        }
+        let comp = gst::ElementFactory::make("lsp-rs-compressor")
+            .name("translate_test_comp")
+            .build()
+            .unwrap();
+
+        // al -> threshold (both linear, no value change)
+        let result = translate_property_for_element(&comp, "al", &PropertyValue::Float(0.1));
+        assert!(result.is_some());
+        let (name, _) = result.unwrap();
+        assert_eq!(name, "threshold");
+
+        // cr -> ratio
+        let result = translate_property_for_element(&comp, "cr", &PropertyValue::Float(4.0));
+        assert!(result.is_some());
+        let (name, _) = result.unwrap();
+        assert_eq!(name, "ratio");
+
+        // enabled -> no translation needed
+        let result = translate_property_for_element(&comp, "enabled", &PropertyValue::Bool(true));
+        assert!(result.is_none(), "enabled should not need translation");
+    }
+
+    #[test]
+    fn test_translate_eq_property() {
+        init_gst();
+        if !is_element_available("lsp-rs-equalizer") {
+            println!("lsp-rs-equalizer not available, skipping translation test");
+            return;
+        }
+        let eq = gst::ElementFactory::make("lsp-rs-equalizer")
+            .name("translate_test_eq")
+            .build()
+            .unwrap();
+
+        // f-0 -> band0-frequency
+        let result = translate_property_for_element(&eq, "f-0", &PropertyValue::Float(1000.0));
+        assert!(result.is_some());
+        let (name, _) = result.unwrap();
+        assert_eq!(name, "band0-frequency");
+
+        // g-0 (linear) -> band0-gain (dB)
+        let result = translate_property_for_element(&eq, "g-0", &PropertyValue::Float(1.0));
+        assert!(result.is_some());
+        let (name, value) = result.unwrap();
+        assert_eq!(name, "band0-gain");
+        if let PropertyValue::Float(v) = value {
+            assert!(
+                v.abs() < 0.1,
+                "1.0 linear should translate to 0 dB, got {}",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn test_translate_limiter_property() {
+        init_gst();
+        if !is_element_available("lsp-rs-limiter") {
+            println!("lsp-rs-limiter not available, skipping translation test");
+            return;
+        }
+        let lim = gst::ElementFactory::make("lsp-rs-limiter")
+            .name("translate_test_lim")
+            .build()
+            .unwrap();
+
+        // th (linear) -> threshold (dB)
+        let result = translate_property_for_element(&lim, "th", &PropertyValue::Float(0.1));
+        assert!(result.is_some());
+        let (name, value) = result.unwrap();
+        assert_eq!(name, "threshold");
+        if let PropertyValue::Float(v) = value {
+            assert!(
+                (v - (-20.0)).abs() < 0.1,
+                "0.1 linear should translate to -20 dB, got {}",
+                v
+            );
+        }
+    }
+
+    #[test]
+    fn test_translate_no_translation_for_lv2() {
+        init_gst();
+        // For LV2 elements (or any non-lsp-rs element), translation should return None
+        if let Ok(elem) = gst::ElementFactory::make("identity")
+            .name("translate_test_identity")
+            .build()
+        {
+            let result = translate_property_for_element(&elem, "gt", &PropertyValue::Float(0.1));
+            assert!(
+                result.is_none(),
+                "Should not translate properties for non-lsp-rs elements"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixer_definition_has_dsp_backend_property() {
+        let def = mixer_definition();
+        let dsp_prop = def
+            .exposed_properties
+            .iter()
+            .find(|p| p.name == "dsp_backend");
+        assert!(dsp_prop.is_some(), "Should have dsp_backend property");
+        let dsp_prop = dsp_prop.unwrap();
+        match &dsp_prop.default_value {
+            Some(PropertyValue::String(s)) => {
+                assert_eq!(s, "lv2", "Default should be lv2, got {}", s);
+            }
+            other => panic!("Expected String(\"lv2\"), got {:?}", other),
+        }
+        match &dsp_prop.property_type {
+            PropertyType::Enum { values } => {
+                assert_eq!(values.len(), 2);
+                assert_eq!(values[0].value, "lv2");
+                assert_eq!(values[1].value, "rust");
+            }
+            other => panic!("Expected Enum type, got {:?}", other),
+        }
     }
 }
