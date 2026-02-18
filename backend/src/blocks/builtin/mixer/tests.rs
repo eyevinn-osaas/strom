@@ -808,15 +808,15 @@ fn test_mixer_definition_has_dsp_backend_property() {
     let dsp_prop = dsp_prop.unwrap();
     match &dsp_prop.default_value {
         Some(PropertyValue::String(s)) => {
-            assert_eq!(s, "lv2", "Default should be lv2, got {}", s);
+            assert_eq!(s, "rust", "Default should be rust, got {}", s);
         }
-        other => panic!("Expected String(\"lv2\"), got {:?}", other),
+        other => panic!("Expected String(\"rust\"), got {:?}", other),
     }
     match &dsp_prop.property_type {
         PropertyType::Enum { values } => {
             assert_eq!(values.len(), 2);
-            assert_eq!(values[0].value, "lv2");
-            assert_eq!(values[1].value, "rust");
+            assert_eq!(values[0].value, "rust");
+            assert_eq!(values[1].value, "lv2");
         }
         other => panic!("Expected Enum type, got {:?}", other),
     }

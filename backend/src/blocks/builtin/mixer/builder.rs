@@ -89,7 +89,7 @@ impl BlockBuilder for MixerBuilder {
         let num_channels = parse_num_channels(properties);
         let num_aux_buses = parse_num_aux_buses(properties);
         let num_groups = parse_num_groups(properties);
-        let dsp_backend = get_string_prop(properties, "dsp_backend", "lv2");
+        let dsp_backend = get_string_prop(properties, "dsp_backend", "rust");
         let solo_mode_afl = get_string_prop(properties, "solo_mode", "pfl") == "afl";
         info!(
             "Mixer config: {} channels, {} aux buses, {} groups, solo={}, dsp={}",

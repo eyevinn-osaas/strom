@@ -1,7 +1,7 @@
 use crate::blocks::BlockBuildError;
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::properties::db_to_linear;
 
@@ -68,12 +68,8 @@ pub(super) fn make_gate_element(
             gate.set_property("release", release_ms as f32);
             return Ok(gate);
         }
-        warn!(
-            "lsp-rs-gate not available for {}, trying LV2 fallback",
-            name
-        );
-    }
-    if let Ok(gate) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-gate-stereo")
+        error!("lsp-rs-gate not available for {}, using passthrough", name);
+    } else if let Ok(gate) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-gate-stereo")
         .name(name)
         .build()
     {
@@ -90,8 +86,9 @@ pub(super) fn make_gate_element(
             gate.set_property("rt", release_ms as f32);
         }
         return Ok(gate);
+    } else {
+        error!("LV2 gate not available for {}, using passthrough", name);
     }
-    warn!("No gate plugin available for {}, using passthrough", name);
     gst::ElementFactory::make("identity")
         .name(name)
         .property("silent", true)
@@ -124,12 +121,11 @@ pub(super) fn make_compressor_element(
             comp.set_property("makeup-gain", db_to_linear(makeup_db) as f32);
             return Ok(comp);
         }
-        warn!(
-            "lsp-rs-compressor not available for {}, trying LV2 fallback",
+        error!(
+            "lsp-rs-compressor not available for {}, using passthrough",
             name
         );
-    }
-    if let Ok(comp) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-compressor-stereo")
+    } else if let Ok(comp) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-compressor-stereo")
         .name(name)
         .build()
     {
@@ -152,11 +148,12 @@ pub(super) fn make_compressor_element(
             comp.set_property("mk", db_to_linear(makeup_db) as f32);
         }
         return Ok(comp);
+    } else {
+        error!(
+            "LV2 compressor not available for {}, using passthrough",
+            name
+        );
     }
-    warn!(
-        "No compressor plugin available for {}, using passthrough",
-        name
-    );
     gst::ElementFactory::make("identity")
         .name(name)
         .property("silent", true)
@@ -189,14 +186,14 @@ pub(super) fn make_eq_element(
             }
             return Ok(eq);
         }
-        warn!(
-            "lsp-rs-equalizer not available for {}, trying LV2 fallback",
+        error!(
+            "lsp-rs-equalizer not available for {}, using passthrough",
             name
         );
-    }
-    if let Ok(eq) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-para-equalizer-x8-stereo")
-        .name(name)
-        .build()
+    } else if let Ok(eq) =
+        gst::ElementFactory::make("lsp-plug-in-plugins-lv2-para-equalizer-x8-stereo")
+            .name(name)
+            .build()
     {
         if eq.find_property("enabled").is_some() {
             eq.set_property("enabled", enabled);
@@ -220,8 +217,9 @@ pub(super) fn make_eq_element(
             }
         }
         return Ok(eq);
+    } else {
+        error!("LV2 EQ not available for {}, using passthrough", name);
     }
-    warn!("No EQ plugin available for {}, using passthrough", name);
     gst::ElementFactory::make("identity")
         .name(name)
         .property("silent", true)
@@ -245,12 +243,11 @@ pub(super) fn make_limiter_element(
             lim.set_property("threshold", threshold_db as f32); // dB directly
             return Ok(lim);
         }
-        warn!(
-            "lsp-rs-limiter not available for {}, trying LV2 fallback",
+        error!(
+            "lsp-rs-limiter not available for {}, using passthrough",
             name
         );
-    }
-    if let Ok(lim) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-limiter-stereo")
+    } else if let Ok(lim) = gst::ElementFactory::make("lsp-plug-in-plugins-lv2-limiter-stereo")
         .name(name)
         .build()
     {
@@ -261,11 +258,9 @@ pub(super) fn make_limiter_element(
             lim.set_property("th", db_to_linear(threshold_db) as f32);
         }
         return Ok(lim);
+    } else {
+        error!("LV2 limiter not available for {}, using passthrough", name);
     }
-    warn!(
-        "No limiter plugin available for {}, using passthrough",
-        name
-    );
     gst::ElementFactory::make("identity")
         .name(name)
         .property("silent", true)

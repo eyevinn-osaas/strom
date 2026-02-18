@@ -64,16 +64,16 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_type: PropertyType::Enum {
                 values: vec![
                     EnumValue {
-                        value: "lv2".to_string(),
-                        label: Some("LV2".to_string()),
-                    },
-                    EnumValue {
                         value: "rust".to_string(),
                         label: Some("Rust".to_string()),
                     },
+                    EnumValue {
+                        value: "lv2".to_string(),
+                        label: Some("LV2".to_string()),
+                    },
                 ],
             },
-            default_value: Some(PropertyValue::String("lv2".to_string())),
+            default_value: Some(PropertyValue::String("rust".to_string())),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "dsp_backend".to_string(),
@@ -507,7 +507,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             label: format!("Ch {} Fader", ch),
             description: format!("Channel {} volume (0.0 to 2.0)", ch),
             property_type: PropertyType::Float,
-            default_value: Some(PropertyValue::Float(0.75)),
+            default_value: Some(PropertyValue::Float(1.0)),
             mapping: PropertyMapping {
                 element_id: format!("volume_{}", ch - 1),
                 property_name: "volume".to_string(),
@@ -613,8 +613,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_type: PropertyType::Bool,
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
-                element_id: format!("hpf_{}", ch - 1),
-                property_name: "cutoff".to_string(),
+                element_id: "_block".to_string(),
+                property_name: format!("ch{}_hpf_enabled", ch),
                 transform: None,
             },
         });

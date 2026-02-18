@@ -1,0 +1,619 @@
+use super::*;
+
+impl MixerEditor {
+    /// Create a new mixer editor.
+    pub fn new(flow_id: FlowId, block_id: String, num_channels: usize, api: ApiClient) -> Self {
+        let channels = (1..=num_channels).map(ChannelStrip::new).collect();
+
+        Self {
+            flow_id,
+            block_id,
+            num_channels,
+            num_aux_buses: 0,
+            num_groups: 0,
+            channels,
+            groups: Vec::new(),
+            aux_masters: Vec::new(),
+            selection: None,
+            active_control: ActiveControl::None,
+            main_fader: 1.0,
+            main_mute: false,
+            main_comp_enabled: false,
+            main_comp_threshold: -20.0,
+            main_comp_ratio: 4.0,
+            main_comp_attack: 10.0,
+            main_comp_release: 100.0,
+            main_comp_makeup: 0.0,
+            main_comp_knee: -6.0,
+            main_eq_enabled: false,
+            main_eq_bands: [
+                (80.0, 0.0, 1.0),
+                (400.0, 0.0, 1.0),
+                (2000.0, 0.0, 1.0),
+                (8000.0, 0.0, 1.0),
+            ],
+            main_limiter_enabled: false,
+            main_limiter_threshold: -3.0,
+            api,
+            status: String::new(),
+            error: None,
+            live_updates: true,
+            last_update: instant::Instant::now(),
+            save_requested: false,
+            is_reset: false,
+        }
+    }
+
+    /// Load channel values from block properties.
+    pub fn load_from_properties(&mut self, properties: &HashMap<String, PropertyValue>) {
+        // Load main fader and mute
+        if let Some(PropertyValue::Float(f)) = properties.get("main_fader") {
+            self.main_fader = *f as f32;
+        }
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_mute") {
+            self.main_mute = *b;
+        }
+
+        // Load main bus processing
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_comp_enabled") {
+            self.main_comp_enabled = *b;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_threshold") {
+            self.main_comp_threshold = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_ratio") {
+            self.main_comp_ratio = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_attack") {
+            self.main_comp_attack = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_release") {
+            self.main_comp_release = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_makeup") {
+            self.main_comp_makeup = *f as f32;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_comp_knee") {
+            self.main_comp_knee = *f as f32;
+        }
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_eq_enabled") {
+            self.main_eq_enabled = *b;
+        }
+        for band in 0..4 {
+            let band_num = band + 1;
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("main_eq{}_freq", band_num))
+            {
+                self.main_eq_bands[band].0 = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("main_eq{}_gain", band_num))
+            {
+                self.main_eq_bands[band].1 = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("main_eq{}_q", band_num))
+            {
+                self.main_eq_bands[band].2 = *f as f32;
+            }
+        }
+        if let Some(PropertyValue::Bool(b)) = properties.get("main_limiter_enabled") {
+            self.main_limiter_enabled = *b;
+        }
+        if let Some(PropertyValue::Float(f)) = properties.get("main_limiter_threshold") {
+            self.main_limiter_threshold = *f as f32;
+        }
+
+        // Load number of aux buses
+        self.num_aux_buses = properties
+            .get("num_aux_buses")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as usize),
+                PropertyValue::String(s) => s.parse().ok(),
+                _ => None,
+            })
+            .unwrap_or(0)
+            .min(MAX_AUX_BUSES);
+
+        // Load number of groups
+        self.num_groups = properties
+            .get("num_groups")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i as usize),
+                PropertyValue::String(s) => s.parse().ok(),
+                _ => None,
+            })
+            .unwrap_or(0)
+            .min(MAX_GROUPS);
+
+        // Initialize groups
+        self.groups = (0..self.num_groups)
+            .map(|i| {
+                let mut sg = GroupStrip::new(i);
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("group{}_fader", i + 1))
+                {
+                    sg.fader = *f as f32;
+                }
+                if let Some(PropertyValue::Bool(b)) =
+                    properties.get(&format!("group{}_mute", i + 1))
+                {
+                    sg.mute = *b;
+                }
+                sg
+            })
+            .collect();
+
+        // Initialize aux masters
+        self.aux_masters = (0..self.num_aux_buses)
+            .map(|i| {
+                let mut aux = AuxMaster::new(i);
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("aux{}_fader", i + 1))
+                {
+                    aux.fader = *f as f32;
+                }
+                if let Some(PropertyValue::Bool(b)) = properties.get(&format!("aux{}_mute", i + 1))
+                {
+                    aux.mute = *b;
+                }
+                aux
+            })
+            .collect();
+
+        // Load per-channel properties
+        for ch in &mut self.channels {
+            let ch_num = ch.channel_num;
+
+            // Label
+            if let Some(PropertyValue::String(s)) = properties.get(&format!("ch{}_label", ch_num)) {
+                ch.label = s.clone();
+            }
+            // Input gain
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_gain", ch_num)) {
+                ch.gain = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_pan", ch_num)) {
+                ch.pan = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_fader", ch_num)) {
+                ch.fader = *f as f32;
+            }
+            if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_mute", ch_num)) {
+                ch.mute = *b;
+            }
+            if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_pfl", ch_num)) {
+                ch.pfl = *b;
+            }
+            // Routing to main
+            if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_to_main", ch_num)) {
+                ch.to_main = *b;
+            }
+            // Routing to groups
+            for sg in 0..MAX_GROUPS {
+                if let Some(PropertyValue::Bool(b)) =
+                    properties.get(&format!("ch{}_to_grp{}", ch_num, sg + 1))
+                {
+                    ch.to_grp[sg] = *b;
+                }
+            }
+            // Aux send levels and pre/post
+            for aux in 0..MAX_AUX_BUSES {
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("ch{}_aux{}_level", ch_num, aux + 1))
+                {
+                    ch.aux_sends[aux] = *f as f32;
+                }
+                if let Some(PropertyValue::Bool(b)) =
+                    properties.get(&format!("ch{}_aux{}_pre", ch_num, aux + 1))
+                {
+                    ch.aux_pre[aux] = *b;
+                }
+            }
+            // HPF
+            if let Some(PropertyValue::Bool(b)) =
+                properties.get(&format!("ch{}_hpf_enabled", ch_num))
+            {
+                ch.hpf_enabled = *b;
+            }
+            if let Some(PropertyValue::Float(f)) = properties.get(&format!("ch{}_hpf_freq", ch_num))
+            {
+                ch.hpf_freq = *f as f32;
+            }
+            // Gate
+            if let Some(PropertyValue::Bool(b)) =
+                properties.get(&format!("ch{}_gate_enabled", ch_num))
+            {
+                ch.gate_enabled = *b;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_gate_threshold", ch_num))
+            {
+                ch.gate_threshold = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_gate_attack", ch_num))
+            {
+                ch.gate_attack = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_gate_release", ch_num))
+            {
+                ch.gate_release = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_gate_range", ch_num))
+            {
+                ch.gate_range = *f as f32;
+            }
+            // Compressor
+            if let Some(PropertyValue::Bool(b)) =
+                properties.get(&format!("ch{}_comp_enabled", ch_num))
+            {
+                ch.comp_enabled = *b;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_threshold", ch_num))
+            {
+                ch.comp_threshold = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_ratio", ch_num))
+            {
+                ch.comp_ratio = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_attack", ch_num))
+            {
+                ch.comp_attack = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_release", ch_num))
+            {
+                ch.comp_release = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_makeup", ch_num))
+            {
+                ch.comp_makeup = *f as f32;
+            }
+            if let Some(PropertyValue::Float(f)) =
+                properties.get(&format!("ch{}_comp_knee", ch_num))
+            {
+                ch.comp_knee = *f as f32;
+            }
+            // EQ
+            if let Some(PropertyValue::Bool(b)) =
+                properties.get(&format!("ch{}_eq_enabled", ch_num))
+            {
+                ch.eq_enabled = *b;
+            }
+            for band in 0..4 {
+                let band_num = band + 1;
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("ch{}_eq{}_freq", ch_num, band_num))
+                {
+                    ch.eq_bands[band].0 = *f as f32;
+                }
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("ch{}_eq{}_gain", ch_num, band_num))
+                {
+                    ch.eq_bands[band].1 = *f as f32;
+                }
+                if let Some(PropertyValue::Float(f)) =
+                    properties.get(&format!("ch{}_eq{}_q", ch_num, band_num))
+                {
+                    ch.eq_bands[band].2 = *f as f32;
+                }
+            }
+        }
+    }
+
+    /// Collect all current mixer state as block properties.
+    pub fn collect_properties(&self) -> HashMap<String, PropertyValue> {
+        let mut props = HashMap::new();
+
+        // Structural properties
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::Int(self.num_channels as i64),
+        );
+        props.insert(
+            "num_aux_buses".to_string(),
+            PropertyValue::Int(self.num_aux_buses as i64),
+        );
+        props.insert(
+            "num_groups".to_string(),
+            PropertyValue::Int(self.num_groups as i64),
+        );
+
+        // Main bus
+        props.insert(
+            "main_fader".to_string(),
+            PropertyValue::Float(self.main_fader as f64),
+        );
+        props.insert("main_mute".to_string(), PropertyValue::Bool(self.main_mute));
+        props.insert(
+            "main_comp_enabled".to_string(),
+            PropertyValue::Bool(self.main_comp_enabled),
+        );
+        props.insert(
+            "main_comp_threshold".to_string(),
+            PropertyValue::Float(self.main_comp_threshold as f64),
+        );
+        props.insert(
+            "main_comp_ratio".to_string(),
+            PropertyValue::Float(self.main_comp_ratio as f64),
+        );
+        props.insert(
+            "main_comp_attack".to_string(),
+            PropertyValue::Float(self.main_comp_attack as f64),
+        );
+        props.insert(
+            "main_comp_release".to_string(),
+            PropertyValue::Float(self.main_comp_release as f64),
+        );
+        props.insert(
+            "main_comp_makeup".to_string(),
+            PropertyValue::Float(self.main_comp_makeup as f64),
+        );
+        props.insert(
+            "main_comp_knee".to_string(),
+            PropertyValue::Float(self.main_comp_knee as f64),
+        );
+        props.insert(
+            "main_eq_enabled".to_string(),
+            PropertyValue::Bool(self.main_eq_enabled),
+        );
+        for (band, (freq, gain, q)) in self.main_eq_bands.iter().enumerate() {
+            let b = band + 1;
+            props.insert(
+                format!("main_eq{}_freq", b),
+                PropertyValue::Float(*freq as f64),
+            );
+            props.insert(
+                format!("main_eq{}_gain", b),
+                PropertyValue::Float(*gain as f64),
+            );
+            props.insert(format!("main_eq{}_q", b), PropertyValue::Float(*q as f64));
+        }
+        props.insert(
+            "main_limiter_enabled".to_string(),
+            PropertyValue::Bool(self.main_limiter_enabled),
+        );
+        props.insert(
+            "main_limiter_threshold".to_string(),
+            PropertyValue::Float(self.main_limiter_threshold as f64),
+        );
+
+        // Aux masters
+        for aux in &self.aux_masters {
+            let n = aux.index + 1;
+            props.insert(
+                format!("aux{}_fader", n),
+                PropertyValue::Float(aux.fader as f64),
+            );
+            props.insert(format!("aux{}_mute", n), PropertyValue::Bool(aux.mute));
+        }
+
+        // Groups
+        for sg in &self.groups {
+            let n = sg.index + 1;
+            props.insert(
+                format!("group{}_fader", n),
+                PropertyValue::Float(sg.fader as f64),
+            );
+            props.insert(format!("group{}_mute", n), PropertyValue::Bool(sg.mute));
+        }
+
+        // Per-channel
+        for ch in &self.channels {
+            let n = ch.channel_num;
+            props.insert(
+                format!("ch{}_label", n),
+                PropertyValue::String(ch.label.clone()),
+            );
+            props.insert(
+                format!("ch{}_gain", n),
+                PropertyValue::Float(ch.gain as f64),
+            );
+            props.insert(format!("ch{}_pan", n), PropertyValue::Float(ch.pan as f64));
+            props.insert(
+                format!("ch{}_fader", n),
+                PropertyValue::Float(ch.fader as f64),
+            );
+            props.insert(format!("ch{}_mute", n), PropertyValue::Bool(ch.mute));
+            props.insert(format!("ch{}_pfl", n), PropertyValue::Bool(ch.pfl));
+            props.insert(format!("ch{}_to_main", n), PropertyValue::Bool(ch.to_main));
+            for (sg, &enabled) in ch.to_grp.iter().enumerate().take(self.num_groups) {
+                props.insert(
+                    format!("ch{}_to_grp{}", n, sg + 1),
+                    PropertyValue::Bool(enabled),
+                );
+            }
+            for aux in 0..self.num_aux_buses {
+                props.insert(
+                    format!("ch{}_aux{}_level", n, aux + 1),
+                    PropertyValue::Float(ch.aux_sends[aux] as f64),
+                );
+                props.insert(
+                    format!("ch{}_aux{}_pre", n, aux + 1),
+                    PropertyValue::Bool(ch.aux_pre[aux]),
+                );
+            }
+            // HPF
+            props.insert(
+                format!("ch{}_hpf_enabled", n),
+                PropertyValue::Bool(ch.hpf_enabled),
+            );
+            props.insert(
+                format!("ch{}_hpf_freq", n),
+                PropertyValue::Float(ch.hpf_freq as f64),
+            );
+            // Gate
+            props.insert(
+                format!("ch{}_gate_enabled", n),
+                PropertyValue::Bool(ch.gate_enabled),
+            );
+            props.insert(
+                format!("ch{}_gate_threshold", n),
+                PropertyValue::Float(ch.gate_threshold as f64),
+            );
+            props.insert(
+                format!("ch{}_gate_attack", n),
+                PropertyValue::Float(ch.gate_attack as f64),
+            );
+            props.insert(
+                format!("ch{}_gate_release", n),
+                PropertyValue::Float(ch.gate_release as f64),
+            );
+            props.insert(
+                format!("ch{}_gate_range", n),
+                PropertyValue::Float(ch.gate_range as f64),
+            );
+            // Compressor
+            props.insert(
+                format!("ch{}_comp_enabled", n),
+                PropertyValue::Bool(ch.comp_enabled),
+            );
+            props.insert(
+                format!("ch{}_comp_threshold", n),
+                PropertyValue::Float(ch.comp_threshold as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_ratio", n),
+                PropertyValue::Float(ch.comp_ratio as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_attack", n),
+                PropertyValue::Float(ch.comp_attack as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_release", n),
+                PropertyValue::Float(ch.comp_release as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_makeup", n),
+                PropertyValue::Float(ch.comp_makeup as f64),
+            );
+            props.insert(
+                format!("ch{}_comp_knee", n),
+                PropertyValue::Float(ch.comp_knee as f64),
+            );
+            // EQ
+            props.insert(
+                format!("ch{}_eq_enabled", n),
+                PropertyValue::Bool(ch.eq_enabled),
+            );
+            for (band, (freq, gain, q)) in ch.eq_bands.iter().enumerate() {
+                let b = band + 1;
+                props.insert(
+                    format!("ch{}_eq{}_freq", n, b),
+                    PropertyValue::Float(*freq as f64),
+                );
+                props.insert(
+                    format!("ch{}_eq{}_gain", n, b),
+                    PropertyValue::Float(*gain as f64),
+                );
+                props.insert(
+                    format!("ch{}_eq{}_q", n, b),
+                    PropertyValue::Float(*q as f64),
+                );
+            }
+        }
+
+        props
+    }
+
+    /// Reset all mixer parameters to defaults.
+    /// Resets in-memory state and sets `reset_properties` so the save
+    /// only writes structural keys, letting backend defaults take over.
+    pub(super) fn reset_to_defaults(&mut self) {
+        // Main bus
+        self.main_fader = 1.0;
+        self.main_mute = false;
+        self.main_comp_enabled = false;
+        self.main_comp_threshold = -20.0;
+        self.main_comp_ratio = 4.0;
+        self.main_comp_attack = 10.0;
+        self.main_comp_release = 100.0;
+        self.main_comp_makeup = 0.0;
+        self.main_comp_knee = -6.0;
+        self.main_eq_enabled = false;
+        self.main_eq_bands = [
+            (80.0, 0.0, 1.0),
+            (400.0, 0.0, 1.0),
+            (2000.0, 0.0, 1.0),
+            (8000.0, 0.0, 1.0),
+        ];
+        self.main_limiter_enabled = false;
+        self.main_limiter_threshold = -3.0;
+
+        // Aux masters
+        for aux in &mut self.aux_masters {
+            aux.fader = 1.0;
+            aux.mute = false;
+        }
+
+        // Groups
+        for sg in &mut self.groups {
+            sg.fader = 1.0;
+            sg.mute = false;
+        }
+
+        // Channels
+        for ch in &mut self.channels {
+            ch.gain = 0.0;
+            ch.pan = 0.0;
+            ch.fader = DEFAULT_FADER;
+            ch.mute = false;
+            ch.pfl = false;
+            ch.to_main = true;
+            ch.to_grp = [false; MAX_GROUPS];
+            ch.aux_sends = [0.0; MAX_AUX_BUSES];
+            ch.aux_pre = [true, true, false, false];
+            ch.hpf_enabled = false;
+            ch.hpf_freq = 80.0;
+            ch.gate_enabled = false;
+            ch.gate_threshold = -40.0;
+            ch.gate_attack = 5.0;
+            ch.gate_release = 100.0;
+            ch.gate_range = -80.0;
+            ch.comp_enabled = false;
+            ch.comp_threshold = -20.0;
+            ch.comp_ratio = 4.0;
+            ch.comp_attack = 10.0;
+            ch.comp_release = 100.0;
+            ch.comp_makeup = 0.0;
+            ch.comp_knee = -6.0;
+            ch.eq_enabled = false;
+            ch.eq_bands = [
+                (80.0, 0.0, 1.0),
+                (400.0, 0.0, 1.0),
+                (2000.0, 0.0, 1.0),
+                (8000.0, 0.0, 1.0),
+            ];
+        }
+
+        self.selection = None;
+        self.is_reset = true;
+    }
+
+    /// Collect only structural properties (after reset).
+    /// Backend uses its own matching defaults for everything else.
+    pub fn collect_structural_properties(&self) -> HashMap<String, PropertyValue> {
+        let mut props = HashMap::new();
+        props.insert(
+            "num_channels".to_string(),
+            PropertyValue::Int(self.num_channels as i64),
+        );
+        props.insert(
+            "num_aux_buses".to_string(),
+            PropertyValue::Int(self.num_aux_buses as i64),
+        );
+        props.insert(
+            "num_groups".to_string(),
+            PropertyValue::Int(self.num_groups as i64),
+        );
+        props
+    }
+}
