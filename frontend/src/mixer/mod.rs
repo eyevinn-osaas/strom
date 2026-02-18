@@ -25,8 +25,7 @@ use crate::meter::{MeterData, MeterDataStore};
 
 use util::*;
 
-/// Minimum knee value in linear scale (corresponds to -24 dB)
-const MIN_KNEE_LINEAR: f64 = 0.0631;
+use strom_types::mixer::MIN_KNEE_LINEAR;
 
 // ── Layout constants ─────────────────────────────────────────────────
 /// Gap between strips
@@ -109,8 +108,6 @@ struct ChannelStrip {
     eq_enabled: bool,
     /// EQ bands: (freq, gain_db, q) for 4 bands
     eq_bands: [(f32, f32, f32); 4],
-    /// Pending API update
-    pending_update: bool,
 }
 
 /// Group strip state.
@@ -148,7 +145,7 @@ impl ChannelStrip {
             to_main: true,
             to_grp: [false; MAX_GROUPS],
             aux_sends: [0.0; MAX_AUX_BUSES],
-            aux_pre: [true, true, false, false], // aux 1-2 pre, 3-4 post
+            aux_pre: DEFAULT_AUX_PRE,
             hpf_enabled: false,
             hpf_freq: DEFAULT_HPF_FREQ,
             gate_enabled: false,
@@ -164,7 +161,6 @@ impl ChannelStrip {
             comp_knee: DEFAULT_COMP_KNEE,
             eq_enabled: false,
             eq_bands: DEFAULT_EQ_BANDS,
-            pending_update: false,
         }
     }
 }
@@ -173,7 +169,7 @@ impl GroupStrip {
     fn new(index: usize) -> Self {
         Self {
             index,
-            fader: 1.0,
+            fader: DEFAULT_FADER,
             mute: false,
         }
     }
@@ -183,7 +179,7 @@ impl AuxMaster {
     fn new(index: usize) -> Self {
         Self {
             index,
-            fader: 1.0,
+            fader: DEFAULT_FADER,
             mute: false,
         }
     }
@@ -202,7 +198,7 @@ enum ActiveControl {
 }
 
 /// What is currently selected in the mixer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Selection {
     Channel(usize),
     Main,
@@ -277,6 +273,8 @@ pub struct MixerEditor {
     save_requested: bool,
     /// True after reset — next save writes only structural properties
     is_reset: bool,
+    /// Channel index currently being label-edited (None = not editing)
+    editing_label: Option<usize>,
 }
 
 impl MixerEditor {

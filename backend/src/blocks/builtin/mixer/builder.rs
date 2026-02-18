@@ -206,7 +206,7 @@ impl BlockBuilder for MixerBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("main volume: {}", e)))?;
 
-        // Set main fader from properties
+        // Set main fader from properties, respecting mute state
         let main_fader = properties
             .get("main_fader")
             .and_then(|v| match v {
@@ -214,7 +214,9 @@ impl BlockBuilder for MixerBuilder {
                 _ => None,
             })
             .unwrap_or(1.0);
-        main_volume.set_property("volume", main_fader);
+        let main_mute = get_bool_prop(properties, "main_mute", false);
+        let effective_main_volume = if main_mute { 0.0 } else { main_fader };
+        main_volume.set_property("volume", effective_main_volume);
         elements.push((main_volume_id.clone(), main_volume));
 
         // Main level meter (for main mix metering)

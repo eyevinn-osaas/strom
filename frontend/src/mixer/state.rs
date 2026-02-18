@@ -36,6 +36,7 @@ impl MixerEditor {
             last_update: instant::Instant::now(),
             save_requested: false,
             is_reset: false,
+            editing_label: None,
         }
     }
 
@@ -298,11 +299,30 @@ impl MixerEditor {
         }
     }
 
-    /// Collect all current mixer state as block properties.
+    /// Collect current mixer state as block properties, omitting values that
+    /// match their defaults. Only non-default values and structural keys
+    /// are persisted so storage stays minimal and backend defaults take over
+    /// for anything not explicitly set.
     pub fn collect_properties(&self) -> HashMap<String, PropertyValue> {
         let mut props = HashMap::new();
 
-        // Structural properties
+        // Helper closures to insert only non-default values
+        macro_rules! set_f {
+            ($key:expr, $val:expr, $def:expr) => {
+                if ($val - $def).abs() > f32::EPSILON {
+                    props.insert($key, PropertyValue::Float($val as f64));
+                }
+            };
+        }
+        macro_rules! set_b {
+            ($key:expr, $val:expr, $def:expr) => {
+                if $val != $def {
+                    props.insert($key, PropertyValue::Bool($val));
+                }
+            };
+        }
+
+        // Structural properties (always saved)
         props.insert(
             "num_channels".to_string(),
             PropertyValue::Int(self.num_channels as i64),
@@ -317,193 +337,167 @@ impl MixerEditor {
         );
 
         // Main bus
-        props.insert(
-            "main_fader".to_string(),
-            PropertyValue::Float(self.main_fader as f64),
-        );
-        props.insert("main_mute".to_string(), PropertyValue::Bool(self.main_mute));
-        props.insert(
+        set_f!("main_fader".to_string(), self.main_fader, DEFAULT_FADER);
+        set_b!("main_mute".to_string(), self.main_mute, false);
+        set_b!(
             "main_comp_enabled".to_string(),
-            PropertyValue::Bool(self.main_comp_enabled),
+            self.main_comp_enabled,
+            false
         );
-        props.insert(
+        set_f!(
             "main_comp_threshold".to_string(),
-            PropertyValue::Float(self.main_comp_threshold as f64),
+            self.main_comp_threshold,
+            DEFAULT_COMP_THRESHOLD
         );
-        props.insert(
+        set_f!(
             "main_comp_ratio".to_string(),
-            PropertyValue::Float(self.main_comp_ratio as f64),
+            self.main_comp_ratio,
+            DEFAULT_COMP_RATIO
         );
-        props.insert(
+        set_f!(
             "main_comp_attack".to_string(),
-            PropertyValue::Float(self.main_comp_attack as f64),
+            self.main_comp_attack,
+            DEFAULT_COMP_ATTACK
         );
-        props.insert(
+        set_f!(
             "main_comp_release".to_string(),
-            PropertyValue::Float(self.main_comp_release as f64),
+            self.main_comp_release,
+            DEFAULT_COMP_RELEASE
         );
-        props.insert(
+        set_f!(
             "main_comp_makeup".to_string(),
-            PropertyValue::Float(self.main_comp_makeup as f64),
+            self.main_comp_makeup,
+            DEFAULT_COMP_MAKEUP
         );
-        props.insert(
+        set_f!(
             "main_comp_knee".to_string(),
-            PropertyValue::Float(self.main_comp_knee as f64),
+            self.main_comp_knee,
+            DEFAULT_COMP_KNEE
         );
-        props.insert(
-            "main_eq_enabled".to_string(),
-            PropertyValue::Bool(self.main_eq_enabled),
-        );
+        set_b!("main_eq_enabled".to_string(), self.main_eq_enabled, false);
         for (band, (freq, gain, q)) in self.main_eq_bands.iter().enumerate() {
             let b = band + 1;
-            props.insert(
-                format!("main_eq{}_freq", b),
-                PropertyValue::Float(*freq as f64),
-            );
-            props.insert(
-                format!("main_eq{}_gain", b),
-                PropertyValue::Float(*gain as f64),
-            );
-            props.insert(format!("main_eq{}_q", b), PropertyValue::Float(*q as f64));
+            let (df, dg, dq) = DEFAULT_EQ_BANDS[band];
+            set_f!(format!("main_eq{}_freq", b), *freq, df);
+            set_f!(format!("main_eq{}_gain", b), *gain, dg);
+            set_f!(format!("main_eq{}_q", b), *q, dq);
         }
-        props.insert(
+        set_b!(
             "main_limiter_enabled".to_string(),
-            PropertyValue::Bool(self.main_limiter_enabled),
+            self.main_limiter_enabled,
+            false
         );
-        props.insert(
+        set_f!(
             "main_limiter_threshold".to_string(),
-            PropertyValue::Float(self.main_limiter_threshold as f64),
+            self.main_limiter_threshold,
+            DEFAULT_LIMITER_THRESHOLD
         );
 
         // Aux masters
         for aux in &self.aux_masters {
             let n = aux.index + 1;
-            props.insert(
-                format!("aux{}_fader", n),
-                PropertyValue::Float(aux.fader as f64),
-            );
-            props.insert(format!("aux{}_mute", n), PropertyValue::Bool(aux.mute));
+            set_f!(format!("aux{}_fader", n), aux.fader, DEFAULT_FADER);
+            set_b!(format!("aux{}_mute", n), aux.mute, false);
         }
 
         // Groups
         for sg in &self.groups {
             let n = sg.index + 1;
-            props.insert(
-                format!("group{}_fader", n),
-                PropertyValue::Float(sg.fader as f64),
-            );
-            props.insert(format!("group{}_mute", n), PropertyValue::Bool(sg.mute));
+            set_f!(format!("group{}_fader", n), sg.fader, DEFAULT_FADER);
+            set_b!(format!("group{}_mute", n), sg.mute, false);
         }
 
         // Per-channel
         for ch in &self.channels {
             let n = ch.channel_num;
-            props.insert(
-                format!("ch{}_label", n),
-                PropertyValue::String(ch.label.clone()),
-            );
-            props.insert(
-                format!("ch{}_gain", n),
-                PropertyValue::Float(ch.gain as f64),
-            );
-            props.insert(format!("ch{}_pan", n), PropertyValue::Float(ch.pan as f64));
-            props.insert(
-                format!("ch{}_fader", n),
-                PropertyValue::Float(ch.fader as f64),
-            );
-            props.insert(format!("ch{}_mute", n), PropertyValue::Bool(ch.mute));
-            props.insert(format!("ch{}_pfl", n), PropertyValue::Bool(ch.pfl));
-            props.insert(format!("ch{}_to_main", n), PropertyValue::Bool(ch.to_main));
-            for (sg, &enabled) in ch.to_grp.iter().enumerate().take(self.num_groups) {
+            let default_label = format!("Ch {}", n);
+            if ch.label != default_label {
                 props.insert(
-                    format!("ch{}_to_grp{}", n, sg + 1),
-                    PropertyValue::Bool(enabled),
+                    format!("ch{}_label", n),
+                    PropertyValue::String(ch.label.clone()),
                 );
             }
-            for aux in 0..self.num_aux_buses {
-                props.insert(
+            set_f!(format!("ch{}_gain", n), ch.gain, DEFAULT_GAIN);
+            set_f!(format!("ch{}_pan", n), ch.pan, DEFAULT_PAN);
+            set_f!(format!("ch{}_fader", n), ch.fader, DEFAULT_FADER);
+            set_b!(format!("ch{}_mute", n), ch.mute, false);
+            set_b!(format!("ch{}_pfl", n), ch.pfl, false);
+            set_b!(format!("ch{}_to_main", n), ch.to_main, true);
+            for (sg, &enabled) in ch.to_grp.iter().enumerate().take(self.num_groups) {
+                set_b!(format!("ch{}_to_grp{}", n, sg + 1), enabled, false);
+            }
+            for (aux, &default_pre) in DEFAULT_AUX_PRE.iter().enumerate().take(self.num_aux_buses) {
+                set_f!(
                     format!("ch{}_aux{}_level", n, aux + 1),
-                    PropertyValue::Float(ch.aux_sends[aux] as f64),
+                    ch.aux_sends[aux],
+                    0.0
                 );
-                props.insert(
+                set_b!(
                     format!("ch{}_aux{}_pre", n, aux + 1),
-                    PropertyValue::Bool(ch.aux_pre[aux]),
+                    ch.aux_pre[aux],
+                    default_pre
                 );
             }
             // HPF
-            props.insert(
-                format!("ch{}_hpf_enabled", n),
-                PropertyValue::Bool(ch.hpf_enabled),
-            );
-            props.insert(
-                format!("ch{}_hpf_freq", n),
-                PropertyValue::Float(ch.hpf_freq as f64),
-            );
+            set_b!(format!("ch{}_hpf_enabled", n), ch.hpf_enabled, false);
+            set_f!(format!("ch{}_hpf_freq", n), ch.hpf_freq, DEFAULT_HPF_FREQ);
             // Gate
-            props.insert(
-                format!("ch{}_gate_enabled", n),
-                PropertyValue::Bool(ch.gate_enabled),
-            );
-            props.insert(
+            set_b!(format!("ch{}_gate_enabled", n), ch.gate_enabled, false);
+            set_f!(
                 format!("ch{}_gate_threshold", n),
-                PropertyValue::Float(ch.gate_threshold as f64),
+                ch.gate_threshold,
+                DEFAULT_GATE_THRESHOLD
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_gate_attack", n),
-                PropertyValue::Float(ch.gate_attack as f64),
+                ch.gate_attack,
+                DEFAULT_GATE_ATTACK
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_gate_release", n),
-                PropertyValue::Float(ch.gate_release as f64),
+                ch.gate_release,
+                DEFAULT_GATE_RELEASE
             );
             // Compressor
-            props.insert(
-                format!("ch{}_comp_enabled", n),
-                PropertyValue::Bool(ch.comp_enabled),
-            );
-            props.insert(
+            set_b!(format!("ch{}_comp_enabled", n), ch.comp_enabled, false);
+            set_f!(
                 format!("ch{}_comp_threshold", n),
-                PropertyValue::Float(ch.comp_threshold as f64),
+                ch.comp_threshold,
+                DEFAULT_COMP_THRESHOLD
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_comp_ratio", n),
-                PropertyValue::Float(ch.comp_ratio as f64),
+                ch.comp_ratio,
+                DEFAULT_COMP_RATIO
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_comp_attack", n),
-                PropertyValue::Float(ch.comp_attack as f64),
+                ch.comp_attack,
+                DEFAULT_COMP_ATTACK
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_comp_release", n),
-                PropertyValue::Float(ch.comp_release as f64),
+                ch.comp_release,
+                DEFAULT_COMP_RELEASE
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_comp_makeup", n),
-                PropertyValue::Float(ch.comp_makeup as f64),
+                ch.comp_makeup,
+                DEFAULT_COMP_MAKEUP
             );
-            props.insert(
+            set_f!(
                 format!("ch{}_comp_knee", n),
-                PropertyValue::Float(ch.comp_knee as f64),
+                ch.comp_knee,
+                DEFAULT_COMP_KNEE
             );
             // EQ
-            props.insert(
-                format!("ch{}_eq_enabled", n),
-                PropertyValue::Bool(ch.eq_enabled),
-            );
+            set_b!(format!("ch{}_eq_enabled", n), ch.eq_enabled, false);
             for (band, (freq, gain, q)) in ch.eq_bands.iter().enumerate() {
                 let b = band + 1;
-                props.insert(
-                    format!("ch{}_eq{}_freq", n, b),
-                    PropertyValue::Float(*freq as f64),
-                );
-                props.insert(
-                    format!("ch{}_eq{}_gain", n, b),
-                    PropertyValue::Float(*gain as f64),
-                );
-                props.insert(
-                    format!("ch{}_eq{}_q", n, b),
-                    PropertyValue::Float(*q as f64),
-                );
+                let (df, dg, dq) = DEFAULT_EQ_BANDS[band];
+                set_f!(format!("ch{}_eq{}_freq", n, b), *freq, df);
+                set_f!(format!("ch{}_eq{}_gain", n, b), *gain, dg);
+                set_f!(format!("ch{}_eq{}_q", n, b), *q, dq);
             }
         }
 
@@ -551,7 +545,7 @@ impl MixerEditor {
             ch.to_main = true;
             ch.to_grp = [false; MAX_GROUPS];
             ch.aux_sends = [0.0; MAX_AUX_BUSES];
-            ch.aux_pre = [true, true, false, false];
+            ch.aux_pre = DEFAULT_AUX_PRE;
             ch.hpf_enabled = false;
             ch.hpf_freq = DEFAULT_HPF_FREQ;
             ch.gate_enabled = false;

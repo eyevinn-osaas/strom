@@ -3,9 +3,13 @@ use super::*;
 impl MixerEditor {
     /// Render the detail panel for the current selection.
     pub(super) fn render_detail_panel(&mut self, ui: &mut Ui, ctx: &Context) {
-        match self.selection.clone() {
-            Some(Selection::Channel(index)) => {
+        match self.selection {
+            Some(Selection::Channel(index)) if index < self.channels.len() => {
                 self.render_channel_detail_panel(ui, ctx, index);
+            }
+            Some(Selection::Channel(_)) => {
+                // Stale index after channel count change
+                self.selection = None;
             }
             Some(Selection::Main) => {
                 self.render_main_detail_panel(ui, ctx);
@@ -17,15 +21,19 @@ impl MixerEditor {
     /// Render the detail panel for a selected channel (HPF/Gate/Comp/EQ).
     pub(super) fn render_channel_detail_panel(&mut self, ui: &mut Ui, ctx: &Context, index: usize) {
         let ch_num = index + 1;
+        let label = &self.channels[index].label;
+        let header = if *label == format!("Ch {}", ch_num) {
+            format!("Channel {} - Processing", ch_num)
+        } else {
+            format!("{} (Ch {}) - Processing", label, ch_num)
+        };
 
         egui::Frame::default()
             .fill(Color32::from_rgb(35, 35, 40))
             .inner_margin(8.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("Channel {} - Processing", ch_num)).strong(),
-                    );
+                    ui.label(egui::RichText::new(header).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("Close").clicked() {
                             self.selection = None;
@@ -139,12 +147,19 @@ impl MixerEditor {
                     self.main_comp_release = DEFAULT_COMP_RELEASE;
                     self.main_comp_makeup = DEFAULT_COMP_MAKEUP;
                     self.main_comp_knee = DEFAULT_COMP_KNEE;
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "enabled");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "threshold");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "ratio");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "attack");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "release");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "makeup");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "comp", "knee");
                 }
             });
@@ -264,10 +279,14 @@ impl MixerEditor {
                 if ui.small_button("Reset").clicked() {
                     self.main_eq_enabled = false;
                     self.main_eq_bands = DEFAULT_EQ_BANDS;
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "eq", "enabled");
                     for band in 0..4 {
+                        self.bypass_throttle();
                         self.update_main_eq_param(ctx, band, "freq");
+                        self.bypass_throttle();
                         self.update_main_eq_param(ctx, band, "gain");
+                        self.bypass_throttle();
                         self.update_main_eq_param(ctx, band, "q");
                     }
                 }
@@ -348,7 +367,9 @@ impl MixerEditor {
                 if ui.small_button("Reset").clicked() {
                     self.main_limiter_enabled = false;
                     self.main_limiter_threshold = DEFAULT_LIMITER_THRESHOLD;
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "limiter", "enabled");
+                    self.bypass_throttle();
                     self.update_main_processing_param(ctx, "limiter", "threshold");
                 }
             });
@@ -477,9 +498,13 @@ impl MixerEditor {
                     self.channels[index].gate_threshold = DEFAULT_GATE_THRESHOLD;
                     self.channels[index].gate_attack = DEFAULT_GATE_ATTACK;
                     self.channels[index].gate_release = DEFAULT_GATE_RELEASE;
+                    self.bypass_throttle();
                     self.update_channel_property(ctx, index, "gate_enabled");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "gate", "threshold");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "gate", "attack");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "gate", "release");
                 }
             });
@@ -566,12 +591,19 @@ impl MixerEditor {
                     self.channels[index].comp_release = DEFAULT_COMP_RELEASE;
                     self.channels[index].comp_makeup = DEFAULT_COMP_MAKEUP;
                     self.channels[index].comp_knee = DEFAULT_COMP_KNEE;
+                    self.bypass_throttle();
                     self.update_channel_property(ctx, index, "comp_enabled");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "comp", "threshold");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "comp", "ratio");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "comp", "attack");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "comp", "release");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "comp", "makeup");
+                    self.bypass_throttle();
                     self.update_processing_param(ctx, index, "comp", "knee");
                 }
             });
@@ -694,10 +726,14 @@ impl MixerEditor {
                 if ui.small_button("Reset").clicked() {
                     self.channels[index].eq_enabled = false;
                     self.channels[index].eq_bands = DEFAULT_EQ_BANDS;
+                    self.bypass_throttle();
                     self.update_channel_property(ctx, index, "eq_enabled");
                     for band in 0..4 {
+                        self.bypass_throttle();
                         self.update_eq_param(ctx, index, band, "freq");
+                        self.bypass_throttle();
                         self.update_eq_param(ctx, index, band, "gain");
+                        self.bypass_throttle();
                         self.update_eq_param(ctx, index, band, "q");
                     }
                 }

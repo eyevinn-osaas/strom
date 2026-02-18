@@ -37,11 +37,11 @@ mod properties;
 #[cfg(test)]
 mod tests;
 
-use strom_types::mixer::{DEFAULT_CHANNELS, MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS};
+use strom_types::mixer::{
+    DEFAULT_CHANNELS, MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS, MIN_KNEE_LINEAR,
+};
 /// Level meter interval in nanoseconds (100ms)
 const METER_INTERVAL_NS: u64 = 100_000_000;
-/// Minimum knee value in linear scale (corresponds to -24 dB)
-const MIN_KNEE_LINEAR: f64 = 0.0631;
 /// Maximum queue buffers for internal queues
 const QUEUE_MAX_BUFFERS: u32 = 3;
 /// EQ band type for Peaking/Bell filter (lsp-rs-equalizer enum value)

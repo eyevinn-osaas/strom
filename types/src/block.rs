@@ -1,8 +1,8 @@
 //! Block definitions and instances for reusable element groupings.
 
 use crate::{MediaType, PropertyValue};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize, Serializer};
+use std::collections::{BTreeMap, HashMap};
 
 /// Enum value with optional label for display
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +185,7 @@ pub struct BlockInstance {
     pub name: Option<String>,
 
     /// Property values for this instance
+    #[serde(serialize_with = "sorted_properties")]
     pub properties: HashMap<String, PropertyValue>,
 
     /// Position in the visual editor
@@ -343,4 +344,16 @@ pub fn parse_resolution_string(s: &str) -> Option<(u32, u32)> {
         }
     }
     None
+}
+
+/// Serialize a HashMap with sorted keys for deterministic JSON output.
+pub(crate) fn sorted_properties<S>(
+    map: &HashMap<String, PropertyValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let sorted: BTreeMap<_, _> = map.iter().collect();
+    sorted.serialize(serializer)
 }

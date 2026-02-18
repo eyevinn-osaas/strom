@@ -147,7 +147,6 @@ impl MixerEditor {
         index: usize,
         meter_data: Option<&MeterData>,
     ) {
-        let channel_label = self.channels[index].label.clone();
         let channel_pan = self.channels[index].pan;
         let channel_fader = self.channels[index].fader;
         let channel_mute = self.channels[index].mute;
@@ -176,8 +175,32 @@ impl MixerEditor {
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
 
-                    // ── Label ──
-                    ui.label(egui::RichText::new(&channel_label).strong().size(11.0));
+                    // ── Label (double-click to edit) ──
+                    if self.editing_label == Some(index) {
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut self.channels[index].label)
+                                .desired_width(strip_inner - 4.0)
+                                .font(egui::TextStyle::Body)
+                                .horizontal_align(egui::Align::Center),
+                        );
+                        if response.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.editing_label = None;
+                        }
+                        // Auto-focus when first shown
+                        response.request_focus();
+                    } else {
+                        let label_response = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&self.channels[index].label)
+                                    .strong()
+                                    .size(11.0),
+                            )
+                            .sense(Sense::click()),
+                        );
+                        if label_response.double_clicked() {
+                            self.editing_label = Some(index);
+                        }
+                    }
 
                     // ── H / G / C / E buttons ──
                     let hgce_btn_w = (strip_inner - 10.0) / 4.0;

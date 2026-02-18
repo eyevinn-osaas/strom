@@ -40,6 +40,13 @@ pub const MAX_CHANNELS: usize = 32;
 pub const MAX_AUX_BUSES: usize = 4;
 pub const MAX_GROUPS: usize = 4;
 
+// ── Routing defaults ──────────────────────────────────────────────
+/// Default aux send pre/post-fader mode per bus (aux 1-2 pre, 3-4 post)
+pub const DEFAULT_AUX_PRE: [bool; MAX_AUX_BUSES] = [true, true, false, false];
+
+/// Minimum compressor knee value in linear scale (corresponds to -24 dB)
+pub const MIN_KNEE_LINEAR: f64 = 0.0631;
+
 // ── Latency / live defaults ─────────────────────────────────────────
 pub const DEFAULT_LATENCY_MS: u64 = 30;
 pub const DEFAULT_MIN_UPSTREAM_LATENCY_MS: u64 = 30;
