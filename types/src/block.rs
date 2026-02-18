@@ -287,6 +287,10 @@ pub struct BlockCategoriesResponse {
     pub categories: Vec<String>,
 }
 
+/// Default WebRTC jitterbuffer latency in milliseconds.
+/// GStreamer's default is 200ms; we use 40ms for lower latency on LAN.
+pub const DEFAULT_JITTERBUFFER_LATENCY_MS: i64 = 40;
+
 /// Common video resolutions for use in block property dropdowns.
 /// Ordered from largest to smallest.
 pub const COMMON_VIDEO_RESOLUTIONS: &[(&str, &str)] = &[

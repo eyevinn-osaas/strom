@@ -4,7 +4,7 @@ members = ["types", "backend", "frontend", "mcp-server"]
 default-members = ["backend"]
 
 [workspace.package]
-version = "0.3.19"
+version = "0.3.21"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Per Enstedt <per.enstedt@eyevinn.se>"]
@@ -16,7 +16,7 @@ description = "Visual GStreamer pipeline editor and manager"
 # Shared types
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-uuid = { version = "1.20", features = ["serde", "v4", "js"] }
+uuid = { version = "1.21", features = ["serde", "v4", "js"] }
 
 # Backend
 axum = { version = "0.8.8", features = ["ws", "multipart"] }
@@ -25,14 +25,14 @@ tokio = { version = "1.49", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
-gstreamer = { version = "0.24.4", features = ["v1_20"] }
-gstreamer-app = { version = "0.24.2", features = ["v1_20"] }
-gstreamer-controller = { version = "0.24.4", features = ["v1_20"] }
-gstreamer-net = { version = "0.24.4", features = ["v1_20"] }
-gstreamer-video = { version = "0.24.4", features = ["v1_20"] }
+gstreamer = { version = "0.25.0-alpha.2", features = ["v1_20"] }
+gstreamer-app = { version = "0.25.0-alpha.2", features = ["v1_20"] }
+gstreamer-controller = { version = "0.25.0-alpha.2", features = ["v1_20"] }
+gstreamer-net = { version = "0.25.0-alpha.2", features = ["v1_20"] }
+gstreamer-video = { version = "0.25.0-alpha.2", features = ["v1_20"] }
 gst-plugin-webrtc = { version = "0.15.0-alpha.2", features = ["whep", "whip"] }
-gst-plugin-webrtchttp = "0.14"
-gst-plugin-inter = "0.14"
+gst-plugin-webrtchttp = { version = "0.15.0-alpha.2", default-features = false } 
+gst-plugin-inter = "0.15.0-alpha.2"
 gst-plugin-rtp = "0.15.0-alpha.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
@@ -43,7 +43,7 @@ utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 
 # Frontend
 egui = "0.33"
-eframe = { version = "0.33", features = ["default_fonts", "glow", "persistence"] }
+eframe = { version = "0.33", features = ["default_fonts", "persistence", "glow"] }
 egui_extras = { version = "0.33", features = ["image"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 gloo-net = { version = "0.6", features = ["websocket"] }
