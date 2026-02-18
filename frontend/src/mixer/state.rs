@@ -37,6 +37,7 @@ impl MixerEditor {
             save_requested: false,
             is_reset: false,
             editing_label: None,
+            strip_interacted: false,
         }
     }
 

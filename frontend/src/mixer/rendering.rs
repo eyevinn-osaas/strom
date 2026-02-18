@@ -14,9 +14,10 @@ impl MixerEditor {
         }
 
         self.handle_keyboard(ui, ctx);
+        self.strip_interacted = false;
 
         let available_height = ui.available_height();
-        let detail_panel_height = if self.selection.is_some() { 180.0 } else { 0.0 };
+        let detail_panel_height = if self.selection.is_some() { 220.0 } else { 0.0 };
         let status_bar_height = 30.0;
         let channel_area_height = (available_height
             - BUS_ROW_MIN_HEIGHT
@@ -89,17 +90,26 @@ impl MixerEditor {
                     // ── Row 3: Detail panel (Gate/Comp/EQ) ──
                     if self.selection.is_some() {
                         ui.separator();
-                        egui::ScrollArea::horizontal()
-                            .id_salt("detail_h_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                self.render_detail_panel(ui, ctx);
-                            });
+                        let detail_resp = ui.scope(|ui| {
+                            egui::ScrollArea::horizontal()
+                                .id_salt("detail_h_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    self.render_detail_panel(ui, ctx);
+                                });
+                        });
+                        if ui.input(|i| i.pointer.any_pressed()) {
+                            if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                                if detail_resp.response.rect.contains(pos) {
+                                    self.strip_interacted = true;
+                                }
+                            }
+                        }
                     }
 
                     // ── Status bar ──
                     ui.separator();
-                    ui.horizontal(|ui| {
+                    let status_resp = ui.horizontal(|ui| {
                         if let Some(error) = &self.error {
                             ui.colored_label(Color32::RED, error);
                         } else if !self.status.is_empty() {
@@ -108,7 +118,7 @@ impl MixerEditor {
                         // Keyboard shortcuts legend
                         ui.label(
                             egui::RichText::new(
-                                "1-0: Select ch | M: Mute | P: PFL | Arrows: Fader/Pan",
+                                "1-0: Select ch | M: Mute | P: PFL | Esc: Deselect | Arrows: Fader/Pan",
                             )
                             .small()
                             .color(Color32::from_gray(90)),
@@ -119,7 +129,7 @@ impl MixerEditor {
                                     ui.label(format!("Selected: Ch {}", ch + 1));
                                 }
                                 Some(Selection::Main) => {
-                                    ui.label("Selected: MAIN");
+                                    ui.label("Selected: Main");
                                 }
                                 None => {}
                             }
@@ -135,6 +145,18 @@ impl MixerEditor {
                             }
                         });
                     });
+                    if ui.input(|i| i.pointer.any_pressed()) {
+                        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+                            if status_resp.response.rect.contains(pos) {
+                                self.strip_interacted = true;
+                            }
+                        }
+                    }
+
+                    // ── Background click to deselect ──
+                    if ui.input(|i| i.pointer.any_pressed()) && !self.strip_interacted {
+                        self.selection = None;
+                    }
                 });
             });
     }
@@ -473,6 +495,31 @@ impl MixerEditor {
                         self.channels[index].pfl = !self.channels[index].pfl;
                         self.update_channel_property(ctx, index, "pfl");
                     }
+
+                    // ── Select button ──
+                    let sel_label = if is_selected { "Selected" } else { "Select" };
+                    let sel_fill = if is_selected {
+                        Color32::from_rgb(50, 100, 200)
+                    } else {
+                        Color32::from_rgb(48, 48, 52)
+                    };
+                    let sel_text_col = if is_selected {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_gray(100)
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(sel_label).small().color(sel_text_col),
+                            )
+                            .fill(sel_fill)
+                            .min_size(Vec2::new(strip_inner - 4.0, BTN_H)),
+                        )
+                        .clicked()
+                    {
+                        self.selection = Some(Selection::Channel(index));
+                    }
                 });
             });
 
@@ -486,6 +533,7 @@ impl MixerEditor {
                 .is_some_and(|pos| strip_rect.contains(pos))
         {
             self.selection = Some(Selection::Channel(index));
+            self.strip_interacted = true;
         }
     }
 
@@ -632,13 +680,46 @@ impl MixerEditor {
                         self.main_mute = !self.main_mute;
                         self.update_main_mute(ctx);
                     }
+
+                    // ── Select button ──
+                    let sel_label = if is_selected { "Selected" } else { "Select" };
+                    let sel_fill = if is_selected {
+                        Color32::from_rgb(50, 100, 200)
+                    } else {
+                        Color32::from_rgb(48, 48, 52)
+                    };
+                    let sel_text_col = if is_selected {
+                        Color32::WHITE
+                    } else {
+                        Color32::from_gray(100)
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(sel_label).small().color(sel_text_col),
+                            )
+                            .fill(sel_fill)
+                            .min_size(Vec2::new(BUS_STRIP_INNER - 4.0, BTN_H)),
+                        )
+                        .clicked()
+                    {
+                        self.selection = Some(Selection::Main);
+                    }
                 });
             });
 
         if should_select {
             self.selection = Some(Selection::Main);
+            self.strip_interacted = true;
         }
-        let _ = frame_response;
+        // Track interaction for background-click deselection
+        if ui.input(|i| i.pointer.any_pressed())
+            && ui
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|pos| frame_response.response.rect.contains(pos))
+        {
+            self.strip_interacted = true;
+        }
     }
 
     /// Render the group strips section (compact, for bus row).
@@ -656,7 +737,7 @@ impl MixerEditor {
             let meter_key = format!("{}:meter:group{}", self.block_id, sg_idx + 1);
             let meter_data = meter_store.get(&self.flow_id, &meter_key);
 
-            egui::Frame::default()
+            let grp_frame = egui::Frame::default()
                 .fill(Color32::from_rgb(42, 38, 48))
                 .corner_radius(CornerRadius::same(3))
                 .inner_margin(STRIP_MARGIN)
@@ -728,6 +809,13 @@ impl MixerEditor {
                         }
                     });
                 });
+            if ui.input(|i| i.pointer.any_pressed())
+                && ui
+                    .input(|i| i.pointer.interact_pos())
+                    .is_some_and(|pos| grp_frame.response.rect.contains(pos))
+            {
+                self.strip_interacted = true;
+            }
 
             ui.add_space(STRIP_GAP);
         }
@@ -749,7 +837,7 @@ impl MixerEditor {
             let meter_key = format!("{}:meter:aux{}", self.block_id, aux_idx + 1);
             let meter_data = meter_store.get(&self.flow_id, &meter_key);
 
-            egui::Frame::default()
+            let aux_frame = egui::Frame::default()
                 .fill(Color32::from_rgb(38, 42, 50))
                 .corner_radius(CornerRadius::same(3))
                 .inner_margin(STRIP_MARGIN)
@@ -821,6 +909,13 @@ impl MixerEditor {
                         }
                     });
                 });
+            if ui.input(|i| i.pointer.any_pressed())
+                && ui
+                    .input(|i| i.pointer.interact_pos())
+                    .is_some_and(|pos| aux_frame.response.rect.contains(pos))
+            {
+                self.strip_interacted = true;
+            }
 
             ui.add_space(STRIP_GAP);
         }

@@ -423,6 +423,13 @@ impl PropertyInspector {
                 result.browse_ndi_sources_requested = true;
             }
 
+            // Open Mixer button for mixer blocks
+            if definition.id == "builtin.mixer"
+                && ui.button("🎤 Open Mixer").clicked()
+            {
+                crate::app::set_local_storage("open_mixer_editor", &block.id);
+            }
+
             // Edit Layout button for compositor blocks
             if (definition.id == "builtin.glcompositor" || definition.id == "builtin.compositor")
                 && ui.button("✏ Edit Layout").clicked()

@@ -275,6 +275,8 @@ pub struct MixerEditor {
     is_reset: bool,
     /// Channel index currently being label-edited (None = not editing)
     editing_label: Option<usize>,
+    /// Transient: true when a strip or panel was clicked this frame
+    strip_interacted: bool,
 }
 
 impl MixerEditor {

@@ -888,7 +888,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         },
         built_in: true,
         ui_metadata: Some(BlockUIMetadata {
-            icon: Some("\u{1f39a}".to_string()),
+            icon: Some("\u{1f3a4}".to_string()),
             width: Some(3.0),
             height: Some(4.0),
             ..Default::default()

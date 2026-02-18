@@ -9,6 +9,11 @@ impl MixerEditor {
             self.status = "Saving mixer state...".to_string();
         }
 
+        // Escape = Deselect (close detail panel)
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.selection = None;
+        }
+
         // Number keys 1-9, 0 for channel selection
         for (key, ch) in [
             (egui::Key::Num1, 0),
