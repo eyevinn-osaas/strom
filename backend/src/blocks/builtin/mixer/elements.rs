@@ -288,12 +288,11 @@ pub(super) fn make_hpf_element(
     {
         // mode: 0=low-pass, 1=high-pass
         hpf.set_property_from_str("mode", "high-pass");
-        hpf.set_property("cutoff", cutoff_hz as f32);
         hpf.set_property_from_str("poles", "4"); // 24dB/oct slope
-        if !enabled {
-            // Bypass by setting cutoff to minimum
-            hpf.set_property("cutoff", 1.0f32);
+        if enabled {
+            hpf.set_property("cutoff", cutoff_hz as f32);
         }
+        // cutoff=0 (default) enables GstBaseTransform passthrough mode
         return Ok(hpf);
     }
     // Try audiowsinclimit as alternative
@@ -302,9 +301,8 @@ pub(super) fn make_hpf_element(
         .build()
     {
         hpf.set_property_from_str("mode", "high-pass");
-        hpf.set_property("cutoff", cutoff_hz as f32);
-        if !enabled {
-            hpf.set_property("cutoff", 1.0f32);
+        if enabled {
+            hpf.set_property("cutoff", cutoff_hz as f32);
         }
         return Ok(hpf);
     }

@@ -450,7 +450,7 @@ fn test_make_hpf_element() {
 }
 
 #[test]
-fn test_make_hpf_element_disabled_uses_min_cutoff() {
+fn test_make_hpf_element_disabled_uses_passthrough() {
     init_gst();
     if !is_element_available("audiocheblimit") {
         println!("audiocheblimit not available, skipping");
@@ -463,8 +463,8 @@ fn test_make_hpf_element_disabled_uses_min_cutoff() {
     if hpf.find_property("cutoff").is_some() {
         let cutoff: f32 = hpf.property("cutoff");
         assert!(
-            (cutoff - 1.0).abs() < 0.1,
-            "Disabled HPF should have cutoff=1.0, got {}",
+            cutoff.abs() < 0.1,
+            "Disabled HPF should have cutoff=0 (passthrough), got {}",
             cutoff
         );
     }

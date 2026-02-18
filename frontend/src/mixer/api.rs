@@ -33,7 +33,7 @@ impl MixerEditor {
                 let cutoff = if channel.hpf_enabled {
                     channel.hpf_freq
                 } else {
-                    1.0 // Bypass: set cutoff to minimum
+                    0.0 // cutoff=0 enables GstBaseTransform passthrough
                 };
                 (
                     format!("hpf_{}", index),
