@@ -10,6 +10,7 @@ use super::elements::*;
 use super::metering::connect_mixer_meter_handler;
 use super::properties::*;
 use super::{METER_INTERVAL_NS, MIN_KNEE_LINEAR, QUEUE_MAX_BUFFERS};
+use strom_types::mixer::{DEFAULT_LATENCY_MS, DEFAULT_MIN_UPSTREAM_LATENCY_MS};
 
 /// Mixer block builder.
 pub struct MixerBuilder;
@@ -117,9 +118,12 @@ impl BlockBuilder for MixerBuilder {
 
         // Mixer aggregator settings
         let force_live = get_bool_prop(properties, "force_live", true);
-        let latency_ms = get_float_prop(properties, "latency", 30.0) as u64;
-        let min_upstream_latency_ms =
-            get_float_prop(properties, "min_upstream_latency", 30.0) as u64;
+        let latency_ms = get_u64_prop(properties, "latency", DEFAULT_LATENCY_MS);
+        let min_upstream_latency_ms = get_u64_prop(
+            properties,
+            "min_upstream_latency",
+            DEFAULT_MIN_UPSTREAM_LATENCY_MS,
+        );
 
         // ========================================================================
         // Create main audiomixer

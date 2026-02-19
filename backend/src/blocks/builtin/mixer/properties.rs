@@ -64,6 +64,24 @@ pub(super) fn get_float_prop(
         .unwrap_or(default)
 }
 
+/// Get a u64 property with default.
+pub(super) fn get_u64_prop(
+    properties: &HashMap<String, PropertyValue>,
+    name: &str,
+    default: u64,
+) -> u64 {
+    properties
+        .get(name)
+        .and_then(|v| match v {
+            PropertyValue::UInt(u) => Some(*u),
+            PropertyValue::Int(i) => Some(*i as u64),
+            PropertyValue::Float(f) => Some(*f as u64),
+            PropertyValue::String(s) => s.parse::<u64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
 /// Get a bool property with default.
 pub(super) fn get_bool_prop(
     properties: &HashMap<String, PropertyValue>,

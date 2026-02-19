@@ -1404,6 +1404,13 @@ impl PropertyInspector {
         value: &mut PropertyValue,
         enum_values: &[EnumValue],
     ) -> bool {
+        // Normalize numeric values to strings so they match enum variant values.
+        // This handles values deserialized from JSON as Int/UInt (e.g. `4` instead of `"4"`).
+        match value {
+            PropertyValue::Int(i) => *value = PropertyValue::String(i.to_string()),
+            PropertyValue::UInt(u) => *value = PropertyValue::String(u.to_string()),
+            _ => {}
+        }
         if let PropertyValue::String(s) = value {
             let mut changed = false;
 
@@ -1632,9 +1639,9 @@ impl PropertyInspector {
                 (PropertyValue::Float(f), Some(PropertyType::Float { min, max })) => {
                     ui.add(egui::Slider::new(f, *min..=*max)).changed()
                 }
-                (PropertyValue::Float(f), _) => {
-                    ui.add(egui::DragValue::new(f).speed(0.1)).changed()
-                }
+                (PropertyValue::Float(f), _) => ui
+                    .add(egui::DragValue::new(f).speed(0.1).fixed_decimals(1))
+                    .changed(),
                 (PropertyValue::Bool(b), _) => ui.checkbox(b, "").changed(),
             }
         }

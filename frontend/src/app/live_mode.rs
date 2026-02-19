@@ -207,6 +207,16 @@ impl StromApp {
                 editor.show_fullscreen(ui, ctx);
             });
         } else if let Some(ref mut editor) = self.mixer_editor {
+            // Update pipeline running state so the editor skips API calls when stopped
+            let running = self
+                .flows
+                .iter()
+                .find(|f| f.id == flow_id)
+                .and_then(|f| f.state)
+                .map(|s| s == strom_types::PipelineState::Playing)
+                .unwrap_or(false);
+            editor.set_pipeline_running(running);
+
             CentralPanel::default().show(ctx, |ui| {
                 editor.show_fullscreen(ui, ctx, &self.meter_data);
             });

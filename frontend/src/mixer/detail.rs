@@ -164,7 +164,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.main_comp_threshold)
                                     .range(-60.0..=0.0)
                                     .suffix(" dB")
-                                    .speed(0.5),
+                                    .speed(0.5)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -176,7 +177,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.main_comp_ratio)
                                     .range(1.0..=20.0)
                                     .suffix(":1")
-                                    .speed(0.1),
+                                    .speed(0.1)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -190,7 +192,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.main_comp_attack)
                                     .range(0.1..=200.0)
                                     .suffix(" ms")
-                                    .speed(0.5),
+                                    .speed(0.5)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -202,7 +205,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.main_comp_release)
                                     .range(10.0..=1000.0)
                                     .suffix(" ms")
-                                    .speed(1.0),
+                                    .speed(1.0)
+                                    .fixed_decimals(0),
                             )
                             .changed()
                         {
@@ -216,7 +220,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.main_comp_makeup)
                                     .range(0.0..=24.0)
                                     .suffix(" dB")
-                                    .speed(0.2),
+                                    .speed(0.2)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -228,7 +233,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.main_comp_knee)
                                     .range(-24.0..=0.0)
                                     .suffix(" dB")
-                                    .speed(0.2),
+                                    .speed(0.2)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -294,7 +300,8 @@ impl MixerEditor {
                                     egui::DragValue::new(&mut self.main_eq_bands[band].0)
                                         .range(20.0..=20000.0)
                                         .suffix(" Hz")
-                                        .speed(10.0),
+                                        .speed(10.0)
+                                        .fixed_decimals(0),
                                 )
                                 .changed()
                             {
@@ -306,7 +313,8 @@ impl MixerEditor {
                                     egui::DragValue::new(&mut self.main_eq_bands[band].1)
                                         .range(-15.0..=15.0)
                                         .suffix(" dB")
-                                        .speed(0.1),
+                                        .speed(0.1)
+                                        .fixed_decimals(1),
                                 )
                                 .changed()
                             {
@@ -318,7 +326,8 @@ impl MixerEditor {
                                     egui::DragValue::new(&mut self.main_eq_bands[band].2)
                                         .range(0.1..=10.0)
                                         .prefix("Q ")
-                                        .speed(0.05),
+                                        .speed(0.05)
+                                        .fixed_decimals(2),
                                 )
                                 .changed()
                             {
@@ -375,7 +384,8 @@ impl MixerEditor {
                             egui::DragValue::new(&mut self.main_limiter_threshold)
                                 .range(-20.0..=0.0)
                                 .suffix(" dB")
-                                .speed(0.2),
+                                .speed(0.2)
+                                .fixed_decimals(1),
                         )
                         .changed()
                     {
@@ -418,7 +428,8 @@ impl MixerEditor {
                             egui::DragValue::new(&mut self.channels[index].gain)
                                 .range(-20.0..=20.0)
                                 .suffix(" dB")
-                                .speed(0.2),
+                                .speed(0.2)
+                                .fixed_decimals(1),
                         )
                         .changed()
                     {
@@ -459,7 +470,8 @@ impl MixerEditor {
                             egui::DragValue::new(&mut self.channels[index].hpf_freq)
                                 .range(20.0..=500.0)
                                 .suffix(" Hz")
-                                .speed(1.0),
+                                .speed(1.0)
+                                .fixed_decimals(0),
                         )
                         .changed()
                     {
@@ -501,7 +513,8 @@ impl MixerEditor {
                             egui::DragValue::new(&mut self.channels[index].gate_threshold)
                                 .range(-60.0..=0.0)
                                 .suffix(" dB")
-                                .speed(0.5),
+                                .speed(0.5)
+                                .fixed_decimals(1),
                         )
                         .changed()
                     {
@@ -516,7 +529,8 @@ impl MixerEditor {
                             egui::DragValue::new(&mut self.channels[index].gate_attack)
                                 .range(0.1..=200.0)
                                 .suffix(" ms")
-                                .speed(0.5),
+                                .speed(0.5)
+                                .fixed_decimals(1),
                         )
                         .changed()
                     {
@@ -531,7 +545,8 @@ impl MixerEditor {
                             egui::DragValue::new(&mut self.channels[index].gate_release)
                                 .range(10.0..=1000.0)
                                 .suffix(" ms")
-                                .speed(1.0),
+                                .speed(1.0)
+                                .fixed_decimals(0),
                         )
                         .changed()
                     {
@@ -585,7 +600,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.channels[index].comp_threshold)
                                     .range(-60.0..=0.0)
                                     .suffix(" dB")
-                                    .speed(0.5),
+                                    .speed(0.5)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -597,7 +613,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.channels[index].comp_ratio)
                                     .range(1.0..=20.0)
                                     .suffix(":1")
-                                    .speed(0.1),
+                                    .speed(0.1)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -611,7 +628,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.channels[index].comp_attack)
                                     .range(0.1..=200.0)
                                     .suffix(" ms")
-                                    .speed(0.5),
+                                    .speed(0.5)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -623,7 +641,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.channels[index].comp_release)
                                     .range(10.0..=1000.0)
                                     .suffix(" ms")
-                                    .speed(1.0),
+                                    .speed(1.0)
+                                    .fixed_decimals(0),
                             )
                             .changed()
                         {
@@ -637,7 +656,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.channels[index].comp_makeup)
                                     .range(0.0..=24.0)
                                     .suffix(" dB")
-                                    .speed(0.2),
+                                    .speed(0.2)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -649,7 +669,8 @@ impl MixerEditor {
                                 egui::DragValue::new(&mut self.channels[index].comp_knee)
                                     .range(-24.0..=0.0)
                                     .suffix(" dB")
-                                    .speed(0.2),
+                                    .speed(0.2)
+                                    .fixed_decimals(1),
                             )
                             .changed()
                         {
@@ -717,7 +738,8 @@ impl MixerEditor {
                                     )
                                     .range(20.0..=20000.0)
                                     .suffix(" Hz")
-                                    .speed(10.0),
+                                    .speed(10.0)
+                                    .fixed_decimals(0),
                                 )
                                 .changed()
                             {
@@ -731,7 +753,8 @@ impl MixerEditor {
                                     )
                                     .range(-15.0..=15.0)
                                     .suffix(" dB")
-                                    .speed(0.1),
+                                    .speed(0.1)
+                                    .fixed_decimals(1),
                                 )
                                 .changed()
                             {
@@ -745,7 +768,8 @@ impl MixerEditor {
                                     )
                                     .range(0.1..=10.0)
                                     .prefix("Q ")
-                                    .speed(0.05),
+                                    .speed(0.05)
+                                    .fixed_decimals(2),
                                 )
                                 .changed()
                             {

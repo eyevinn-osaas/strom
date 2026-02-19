@@ -222,8 +222,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         name: "latency".to_string(),
         label: "Latency".to_string(),
         description: "Mixer aggregator latency in milliseconds. Time to wait for slower inputs before producing output. Construction-time only.".to_string(),
-        property_type: PropertyType::Float,
-        default_value: Some(PropertyValue::Float(DEFAULT_LATENCY_MS as f64)),
+        property_type: PropertyType::UInt,
+        default_value: Some(PropertyValue::UInt(DEFAULT_LATENCY_MS)),
         mapping: PropertyMapping {
             element_id: "_block".to_string(),
             property_name: "latency".to_string(),
@@ -234,8 +234,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
         name: "min_upstream_latency".to_string(),
         label: "Min Upstream Latency".to_string(),
         description: "Minimum upstream latency reported to upstream elements in milliseconds. Construction-time only.".to_string(),
-        property_type: PropertyType::Float,
-        default_value: Some(PropertyValue::Float(DEFAULT_MIN_UPSTREAM_LATENCY_MS as f64)),
+        property_type: PropertyType::UInt,
+        default_value: Some(PropertyValue::UInt(DEFAULT_MIN_UPSTREAM_LATENCY_MS)),
         mapping: PropertyMapping {
             element_id: "_block".to_string(),
             property_name: "min_upstream_latency".to_string(),

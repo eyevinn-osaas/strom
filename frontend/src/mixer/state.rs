@@ -38,6 +38,7 @@ impl MixerEditor {
             is_reset: false,
             editing_label: None,
             strip_interacted: false,
+            pipeline_running: false,
         }
     }
 

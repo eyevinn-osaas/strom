@@ -16,7 +16,7 @@ impl MixerEditor {
         processor: &str,
         param: &str,
     ) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -123,7 +123,7 @@ impl MixerEditor {
         band: usize,
         param: &str,
     ) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -169,7 +169,7 @@ impl MixerEditor {
         processor: &str,
         param: &str,
     ) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -253,7 +253,7 @@ impl MixerEditor {
 
     /// Update a main bus EQ band parameter via API.
     pub(super) fn update_main_eq_param(&mut self, ctx: &Context, band: usize, param: &str) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -293,7 +293,7 @@ impl MixerEditor {
 
     /// Update a channel property via API.
     pub(super) fn update_channel_property(&mut self, ctx: &Context, index: usize, property: &str) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -386,7 +386,7 @@ impl MixerEditor {
 
     /// Update main fader via API.
     pub(super) fn update_main_fader(&mut self, ctx: &Context) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -422,7 +422,7 @@ impl MixerEditor {
 
     /// Update main mute via API.
     pub(super) fn update_main_mute(&mut self, ctx: &Context) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -452,7 +452,7 @@ impl MixerEditor {
 
     /// Update aux send level via API.
     pub(super) fn update_aux_send(&mut self, ctx: &Context, ch_idx: usize, aux_idx: usize) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -485,7 +485,7 @@ impl MixerEditor {
     /// Routing is implemented using volume elements - all destinations are always
     /// connected, we just set volume to 1.0 for active route and 0.0 for inactive.
     pub(super) fn update_routing(&mut self, ctx: &Context, ch_idx: usize) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -563,7 +563,7 @@ impl MixerEditor {
 
     /// Update group fader via API.
     pub(super) fn update_group_fader(&mut self, ctx: &Context, sg_idx: usize) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -599,7 +599,7 @@ impl MixerEditor {
 
     /// Update group mute via API.
     pub(super) fn update_group_mute(&mut self, ctx: &Context, sg_idx: usize) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -629,7 +629,7 @@ impl MixerEditor {
 
     /// Update aux master fader via API.
     pub(super) fn update_aux_master_fader(&mut self, ctx: &Context, aux_idx: usize) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 
@@ -665,7 +665,7 @@ impl MixerEditor {
 
     /// Update aux master mute via API.
     pub(super) fn update_aux_master_mute(&mut self, ctx: &Context, aux_idx: usize) {
-        if !self.live_updates {
+        if !self.live_updates || !self.pipeline_running {
             return;
         }
 

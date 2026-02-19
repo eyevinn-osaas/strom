@@ -277,6 +277,8 @@ pub struct MixerEditor {
     editing_label: Option<usize>,
     /// Transient: true when a strip or panel was clicked this frame
     strip_interacted: bool,
+    /// Whether the pipeline is currently running (set by the app)
+    pipeline_running: bool,
 }
 
 impl MixerEditor {
@@ -288,6 +290,11 @@ impl MixerEditor {
     /// Get the flow ID.
     pub fn flow_id(&self) -> FlowId {
         self.flow_id
+    }
+
+    /// Update the pipeline running state. Called by the app before rendering.
+    pub fn set_pipeline_running(&mut self, running: bool) {
+        self.pipeline_running = running;
     }
 
     /// Check if a save was requested (Ctrl+S or Save button).
