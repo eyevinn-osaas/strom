@@ -131,7 +131,7 @@
             const modeLabel = stream.mode === 'audio_video' ? 'Audio + Video' :
                              stream.mode === 'video' ? 'Video' : 'Audio';
 
-            const fullWhepUrl = window.location.protocol + '//' + window.location.host + '/whep/' + stream.endpoint_id;
+            const fullWhepUrl = window.location.protocol + '//' + window.location.host + '/whep/' + encodeURIComponent(stream.endpoint_id);
 
             card.innerHTML = `
                 <div class="stream-header">
@@ -173,7 +173,7 @@
         }
 
         function copyUrl(endpointId) {
-            const fullUrl = window.location.protocol + '//' + window.location.host + '/whep/' + endpointId;
+            const fullUrl = window.location.protocol + '//' + window.location.host + '/whep/' + encodeURIComponent(endpointId);
             navigator.clipboard.writeText(fullUrl);
         }
 
@@ -184,7 +184,7 @@
             connectBtn.disabled = true;
             setStatus('status-' + endpointId, 'Connecting...', 'connecting');
 
-            const connection = new WhepConnection('/whep/' + endpointId, {
+            const connection = new WhepConnection('/whep/' + encodeURIComponent(endpointId), {
                 onAudioTrack: (stream) => {
                     const track = stream.getAudioTracks()[0];
                     streamAudioTracks.set(endpointId, track);
