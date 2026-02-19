@@ -756,23 +756,6 @@ impl MediaPage {
         // Clean up (will be done after selection)
         // Note: In a real app, we'd want to remove the input element after use
     }
-
-    /// Set error message.
-    pub fn set_error(&mut self, error: String) {
-        self.error = Some(error);
-        self.loading = false;
-    }
-
-    /// Set success message.
-    pub fn set_success(&mut self, message: String) {
-        self.success_message = Some(message);
-    }
-
-    /// Clear messages.
-    pub fn clear_messages(&mut self) {
-        self.error = None;
-        self.success_message = None;
-    }
 }
 
 impl Default for MediaPage {

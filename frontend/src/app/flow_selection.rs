@@ -8,18 +8,6 @@ impl StromApp {
             .and_then(|id| self.flows.iter().find(|f| f.id == id))
     }
 
-    /// Get the currently selected flow mutably.
-    pub(super) fn current_flow_mut(&mut self) -> Option<&mut Flow> {
-        self.selected_flow_id
-            .and_then(|id| self.flows.iter_mut().find(|f| f.id == id))
-    }
-
-    /// Get the index of the currently selected flow (for UI rendering).
-    pub(super) fn selected_flow_index(&self) -> Option<usize> {
-        self.selected_flow_id
-            .and_then(|id| self.flows.iter().position(|f| f.id == id))
-    }
-
     /// Select a flow by ID.
     pub(super) fn select_flow(&mut self, flow_id: strom_types::FlowId) {
         if let Some(flow) = self.flows.iter().find(|f| f.id == flow_id) {

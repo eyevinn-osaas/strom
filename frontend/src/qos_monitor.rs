@@ -60,26 +60,36 @@ pub struct QoSElementData {
     /// Element ID (or block ID if element is inside a block)
     pub element_id: String,
     /// Block ID if this element is inside a block
+    #[allow(dead_code)]
     pub block_id: Option<String>,
     /// Full GStreamer element name
+    #[allow(dead_code)]
     pub element_name: String,
     /// Internal element type if part of a block
+    #[allow(dead_code)]
     pub internal_element_type: Option<String>,
     /// Average proportion (< 1.0 = falling behind)
     pub avg_proportion: f64,
     /// Minimum proportion seen
+    #[allow(dead_code)]
     pub min_proportion: f64,
     /// Maximum proportion seen
+    #[allow(dead_code)]
     pub max_proportion: f64,
     /// Average jitter in nanoseconds
+    #[allow(dead_code)]
     pub avg_jitter_ns: i64,
     /// Number of QoS events in the last update
+    #[allow(dead_code)]
     pub event_count: u64,
     /// Total buffers processed
+    #[allow(dead_code)]
     pub total_processed: u64,
     /// Whether currently falling behind
+    #[allow(dead_code)]
     pub is_falling_behind: bool,
     /// Timestamp of last update (using WASM-compatible instant crate)
+    #[allow(dead_code)]
     pub last_update: Instant,
 }
 
@@ -160,17 +170,6 @@ impl QoSStore {
         self.flows.get(flow_id).and_then(|f| f.worst_health)
     }
 
-    /// Get QoS stats for a specific element
-    pub fn get_element_stats(
-        &self,
-        flow_id: &FlowId,
-        element_id: &str,
-    ) -> Option<&QoSElementHistory> {
-        self.flows
-            .get(flow_id)
-            .and_then(|f| f.elements.get(element_id))
-    }
-
     /// Get all elements with QoS issues in a flow
     pub fn get_problem_elements(&self, flow_id: &FlowId) -> Vec<(&str, &QoSElementData)> {
         self.flows
@@ -205,13 +204,6 @@ impl QoSStore {
             .unwrap_or_default()
     }
 
-    /// Check if any element in a flow has QoS issues
-    pub fn flow_has_issues(&self, flow_id: &FlowId) -> bool {
-        self.get_flow_health(flow_id)
-            .map(|h| h != QoSHealth::Ok)
-            .unwrap_or(false)
-    }
-
     /// Clear stats for a flow (when flow is stopped or deleted)
     pub fn clear_flow(&mut self, flow_id: &FlowId) {
         self.flows.remove(flow_id);
@@ -221,19 +213,6 @@ impl QoSStore {
     pub fn clear_element(&mut self, flow_id: &FlowId, element_id: &str) {
         if let Some(flow_stats) = self.flows.get_mut(flow_id) {
             flow_stats.elements.remove(element_id);
-            flow_stats.update_worst_health();
-        }
-    }
-
-    /// Clear stale entries (elements that haven't updated recently)
-    pub fn clear_stale(&mut self, max_age: std::time::Duration) {
-        for flow_stats in self.flows.values_mut() {
-            flow_stats.elements.retain(|_, h| {
-                h.latest
-                    .as_ref()
-                    .map(|d| d.last_update.elapsed() < max_age)
-                    .unwrap_or(false)
-            });
             flow_stats.update_worst_health();
         }
     }
