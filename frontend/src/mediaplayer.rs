@@ -66,18 +66,6 @@ impl MediaPlayerDataStore {
         }
     }
 
-    /// Update media player data for a specific block.
-    pub fn update(&mut self, flow_id: FlowId, block_id: String, data: MediaPlayerData) {
-        let key = MediaPlayerKey { flow_id, block_id };
-        self.data.insert(
-            key,
-            TimestampedPlayerData {
-                data,
-                updated_at: Instant::now(),
-            },
-        );
-    }
-
     /// Update position only (from periodic position events).
     pub fn update_position(
         &mut self,
@@ -168,16 +156,6 @@ impl MediaPlayerDataStore {
                 None
             }
         })
-    }
-
-    /// Clear all media player data.
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
-
-    /// Remove media player data for a specific flow.
-    pub fn clear_flow(&mut self, flow_id: &FlowId) {
-        self.data.retain(|k, _| k.flow_id != *flow_id);
     }
 }
 

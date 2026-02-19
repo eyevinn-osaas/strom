@@ -532,19 +532,9 @@ impl ElementPalette {
             .insert(element_info.name.clone(), element_info);
     }
 
-    /// Get block definition for a specific block ID.
-    pub fn get_block_info(&self, block_id: &str) -> Option<&BlockDefinition> {
-        self.blocks.iter().find(|b| b.id == block_id)
-    }
-
     /// Request focus on the search box (will be applied on next frame).
     pub fn focus_search(&mut self) {
         self.focus_search_requested = true;
-    }
-
-    /// Check if the Elements tab is currently active.
-    pub fn is_elements_tab(&self) -> bool {
-        self.current_tab == PaletteTab::Elements
     }
 
     /// Switch to Elements tab.

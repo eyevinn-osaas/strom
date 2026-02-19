@@ -55,15 +55,6 @@ pub(super) fn brighten_color(color: Color32, amount: u8) -> Color32 {
     )
 }
 
-/// Darken a color by subtracting from each component
-pub(super) fn darken_color(color: Color32, amount: u8) -> Color32 {
-    Color32::from_rgb(
-        color.r().saturating_sub(amount),
-        color.g().saturating_sub(amount),
-        color.b().saturating_sub(amount),
-    )
-}
-
 /// Represents the state of the graph editor.
 pub struct GraphEditor {
     /// Elements (nodes) in the graph
@@ -228,18 +219,6 @@ impl GraphEditor {
     /// Load blocks into the editor (used when loading from backend).
     pub fn load_blocks(&mut self, blocks: Vec<BlockInstance>) {
         self.blocks = blocks;
-    }
-
-    /// Update runtime data for blocks without replacing the entire array.
-    /// This preserves UI state while updating runtime fields like SDP.
-    pub fn update_blocks_runtime_data(&mut self, updated_blocks: &[BlockInstance]) {
-        for updated_block in updated_blocks {
-            if let Some(existing_block) = self.blocks.iter_mut().find(|b| b.id == updated_block.id)
-            {
-                // Only update runtime_data, preserve other fields
-                existing_block.runtime_data = updated_block.runtime_data.clone();
-            }
-        }
     }
 }
 
