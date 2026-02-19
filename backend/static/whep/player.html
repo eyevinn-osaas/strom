@@ -388,7 +388,7 @@
             // Set endpoint from server-provided value
             const serverEndpoint = '{{ENDPOINT}}';
             if (serverEndpoint) {
-                document.getElementById('endpoint').value = location.protocol + '//' + location.host + serverEndpoint;
+                document.getElementById('endpoint').value = location.protocol + '//' + location.host + encodeURI(serverEndpoint);
             }
 
             // Auto-test mode: ?autotest=1
