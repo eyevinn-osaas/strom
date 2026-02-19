@@ -10,7 +10,7 @@
 <body style="display: flex; flex-direction: column; align-items: center;">
     <div class="container">
         <div style="position: relative; margin-bottom: 8px;">
-            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v5</span>
+            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v6</span>
             <h1 style="text-align: center; margin: 0;">WHEP Player at <span id="hostAddress"></span></h1>
             <a href="/player/whep-streams" style="color: #888; font-size: 0.9em; position: absolute; right: 0; top: 50%; transform: translateY(-50%);">All streams</a>
         </div>
@@ -40,7 +40,7 @@
                 <div class="audio-bar"></div>
             </div>
             <div class="audio-controls" id="audioControls" style="width: 100%; max-width: 400px;">
-                <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="Toggle mute">&#128266;</button>
+                <button class="mute-btn muted" id="muteBtn" onclick="toggleMute()" title="Toggle mute">&#128263;</button>
                 <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="100" oninput="setVolume(this.value)">
                 <span class="volume-label" id="volumeLabel">100%</span>
             </div>
@@ -61,7 +61,7 @@
         <div class="log" id="log"></div>
     </div>
 
-    <audio id="audio" autoplay></audio>
+    <audio id="audio" autoplay muted></audio>
 
     <script src="/static/webrtc.js"></script>
     <script src="/static/whep.js"></script>
@@ -164,7 +164,9 @@
             connection = new WhepConnection(endpoint, {
                 onAudioTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
-                    document.getElementById('audio').srcObject = stream;
+                    const audio = document.getElementById('audio');
+                    audio.srcObject = stream;
+                    audio.play().catch(() => {});
                 },
                 onVideoTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
@@ -206,11 +208,8 @@
                 },
                 onMediaStatus: (hasAudio, hasVideo) => {
                     if (myConnectionId !== connectionId) return; // Stale
-                    // Show audio indicator if stream has audio (regardless of video)
-                    // Show audio controls only for audio-only streams (video has its own controls)
-                    const isAudioOnly = hasAudio && !hasVideo;
                     setElementClass('audioIndicator', 'active', hasAudio);
-                    setElementClass('audioControls', 'active', isAudioOnly);
+                    setElementClass('audioControls', 'active', hasAudio);
                     hasAudioStream = hasAudio;
                     // Re-enumerate devices now that we have an active media
                     // session — browsers restrict enumerateDevices until media
@@ -310,6 +309,8 @@
             } else {
                 muteBtn.innerHTML = '&#128266;'; // Speaker with sound
                 muteBtn.classList.remove('muted');
+                // Ensure playback after user interaction (autoplay policy)
+                audio.play().catch(() => {});
             }
         }
 
