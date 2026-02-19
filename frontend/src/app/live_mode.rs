@@ -67,6 +67,7 @@ impl StromApp {
     pub(super) fn exit_live_mode(&mut self) {
         self.app_mode = AppMode::Admin;
         self.compositor_editor = None;
+        self.mixer_editor = None;
         tracing::info!("Exited Live mode");
     }
 
@@ -77,10 +78,13 @@ impl StromApp {
         flow_id: strom_types::FlowId,
         block_id: &str,
     ) {
-        // Ensure compositor editor exists
-        if self.compositor_editor.is_none() {
+        // Ensure editor exists (compositor or mixer)
+        if self.compositor_editor.is_none() && self.mixer_editor.is_none() {
             self.enter_live_mode(flow_id, block_id.to_string(), ctx);
         }
+
+        // Determine view type for title
+        let is_mixer = self.mixer_editor.is_some();
 
         // Get flow and block names for display
         let flow_name = self
@@ -111,7 +115,8 @@ impl StromApp {
                     }
 
                     // Title
-                    ui.label(egui::RichText::new("Live View").strong().size(16.0));
+                    let title = if is_mixer { "Live Audio" } else { "Live View" };
+                    ui.label(egui::RichText::new(title).strong().size(16.0));
 
                     ui.separator();
 
@@ -196,17 +201,65 @@ impl StromApp {
                 });
             });
 
-        // Full-screen compositor editor
+        // Full-screen editor (compositor or mixer)
         if let Some(ref mut editor) = self.compositor_editor {
             CentralPanel::default().show(ctx, |ui| {
                 editor.show_fullscreen(ui, ctx);
             });
+        } else if let Some(ref mut editor) = self.mixer_editor {
+            // Update pipeline running state so the editor skips API calls when stopped
+            let running = self
+                .flows
+                .iter()
+                .find(|f| f.id == flow_id)
+                .and_then(|f| f.state)
+                .map(|s| s == strom_types::PipelineState::Playing)
+                .unwrap_or(false);
+            editor.set_pipeline_running(running);
+
+            CentralPanel::default().show(ctx, |ui| {
+                editor.show_fullscreen(ui, ctx, &self.meter_data);
+            });
+
+            // Handle mixer save request
+            if editor.needs_save() {
+                let props = if editor.is_reset() {
+                    editor.collect_structural_properties()
+                } else {
+                    editor.collect_properties()
+                };
+                editor.clear_save();
+                let block_id = editor.block_id().to_string();
+                let flow_id = editor.flow_id();
+
+                if let Some(flow) = self.flows.iter_mut().find(|f| f.id == flow_id) {
+                    if let Some(block) = flow.blocks.iter_mut().find(|b| b.id == block_id) {
+                        block.properties = props;
+                    }
+                    let flow_clone = flow.clone();
+                    let api = self.api.clone();
+                    let ctx_clone = ctx.clone();
+                    spawn_task(async move {
+                        match api.update_flow(&flow_clone).await {
+                            Ok(_) => {
+                                tracing::info!("Mixer state saved");
+                                set_local_storage("mixer_save_status", "ok");
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to save mixer state: {}", e);
+                                set_local_storage("mixer_save_status", &format!("error: {}", e));
+                            }
+                        }
+                        ctx_clone.request_repaint();
+                    });
+                }
+            }
         } else {
             // Show loading state
             CentralPanel::default().show(ctx, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.spinner();
-                    ui.label("Loading compositor...");
+                    ui.label("Loading...");
                 });
             });
         }

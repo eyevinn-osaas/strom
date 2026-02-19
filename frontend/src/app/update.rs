@@ -1112,6 +1112,43 @@ impl eframe::App for StromApp {
             }
         }
 
+        // Check for mixer editor open signal - enters Live Audio mode
+        if let Some(block_id) = get_local_storage("open_mixer_editor") {
+            remove_local_storage("open_mixer_editor");
+
+            // Extract data from flow/block to avoid borrow issues
+            let mixer_data = self.current_flow().and_then(|flow| {
+                flow.blocks.iter().find(|b| b.id == block_id).map(|block| {
+                    let num_channels = block
+                        .properties
+                        .get("num_channels")
+                        .and_then(|v| match v {
+                            strom_types::PropertyValue::String(s) => s.parse::<usize>().ok(),
+                            strom_types::PropertyValue::Int(i) => Some(*i as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(8);
+                    (flow.id, block.properties.clone(), num_channels)
+                })
+            });
+
+            if let Some((flow_id, properties, num_channels)) = mixer_data {
+                // Create mixer editor
+                let mut editor = crate::mixer::MixerEditor::new(
+                    flow_id,
+                    block_id.clone(),
+                    num_channels,
+                    self.api.clone(),
+                );
+                editor.load_from_properties(&properties);
+                self.mixer_editor = Some(editor);
+
+                // Enter Live Audio mode
+                self.app_mode = AppMode::Live { flow_id, block_id };
+                tracing::info!("Entered Live Audio mode for mixer");
+            }
+        }
+
         // Check for playlist editor open signal
         // Check for stream picker open signal (double-click on AES67 Input)
         if let Some(block_id) = get_local_storage("open_stream_picker") {

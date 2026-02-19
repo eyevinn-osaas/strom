@@ -71,12 +71,14 @@ impl BlockBuilder for NDIInputBuilder {
         let outputs = match mode.as_str() {
             "combined" => vec![
                 ExternalPad {
+                    label: Some("Video".to_string()),
                     name: "video_out".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "videocapsfilter".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
                 ExternalPad {
+                    label: Some("Audio".to_string()),
                     name: "audio_out".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "audiocapsfilter".to_string(),
@@ -84,12 +86,14 @@ impl BlockBuilder for NDIInputBuilder {
                 },
             ],
             "video" => vec![ExternalPad {
+                label: None,
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "capsfilter".to_string(),
                 internal_pad_name: "src".to_string(),
             }],
             "audio" => vec![ExternalPad {
+                label: None,
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "capsfilter".to_string(),
@@ -417,12 +421,14 @@ impl BlockBuilder for NDIOutputBuilder {
         let inputs = match mode.as_str() {
             "combined" => vec![
                 ExternalPad {
+                    label: Some("Video".to_string()),
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "videoconvert".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
+                    label: Some("Audio".to_string()),
                     name: "audio_in".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "audioconvert".to_string(),
@@ -430,12 +436,14 @@ impl BlockBuilder for NDIOutputBuilder {
                 },
             ],
             "video" => vec![ExternalPad {
+                label: None,
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "videoconvert".to_string(),
                 internal_pad_name: "sink".to_string(),
             }],
             "audio" => vec![ExternalPad {
+                label: None,
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "audioconvert".to_string(),
@@ -785,12 +793,14 @@ fn ndi_input_definition() -> BlockDefinition {
             inputs: vec![],
             outputs: vec![
                 ExternalPad {
+                    label: Some("Video".to_string()),
                     name: "video_out".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "videocapsfilter".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
                 ExternalPad {
+                    label: Some("Audio".to_string()),
                     name: "audio_out".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "audiocapsfilter".to_string(),
@@ -850,12 +860,14 @@ fn ndi_output_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![
                 ExternalPad {
+                    label: Some("Video".to_string()),
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "videoconvert".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
+                    label: Some("Audio".to_string()),
                     name: "audio_in".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "audioconvert".to_string(),

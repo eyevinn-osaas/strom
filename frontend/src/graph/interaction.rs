@@ -432,6 +432,7 @@ impl GraphEditor {
                     self.hovered_pad = Some((block.id.clone(), external_pad.name.clone()));
                     any_hovered = true;
                 }
+                pad_response.on_hover_text(&external_pad.name);
             }
 
             // Handle output pad interactions
@@ -462,6 +463,7 @@ impl GraphEditor {
                     self.hovered_pad = Some((block.id.clone(), external_pad.name.clone()));
                     any_hovered = true;
                 }
+                pad_response.on_hover_text(&external_pad.name);
             }
         }
 

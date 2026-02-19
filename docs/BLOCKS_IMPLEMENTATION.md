@@ -44,8 +44,9 @@ Current built-in blocks in `backend/src/blocks/builtin/`:
 | DeckLink Input/Output | `decklink.rs` | Blackmagic SDI/HDMI capture and playback |
 | NDI Input/Output | `ndi.rs` | NewTek NDI video over IP |
 | Media Player | `mediaplayer.rs` | File playback with playlist support |
+| Audio Mixer | `mixer.rs` | Stereo mixer with per-channel processing, aux sends, subgroups |
 
-See [VIDEO_ENCODER_BLOCK.md](VIDEO_ENCODER_BLOCK.md) and [WHEP_OUTPUT_BLOCK.md](WHEP_OUTPUT_BLOCK.md) for detailed documentation.
+See [MIXER_BLOCK.md](MIXER_BLOCK.md), [VIDEO_ENCODER_BLOCK.md](VIDEO_ENCODER_BLOCK.md) and [WHEP_OUTPUT_BLOCK.md](WHEP_OUTPUT_BLOCK.md) for detailed documentation.
 
 ## Adding a New Block
 

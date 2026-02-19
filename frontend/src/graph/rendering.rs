@@ -442,6 +442,11 @@ impl GraphEditor {
                     set_local_storage("open_routing_editor", &block.id);
                 }
 
+                // Handle double-click to open mixer editor for Mixer blocks
+                if node_response.double_clicked() && block.block_definition_id == "builtin.mixer" {
+                    set_local_storage("open_mixer_editor", &block.id);
+                }
+
                 // Note: Playlist editor for media player is opened via the + button in the compact UI
 
                 // Handle node dragging
@@ -1459,6 +1464,18 @@ impl GraphEditor {
                         Color32::BLACK,
                     );
                 }
+
+                // Draw pad label inside block (to the right of input pad)
+                if let Some(pad_label) = &external_pad.label {
+                    let label_pos = pos2(rect.min.x + port_size * 0.8, pad_center.y);
+                    painter.text(
+                        label_pos,
+                        egui::Align2::LEFT_CENTER,
+                        pad_label,
+                        FontId::proportional(11.0 * self.zoom),
+                        Color32::from_gray(200),
+                    );
+                }
             }
 
             // Draw output pads on the right
@@ -1538,6 +1555,18 @@ impl GraphEditor {
                         label,
                         FontId::proportional(10.0 * self.zoom),
                         Color32::BLACK,
+                    );
+                }
+
+                // Draw pad label inside block (to the left of output pad)
+                if let Some(pad_label) = &external_pad.label {
+                    let label_pos = pos2(rect.max.x - port_size * 0.8, pad_center.y);
+                    painter.text(
+                        label_pos,
+                        egui::Align2::RIGHT_CENTER,
+                        pad_label,
+                        FontId::proportional(11.0 * self.zoom),
+                        Color32::from_gray(200),
                     );
                 }
             }

@@ -268,6 +268,7 @@ fn inter_output_definition() -> BlockDefinition {
         ],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {
+                label: None,
                 name: "sink".to_string(),
                 media_type: MediaType::Generic,
                 internal_element_id: "intersink".to_string(),
@@ -334,6 +335,7 @@ fn inter_input_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![], // No inputs - this is a source
             outputs: vec![ExternalPad {
+                label: None,
                 name: "src".to_string(),
                 media_type: MediaType::Generic,
                 internal_element_id: "intersrc".to_string(),

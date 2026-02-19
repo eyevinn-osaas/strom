@@ -1161,12 +1161,14 @@ fn media_player_definition() -> BlockDefinition {
             inputs: vec![],
             outputs: vec![
                 ExternalPad {
+                    label: None,
                     name: "video_out".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "video_out".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
                 ExternalPad {
+                    label: None,
                     name: "audio_out".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "audio_out".to_string(),

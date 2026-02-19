@@ -22,6 +22,7 @@ use crate::latency::LatencyDataStore;
 use crate::login::LoginScreen;
 use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
+use crate::mixer::MixerEditor;
 use crate::palette::ElementPalette;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
@@ -630,6 +631,8 @@ pub struct StromApp {
     show_stats_panel: bool,
     /// Compositor layout editor (if open)
     compositor_editor: Option<CompositorEditor>,
+    /// Mixer editor (if open)
+    mixer_editor: Option<MixerEditor>,
     /// Playlist editor (if open)
     playlist_editor: Option<PlaylistEditor>,
     /// Routing matrix editor for Audio Router blocks (if open)
