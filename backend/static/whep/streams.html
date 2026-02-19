@@ -9,7 +9,7 @@
 </head>
 <body>
     <div class="header">
-        <h1 style="position: relative;"><span style="color: #666; font-size: 0.5em; vertical-align: middle; margin-right: 8px;">v1</span>WHEP Streams at <span id="hostAddress"></span>
+        <h1 style="position: relative;"><span style="color: #666; font-size: 0.5em; vertical-align: middle; margin-right: 8px;">v2</span>WHEP Streams at <span id="hostAddress"></span>
             <a href="/player/whip-ingest" style="color: #888; font-size: 0.9em; position: absolute; right: 0; top: 50%; transform: translateY(-50%);">WHIP Ingest</a>
         </h1>
         <div class="subtitle">Active streams from Strom flows</div>
@@ -34,6 +34,41 @@
     <script>
         const streamConnections = new Map();
         const streamAudioTracks = new Map();
+        const streamAudioMeters = new Map();
+
+        function startAudioMeter(id, track) {
+            stopAudioMeter(id);
+            const ctx = new AudioContext();
+            const source = ctx.createMediaStreamSource(new MediaStream([track]));
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            const fill = document.getElementById('meter-fill-' + id);
+            if (!fill) return;
+            let rafId = null;
+
+            function update() {
+                analyser.getByteFrequencyData(data);
+                let sum = 0;
+                for (let i = 0; i < data.length; i++) sum += data[i];
+                const pct = Math.min(100, (sum / data.length / 128) * 100);
+                fill.style.width = pct + '%';
+                rafId = requestAnimationFrame(update);
+            }
+            rafId = requestAnimationFrame(update);
+            streamAudioMeters.set(id, { ctx, rafId });
+        }
+
+        function stopAudioMeter(id) {
+            const meter = streamAudioMeters.get(id);
+            if (!meter) return;
+            cancelAnimationFrame(meter.rafId);
+            meter.ctx.close();
+            streamAudioMeters.delete(id);
+            const fill = document.getElementById('meter-fill-' + id);
+            if (fill) fill.style.width = '0%';
+        }
 
         async function loadStreams() {
             try {
@@ -55,6 +90,7 @@
                     conn.close();
                     streamConnections.delete(id);
                     streamAudioTracks.delete(id);
+                    stopAudioMeter(id);
                 }
             }
 
@@ -104,10 +140,10 @@
                 </div>
                 <div class="stream-content">
                     <div class="video-container" id="video-${stream.endpoint_id}">
-                        <video autoplay muted playsinline controls></video>
+                        <video autoplay playsinline controls></video>
                     </div>
                     <div class="audio-indicator" id="audio-${stream.endpoint_id}" style="margin-bottom: 8px;">
-                        ${createAudioIndicator()}
+                        ${createAudioIndicator(stream.endpoint_id)}
                     </div>
                     <div class="audio-controls" id="audio-controls-${stream.endpoint_id}" style="margin-bottom: 12px;">
                         <button class="mute-btn" id="mute-${stream.endpoint_id}" onclick="toggleMute('${stream.endpoint_id}')" title="Toggle mute">&#128266;</button>
@@ -150,7 +186,9 @@
 
             const connection = new WhepConnection('/whep/' + endpointId, {
                 onAudioTrack: (stream) => {
-                    streamAudioTracks.set(endpointId, stream.getAudioTracks()[0]);
+                    const track = stream.getAudioTracks()[0];
+                    streamAudioTracks.set(endpointId, track);
+                    startAudioMeter(endpointId, track);
                     const audio = document.getElementById('audio-elem-' + endpointId);
                     audio.srcObject = stream;
                     audio.play().catch(() => {});
@@ -166,7 +204,7 @@
                 },
                 onConnected: () => {
                     disconnectBtn.disabled = false;
-                    setStatus('status-' + endpointId, 'Connected - Waiting...', 'connected');
+                    setStatus('status-' + endpointId, 'Connected', 'connected');
                 },
                 onMediaStatus: (hasAudio, hasVideo) => {
                     let mediaTypes = [];
@@ -192,6 +230,7 @@
                     setElementClass('audio-controls-' + endpointId, 'active', false);
                     setElementClass('video-' + endpointId, 'active', false);
                     streamAudioTracks.delete(endpointId);
+                    stopAudioMeter(endpointId);
                     document.getElementById('audio-elem-' + endpointId).srcObject = null;
                     const container = document.getElementById('video-' + endpointId);
                     if (container) container.querySelector('video').srcObject = null;
@@ -210,6 +249,7 @@
                 conn.disconnect();
                 streamConnections.delete(endpointId);
                 streamAudioTracks.delete(endpointId);
+                stopAudioMeter(endpointId);
             }
         }
 

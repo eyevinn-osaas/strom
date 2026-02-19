@@ -10,7 +10,7 @@
 <body style="display: flex; flex-direction: column; align-items: center;">
     <div class="container">
         <div style="position: relative; margin-bottom: 8px;">
-            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v6.5</span>
+            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v7</span>
             <h1 style="text-align: center; margin: 0;">WHEP Player at <span id="hostAddress"></span></h1>
             <a href="/player/whep-streams" style="color: #888; font-size: 0.9em; position: absolute; right: 0; top: 50%; transform: translateY(-50%);">All streams</a>
         </div>
@@ -33,11 +33,7 @@
                 <video id="video" autoplay muted playsinline controls></video>
             </div>
             <div class="audio-indicator" id="audioIndicator">
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
+                <div class="meter-bar"><div class="meter-fill" id="meterFill"></div></div>
             </div>
             <div class="audio-controls" id="audioControls" style="width: 100%; max-width: 400px;">
                 <button class="mute-btn muted" id="muteBtn" onclick="toggleMute()" title="Toggle mute">&#128263;</button>
@@ -75,6 +71,7 @@
         let transportSuffix = '';   // Debug: " - relay <addr>" or " - direct <addr>"
         let hasAudioStream = false;
         let audioTrack = null;   // Stored for adding to video stream in A+V mode
+        let audioMeter = null;   // Audio level meter (AnalyserNode + animation)
         const MAX_RECONNECT_ATTEMPTS = 15;
         const RECONNECT_DELAY = 10000;
 
@@ -166,6 +163,7 @@
                 onAudioTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
                     audioTrack = stream.getAudioTracks()[0];
+                    startAudioMeter(audioTrack);
                     // Set on audio element for now; if video arrives,
                     // onVideoTrack will move it to the video stream
                     const audio = document.getElementById('audio');
@@ -248,6 +246,7 @@
                     setElementClass('videoContainer', 'active', false);
                     hasAudioStream = false;
                     audioTrack = null;
+                    stopAudioMeter();
                     updateAudioOutputDropdown();
                     document.getElementById('audio').srcObject = null;
                     document.getElementById('video').srcObject = null;
@@ -293,6 +292,7 @@
             setElementClass('videoContainer', 'active', false);
             hasAudioStream = false;
             audioTrack = null;
+            stopAudioMeter();
             updateAudioOutputDropdown();
             document.getElementById('audio').srcObject = null;
             document.getElementById('video').srcObject = null;
@@ -326,6 +326,7 @@
                 muteBtn.classList.remove('muted');
                 // Ensure playback after user interaction (autoplay policy)
                 audio.play().catch(() => {});
+                if (audioMeter) audioMeter.ctx.resume();
             }
         }
 
@@ -342,6 +343,37 @@
                 muteBtn.innerHTML = '&#128266;';
                 muteBtn.classList.remove('muted');
             }
+        }
+
+        function startAudioMeter(track) {
+            stopAudioMeter();
+            const ctx = new AudioContext();
+            const source = ctx.createMediaStreamSource(new MediaStream([track]));
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            const fill = document.getElementById('meterFill');
+            let rafId = null;
+
+            function update() {
+                analyser.getByteFrequencyData(data);
+                let sum = 0;
+                for (let i = 0; i < data.length; i++) sum += data[i];
+                const pct = Math.min(100, (sum / data.length / 128) * 100);
+                fill.style.width = pct + '%';
+                rafId = requestAnimationFrame(update);
+            }
+            rafId = requestAnimationFrame(update);
+            audioMeter = { ctx, rafId };
+        }
+
+        function stopAudioMeter() {
+            if (!audioMeter) return;
+            cancelAnimationFrame(audioMeter.rafId);
+            audioMeter.ctx.close();
+            audioMeter = null;
+            document.getElementById('meterFill').style.width = '0%';
         }
 
         // Auto-connect if endpoint is provided
