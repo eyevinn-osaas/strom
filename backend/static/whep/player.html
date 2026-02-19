@@ -10,7 +10,7 @@
 <body style="display: flex; flex-direction: column; align-items: center;">
     <div class="container">
         <div style="position: relative; margin-bottom: 8px;">
-            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v6</span>
+            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v6.5</span>
             <h1 style="text-align: center; margin: 0;">WHEP Player at <span id="hostAddress"></span></h1>
             <a href="/player/whep-streams" style="color: #888; font-size: 0.9em; position: absolute; right: 0; top: 50%; transform: translateY(-50%);">All streams</a>
         </div>
@@ -74,6 +74,7 @@
         let reconnectTimer = null;
         let transportSuffix = '';   // Debug: " - relay <addr>" or " - direct <addr>"
         let hasAudioStream = false;
+        let audioTrack = null;   // Stored for adding to video stream in A+V mode
         const MAX_RECONNECT_ATTEMPTS = 15;
         const RECONNECT_DELAY = 10000;
 
@@ -164,17 +165,23 @@
             connection = new WhepConnection(endpoint, {
                 onAudioTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
+                    audioTrack = stream.getAudioTracks()[0];
+                    // Set on audio element for now; if video arrives,
+                    // onVideoTrack will move it to the video stream
                     const audio = document.getElementById('audio');
                     audio.srcObject = stream;
                     audio.play().catch(() => {});
                 },
                 onVideoTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
+                    // Add audio track to video stream so built-in controls
+                    // handle both audio and video
+                    if (audioTrack) {
+                        stream.addTrack(audioTrack);
+                    }
                     const video = document.getElementById('video');
                     video.srcObject = stream;
                     setElementClass('videoContainer', 'active', true);
-                    // Start playback muted (allowed by browsers)
-                    // User can unmute via video controls
                     video.muted = true;
                     video.play().catch(e => {
                         log('Autoplay blocked: ' + e.message, 'warning');
@@ -208,9 +215,15 @@
                 },
                 onMediaStatus: (hasAudio, hasVideo) => {
                     if (myConnectionId !== connectionId) return; // Stale
+                    const isAudioOnly = hasAudio && !hasVideo;
                     setElementClass('audioIndicator', 'active', hasAudio);
-                    setElementClass('audioControls', 'active', hasAudio);
+                    setElementClass('audioControls', 'active', isAudioOnly);
                     hasAudioStream = hasAudio;
+                    if (hasVideo) {
+                        // Audio is on the video element now, clear the
+                        // separate audio element
+                        document.getElementById('audio').srcObject = null;
+                    }
                     // Re-enumerate devices now that we have an active media
                     // session — browsers restrict enumerateDevices until media
                     // is flowing, so the initial enumeration may have returned
@@ -234,6 +247,7 @@
                     setElementClass('audioControls', 'active', false);
                     setElementClass('videoContainer', 'active', false);
                     hasAudioStream = false;
+                    audioTrack = null;
                     updateAudioOutputDropdown();
                     document.getElementById('audio').srcObject = null;
                     document.getElementById('video').srcObject = null;
@@ -278,6 +292,7 @@
             setElementClass('audioControls', 'active', false);
             setElementClass('videoContainer', 'active', false);
             hasAudioStream = false;
+            audioTrack = null;
             updateAudioOutputDropdown();
             document.getElementById('audio').srcObject = null;
             document.getElementById('video').srcObject = null;
@@ -320,7 +335,6 @@
             const muteBtn = document.getElementById('muteBtn');
             audio.volume = value / 100;
             volumeLabel.textContent = value + '%';
-            // Update mute button state based on volume
             if (value == 0) {
                 muteBtn.innerHTML = '&#128263;';
                 muteBtn.classList.add('muted');
