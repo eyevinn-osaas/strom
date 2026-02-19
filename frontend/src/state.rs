@@ -32,15 +32,6 @@ pub enum AppMessage {
     /// Element pad properties loading failed (element_type, error)
     ElementPadPropertiesError(String, String),
 
-    /// SDP loaded for a block
-    SdpLoaded {
-        flow_id: String,
-        block_id: String,
-        sdp: String,
-    },
-    /// SDP loading failed
-    SdpError(String),
-
     /// Event received from backend via WebSocket
     Event(StromEvent),
 
@@ -66,8 +57,6 @@ pub enum AppMessage {
         flow_id: strom_types::FlowId,
         stats: strom_types::api::WebRtcStats,
     },
-    /// WebRTC stats loading failed
-    WebRtcStatsError(String),
 
     /// Flow operation completed successfully
     FlowOperationSuccess(String),
@@ -80,7 +69,7 @@ pub enum AppMessage {
     /// Latency loaded for a flow
     LatencyLoaded {
         flow_id: String,
-        latency: crate::api::LatencyInfo,
+        latency: crate::api::LatencyResponse,
     },
     /// Latency loading failed (flow not running)
     LatencyNotAvailable(String),

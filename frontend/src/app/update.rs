@@ -878,9 +878,6 @@ impl eframe::App for StromApp {
                     tracing::debug!("Latency not available for flow {}", flow_id);
                     self.latency_cache.remove(&flow_id);
                 }
-                AppMessage::WebRtcStatsError(error) => {
-                    tracing::trace!("WebRTC stats error: {}", error);
-                }
                 AppMessage::RtpStatsLoaded { flow_id, rtp_stats } => {
                     tracing::debug!(
                         "RTP stats loaded for flow {}: {} blocks",
@@ -995,8 +992,6 @@ impl eframe::App for StromApp {
                     self.media_page
                         .refresh(&self.api, ctx, &self.channels.sender());
                 }
-                // SDP messages are handled elsewhere
-                AppMessage::SdpLoaded { .. } | AppMessage::SdpError(_) => {}
             }
         }
 

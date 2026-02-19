@@ -11,37 +11,7 @@ mod media;
 mod player;
 mod stats;
 
-pub use auth::AuthStatusResponse;
-pub use flows::LatencyInfo;
-
-use serde::Deserialize;
-
-/// Version information from the backend
-#[derive(Debug, Clone, Deserialize)]
-pub struct VersionInfo {
-    pub version: String,
-    pub git_hash: String,
-    pub git_tag: String,
-    pub git_branch: String,
-    pub git_dirty: bool,
-    pub build_timestamp: String,
-    /// Unique build ID (UUID) generated at compile time
-    #[serde(default)]
-    pub build_id: String,
-    #[serde(default)]
-    pub gstreamer_version: String,
-    #[serde(default)]
-    pub os_info: String,
-    #[serde(default)]
-    pub in_docker: bool,
-    /// When the Strom server process was started (ISO 8601 format with timezone)
-    /// This is the process uptime, not the system uptime
-    #[serde(default)]
-    pub process_started_at: String,
-    /// When the system was booted (ISO 8601 format with timezone)
-    #[serde(default)]
-    pub system_boot_time: String,
-}
+pub use strom_types::api::{AuthStatusResponse, LatencyResponse, VersionInfo};
 
 /// Result type for API operations.
 pub type ApiResult<T> = Result<T, ApiError>;

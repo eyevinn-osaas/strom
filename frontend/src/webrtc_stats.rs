@@ -41,14 +41,6 @@ impl WebRtcStatsStore {
         self.data.get(&key)
     }
 
-    /// Check if stats are stale (older than given duration).
-    pub fn is_stale(&self, flow_id: &FlowId, max_age: std::time::Duration) -> bool {
-        self.last_update
-            .get(flow_id)
-            .map(|t| t.elapsed() > max_age)
-            .unwrap_or(true)
-    }
-
     /// Remove stats that haven't been updated within the given TTL.
     pub fn evict_stale(&mut self, ttl: std::time::Duration) {
         let stale_flows: Vec<FlowId> = self
@@ -60,12 +52,6 @@ impl WebRtcStatsStore {
         for flow_id in stale_flows {
             self.clear_flow(&flow_id);
         }
-    }
-
-    /// Clear all WebRTC stats data.
-    pub fn clear(&mut self) {
-        self.data.clear();
-        self.last_update.clear();
     }
 
     /// Remove WebRTC stats for a specific flow.

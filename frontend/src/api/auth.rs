@@ -1,19 +1,8 @@
-use serde::Deserialize;
-
 use super::*;
-
-/// Authentication status response
-#[derive(Debug, Clone, Deserialize)]
-pub struct AuthStatusResponse {
-    pub authenticated: bool,
-    pub auth_required: bool,
-    #[allow(dead_code)]
-    pub methods: Vec<String>,
-}
 
 impl ApiClient {
     /// Get version and build information from the backend.
-    pub async fn get_version(&self) -> ApiResult<VersionInfo> {
+    pub async fn get_version(&self) -> ApiResult<strom_types::api::VersionInfo> {
         use tracing::info;
 
         let url = format!("{}/version", self.base_url);
@@ -31,7 +20,7 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        let version_info: VersionInfo = response
+        let version_info: strom_types::api::VersionInfo = response
             .json()
             .await
             .map_err(|e| ApiError::Decode(e.to_string()))?;
@@ -41,7 +30,7 @@ impl ApiClient {
     }
 
     /// Check authentication status and whether auth is required.
-    pub async fn get_auth_status(&self) -> ApiResult<AuthStatusResponse> {
+    pub async fn get_auth_status(&self) -> ApiResult<strom_types::api::AuthStatusResponse> {
         use tracing::info;
 
         let url = format!("{}/auth/status", self.base_url);
@@ -59,7 +48,7 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        let auth_status: AuthStatusResponse = response
+        let auth_status: strom_types::api::AuthStatusResponse = response
             .json()
             .await
             .map_err(|e| ApiError::Decode(e.to_string()))?;

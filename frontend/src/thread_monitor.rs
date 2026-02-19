@@ -94,28 +94,6 @@ impl ThreadMonitorStore {
         threads
     }
 
-    /// Get threads for a specific flow, sorted by CPU usage.
-    pub fn get_threads_for_flow(&self, flow_id: &FlowId) -> Vec<&ThreadHistory> {
-        let Some(thread_ids) = self.by_flow.get(flow_id) else {
-            return Vec::new();
-        };
-
-        let mut threads: Vec<&ThreadHistory> = thread_ids
-            .iter()
-            .filter_map(|id| self.threads.get(id))
-            .collect();
-
-        threads.sort_by(|a, b| {
-            let a_cpu = a.latest.as_ref().map(|s| s.cpu_usage).unwrap_or(0.0);
-            let b_cpu = b.latest.as_ref().map(|s| s.cpu_usage).unwrap_or(0.0);
-            b_cpu
-                .partial_cmp(&a_cpu)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        threads
-    }
-
     /// Get the total number of active threads.
     pub fn thread_count(&self) -> usize {
         self.threads.len()
@@ -133,10 +111,5 @@ impl ThreadMonitorStore {
     /// Check if there are any threads being monitored.
     pub fn is_empty(&self) -> bool {
         self.threads.is_empty()
-    }
-
-    /// Get the last update timestamp.
-    pub fn last_timestamp(&self) -> i64 {
-        self.last_timestamp
     }
 }

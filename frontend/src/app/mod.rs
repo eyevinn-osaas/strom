@@ -617,8 +617,8 @@ pub struct StromApp {
         Vec<strom_types::element::Link>,
         String,
     )>,
-    /// Cached latency info for flows (flow_id -> LatencyInfo)
-    latency_cache: std::collections::HashMap<String, crate::api::LatencyInfo>,
+    /// Cached latency info for flows (flow_id -> LatencyResponse)
+    latency_cache: std::collections::HashMap<String, crate::api::LatencyResponse>,
     /// Last time latency was fetched (for periodic refresh)
     last_latency_fetch: instant::Instant,
     /// Cached RTP stats info for flows (flow_id -> FlowStatsResponse)
