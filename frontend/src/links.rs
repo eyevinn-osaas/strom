@@ -114,7 +114,7 @@ impl LinksPage {
 
         // Tab bar
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.selected_tab, LinksTab::Whep, "WHEP Players");
+            ui.selectable_value(&mut self.selected_tab, LinksTab::Whep, "WHIP/WHEP");
             ui.selectable_value(&mut self.selected_tab, LinksTab::Srt, "MPEG-TS/SRT");
             ui.selectable_value(&mut self.selected_tab, LinksTab::Api, "API");
         });
@@ -135,10 +135,44 @@ impl LinksPage {
     }
 
     fn render_whep_tab(&self, ui: &mut Ui, ctx: &Context, server_base: &str) {
-        ui.heading("WHEP Players");
+        ui.heading("WHIP/WHEP");
         ui.add_space(8.0);
-        ui.label("WebRTC-HTTP Egress Protocol players for low-latency streaming.");
+        ui.label("WebRTC ingest (WHIP) and playback (WHEP) for low-latency streaming.");
         ui.add_space(16.0);
+
+        // WHIP Ingest
+        egui::Frame::group(ui.style())
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.strong("WHIP Ingest");
+                ui.add_space(4.0);
+
+                let ingest_url = format!("{}/player/whip-ingest", server_base);
+                ui.horizontal(|ui| {
+                    if ui.small_button("Open").clicked() {
+                        ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
+                    }
+                    if ui.small_button("Copy").clicked() {
+                        crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
+                    }
+                    if ui
+                        .link(egui::RichText::new(&ingest_url).monospace())
+                        .clicked()
+                    {
+                        ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
+                    }
+                });
+
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(
+                        "Send audio/video from a browser to a Strom flow via WebRTC.",
+                    )
+                    .weak(),
+                );
+            });
+
+        ui.add_space(12.0);
 
         // Combined streams player
         egui::Frame::group(ui.style())
