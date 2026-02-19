@@ -150,7 +150,7 @@ Pre-built multi-architecture images (amd64/arm64):
 
 ```bash
 docker pull eyevinntechnology/strom:latest
-docker pull eyevinntechnology/strom:0.3.8  # Specific version
+docker pull eyevinntechnology/strom:0.3.22  # Specific version
 
 # Extended image with HTML rendering support (CEF/Chromium)
 docker pull eyevinntechnology/strom-full:latest
@@ -225,15 +225,34 @@ Configure via config files, CLI arguments, or environment variables (in priority
 
 ```bash
 # Common options
---port 8080                    # or STROM_SERVER_PORT=8080
---data-dir /path/to/data       # or STROM_STORAGE_DATA_DIR=...
---database-url postgresql://...  # or STROM_STORAGE_DATABASE_URL=... (for production)
+--port 8080                    # or STROM_PORT=8080
+--data-dir /path/to/data       # or STROM_DATA_DIR=...
+--database-url postgresql://...  # or STROM_DATABASE_URL=... (for production)
 RUST_LOG=info                  # Logging level
 ```
 
 **Storage:** JSON files by default, PostgreSQL for production. See [docs/POSTGRESQL.md](docs/POSTGRESQL.md).
 
 **Config file:** Copy `.strom.toml.example` to `.strom.toml` for all options.
+
+### HTTPS/TLS
+
+Strom supports HTTPS with automatic certificate hot-reload (zero-downtime renewal):
+
+```bash
+# CLI
+strom --tls-cert cert.pem --tls-key key.pem
+
+# Environment variables
+STROM_TLS_CERT=cert.pem STROM_TLS_KEY=key.pem strom
+
+# Or in .strom.toml
+# [server]
+# tls_cert = "cert.pem"
+# tls_key = "key.pem"
+```
+
+Both certificate and key must be in PEM format. The certificate file can include intermediate certificates. For local development, generate certs with `mkcert localhost <your-ip>`.
 
 ## Authentication
 
@@ -274,6 +293,8 @@ Create reusable components from element groups:
 - **Inter Output** - Publishes streams for other flows to consume
 
 **Processing:**
+- **Audio Mixer** - Digital mixing console with up to 32 input channels, per-channel processing (gain, gate, compressor, EQ, pan, fader, mute), auxiliary sends, groups, PFL bus, and main stereo bus with metering
+- **Audio Router** - Flexible multi-input channel routing matrix with mixing and fan-out capabilities
 - **Video Encoder** - H.264/H.265/AV1/VP9 with automatic hardware acceleration (NVENC, QSV, VA-API, AMF, software)
 - **Video Format** - Resolution, framerate, and pixel format conversion
 - **Audio Format** - Sample rate, channels, and PCM format conversion (supports surround sound)
@@ -281,10 +302,11 @@ Create reusable components from element groups:
 
 **Analysis:**
 - **Audio Meter** - RMS and peak level monitoring per channel
+- **Audio Latency** - Measures audio round-trip latency using GStreamer's audiolatency element
 
 Custom blocks can also be created via JSON or API.
 
-See `docs/BLOCKS_IMPLEMENTATION.md`, `docs/VIDEO_ENCODER_BLOCK.md`, and `docs/WHEP_OUTPUT_BLOCK.md` for details.
+See `docs/BLOCKS_IMPLEMENTATION.md`, `docs/MIXER_BLOCK.md`, `docs/VIDEO_ENCODER_BLOCK.md`, and `docs/WHEP_OUTPUT_BLOCK.md` for details.
 
 ## MCP Integration
 

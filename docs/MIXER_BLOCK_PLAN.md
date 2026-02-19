@@ -1,5 +1,7 @@
 # Stereo Mixer Block - Implementation Plan
 
+> **Note:** This is a historical design document from the planning phase. The mixer has since been implemented as a multi-file module at `backend/src/blocks/builtin/mixer/`. See [MIXER_BLOCK.md](MIXER_BLOCK.md) for current documentation.
+
 ## Overview
 
 Build a digital audio mixer block for Strom, similar to professional digital consoles

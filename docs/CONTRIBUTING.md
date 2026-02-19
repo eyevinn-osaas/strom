@@ -87,7 +87,7 @@ git commit --no-verify
 ### Backend Only
 
 ```bash
-cargo build --package strom
+cargo build
 ```
 
 ### Frontend Only
@@ -106,7 +106,7 @@ trunk build --release
 cd ..
 
 # Build backend with embedded frontend
-cargo build --release --package strom
+cargo build --release
 ```
 
 ### Development Mode
@@ -119,7 +119,7 @@ cd frontend
 trunk serve
 
 # Terminal 2: Backend
-cargo run --package strom
+cargo run
 ```
 
 ## Docker
