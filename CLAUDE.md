@@ -17,7 +17,12 @@
 - When working in or near a file that exceeds 1500 lines, proactively suggest splitting it into focused sub-modules (following the pattern used for `pipeline.rs` and `app.rs`)
 - Each sub-module should have a single clear responsibility (e.g. construction, lifecycle, linking, properties)
 - Check for large files with: `find backend/src frontend/src -name "*.rs" | xargs wc -l | sort -rn | head -20`
-- Default values and constants shared between frontend and backend must be defined in `strom-types` (e.g. `strom_types::mixer` for mixer defaults). Never duplicate defaults across crates.
+- Shared types (structs, enums), default values, and constants used by both frontend and backend must be defined in `strom-types`. Never duplicate these across crates. If you find a duplicate, move it to `strom-types`.
+
+## Dead Code
+- Never use blanket `#![allow(dead_code)]`. Each case must be handled individually.
+- For target-specific code (e.g. only used in WASM or only in native), use `#[cfg(target_arch = "wasm32")]` or `#[cfg(not(target_arch = "wasm32"))]` — not `#[allow(dead_code)]`.
+- `#[allow(dead_code)]` is acceptable only for serde deserialization fields or event data fields that mirror the backend but are not yet displayed in the UI.
 
 ## Build
 - Always build with `cargo check`, `cargo build`, or `cargo run` — never use the `-p` flag
