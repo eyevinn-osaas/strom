@@ -114,42 +114,6 @@ impl InputBox {
         let (r, g, b) = hsv_to_rgb(hue, 0.7, 0.9);
         Color32::from_rgba_unmultiplied(r, g, b, (self.alpha * 255.0) as u8)
     }
-
-    /// Get resize handle rect in canvas coordinates.
-    fn resize_handle_rect(&self, handle: ResizeHandle, handle_size: f32) -> Rect {
-        let rect = self.rect();
-
-        match handle {
-            ResizeHandle::TopLeft => {
-                Rect::from_center_size(rect.left_top(), Vec2::splat(handle_size))
-            }
-            ResizeHandle::Top => Rect::from_center_size(
-                Pos2::new(rect.center().x, rect.top()),
-                Vec2::new(handle_size * 2.0, handle_size),
-            ),
-            ResizeHandle::TopRight => {
-                Rect::from_center_size(rect.right_top(), Vec2::splat(handle_size))
-            }
-            ResizeHandle::Left => Rect::from_center_size(
-                Pos2::new(rect.left(), rect.center().y),
-                Vec2::new(handle_size, handle_size * 2.0),
-            ),
-            ResizeHandle::Right => Rect::from_center_size(
-                Pos2::new(rect.right(), rect.center().y),
-                Vec2::new(handle_size, handle_size * 2.0),
-            ),
-            ResizeHandle::BottomLeft => {
-                Rect::from_center_size(rect.left_bottom(), Vec2::splat(handle_size))
-            }
-            ResizeHandle::Bottom => Rect::from_center_size(
-                Pos2::new(rect.center().x, rect.bottom()),
-                Vec2::new(handle_size * 2.0, handle_size),
-            ),
-            ResizeHandle::BottomRight => {
-                Rect::from_center_size(rect.right_bottom(), Vec2::splat(handle_size))
-            }
-        }
-    }
 }
 
 /// Convert HSV to RGB (0-255).
@@ -224,8 +188,6 @@ pub struct CompositorEditor {
 
     /// Status message
     status: String,
-    /// Error message
-    error: Option<String>,
 
     /// Last time we sent a live update (for throttling)
     last_live_update: instant::Instant,
@@ -294,7 +256,6 @@ impl CompositorEditor {
             animate_moves: true,
             api,
             status: "Loading...".to_string(),
-            error: None,
             last_live_update: instant::Instant::now(),
             // Transition settings
             transition_from: 0,

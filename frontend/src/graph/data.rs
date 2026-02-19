@@ -167,7 +167,8 @@ impl GraphEditor {
         self.request_open_palette.replace(false)
     }
 
-    /// Get the last known canvas rect (for hit testing pinch gestures).
+    /// Get the last known canvas rect (for hit testing pinch gestures, WASM only).
+    #[allow(dead_code)]
     pub fn canvas_rect(&self) -> Option<egui::Rect> {
         self.last_canvas_rect
     }

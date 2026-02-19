@@ -8,6 +8,7 @@ const HISTORY_SIZE: usize = 60; // Keep 60 seconds of history
 /// PTP stats data received from WebSocket event.
 #[derive(Clone, Debug)]
 pub struct PtpStatsData {
+    #[allow(dead_code)]
     pub domain: u8,
     pub synced: bool,
     pub mean_path_delay_ns: Option<u64>,

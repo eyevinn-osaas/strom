@@ -13,7 +13,6 @@ mod stats;
 
 pub use auth::AuthStatusResponse;
 pub use flows::LatencyInfo;
-pub use stats::{FlowRtpStatsInfo, RtpStatisticInfo};
 
 use serde::Deserialize;
 
@@ -88,7 +87,8 @@ impl ApiClient {
         }
     }
 
-    /// Create a new API client with authentication token.
+    /// Create a new API client with authentication token (native only).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_auth(base_url: impl Into<String>, auth_token: Option<String>) -> Self {
         Self {
             base_url: base_url.into(),

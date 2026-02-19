@@ -474,36 +474,3 @@ pub fn show_full(ui: &mut Ui, stats: &WebRtcStats) {
         ui.add_space(10.0);
     }
 }
-
-/// Render a summary line of WebRTC stats for toolbar display.
-pub fn show_summary(ui: &mut Ui, stats: &WebRtcStats) {
-    if stats.connections.is_empty() {
-        return;
-    }
-
-    let total_connections = stats.connections.len();
-    let connected_count = stats
-        .connections
-        .values()
-        .filter(|c| {
-            c.ice_candidates
-                .as_ref()
-                .and_then(|ice| ice.state.as_ref())
-                .map(|s| s == "connected" || s == "completed")
-                .unwrap_or(false)
-        })
-        .count();
-
-    let color = if connected_count == total_connections {
-        Color32::from_rgb(0, 200, 0)
-    } else if connected_count > 0 {
-        Color32::from_rgb(255, 165, 0)
-    } else {
-        Color32::from_rgb(255, 0, 0)
-    };
-
-    ui.colored_label(
-        color,
-        format!("WebRTC: {}/{}", connected_count, total_connections),
-    );
-}

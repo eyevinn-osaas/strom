@@ -133,7 +133,7 @@ impl StromApp {
             last_latency_fetch: instant::Instant::now(),
             rtp_stats_cache: std::collections::HashMap::new(),
             last_rtp_stats_fetch: instant::Instant::now(),
-            show_stats_panel: false,
+
             compositor_editor: None,
             mixer_editor: None,
             playlist_editor: None,
@@ -275,7 +275,7 @@ impl StromApp {
             last_latency_fetch: instant::Instant::now(),
             rtp_stats_cache: std::collections::HashMap::new(),
             last_rtp_stats_fetch: instant::Instant::now(),
-            show_stats_panel: false,
+
             compositor_editor: None,
             mixer_editor: None,
             playlist_editor: None,

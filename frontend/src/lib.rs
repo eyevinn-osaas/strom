@@ -3,8 +3,9 @@
 //! This module exposes the frontend application for embedding in native mode.
 
 #![warn(clippy::all, rust_2018_idioms)]
-#![deny(clippy::disallowed_types)]
+// TODO: remove blanket allow — fix remaining dead code warnings instead
 #![allow(dead_code)]
+#![deny(clippy::disallowed_types)]
 
 mod api;
 mod app;

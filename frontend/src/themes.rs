@@ -31,8 +31,6 @@ mod claude {
     pub const CORAL: Color32 = Color32::from_rgb(0xc9, 0x64, 0x42);
 
     // Semantic colors
-    pub const GREEN: Color32 = Color32::from_rgb(0x98, 0xc3, 0x79);
-    pub const BLUE: Color32 = Color32::from_rgb(0x61, 0xaf, 0xef);
     pub const RED: Color32 = Color32::from_rgb(0xe0, 0x6c, 0x75);
 }
 

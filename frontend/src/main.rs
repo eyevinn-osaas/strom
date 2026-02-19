@@ -3,6 +3,7 @@
 //! Supports both WASM (for web browsers) and native (embedded in backend) modes.
 
 #![warn(clippy::all, rust_2018_idioms)]
+// TODO: remove blanket allow — fix remaining dead code warnings instead
 #![allow(dead_code)]
 
 mod api;

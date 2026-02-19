@@ -121,6 +121,7 @@ pub(super) struct PadToRender {
     /// The actual pad name (e.g., "sink_0" for a request pad, or "sink" for a static pad)
     pub name: String,
     /// The template name (e.g., "sink_%u" for request pads, or "sink" for static pads)
+    #[allow(dead_code)]
     pub template_name: String,
     /// Media type for coloring
     pub media_type: strom_types::element::MediaType,

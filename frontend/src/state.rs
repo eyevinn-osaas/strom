@@ -88,7 +88,7 @@ pub enum AppMessage {
     /// RTP statistics loaded for a flow (jitterbuffer stats from AES67 Input blocks)
     RtpStatsLoaded {
         flow_id: String,
-        rtp_stats: crate::api::FlowRtpStatsInfo,
+        rtp_stats: strom_types::api::FlowStatsResponse,
     },
     /// RTP statistics not available (flow not running or no RTP blocks)
     RtpStatsNotAvailable(String),
@@ -148,14 +148,6 @@ pub enum ConnectionState {
 impl ConnectionState {
     pub fn is_connected(&self) -> bool {
         matches!(self, ConnectionState::Connected)
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            ConnectionState::Connected => "Connected",
-            ConnectionState::Disconnected => "Disconnected",
-            ConnectionState::Reconnecting { .. } => "Reconnecting",
-        }
     }
 }
 

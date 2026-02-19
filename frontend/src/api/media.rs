@@ -36,7 +36,8 @@ impl ApiClient {
         format!("{}/media/file/{}", self.base_url, urlencoding::encode(path))
     }
 
-    /// Upload a file to the media directory.
+    /// Upload a file to the media directory (WASM only).
+    #[cfg(target_arch = "wasm32")]
     pub async fn upload_media(
         &self,
         target_path: &str,

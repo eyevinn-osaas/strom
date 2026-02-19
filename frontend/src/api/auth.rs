@@ -7,6 +7,7 @@ use super::*;
 pub struct AuthStatusResponse {
     pub authenticated: bool,
     pub auth_required: bool,
+    #[allow(dead_code)]
     pub methods: Vec<String>,
 }
 

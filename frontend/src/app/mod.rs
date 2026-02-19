@@ -422,6 +422,7 @@ pub enum LogLevel {
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     /// Timestamp when the message was received
+    #[allow(dead_code)]
     pub timestamp: instant::Instant,
     /// Severity level
     pub level: LogLevel,
@@ -620,12 +621,10 @@ pub struct StromApp {
     latency_cache: std::collections::HashMap<String, crate::api::LatencyInfo>,
     /// Last time latency was fetched (for periodic refresh)
     last_latency_fetch: instant::Instant,
-    /// Cached RTP stats info for flows (flow_id -> FlowRtpStatsInfo)
-    rtp_stats_cache: std::collections::HashMap<String, crate::api::FlowRtpStatsInfo>,
+    /// Cached RTP stats info for flows (flow_id -> FlowStatsResponse)
+    rtp_stats_cache: std::collections::HashMap<String, strom_types::api::FlowStatsResponse>,
     /// Last time stats was fetched (for periodic refresh)
     last_rtp_stats_fetch: instant::Instant,
-    /// Whether to show the stats panel
-    show_stats_panel: bool,
     /// Compositor layout editor (if open)
     compositor_editor: Option<CompositorEditor>,
     /// Mixer editor (if open)

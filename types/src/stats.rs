@@ -32,6 +32,31 @@ pub enum StatValue {
     TimestampNs(u64),
 }
 
+impl StatValue {
+    /// Format the value for display.
+    pub fn format(&self) -> String {
+        match self {
+            StatValue::Counter(v) => format!("{}", v),
+            StatValue::Gauge(v) => format!("{}", v),
+            StatValue::Float(v) => format!("{:.2}", v),
+            StatValue::Bool(v) => if *v { "Yes" } else { "No" }.to_string(),
+            StatValue::String(v) => v.clone(),
+            StatValue::DurationNs(v) => {
+                if *v < 1_000 {
+                    format!("{} ns", v)
+                } else if *v < 1_000_000 {
+                    format!("{:.2} us", *v as f64 / 1_000.0)
+                } else if *v < 1_000_000_000 {
+                    format!("{:.2} ms", *v as f64 / 1_000_000.0)
+                } else {
+                    format!("{:.2} s", *v as f64 / 1_000_000_000.0)
+                }
+            }
+            StatValue::TimestampNs(v) => format!("{}", v),
+        }
+    }
+}
+
 /// Metadata about a statistic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]

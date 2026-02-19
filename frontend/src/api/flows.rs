@@ -7,14 +7,18 @@ use super::*;
 #[derive(Debug, Clone, Deserialize)]
 pub struct LatencyInfo {
     /// Minimum latency in nanoseconds
+    #[allow(dead_code)]
     pub min_latency_ns: u64,
     /// Maximum latency in nanoseconds
+    #[allow(dead_code)]
     pub max_latency_ns: u64,
     /// Whether the pipeline is a live pipeline
+    #[allow(dead_code)]
     pub live: bool,
     /// Minimum latency formatted as human-readable string
     pub min_latency_formatted: String,
     /// Maximum latency formatted as human-readable string
+    #[allow(dead_code)]
     pub max_latency_formatted: String,
 }
 
