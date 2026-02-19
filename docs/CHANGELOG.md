@@ -2,6 +2,116 @@
 
 All notable changes to the Strom GStreamer Flow Engine project.
 
+## [0.3.22] - 2026-02-19
+
+### Added
+- Audio Mixer block with full channel strip processing (#365)
+  - Per-channel gate, compressor, parametric EQ, and high-pass filter
+  - Multi-row layout with pan knobs and dB-aligned faders
+  - LCD-style value displays and editable channel labels
+  - PFL/AFL solo mode, aux sends, and subgroup routing
+  - Input gain and main bus processing chain
+  - Rust DSP backend (lsp-plugins-rs) as alternative to LV2
+  - Force-live mode, configurable latency, and output tees
+  - Bus selection, save/reset, and per-section reset buttons
+  - 38 unit and integration tests
+- WHEP Player: Real audio level meter replacing CSS animation (#376)
+- Frontend: Rename WHEP Players tab to WHIP/WHEP and add ingest link (#376)
+- WHEP: Configurable jitterbuffer latency (#366)
+
+### Changed
+- Update GStreamer bindings to 0.25.0-alpha.2 (#362)
+- Refactor: Split app.rs (7172 lines) into focused modules (#372)
+- Refactor: Split pipeline.rs into focused sub-modules (#373)
+- Refactor: Split graph.rs, compositor_editor.rs, api.rs into focused modules (#375)
+- Refactor: Split mixer.rs into directory module (#365)
+- Centralize mixer defaults in strom-types (#365)
+
+### Fixed
+- WHEP: Encode server-provided endpoint path in player URL (#376)
+- WHEP: URL-encode endpoint IDs in streams page URLs (#376)
+- WHEP: Route audio through video element for A+V streams (#376)
+- WHEP: Start audio muted to comply with browser autoplay policy (#376)
+- WHEP: Fix ice-transport-policy crash (#366)
+- Mixer: Various fixes for HPF, faders, knobs, and plugin properties (#365)
+- GUI: Use wgpu renderer on macOS to avoid OpenGL conflict (#361)
+- Protect Swagger UI with auth (#360)
+
+---
+
+## [0.3.21] - 2026-02-11
+
+### Fixed
+- Resolution live-change and preserve pre-built WASM in Docker (#358)
+
+---
+
+## [0.3.20] - 2026-02-11
+
+### Added
+- WHIP Input block for browser/encoder ingest (#350)
+- Backend: Placeholder page when WASM frontend is not built (#341)
+
+### Changed
+- Remove VP8 from offered video codecs in WHEP (#346)
+
+### Fixed
+- Auth: Disable Secure flag on session cookie for HTTP access (#356)
+- Video encoder: Correct vtenc bitrate unit and remove conflicting quality (#348)
+- WHEP: Strip H.264 profile-level-id from webrtcsink capsfilters (#347)
+- WHEP: Strip opus stereo fmtp params to fix audio-only timeout (#345)
+- WHEP: Correct default stream mode to video-only and fix audio+video port creation (#343)
+- Installer: Create install directory if it doesn't exist (#342)
+
+---
+
+## [0.3.19] - 2026-02-06
+
+### Added
+- WHEP Player: Debug mode toggle for ICE/TURN logging (#331)
+- WHEP Player: Persist debug mode setting across reloads (#338)
+- Backend: Configurable ICE transport policy (#332)
+- Backend: Configurable CORS allowed origins (#330)
+
+### Fixed
+- Frontend: Clear stale WebRTC stats when peers disconnect or flows stop (#339)
+- Docker: Clear stale CEF cache on container start (#337)
+
+---
+
+## [0.3.18] - 2026-02-02
+
+### Added
+- Frontend: Debug console button in footer (#320)
+- OpenAPI documentation for API endpoints (#319)
+- Open source community standards documentation (#318)
+
+### Fixed
+- gstcefsrc: Only use x86-64-v3 on amd64 architecture (#323)
+- gstcefsrc: Target x86-64-v3 and bump CEF to 144.0.12 (#321)
+- AES67: Make rtcp-mode property optional for older GStreamer (#317)
+
+---
+
+## [0.3.17] - 2026-01-30
+
+### Changed
+- Consolidate CI jobs and add cross-platform tests (#311)
+
+### Fixed
+- WHIP: Handle incoming RTP from SMB to prevent not-linked errors (#315)
+- Frontend: Add clipboard fallback for insecure HTTP contexts (#313)
+- Remove emojis from log statements (#312)
+
+---
+
+## [0.3.16] - 2026-01-29
+
+### Fixed
+- Resolve build warnings and increase macOS CI timeout (#308)
+
+---
+
 ## [0.3.15] - 2026-01-28
 
 ### Added
