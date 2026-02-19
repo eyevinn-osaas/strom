@@ -1,20 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::*;
-
-/// Login request payload
-#[derive(Debug, Serialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-/// Login response
-#[derive(Debug, Deserialize)]
-pub struct LoginResponse {
-    pub success: bool,
-    pub message: String,
-}
 
 /// Authentication status response
 #[derive(Debug, Clone, Deserialize)]
@@ -82,40 +68,6 @@ impl ApiClient {
             auth_status.auth_required, auth_status.authenticated
         );
         Ok(auth_status)
-    }
-
-    /// Login with username and password.
-    pub async fn login(&self, username: String, password: String) -> ApiResult<LoginResponse> {
-        use tracing::info;
-
-        let url = format!("{}/login", self.base_url);
-        info!("Attempting login for user: {}", username);
-
-        let request = LoginRequest { username, password };
-
-        let response = self
-            .with_auth(self.client.post(&url).json(&request))
-            .send()
-            .await
-            .map_err(|e| {
-                tracing::error!("Network request failed: {}", e);
-                ApiError::Network(e.to_string())
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_default();
-            tracing::error!("HTTP error {}: {}", status, text);
-            return Err(ApiError::Http(status, text));
-        }
-
-        let login_response: LoginResponse = response.json().await.map_err(|e| {
-            tracing::error!("Failed to parse login response: {}", e);
-            ApiError::Decode(e.to_string())
-        })?;
-
-        info!("Login response: success={}", login_response.success);
-        Ok(login_response)
     }
 
     /// Logout the current session.

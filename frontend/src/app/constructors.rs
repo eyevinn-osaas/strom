@@ -1,7 +1,6 @@
 use crate::api::ApiClient;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
-use crate::login::LoginScreen;
 use crate::mediaplayer::MediaPlayerDataStore;
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
@@ -123,7 +122,6 @@ impl StromApp {
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
             version_info: None,
-            login_screen: LoginScreen::default(),
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
@@ -266,7 +264,6 @@ impl StromApp {
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
             version_info: None,
-            login_screen: LoginScreen::default(),
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,

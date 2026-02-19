@@ -812,22 +812,6 @@ impl eframe::App for StromApp {
                         self.load_version(ctx.clone());
                     }
                 }
-                AppMessage::LoginResult(response) => {
-                    tracing::info!("Login result: success={}", response.success);
-                    self.login_screen.set_logging_in(false);
-
-                    if response.success {
-                        // Clear login form
-                        self.login_screen.username.clear();
-                        self.login_screen.password.clear();
-                        self.login_screen.clear_error();
-
-                        // Recheck auth status to update UI
-                        self.check_auth_status(ctx.clone());
-                    } else {
-                        self.login_screen.set_error(response.message);
-                    }
-                }
                 AppMessage::LogoutComplete => {
                     tracing::info!("Logout complete, reloading page to show login form");
 

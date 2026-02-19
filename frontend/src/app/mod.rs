@@ -19,7 +19,6 @@ use crate::audiorouter::RoutingMatrixEditor;
 use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
-use crate::login::LoginScreen;
 use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
 use crate::mixer::MixerEditor;
@@ -599,8 +598,6 @@ pub struct StromApp {
     needs_initial_settings_apply: bool,
     /// Version information from the backend
     version_info: Option<crate::api::VersionInfo>,
-    /// Login screen
-    login_screen: LoginScreen,
     /// Authentication status
     auth_status: Option<AuthStatusResponse>,
     /// Whether we're checking auth status

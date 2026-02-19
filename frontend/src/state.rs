@@ -58,8 +58,6 @@ pub enum AppMessage {
 
     /// Authentication status loaded
     AuthStatusLoaded(crate::api::AuthStatusResponse),
-    /// Login result received
-    LoginResult(crate::api::LoginResponse),
     /// Logout completed
     LogoutComplete,
 

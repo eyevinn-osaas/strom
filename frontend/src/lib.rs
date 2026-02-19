@@ -18,7 +18,6 @@ mod info_page;
 mod latency;
 mod links;
 mod list_navigator;
-mod login;
 mod media;
 mod mediaplayer;
 mod meter;

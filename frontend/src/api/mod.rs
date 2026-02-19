@@ -11,7 +11,7 @@ mod media;
 mod player;
 mod stats;
 
-pub use auth::{AuthStatusResponse, LoginResponse};
+pub use auth::AuthStatusResponse;
 pub use flows::LatencyInfo;
 pub use stats::{FlowRtpStatsInfo, RtpStatisticInfo};
 
@@ -78,7 +78,8 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    /// Create a new API client with the given base URL.
+    /// Create a new API client with the given base URL (WASM only, no auth).
+    #[cfg(target_arch = "wasm32")]
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
@@ -94,11 +95,6 @@ impl ApiClient {
             client: reqwest::Client::new(),
             auth_token,
         }
-    }
-
-    /// Get the auth token (for WebSocket connections)
-    pub fn auth_token(&self) -> Option<&str> {
-        self.auth_token.as_deref()
     }
 
     /// Helper to add auth header to a request builder
