@@ -33,6 +33,7 @@
     <script src="/static/whep.js"></script>
     <script>
         const streamConnections = new Map();
+        const streamAudioTracks = new Map();
 
         async function loadStreams() {
             try {
@@ -53,6 +54,7 @@
                 if (!streams.find(s => s.endpoint_id === id)) {
                     conn.close();
                     streamConnections.delete(id);
+                    streamAudioTracks.delete(id);
                 }
             }
 
@@ -108,7 +110,7 @@
                         ${createAudioIndicator()}
                     </div>
                     <div class="audio-controls" id="audio-controls-${stream.endpoint_id}" style="margin-bottom: 12px;">
-                        <button class="mute-btn" id="mute-${stream.endpoint_id}" onclick="toggleMute('${stream.endpoint_id}')" title="Toggle mute">&#128266;</button>
+                        <button class="mute-btn muted" id="mute-${stream.endpoint_id}" onclick="toggleMute('${stream.endpoint_id}')" title="Toggle mute">&#128263;</button>
                         <input type="range" class="volume-slider" id="volume-${stream.endpoint_id}" min="0" max="100" value="100" oninput="setVolume('${stream.endpoint_id}', this.value)">
                         <span class="volume-label" id="volume-label-${stream.endpoint_id}">100%</span>
                     </div>
@@ -123,7 +125,7 @@
                         <button class="open-btn" onclick="openPlayer('${stream.endpoint_id}')">Open</button>
                     </div>
                 </div>
-                <audio id="audio-elem-${stream.endpoint_id}" autoplay></audio>
+                <audio id="audio-elem-${stream.endpoint_id}" autoplay muted></audio>
             `;
 
             return card;
@@ -148,9 +150,16 @@
 
             const connection = new WhepConnection('/whep/' + endpointId, {
                 onAudioTrack: (stream) => {
-                    document.getElementById('audio-elem-' + endpointId).srcObject = stream;
+                    streamAudioTracks.set(endpointId, stream.getAudioTracks()[0]);
+                    const audio = document.getElementById('audio-elem-' + endpointId);
+                    audio.srcObject = stream;
+                    audio.play().catch(() => {});
                 },
                 onVideoTrack: (stream) => {
+                    const track = streamAudioTracks.get(endpointId);
+                    if (track) {
+                        stream.addTrack(track);
+                    }
                     const container = document.getElementById('video-' + endpointId);
                     container.querySelector('video').srcObject = stream;
                     setElementClass('video-' + endpointId, 'active', true);
@@ -166,11 +175,12 @@
                     if (mediaTypes.length > 0) {
                         setStatus('status-' + endpointId, 'Playing ' + mediaTypes.join(' + '), 'connected');
                     }
-                    // Show audio indicator if stream has audio (regardless of video)
-                    // Show audio controls only for audio-only streams (video has its own controls)
                     const isAudioOnly = hasAudio && !hasVideo;
                     setElementClass('audio-' + endpointId, 'active', hasAudio);
                     setElementClass('audio-controls-' + endpointId, 'active', isAudioOnly);
+                    if (hasVideo) {
+                        document.getElementById('audio-elem-' + endpointId).srcObject = null;
+                    }
                 },
                 onError: (msg) => {
                     setStatus('status-' + endpointId, 'Error: ' + msg, 'error');
@@ -181,6 +191,7 @@
                     setElementClass('audio-' + endpointId, 'active', false);
                     setElementClass('audio-controls-' + endpointId, 'active', false);
                     setElementClass('video-' + endpointId, 'active', false);
+                    streamAudioTracks.delete(endpointId);
                     document.getElementById('audio-elem-' + endpointId).srcObject = null;
                     const container = document.getElementById('video-' + endpointId);
                     if (container) container.querySelector('video').srcObject = null;
@@ -198,6 +209,7 @@
             if (conn) {
                 conn.disconnect();
                 streamConnections.delete(endpointId);
+                streamAudioTracks.delete(endpointId);
             }
         }
 
@@ -211,6 +223,7 @@
             } else {
                 muteBtn.innerHTML = '&#128266;';
                 muteBtn.classList.remove('muted');
+                audio.play().catch(() => {});
             }
         }
 
