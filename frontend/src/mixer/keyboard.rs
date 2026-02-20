@@ -14,6 +14,11 @@ impl MixerEditor {
             self.selection = None;
         }
 
+        // Don't process other shortcuts if a text input has focus
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+
         // Number keys 1-9, 0 for channel selection
         for (key, ch) in [
             (egui::Key::Num1, 0),
