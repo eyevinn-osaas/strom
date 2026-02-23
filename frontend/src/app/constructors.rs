@@ -164,6 +164,8 @@ impl StromApp {
             focus_target: FocusTarget::None,
             focus_flow_filter_requested: false,
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
+            key_sequence_buffer: Vec::new(),
+            interactive_overlay: None,
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility
@@ -306,6 +308,8 @@ impl StromApp {
             focus_target: FocusTarget::None,
             focus_flow_filter_requested: false,
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
+            key_sequence_buffer: Vec::new(),
+            interactive_overlay: None,
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility
