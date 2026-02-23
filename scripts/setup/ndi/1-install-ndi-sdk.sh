@@ -8,6 +8,9 @@
 
 set -euo pipefail
 
+# Use sudo only if not already root
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -75,8 +78,8 @@ fi
 # Install dependencies
 log_info "Installing dependencies..."
 if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y wget libavahi-common3 libavahi-client3
+    $SUDO apt-get update
+    $SUDO apt-get install -y wget file libavahi-common3 libavahi-client3
 else
     log_warning "apt-get not found. Please ensure libavahi-common3 and libavahi-client3 are installed."
 fi
@@ -133,11 +136,11 @@ if [ -f "$INSTALLER_SCRIPT" ]; then
         log_info "Found library: $NDI_LIB_NAME"
 
         # Copy the actual library file
-        sudo cp -v "$NDI_LIB" "$INSTALL_PREFIX/lib/$LIB_DIR/"
+        $SUDO cp -v "$NDI_LIB" "$INSTALL_PREFIX/lib/$LIB_DIR/"
 
         # Create symlinks
-        sudo ln -sf "$NDI_LIB_NAME" "$INSTALL_PREFIX/lib/$LIB_DIR/libndi.so.6"
-        sudo ln -sf libndi.so.6 "$INSTALL_PREFIX/lib/$LIB_DIR/libndi.so"
+        $SUDO ln -sf "$NDI_LIB_NAME" "$INSTALL_PREFIX/lib/$LIB_DIR/libndi.so.6"
+        $SUDO ln -sf libndi.so.6 "$INSTALL_PREFIX/lib/$LIB_DIR/libndi.so"
 
         log_success "Libraries installed"
     else
@@ -147,8 +150,8 @@ if [ -f "$INSTALLER_SCRIPT" ]; then
     # Install headers (optional but useful)
     if [ -d "$SDK_DIR/include" ]; then
         log_info "Installing headers to $INSTALL_PREFIX/include/ndi/..."
-        sudo mkdir -p "$INSTALL_PREFIX/include/ndi"
-        sudo cp -v "$SDK_DIR/include/"* "$INSTALL_PREFIX/include/ndi/"
+        $SUDO mkdir -p "$INSTALL_PREFIX/include/ndi"
+        $SUDO cp -v "$SDK_DIR/include/"* "$INSTALL_PREFIX/include/ndi/"
         log_success "Headers installed"
     fi
 
@@ -156,7 +159,7 @@ elif [ -f "ndi-sdk-installer.sh" ]; then
     # Fallback for older SDK versions
     log_info "Found alternative installer: ndi-sdk-installer.sh"
     chmod +x ndi-sdk-installer.sh
-    sudo ./ndi-sdk-installer.sh
+    $SUDO ./ndi-sdk-installer.sh
 
 else
     log_error "Could not find NDI SDK installer script. Archive structure may have changed."
@@ -167,7 +170,7 @@ fi
 
 # Update library cache
 log_info "Updating library cache..."
-sudo ldconfig
+$SUDO ldconfig
 
 # Verify installation
 echo ""

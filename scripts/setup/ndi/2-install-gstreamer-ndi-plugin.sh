@@ -9,6 +9,9 @@
 
 set -euo pipefail
 
+# Use sudo only if not already root
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -71,8 +74,8 @@ log_success "NDI SDK found"
 # Install build dependencies
 log_info "Installing build dependencies..."
 if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y \
+    $SUDO apt-get update
+    $SUDO apt-get install -y \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
         gstreamer1.0-plugins-base \
@@ -135,11 +138,11 @@ log_success "Build complete: $PLUGIN_PATH"
 INSTALL_PATH="/usr/lib/$LIB_DIR/gstreamer-1.0/libgstndi.so"
 
 log_info "Installing plugin to: $INSTALL_PATH"
-sudo install -o root -g root -m 644 "$PLUGIN_PATH" "$INSTALL_PATH"
+$SUDO install -o root -g root -m 644 "$PLUGIN_PATH" "$INSTALL_PATH"
 
 # Update library cache
 log_info "Updating library cache..."
-sudo ldconfig
+$SUDO ldconfig
 
 # Clear GStreamer plugin cache
 log_info "Clearing GStreamer plugin cache..."
