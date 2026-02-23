@@ -169,8 +169,7 @@ impl OverlayState {
     }
 
     fn render(&self, ctx: &Context) {
-        #[allow(deprecated)]
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
 
         egui::Area::new(egui::Id::new("interactive_overlay"))
             .fixed_pos(screen_rect.min)
