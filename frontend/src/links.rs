@@ -1,10 +1,12 @@
 //! Links page for quick access to WHEP players, SRT streams, and API endpoints.
 
 use egui::{Context, Ui};
+use std::collections::HashSet;
 use strom_types::{Flow, PropertyValue};
 
 use crate::api::ApiClient;
 use crate::app::{download_file, generate_vlc_playlist};
+use crate::qr::QrCache;
 
 /// Information about an SRT listener stream.
 struct SrtListenerInfo {
@@ -26,12 +28,18 @@ enum LinksTab {
 /// Links page state.
 pub struct LinksPage {
     selected_tab: LinksTab,
+    /// URLs for which the QR code is currently shown.
+    qr_visible: HashSet<String>,
+    /// Cached QR code textures.
+    qr_cache: QrCache,
 }
 
 impl LinksPage {
     pub fn new() -> Self {
         Self {
             selected_tab: LinksTab::default(),
+            qr_visible: HashSet::new(),
+            qr_cache: QrCache::new(),
         }
     }
 
@@ -127,14 +135,26 @@ impl LinksPage {
                 ui.add_space(16.0);
 
                 match self.selected_tab {
-                    LinksTab::Whep => self.render_whep_tab(ui, ctx, server_base),
+                    LinksTab::Whep => Self::render_whep_tab(
+                        ui,
+                        ctx,
+                        server_base,
+                        &mut self.qr_visible,
+                        &mut self.qr_cache,
+                    ),
                     LinksTab::Srt => self.render_srt_tab(ui, ctx, flows),
                     LinksTab::Api => self.render_api_tab(ui, ctx, server_base),
                 }
             });
     }
 
-    fn render_whep_tab(&self, ui: &mut Ui, ctx: &Context, server_base: &str) {
+    fn render_whep_tab(
+        ui: &mut Ui,
+        ctx: &Context,
+        server_base: &str,
+        qr_visible: &mut HashSet<String>,
+        qr_cache: &mut QrCache,
+    ) {
         ui.heading("WHIP/WHEP");
         ui.add_space(8.0);
         ui.label("WebRTC ingest (WHIP) and playback (WHEP) for low-latency streaming.");
@@ -155,6 +175,18 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
                     }
+                    let is_visible = qr_visible.contains(&ingest_url);
+                    if ui
+                        .small_button(if is_visible { "Hide QR" } else { "QR" })
+                        .on_hover_text("Toggle QR code for mobile access")
+                        .clicked()
+                    {
+                        if is_visible {
+                            qr_visible.remove(&ingest_url);
+                        } else {
+                            qr_visible.insert(ingest_url.clone());
+                        }
+                    }
                     if ui
                         .link(egui::RichText::new(&ingest_url).monospace())
                         .clicked()
@@ -162,6 +194,10 @@ impl LinksPage {
                         ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
                     }
                 });
+
+                if qr_visible.contains(&ingest_url) {
+                    Self::show_inline_qr(ui, ctx, &ingest_url, qr_cache);
+                }
 
                 ui.add_space(4.0);
                 ui.label(
@@ -189,6 +225,18 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &streams_url);
                     }
+                    let is_visible = qr_visible.contains(&streams_url);
+                    if ui
+                        .small_button(if is_visible { "Hide QR" } else { "QR" })
+                        .on_hover_text("Toggle QR code for mobile access")
+                        .clicked()
+                    {
+                        if is_visible {
+                            qr_visible.remove(&streams_url);
+                        } else {
+                            qr_visible.insert(streams_url.clone());
+                        }
+                    }
                     if ui
                         .link(egui::RichText::new(&streams_url).monospace())
                         .clicked()
@@ -196,6 +244,10 @@ impl LinksPage {
                         ctx.open_url(egui::OpenUrl::new_tab(&streams_url));
                     }
                 });
+
+                if qr_visible.contains(&streams_url) {
+                    Self::show_inline_qr(ui, ctx, &streams_url, qr_cache);
+                }
 
                 ui.add_space(4.0);
                 ui.label(
@@ -220,6 +272,18 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &player_base);
                     }
+                    let is_visible = qr_visible.contains(&player_base);
+                    if ui
+                        .small_button(if is_visible { "Hide QR" } else { "QR" })
+                        .on_hover_text("Toggle QR code for mobile access")
+                        .clicked()
+                    {
+                        if is_visible {
+                            qr_visible.remove(&player_base);
+                        } else {
+                            qr_visible.insert(player_base.clone());
+                        }
+                    }
                     if ui
                         .link(egui::RichText::new(&player_base).monospace())
                         .clicked()
@@ -227,6 +291,10 @@ impl LinksPage {
                         ctx.open_url(egui::OpenUrl::new_tab(&player_base));
                     }
                 });
+
+                if qr_visible.contains(&player_base) {
+                    Self::show_inline_qr(ui, ctx, &player_base, qr_cache);
+                }
 
                 ui.add_space(4.0);
                 ui.label(
@@ -237,6 +305,27 @@ impl LinksPage {
                     .weak(),
                 );
             });
+    }
+
+    /// Show an inline QR code image below the URL.
+    /// The QR code encodes the external URL (localhost replaced with hostname).
+    fn show_inline_qr(ui: &mut Ui, ctx: &Context, url: &str, qr_cache: &mut QrCache) {
+        let external_url = crate::app::make_external_url(url);
+        ui.add_space(4.0);
+        if let Some(texture) = qr_cache.get_or_create(ctx, &external_url) {
+            ui.image(egui::load::SizedTexture::new(
+                texture.id(),
+                egui::vec2(160.0, 160.0),
+            ));
+        }
+        if external_url != url {
+            ui.label(
+                egui::RichText::new(&external_url)
+                    .monospace()
+                    .small()
+                    .weak(),
+            );
+        }
     }
 
     fn render_srt_tab(&self, ui: &mut Ui, ctx: &Context, flows: &[Flow]) {

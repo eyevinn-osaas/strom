@@ -37,6 +37,8 @@ tracing.workspace = true
 
 # Image decoding for thumbnails (cross-platform)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# QR code generation (pure Rust, zero dependencies, WASM-compatible)
+qrcodegen = "1.8"
 # Base64 encoding for thumbnail storage (cross-platform)
 base64 = "0.22"
 
@@ -55,6 +57,8 @@ wasm-bindgen = "0.2"
 
 # Native-specific dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# System hostname detection (for generating external URLs)
+hostname = "0.4"
 # Enable wgpu renderer for native (macOS Metal support) - not available for WASM
 eframe = { workspace = true, features = ["wgpu"] }
 # Cross-platform time (standard for native)

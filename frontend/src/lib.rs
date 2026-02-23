@@ -28,6 +28,7 @@ mod palette;
 mod properties;
 mod ptp_monitor;
 mod qos_monitor;
+mod qr;
 mod state;
 mod system_monitor;
 mod themes;

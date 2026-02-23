@@ -291,14 +291,17 @@ pub fn transform_srt_uri_for_vlc(srt_uri: &str) -> String {
 }
 
 /// Get the hostname of the current server.
-/// Returns "127.0.0.1" instead of "localhost" because VLC doesn't work well with localhost.
+///
+/// - WASM: reads from browser `window.location.hostname` (already the external address).
+/// - Native: uses the OS hostname via `gethostname`.
+///
+/// Falls back to `"127.0.0.1"` if detection fails.
 #[cfg(target_arch = "wasm32")]
-fn get_current_hostname() -> String {
+pub(crate) fn get_current_hostname() -> String {
     let hostname = web_sys::window()
         .and_then(|w| w.location().hostname().ok())
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    // VLC doesn't work well with "localhost", use 127.0.0.1 instead
     if hostname == "localhost" {
         "127.0.0.1".to_string()
     } else {
@@ -307,9 +310,34 @@ fn get_current_hostname() -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn get_current_hostname() -> String {
-    // VLC doesn't work well with "localhost", use 127.0.0.1 instead
-    "127.0.0.1".to_string()
+pub(crate) fn get_current_hostname() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+/// Rewrite a URL so that `localhost` / `127.0.0.1` is replaced with the
+/// machine's actual hostname (or the browser host in WASM).
+///
+/// This is needed whenever a URL will be consumed by an external device
+/// (e.g. a phone scanning a QR code, or VLC connecting to an SRT stream).
+/// Returns the URL unchanged if the host is already external.
+pub(crate) fn make_external_url(url: &str) -> String {
+    // Quick check before doing any work
+    let dominated_by_local = url.contains("://localhost") || url.contains("://127.0.0.1");
+    if !dominated_by_local {
+        return url.to_string();
+    }
+
+    let hostname = get_current_hostname();
+    // If we resolved to loopback anyway, nothing we can do
+    if hostname == "127.0.0.1" || hostname == "localhost" {
+        return url.to_string();
+    }
+
+    url.replace("://localhost", &format!("://{}", hostname))
+        .replace("://127.0.0.1", &format!("://{}", hostname))
 }
 
 /// Theme preference for the application
@@ -679,4 +707,8 @@ pub struct StromApp {
     key_sequence_buffer: Vec<egui::Key>,
     /// Interactive overlay state (activated by key sequence)
     interactive_overlay: Option<crate::interactive_overlay::OverlayState>,
+    /// URL to show as inline QR code in the properties panel
+    qr_inline_url: Option<String>,
+    /// QR code texture cache (for properties popup)
+    qr_cache: crate::qr::QrCache,
 }

@@ -30,6 +30,10 @@ pub struct BlockInspectorResult {
     pub whip_ingest_url: Option<String>,
     /// Copy WHIP ingest URL to clipboard - contains endpoint_id
     pub copy_whip_url_requested: Option<String>,
+    /// Show QR code for WHEP player URL - contains endpoint_id
+    pub show_qr_whep: Option<String>,
+    /// Show QR code for WHIP ingest URL - contains endpoint_id
+    pub show_qr_whip: Option<String>,
 }
 
 /// Property inspector panel.
@@ -349,6 +353,8 @@ impl PropertyInspector {
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
+        qr_inline_url: &mut Option<String>,
+        qr_cache: &mut crate::qr::QrCache,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -513,6 +519,14 @@ impl PropertyInspector {
 
                 if let Some(endpoint_id) = endpoint_id {
                     ui.horizontal(|ui| {
+                        let is_qr_visible = qr_inline_url.is_some();
+                        if ui
+                            .button(if is_qr_visible { "Hide QR" } else { "QR" })
+                            .on_hover_text("Toggle QR code for mobile access")
+                            .clicked()
+                        {
+                            result.show_qr_whep = Some(endpoint_id.clone());
+                        }
                         if ui
                             .button("▶ Open Player")
                             .on_hover_text("Open WHEP player in browser")
@@ -528,6 +542,18 @@ impl PropertyInspector {
                             result.copy_whep_url_requested = Some(endpoint_id.clone());
                         }
                     });
+
+                    // Render inline QR code below buttons
+                    if let Some(ref url) = qr_inline_url {
+                        ui.add_space(4.0);
+                        if let Some(texture) = qr_cache.get_or_create(ui.ctx(), url) {
+                            ui.image(egui::load::SizedTexture::new(
+                                texture.id(),
+                                egui::vec2(200.0, 200.0),
+                            ));
+                        }
+                        ui.label(egui::RichText::new(url.as_str()).monospace().small());
+                    }
                 } else {
                     // Flow not running, show disabled button with tooltip
                     ui.add_enabled_ui(false, |ui| {
@@ -553,6 +579,14 @@ impl PropertyInspector {
 
                 if let Some(endpoint_id) = endpoint_id {
                     ui.horizontal(|ui| {
+                        let is_qr_visible = qr_inline_url.is_some();
+                        if ui
+                            .button(if is_qr_visible { "Hide QR" } else { "QR" })
+                            .on_hover_text("Toggle QR code for mobile access")
+                            .clicked()
+                        {
+                            result.show_qr_whip = Some(endpoint_id.clone());
+                        }
                         if ui
                             .button("▶ Open Ingest Page")
                             .on_hover_text("Open WHIP ingest page in browser")
@@ -568,6 +602,18 @@ impl PropertyInspector {
                             result.copy_whip_url_requested = Some(endpoint_id.clone());
                         }
                     });
+
+                    // Render inline QR code below buttons
+                    if let Some(ref url) = qr_inline_url {
+                        ui.add_space(4.0);
+                        if let Some(texture) = qr_cache.get_or_create(ui.ctx(), url) {
+                            ui.image(egui::load::SizedTexture::new(
+                                texture.id(),
+                                egui::vec2(200.0, 200.0),
+                            ));
+                        }
+                        ui.label(egui::RichText::new(url.as_str()).monospace().small());
+                    }
                 } else {
                     ui.add_enabled_ui(false, |ui| {
                         ui.button("▶ Open Ingest Page")

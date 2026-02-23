@@ -1238,6 +1238,8 @@ impl StromApp {
                             rtp_stats,
                             &self.network_interfaces,
                             &self.available_channels,
+                            &mut self.qr_inline_url,
+                            &mut self.qr_cache,
                         );
 
                         // Handle deletion request
@@ -1337,6 +1339,30 @@ impl StromApp {
                             let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
                             crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
                             self.status = "Ingest URL copied to clipboard".to_string();
+                        }
+
+                        // Handle QR code toggle for WHEP player
+                        if let Some(endpoint_id) = result.show_qr_whep {
+                            let player_url = make_external_url(
+                                &self.api.get_whep_player_url(&endpoint_id),
+                            );
+                            if self.qr_inline_url.as_deref() == Some(&player_url) {
+                                self.qr_inline_url = None;
+                            } else {
+                                self.qr_inline_url = Some(player_url);
+                            }
+                        }
+
+                        // Handle QR code toggle for WHIP ingest
+                        if let Some(endpoint_id) = result.show_qr_whip {
+                            let ingest_url = make_external_url(
+                                &self.api.get_whip_ingest_url(&endpoint_id),
+                            );
+                            if self.qr_inline_url.as_deref() == Some(&ingest_url) {
+                                self.qr_inline_url = None;
+                            } else {
+                                self.qr_inline_url = Some(ingest_url);
+                            }
                         }
                     } else {
                         ui.label("Block definition not found");
