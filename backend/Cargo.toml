@@ -54,6 +54,7 @@ gst-plugin-webrtchttp.workspace = true
 gst-plugin-inter.workspace = true
 gst-plugin-rtp.workspace = true
 gst-plugins-lsp = { git = "https://github.com/srperens/lsp-plugins-rs", tag = "v1.3.0", package = "gst-plugins-lsp" }
+agua-gst = { git = "https://github.com/srperens/agua", package = "agua-gst" }
 
 # Error handling
 anyhow = "1.0"
