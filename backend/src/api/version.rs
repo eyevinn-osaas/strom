@@ -2,7 +2,7 @@
 
 use axum::Json;
 
-use crate::version::VersionInfo;
+use crate::version::SystemInfo;
 
 /// Get version and build information
 ///
@@ -18,9 +18,9 @@ use crate::version::VersionInfo;
     path = "/api/version",
     tag = "System",
     responses(
-        (status = 200, description = "Version information", body = VersionInfo)
+        (status = 200, description = "Version information", body = SystemInfo)
     )
 )]
-pub async fn get_version() -> Json<VersionInfo> {
+pub async fn get_version() -> Json<SystemInfo> {
     Json(crate::version::get())
 }

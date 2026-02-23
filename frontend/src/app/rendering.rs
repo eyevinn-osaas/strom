@@ -1343,8 +1343,10 @@ impl StromApp {
 
                         // Handle QR code toggle for WHEP player
                         if let Some(endpoint_id) = result.show_qr_whep {
+                            let server_hostname = self.system_info.as_ref().map(|s| s.hostname.as_str());
                             let player_url = make_external_url(
                                 &self.api.get_whep_player_url(&endpoint_id),
+                                server_hostname,
                             );
                             if self.qr_inline_url.as_deref() == Some(&player_url) {
                                 self.qr_inline_url = None;
@@ -1355,8 +1357,10 @@ impl StromApp {
 
                         // Handle QR code toggle for WHIP ingest
                         if let Some(endpoint_id) = result.show_qr_whip {
+                            let server_hostname = self.system_info.as_ref().map(|s| s.hostname.as_str());
                             let ingest_url = make_external_url(
                                 &self.api.get_whip_ingest_url(&endpoint_id),
+                                server_hostname,
                             );
                             if self.qr_inline_url.as_deref() == Some(&ingest_url) {
                                 self.qr_inline_url = None;
@@ -1727,7 +1731,7 @@ impl StromApp {
                         ui.separator();
                     }
 
-                    if let Some(ref version_info) = self.version_info {
+                    if let Some(ref version_info) = self.system_info {
                         let version_text = if !version_info.git_tag.is_empty() {
                             // On a tagged release
                             version_info.git_tag.to_string()

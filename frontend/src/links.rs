@@ -115,7 +115,14 @@ impl LinksPage {
     }
 
     /// Render the links page.
-    pub fn render(&mut self, ui: &mut Ui, api: &ApiClient, ctx: &Context, flows: &[Flow]) {
+    pub fn render(
+        &mut self,
+        ui: &mut Ui,
+        api: &ApiClient,
+        ctx: &Context,
+        flows: &[Flow],
+        server_hostname: Option<&str>,
+    ) {
         let server_base = api.base_url().trim_end_matches("/api");
 
         ui.add_space(8.0);
@@ -141,6 +148,7 @@ impl LinksPage {
                         server_base,
                         &mut self.qr_visible,
                         &mut self.qr_cache,
+                        server_hostname,
                     ),
                     LinksTab::Srt => self.render_srt_tab(ui, ctx, flows),
                     LinksTab::Api => self.render_api_tab(ui, ctx, server_base),
@@ -154,6 +162,7 @@ impl LinksPage {
         server_base: &str,
         qr_visible: &mut HashSet<String>,
         qr_cache: &mut QrCache,
+        server_hostname: Option<&str>,
     ) {
         ui.heading("WHIP/WHEP");
         ui.add_space(8.0);
@@ -196,7 +205,7 @@ impl LinksPage {
                 });
 
                 if qr_visible.contains(&ingest_url) {
-                    Self::show_inline_qr(ui, ctx, &ingest_url, qr_cache);
+                    Self::show_inline_qr(ui, ctx, &ingest_url, qr_cache, server_hostname);
                 }
 
                 ui.add_space(4.0);
@@ -246,7 +255,7 @@ impl LinksPage {
                 });
 
                 if qr_visible.contains(&streams_url) {
-                    Self::show_inline_qr(ui, ctx, &streams_url, qr_cache);
+                    Self::show_inline_qr(ui, ctx, &streams_url, qr_cache, server_hostname);
                 }
 
                 ui.add_space(4.0);
@@ -293,7 +302,7 @@ impl LinksPage {
                 });
 
                 if qr_visible.contains(&player_base) {
-                    Self::show_inline_qr(ui, ctx, &player_base, qr_cache);
+                    Self::show_inline_qr(ui, ctx, &player_base, qr_cache, server_hostname);
                 }
 
                 ui.add_space(4.0);
@@ -309,8 +318,14 @@ impl LinksPage {
 
     /// Show an inline QR code image below the URL.
     /// The QR code encodes the external URL (localhost replaced with hostname).
-    fn show_inline_qr(ui: &mut Ui, ctx: &Context, url: &str, qr_cache: &mut QrCache) {
-        let external_url = crate::app::make_external_url(url);
+    fn show_inline_qr(
+        ui: &mut Ui,
+        ctx: &Context,
+        url: &str,
+        qr_cache: &mut QrCache,
+        server_hostname: Option<&str>,
+    ) {
+        let external_url = crate::app::make_external_url(url, server_hostname);
         ui.add_space(4.0);
         if let Some(texture) = qr_cache.get_or_create(ctx, &external_url) {
             ui.image(egui::load::SizedTexture::new(

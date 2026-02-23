@@ -2,7 +2,7 @@ use super::*;
 
 impl ApiClient {
     /// Get version and build information from the backend.
-    pub async fn get_version(&self) -> ApiResult<strom_types::api::VersionInfo> {
+    pub async fn get_version(&self) -> ApiResult<strom_types::api::SystemInfo> {
         use tracing::info;
 
         let url = format!("{}/version", self.base_url);
@@ -20,7 +20,7 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        let version_info: strom_types::api::VersionInfo = response
+        let version_info: strom_types::api::SystemInfo = response
             .json()
             .await
             .map_err(|e| ApiError::Decode(e.to_string()))?;

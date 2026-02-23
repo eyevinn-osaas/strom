@@ -121,7 +121,7 @@ impl StromApp {
                 .and_then(|s| eframe::get_value(s, APP_SETTINGS_KEY))
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
-            version_info: None,
+            system_info: None,
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
@@ -267,7 +267,7 @@ impl StromApp {
                 .and_then(|s| eframe::get_value(s, APP_SETTINGS_KEY))
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
-            version_info: None,
+            system_info: None,
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,

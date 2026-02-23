@@ -68,7 +68,7 @@ impl StromApp {
                         version_info.version,
                         version_info.git_hash
                     );
-                    let _ = tx.send(AppMessage::VersionLoaded(version_info));
+                    let _ = tx.send(AppMessage::SystemInfoLoaded(version_info));
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load version info: {}", e);

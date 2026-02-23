@@ -318,23 +318,33 @@ pub(crate) fn get_current_hostname() -> String {
 }
 
 /// Rewrite a URL so that `localhost` / `127.0.0.1` is replaced with the
-/// machine's actual hostname (or the browser host in WASM).
+/// machine's actual hostname.
 ///
 /// This is needed whenever a URL will be consumed by an external device
 /// (e.g. a phone scanning a QR code, or VLC connecting to an SRT stream).
 /// Returns the URL unchanged if the host is already external.
-pub(crate) fn make_external_url(url: &str) -> String {
+///
+/// When `server_hostname` is provided (from backend `SystemInfo`), it takes
+/// precedence over local detection. This ensures correct results even in
+/// WASM mode where `window.location.hostname` may return "localhost".
+pub(crate) fn make_external_url(url: &str, server_hostname: Option<&str>) -> String {
     // Quick check before doing any work
-    let dominated_by_local = url.contains("://localhost") || url.contains("://127.0.0.1");
-    if !dominated_by_local {
+    let is_local = url.contains("://localhost") || url.contains("://127.0.0.1");
+    if !is_local {
         return url.to_string();
     }
 
-    let hostname = get_current_hostname();
-    // If we resolved to loopback anyway, nothing we can do
-    if hostname == "127.0.0.1" || hostname == "localhost" {
-        return url.to_string();
-    }
+    // Prefer the backend-provided hostname, fall back to local detection
+    let hostname = match server_hostname {
+        Some(h) if !h.is_empty() && h != "localhost" && h != "127.0.0.1" => h.to_string(),
+        _ => {
+            let h = get_current_hostname();
+            if h == "127.0.0.1" || h == "localhost" {
+                return url.to_string();
+            }
+            h
+        }
+    };
 
     url.replace("://localhost", &format!("://{}", hostname))
         .replace("://127.0.0.1", &format!("://{}", hostname))
@@ -625,8 +635,8 @@ pub struct StromApp {
     settings: AppSettings,
     /// Whether we need to apply settings in the first update frame (workaround for iOS)
     needs_initial_settings_apply: bool,
-    /// Version information from the backend
-    version_info: Option<crate::api::VersionInfo>,
+    /// System information from the backend (version, host details, runtime environment)
+    system_info: Option<crate::api::SystemInfo>,
     /// Authentication status
     auth_status: Option<AuthStatusResponse>,
     /// Whether we're checking auth status
