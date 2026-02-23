@@ -11,38 +11,7 @@ mod media;
 mod player;
 mod stats;
 
-pub use auth::{AuthStatusResponse, LoginResponse};
-pub use flows::LatencyInfo;
-pub use stats::{FlowRtpStatsInfo, RtpStatisticInfo};
-
-use serde::Deserialize;
-
-/// Version information from the backend
-#[derive(Debug, Clone, Deserialize)]
-pub struct VersionInfo {
-    pub version: String,
-    pub git_hash: String,
-    pub git_tag: String,
-    pub git_branch: String,
-    pub git_dirty: bool,
-    pub build_timestamp: String,
-    /// Unique build ID (UUID) generated at compile time
-    #[serde(default)]
-    pub build_id: String,
-    #[serde(default)]
-    pub gstreamer_version: String,
-    #[serde(default)]
-    pub os_info: String,
-    #[serde(default)]
-    pub in_docker: bool,
-    /// When the Strom server process was started (ISO 8601 format with timezone)
-    /// This is the process uptime, not the system uptime
-    #[serde(default)]
-    pub process_started_at: String,
-    /// When the system was booted (ISO 8601 format with timezone)
-    #[serde(default)]
-    pub system_boot_time: String,
-}
+pub use strom_types::api::{AuthStatusResponse, LatencyResponse, VersionInfo};
 
 /// Result type for API operations.
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -78,7 +47,8 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    /// Create a new API client with the given base URL.
+    /// Create a new API client with the given base URL (WASM only, no auth).
+    #[cfg(target_arch = "wasm32")]
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
@@ -87,18 +57,14 @@ impl ApiClient {
         }
     }
 
-    /// Create a new API client with authentication token.
+    /// Create a new API client with authentication token (native only).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_auth(base_url: impl Into<String>, auth_token: Option<String>) -> Self {
         Self {
             base_url: base_url.into(),
             client: reqwest::Client::new(),
             auth_token,
         }
-    }
-
-    /// Get the auth token (for WebSocket connections)
-    pub fn auth_token(&self) -> Option<&str> {
-        self.auth_token.as_deref()
     }
 
     /// Helper to add auth header to a request builder

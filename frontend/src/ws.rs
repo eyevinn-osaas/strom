@@ -16,7 +16,8 @@ pub struct WebSocketClient {
 }
 
 impl WebSocketClient {
-    /// Create a new WebSocket client with the given URL.
+    /// Create a new WebSocket client (WASM only, no auth).
+    #[cfg(target_arch = "wasm32")]
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
@@ -25,7 +26,8 @@ impl WebSocketClient {
         }
     }
 
-    /// Create a new WebSocket client with auth token.
+    /// Create a new WebSocket client with auth token (native only).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new_with_auth(url: impl Into<String>, auth_token: Option<String>) -> Self {
         Self {
             url: url.into(),
@@ -69,18 +71,6 @@ impl WebSocketClient {
         }
 
         self.connected = true;
-    }
-
-    /// Check if currently connected.
-    pub fn is_connected(&self) -> bool {
-        self.connected
-    }
-
-    /// Disconnect from the WebSocket.
-    pub fn disconnect(&mut self) {
-        tracing::info!("Disconnecting from WebSocket");
-        self.connected = false;
-        // The actual WebSocket will be dropped when the async task completes
     }
 }
 

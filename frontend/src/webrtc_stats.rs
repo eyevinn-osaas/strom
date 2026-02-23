@@ -41,14 +41,6 @@ impl WebRtcStatsStore {
         self.data.get(&key)
     }
 
-    /// Check if stats are stale (older than given duration).
-    pub fn is_stale(&self, flow_id: &FlowId, max_age: std::time::Duration) -> bool {
-        self.last_update
-            .get(flow_id)
-            .map(|t| t.elapsed() > max_age)
-            .unwrap_or(true)
-    }
-
     /// Remove stats that haven't been updated within the given TTL.
     pub fn evict_stale(&mut self, ttl: std::time::Duration) {
         let stale_flows: Vec<FlowId> = self
@@ -60,12 +52,6 @@ impl WebRtcStatsStore {
         for flow_id in stale_flows {
             self.clear_flow(&flow_id);
         }
-    }
-
-    /// Clear all WebRTC stats data.
-    pub fn clear(&mut self) {
-        self.data.clear();
-        self.last_update.clear();
     }
 
     /// Remove WebRTC stats for a specific flow.
@@ -473,37 +459,4 @@ pub fn show_full(ui: &mut Ui, stats: &WebRtcStats) {
         show_connection_stats(ui, name, conn);
         ui.add_space(10.0);
     }
-}
-
-/// Render a summary line of WebRTC stats for toolbar display.
-pub fn show_summary(ui: &mut Ui, stats: &WebRtcStats) {
-    if stats.connections.is_empty() {
-        return;
-    }
-
-    let total_connections = stats.connections.len();
-    let connected_count = stats
-        .connections
-        .values()
-        .filter(|c| {
-            c.ice_candidates
-                .as_ref()
-                .and_then(|ice| ice.state.as_ref())
-                .map(|s| s == "connected" || s == "completed")
-                .unwrap_or(false)
-        })
-        .count();
-
-    let color = if connected_count == total_connections {
-        Color32::from_rgb(0, 200, 0)
-    } else if connected_count > 0 {
-        Color32::from_rgb(255, 165, 0)
-    } else {
-        Color32::from_rgb(255, 0, 0)
-    };
-
-    ui.colored_label(
-        color,
-        format!("WebRTC: {}/{}", connected_count, total_connections),
-    );
 }

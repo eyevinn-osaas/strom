@@ -323,9 +323,4 @@ impl MixerEditor {
             self.num_aux_buses as f32 * KNOB_SIZE + (self.num_aux_buses as f32 - 1.0) * 2.0;
         knob_row.max(MIN_STRIP_INNER)
     }
-
-    /// Total strip width including margins.
-    fn strip_width(&self) -> f32 {
-        self.strip_inner() + STRIP_MARGIN * 2.0
-    }
 }

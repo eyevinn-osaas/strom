@@ -1,7 +1,6 @@
 use crate::api::ApiClient;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
-use crate::login::LoginScreen;
 use crate::mediaplayer::MediaPlayerDataStore;
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
@@ -123,7 +122,6 @@ impl StromApp {
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
             version_info: None,
-            login_screen: LoginScreen::default(),
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
@@ -135,7 +133,7 @@ impl StromApp {
             last_latency_fetch: instant::Instant::now(),
             rtp_stats_cache: std::collections::HashMap::new(),
             last_rtp_stats_fetch: instant::Instant::now(),
-            show_stats_panel: false,
+
             compositor_editor: None,
             mixer_editor: None,
             playlist_editor: None,
@@ -266,7 +264,6 @@ impl StromApp {
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
             version_info: None,
-            login_screen: LoginScreen::default(),
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
@@ -278,7 +275,7 @@ impl StromApp {
             last_latency_fetch: instant::Instant::now(),
             rtp_stats_cache: std::collections::HashMap::new(),
             last_rtp_stats_fetch: instant::Instant::now(),
-            show_stats_panel: false,
+
             compositor_editor: None,
             mixer_editor: None,
             playlist_editor: None,

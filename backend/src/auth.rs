@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+pub use strom_types::api::AuthStatusResponse;
 use tower_sessions::Session;
 
 const SESSION_USER_KEY: &str = "user_authenticated";
@@ -115,17 +116,6 @@ pub struct LoginResponse {
     pub success: bool,
     /// Human-readable message describing the result
     pub message: String,
-}
-
-/// Authentication status response
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct AuthStatusResponse {
-    /// Whether the current session is authenticated
-    pub authenticated: bool,
-    /// Whether authentication is required for this server
-    pub auth_required: bool,
-    /// Available authentication methods (e.g., "session", "api_key")
-    pub methods: Vec<String>,
 }
 
 /// Authentication middleware that checks session, API key, native GUI token, and query param

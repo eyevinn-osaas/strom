@@ -228,7 +228,7 @@ fn main() -> anyhow::Result<()> {
 
     // Handle --version-info flag
     if args.version_info {
-        let info = strom::version::VersionInfo::get();
+        let info = strom::version::get();
         println!("Strom - GStreamer Flow Engine");
         println!("==============================");
         println!("Version:     v{}", info.version);
@@ -299,7 +299,7 @@ fn main() -> anyhow::Result<()> {
     let gui_enabled = false;
 
     // Log version and build info at startup
-    let version_info = strom::version::VersionInfo::get();
+    let version_info = strom::version::get();
     info!(
         "Strom v{} ({}) build_id={} gstreamer={}",
         version_info.version,

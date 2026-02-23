@@ -20,6 +20,7 @@ pub struct BlockInspectorResult {
     /// VLC playlist download requested (for MPEG-TS/SRT blocks) - contains (srt_uri, latency_ms)
     pub vlc_playlist_requested: Option<(String, i32)>,
     /// VLC playlist download-only requested (native mode) - contains (srt_uri, latency_ms)
+    #[cfg(not(target_arch = "wasm32"))]
     pub vlc_playlist_download_only: Option<(String, i32)>,
     /// WHEP player endpoint_id (for WHEP Output blocks) - used to construct full player URL
     pub whep_player_url: Option<String>,
@@ -345,7 +346,7 @@ impl PropertyInspector {
         meter_data_store: &crate::meter::MeterDataStore,
         latency_data_store: &crate::latency::LatencyDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
-        rtp_stats: Option<&crate::api::FlowRtpStatsInfo>,
+        rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
     ) -> BlockInspectorResult {
@@ -775,7 +776,7 @@ impl PropertyInspector {
                             // Stats are prefixed with jitterbuffer name like "rtpjitterbuffer0_num_pushed"
                             // or have "(rtpjitterbuffer0)" in display_name
                             use std::collections::BTreeMap;
-                            let mut grouped: BTreeMap<String, Vec<&crate::api::RtpStatisticInfo>> =
+                            let mut grouped: BTreeMap<String, Vec<&strom_types::stats::Statistic>> =
                                 BTreeMap::new();
 
                             for stat in &block_stats.stats {

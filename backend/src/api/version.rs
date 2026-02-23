@@ -22,5 +22,5 @@ use crate::version::VersionInfo;
     )
 )]
 pub async fn get_version() -> Json<VersionInfo> {
-    Json(VersionInfo::get())
+    Json(crate::version::get())
 }

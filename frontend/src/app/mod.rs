@@ -19,7 +19,6 @@ use crate::audiorouter::RoutingMatrixEditor;
 use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
-use crate::login::LoginScreen;
 use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
 use crate::mixer::MixerEditor;
@@ -423,6 +422,7 @@ pub enum LogLevel {
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     /// Timestamp when the message was received
+    #[allow(dead_code)]
     pub timestamp: instant::Instant,
     /// Severity level
     pub level: LogLevel,
@@ -599,8 +599,6 @@ pub struct StromApp {
     needs_initial_settings_apply: bool,
     /// Version information from the backend
     version_info: Option<crate::api::VersionInfo>,
-    /// Login screen
-    login_screen: LoginScreen,
     /// Authentication status
     auth_status: Option<AuthStatusResponse>,
     /// Whether we're checking auth status
@@ -619,16 +617,14 @@ pub struct StromApp {
         Vec<strom_types::element::Link>,
         String,
     )>,
-    /// Cached latency info for flows (flow_id -> LatencyInfo)
-    latency_cache: std::collections::HashMap<String, crate::api::LatencyInfo>,
+    /// Cached latency info for flows (flow_id -> LatencyResponse)
+    latency_cache: std::collections::HashMap<String, crate::api::LatencyResponse>,
     /// Last time latency was fetched (for periodic refresh)
     last_latency_fetch: instant::Instant,
-    /// Cached RTP stats info for flows (flow_id -> FlowRtpStatsInfo)
-    rtp_stats_cache: std::collections::HashMap<String, crate::api::FlowRtpStatsInfo>,
+    /// Cached RTP stats info for flows (flow_id -> FlowStatsResponse)
+    rtp_stats_cache: std::collections::HashMap<String, strom_types::api::FlowStatsResponse>,
     /// Last time stats was fetched (for periodic refresh)
     last_rtp_stats_fetch: instant::Instant,
-    /// Whether to show the stats panel
-    show_stats_panel: bool,
     /// Compositor layout editor (if open)
     compositor_editor: Option<CompositorEditor>,
     /// Mixer editor (if open)

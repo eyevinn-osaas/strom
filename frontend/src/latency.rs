@@ -90,16 +90,6 @@ impl LatencyDataStore {
         })
     }
 
-    /// Clear all latency data.
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
-
-    /// Remove latency data for a specific flow.
-    pub fn clear_flow(&mut self, flow_id: &FlowId) {
-        self.data.retain(|k, _| k.flow_id != *flow_id);
-    }
-
     /// Remove stale latency data entries (older than TTL).
     #[allow(dead_code)]
     pub fn expire_stale(&mut self) {

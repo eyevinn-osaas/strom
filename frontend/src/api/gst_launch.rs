@@ -1,29 +1,16 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::*;
-
-/// Response from parsing a gst-launch pipeline
-#[derive(Debug, Clone, Deserialize)]
-pub struct ParseGstLaunchResponse {
-    /// Elements extracted from the parsed pipeline
-    pub elements: Vec<strom_types::Element>,
-    /// Links between elements
-    pub links: Vec<strom_types::element::Link>,
-}
-
-/// Response from exporting to gst-launch syntax
-#[derive(Debug, Clone, Deserialize)]
-pub struct ExportGstLaunchResponse {
-    /// The generated gst-launch-1.0 pipeline string
-    pub pipeline: String,
-}
 
 impl ApiClient {
     /// Parse a gst-launch-1.0 pipeline string and return elements and links.
     ///
     /// This uses the backend's GStreamer parser to ensure complete compatibility
     /// with the gst-launch-1.0 syntax.
-    pub async fn parse_gst_launch(&self, pipeline: &str) -> ApiResult<ParseGstLaunchResponse> {
+    pub async fn parse_gst_launch(
+        &self,
+        pipeline: &str,
+    ) -> ApiResult<strom_types::api::ParseGstLaunchResponse> {
         use tracing::info;
 
         let url = format!("{}/gst-launch/parse", self.base_url);
@@ -54,10 +41,11 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        let parse_response: ParseGstLaunchResponse = response.json().await.map_err(|e| {
-            tracing::error!("Failed to parse response: {}", e);
-            ApiError::Decode(e.to_string())
-        })?;
+        let parse_response: strom_types::api::ParseGstLaunchResponse =
+            response.json().await.map_err(|e| {
+                tracing::error!("Failed to parse response: {}", e);
+                ApiError::Decode(e.to_string())
+            })?;
 
         info!(
             "Successfully parsed pipeline: {} elements, {} links",
@@ -104,10 +92,11 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        let export_response: ExportGstLaunchResponse = response.json().await.map_err(|e| {
-            tracing::error!("Failed to parse response: {}", e);
-            ApiError::Decode(e.to_string())
-        })?;
+        let export_response: strom_types::api::ExportGstLaunchResponse =
+            response.json().await.map_err(|e| {
+                tracing::error!("Failed to parse response: {}", e);
+                ApiError::Decode(e.to_string())
+            })?;
 
         info!("Successfully exported pipeline");
         Ok(export_response.pipeline)

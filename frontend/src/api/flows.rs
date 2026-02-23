@@ -1,22 +1,6 @@
-use serde::Deserialize;
 use strom_types::{Flow, FlowId};
 
 use super::*;
-
-/// Pipeline latency information
-#[derive(Debug, Clone, Deserialize)]
-pub struct LatencyInfo {
-    /// Minimum latency in nanoseconds
-    pub min_latency_ns: u64,
-    /// Maximum latency in nanoseconds
-    pub max_latency_ns: u64,
-    /// Whether the pipeline is a live pipeline
-    pub live: bool,
-    /// Minimum latency formatted as human-readable string
-    pub min_latency_formatted: String,
-    /// Maximum latency formatted as human-readable string
-    pub max_latency_formatted: String,
-}
 
 impl ApiClient {
     /// List all flows.
@@ -223,7 +207,10 @@ impl ApiClient {
     }
 
     /// Get latency information for a running flow.
-    pub async fn get_flow_latency(&self, id: FlowId) -> ApiResult<LatencyInfo> {
+    pub async fn get_flow_latency(
+        &self,
+        id: FlowId,
+    ) -> ApiResult<strom_types::api::LatencyResponse> {
         let url = format!("{}/flows/{}/latency", self.base_url, id);
         let response = self
             .with_auth(self.client.get(&url))
@@ -237,7 +224,7 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        let latency_info: LatencyInfo = response
+        let latency_info: strom_types::api::LatencyResponse = response
             .json()
             .await
             .map_err(|e| ApiError::Decode(e.to_string()))?;
@@ -264,7 +251,7 @@ impl ApiClient {
             return Err(ApiError::Http(status, text));
         }
 
-        #[derive(Deserialize)]
+        #[derive(serde::Deserialize)]
         struct DynamicPadsResponse {
             pads: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
         }

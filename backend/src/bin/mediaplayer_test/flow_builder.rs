@@ -2,49 +2,10 @@
 //!
 //! Constructs flows with MediaPlayer and MPEGTSSRT blocks for testing.
 
-#![allow(dead_code)] // Some functions reserved for future tests
-
 use std::collections::HashMap;
 
 use strom_types::block::Position;
 use strom_types::{BlockInstance, Flow, Link, PropertyValue};
-
-/// Build a flow with MediaPlayer -> MPEGTSSRT (single file)
-///
-/// # Arguments
-/// * `name` - Flow name
-/// * `decode_mode` - true for decode mode, false for passthrough
-/// * `srt_uri` - SRT output URI (e.g., "srt://:5100?mode=listener")
-/// * `media_file` - Path to the media file to play
-pub fn build_mediaplayer_to_srt_flow(
-    name: &str,
-    decode_mode: bool,
-    srt_uri: &str,
-    media_file: &str,
-) -> Flow {
-    build_mediaplayer_to_srt_flow_with_playlist(
-        name,
-        decode_mode,
-        srt_uri,
-        &[media_file.to_string()],
-    )
-}
-
-/// Build a flow with MediaPlayer -> MPEGTSSRT (with playlist)
-///
-/// # Arguments
-/// * `name` - Flow name
-/// * `decode_mode` - true for decode mode, false for passthrough
-/// * `srt_uri` - SRT output URI (e.g., "srt://:5100?mode=listener")
-/// * `playlist` - List of media files to play
-pub fn build_mediaplayer_to_srt_flow_with_playlist(
-    name: &str,
-    decode_mode: bool,
-    srt_uri: &str,
-    playlist: &[String],
-) -> Flow {
-    build_mediaplayer_to_srt_flow_full(name, decode_mode, srt_uri, playlist, false)
-}
 
 /// Build a flow with MediaPlayer -> MPEGTSSRT (full options)
 ///

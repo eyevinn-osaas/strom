@@ -496,6 +496,91 @@ pub struct ExportGstLaunchResponse {
 }
 
 // ============================================================================
+// Version and Auth Response Types
+// ============================================================================
+
+/// Build and version information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct VersionInfo {
+    /// Package version from Cargo.toml
+    pub version: String,
+    /// Git commit hash (short)
+    pub git_hash: String,
+    /// Git tag (if on a tagged commit)
+    pub git_tag: String,
+    /// Git branch name
+    pub git_branch: String,
+    /// Whether the working directory had uncommitted changes
+    pub git_dirty: bool,
+    /// Build timestamp (ISO 8601 format)
+    pub build_timestamp: String,
+    /// Unique build ID (UUID) generated at compile time
+    #[serde(default)]
+    pub build_id: String,
+    /// GStreamer runtime version
+    #[serde(default)]
+    pub gstreamer_version: String,
+    /// Operating system name and version
+    #[serde(default)]
+    pub os_info: String,
+    /// Whether running inside a Docker container
+    #[serde(default)]
+    pub in_docker: bool,
+    /// When the Strom server process was started (ISO 8601 format with timezone)
+    #[serde(default)]
+    pub process_started_at: String,
+    /// When the system was booted (ISO 8601 format with timezone)
+    #[serde(default)]
+    pub system_boot_time: String,
+}
+
+impl VersionInfo {
+    /// Get a human-readable version string.
+    ///
+    /// Returns:
+    /// - "v0.1.0" if on a tagged release
+    /// - "v0.1.0-dev+abc12345" if on main/master without tag
+    /// - "v0.1.0-dev+abc12345-dirty" if there are uncommitted changes
+    pub fn version_string(&self) -> String {
+        if !self.git_tag.is_empty() {
+            self.git_tag.clone()
+        } else {
+            let mut version = format!("v{}-dev+{}", self.version, self.git_hash);
+            if self.git_dirty {
+                version.push_str("-dirty");
+            }
+            version
+        }
+    }
+
+    /// Get a short version string for display.
+    ///
+    /// Returns:
+    /// - "v0.1.0" if on a tagged release
+    /// - "v0.1.0-dev" if not on a tag
+    pub fn short_version(&self) -> String {
+        if !self.git_tag.is_empty() {
+            self.git_tag.clone()
+        } else {
+            format!("v{}-dev", self.version)
+        }
+    }
+}
+
+/// Authentication status response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct AuthStatusResponse {
+    /// Whether the current session is authenticated
+    pub authenticated: bool,
+    /// Whether authentication is required for this server
+    pub auth_required: bool,
+    /// Available authentication methods (e.g., "session", "api_key")
+    pub methods: Vec<String>,
+}
+
+// ============================================================================
 // Error Response
 // ============================================================================
 

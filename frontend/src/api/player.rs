@@ -1,28 +1,7 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use strom_types::FlowId;
 
 use super::*;
-
-/// Response with the current player state.
-#[derive(Debug, Clone, Deserialize)]
-pub struct PlayerStateResponse {
-    /// Current playback state: "playing", "paused", "stopped"
-    pub state: String,
-    /// Current position in nanoseconds
-    pub position_ns: u64,
-    /// Total duration in nanoseconds
-    pub duration_ns: u64,
-    /// Current file index (0-based)
-    pub current_file_index: usize,
-    /// Total number of files in playlist
-    pub total_files: usize,
-    /// Current file path/URI
-    pub current_file: Option<String>,
-    /// Full playlist
-    pub playlist: Vec<String>,
-    /// Whether playlist loops
-    pub loop_playlist: bool,
-}
 
 impl ApiClient {
     /// Set the playlist for a media player block.
@@ -152,49 +131,5 @@ impl ApiClient {
 
         info!("Successfully seeked player {}", block_id);
         Ok(())
-    }
-
-    /// Get the current state of a media player, including playlist.
-    pub async fn get_player_state(
-        &self,
-        flow_id: FlowId,
-        block_id: &str,
-    ) -> ApiResult<PlayerStateResponse> {
-        use tracing::info;
-
-        let url = format!(
-            "{}/flows/{}/blocks/{}/player/state",
-            self.base_url, flow_id, block_id
-        );
-        info!("Getting player state for {}", block_id);
-
-        let response = self
-            .with_auth(self.client.get(&url))
-            .send()
-            .await
-            .map_err(|e| {
-                tracing::error!("Network error getting player state: {}", e);
-                ApiError::Network(e.to_string())
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let text = response.text().await.unwrap_or_default();
-            tracing::error!("HTTP error {}: {}", status, text);
-            return Err(ApiError::Http(status, text));
-        }
-
-        let state: PlayerStateResponse = response.json().await.map_err(|e| {
-            tracing::error!("Failed to parse player state response: {}", e);
-            ApiError::Decode(e.to_string())
-        })?;
-
-        info!(
-            "Player {} state: {}, {} files in playlist",
-            block_id,
-            state.state,
-            state.playlist.len()
-        );
-        Ok(state)
     }
 }

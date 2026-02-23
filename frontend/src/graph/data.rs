@@ -146,11 +146,6 @@ impl GraphEditor {
         }
     }
 
-    /// Check if there's content in the clipboard.
-    pub fn has_clipboard(&self) -> bool {
-        self.clipboard.is_some()
-    }
-
     /// Deselect all elements and links.
     pub fn deselect_all(&mut self) {
         self.selected = None;
@@ -172,7 +167,8 @@ impl GraphEditor {
         self.request_open_palette.replace(false)
     }
 
-    /// Get the last known canvas rect (for hit testing pinch gestures).
+    /// Get the last known canvas rect (for hit testing pinch gestures, WASM only).
+    #[allow(dead_code)]
     pub fn canvas_rect(&self) -> Option<egui::Rect> {
         self.last_canvas_rect
     }
@@ -180,12 +176,6 @@ impl GraphEditor {
     /// Select a node (element) by its ID.
     pub fn select_node(&mut self, id: ElementId) {
         self.selected = Some(id);
-        self.selected_link = None;
-    }
-
-    /// Select a block by its ID.
-    pub fn select_block(&mut self, id: &str) {
-        self.selected = Some(id.to_string());
         self.selected_link = None;
     }
 

@@ -3,8 +3,8 @@
 //! Supports both WASM (for web browsers) and native (embedded in backend) modes.
 
 #![warn(clippy::all, rust_2018_idioms)]
-// Allow dead code in frontend - code is used through WASM/eframe traits
-#![allow(dead_code)]
+// Do NOT blanket allow dead_code — use targeted #[allow(dead_code)] or #[cfg] gates instead
+// #![allow(dead_code)]
 
 mod api;
 mod app;
@@ -18,7 +18,6 @@ mod info_page;
 mod latency;
 mod links;
 mod list_navigator;
-mod login;
 mod media;
 mod mediaplayer;
 mod meter;

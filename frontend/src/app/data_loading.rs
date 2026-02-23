@@ -252,41 +252,6 @@ impl StromApp {
         });
     }
 
-    /// Handle login attempt
-    pub(super) fn handle_login(&mut self, ctx: egui::Context) {
-        let username = self.login_screen.username.clone();
-        let password = self.login_screen.password.clone();
-
-        if username.is_empty() || password.is_empty() {
-            self.login_screen
-                .set_error("Username and password are required".to_string());
-            return;
-        }
-
-        self.login_screen.set_logging_in(true);
-        tracing::info!("Attempting login for user: {}", username);
-
-        let api = self.api.clone();
-        let tx = self.channels.sender();
-
-        spawn_task(async move {
-            match api.login(username, password).await {
-                Ok(response) => {
-                    tracing::info!("Login response: success={}", response.success);
-                    let _ = tx.send(AppMessage::LoginResult(response));
-                }
-                Err(e) => {
-                    tracing::error!("Login failed: {}", e);
-                    let _ = tx.send(AppMessage::LoginResult(crate::api::LoginResponse {
-                        success: false,
-                        message: format!("Login failed: {}", e),
-                    }));
-                }
-            }
-            ctx.request_repaint();
-        });
-    }
-
     /// Handle logout
     pub(super) fn handle_logout(&mut self, ctx: egui::Context) {
         tracing::info!("Logging out...");

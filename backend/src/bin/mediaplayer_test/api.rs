@@ -2,8 +2,6 @@
 //!
 //! Provides a type-safe interface for interacting with the Strom server API.
 
-#![allow(dead_code)] // Some methods reserved for future tests
-
 use std::io::Write;
 use std::time::Duration;
 
@@ -39,6 +37,7 @@ struct FlowListResponse {
 
 /// Player state response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // serde deserialization fields
 pub struct PlayerStateResponse {
     pub state: String,
     pub position_ns: u64,
@@ -60,12 +59,6 @@ struct PlayerControlRequest {
 #[derive(Debug, Serialize)]
 struct SeekRequest {
     position_ns: u64,
-}
-
-/// Set playlist request
-#[derive(Debug, Serialize)]
-struct SetPlaylistRequest {
-    files: Vec<String>,
 }
 
 /// Goto file request
@@ -302,31 +295,6 @@ impl StromClient {
         if !resp.status().is_success() {
             let text = resp.text().await?;
             return Err(anyhow!("Failed to seek: {}", text));
-        }
-
-        Ok(())
-    }
-
-    /// Set playlist
-    pub async fn set_playlist(
-        &self,
-        flow_id: FlowId,
-        block_id: &str,
-        files: Vec<String>,
-    ) -> Result<()> {
-        let resp = self
-            .client
-            .post(format!(
-                "{}/api/flows/{}/blocks/{}/player/playlist",
-                self.base_url, flow_id, block_id
-            ))
-            .json(&SetPlaylistRequest { files })
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let text = resp.text().await?;
-            return Err(anyhow!("Failed to set playlist: {}", text));
         }
 
         Ok(())
