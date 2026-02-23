@@ -675,4 +675,8 @@ pub struct StromApp {
     focus_flow_filter_requested: bool,
     /// Native pixels per point (device pixel ratio at startup)
     native_pixels_per_point: f32,
+    /// Key sequence buffer for activation detection
+    key_sequence_buffer: Vec<egui::Key>,
+    /// Interactive overlay state (activated by key sequence)
+    interactive_overlay: Option<crate::interactive_overlay::OverlayState>,
 }

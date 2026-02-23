@@ -91,6 +91,47 @@ impl StromApp {
 
     /// Handle global keyboard shortcuts.
     pub(super) fn handle_keyboard_shortcuts(&mut self, ctx: &Context) {
+        // Track key sequence for overlay activation (works globally, even in text inputs)
+        ctx.input(|i| {
+            for event in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    if !modifiers.command && !modifiers.ctrl && !modifiers.alt {
+                        self.key_sequence_buffer.push(*key);
+                        if self.key_sequence_buffer.len() > 5 {
+                            self.key_sequence_buffer
+                                .drain(..self.key_sequence_buffer.len() - 5);
+                        }
+                    }
+                }
+            }
+        });
+
+        if self.key_sequence_buffer.len() == 5
+            && self.key_sequence_buffer
+                == [
+                    egui::Key::I,
+                    egui::Key::D,
+                    egui::Key::D,
+                    egui::Key::Q,
+                    egui::Key::D,
+                ]
+        {
+            self.interactive_overlay = Some(crate::interactive_overlay::OverlayState::new());
+            self.key_sequence_buffer.clear();
+            return;
+        }
+
+        // When the overlay is active, skip all normal keyboard handling
+        if self.interactive_overlay.is_some() {
+            return;
+        }
+
         // Don't process shortcuts if a text input has focus (except ESC)
         let wants_keyboard = ctx.wants_keyboard_input();
 

@@ -1619,6 +1619,13 @@ impl eframe::App for StromApp {
         if let Some(flow) = self.flow_pending_copy.take() {
             self.copy_flow(&flow, ctx);
         }
+
+        // Render interactive overlay on top of everything when active
+        if let Some(ref mut overlay) = self.interactive_overlay {
+            if overlay.update(ctx) {
+                self.interactive_overlay = None;
+            }
+        }
     }
 
     /// Save persistent state (called by eframe on shutdown and periodically)
