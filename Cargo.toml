@@ -31,7 +31,7 @@ gstreamer-controller = { version = "0.25", features = ["v1_20"] }
 gstreamer-net = { version = "0.25", features = ["v1_20"] }
 gstreamer-video = { version = "0.25", features = ["v1_20"] }
 gst-plugin-webrtc = { version = "0.15", features = ["whep", "whip"] }
-gst-plugin-webrtchttp = { version = "0.15", default-features = false } 
+gst-plugin-webrtchttp = { version = "0.15", default-features = false }
 gst-plugin-inter = "0.15"
 gst-plugin-rtp = "0.15"
 tracing = "0.1"

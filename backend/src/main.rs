@@ -378,6 +378,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         gstrsinter::plugin_register_static().expect("Could not register inter plugins");
         gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
         gst_plugins_lsp::plugin_register_static().expect("Could not register lsp-dsp-rs plugins");
+        agua_gst::plugin_register_static().expect("Could not register agua watermark plugins");
 
         // Detect GPU capabilities for video conversion mode selection
         // This tests CUDA-GL interop to determine if autovideoconvert works
@@ -513,6 +514,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     gstrsinter::plugin_register_static().expect("Could not register inter plugins");
     gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
     gst_plugins_lsp::plugin_register_static().expect("Could not register lsp-dsp-rs plugins");
+    agua_gst::plugin_register_static().expect("Could not register agua watermark plugins");
 
     // Detect GPU capabilities for video conversion mode selection
     // This tests CUDA-GL interop to determine if autovideoconvert works
