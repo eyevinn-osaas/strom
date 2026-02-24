@@ -121,7 +121,7 @@ impl StromApp {
                 .and_then(|s| eframe::get_value(s, APP_SETTINGS_KEY))
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
-            version_info: None,
+            system_info: None,
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
@@ -166,6 +166,8 @@ impl StromApp {
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
             key_sequence_buffer: Vec::new(),
             interactive_overlay: None,
+            qr_inline: None,
+            qr_cache: crate::qr::QrCache::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility
@@ -265,7 +267,7 @@ impl StromApp {
                 .and_then(|s| eframe::get_value(s, APP_SETTINGS_KEY))
                 .unwrap_or_default(),
             needs_initial_settings_apply: true,
-            version_info: None,
+            system_info: None,
             auth_status: None,
             checking_auth: false,
             show_import_dialog: false,
@@ -310,6 +312,8 @@ impl StromApp {
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
             key_sequence_buffer: Vec::new(),
             interactive_overlay: None,
+            qr_inline: None,
+            qr_cache: crate::qr::QrCache::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility

@@ -180,6 +180,15 @@ pub fn download_file(filename: &str, content: &str, _mime_type: &str) {
     }
 }
 
+/// Escape XML special characters in a string.
+pub(crate) fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 /// Generate XSPF playlist content for VLC to play an SRT stream.
 ///
 /// If the block is in listener mode (e.g., `srt://:5000?mode=listener`), VLC needs to
@@ -189,22 +198,11 @@ pub fn generate_vlc_playlist(srt_uri: &str, latency_ms: i32, stream_name: &str) 
     // Transform URI if it's in listener mode - VLC needs to connect as caller
     let vlc_uri = transform_srt_uri_for_vlc(srt_uri);
 
-    // Escape XML special characters in the URI
-    let escaped_uri = vlc_uri
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;");
+    let escaped_uri = escape_xml(&vlc_uri);
 
     // Include SRT URL in the track title for easy identification
     let title_with_url = format!("{} ({})", stream_name, vlc_uri);
-    let escaped_title = title_with_url
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;");
+    let escaped_title = escape_xml(&title_with_url);
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -291,14 +289,17 @@ pub fn transform_srt_uri_for_vlc(srt_uri: &str) -> String {
 }
 
 /// Get the hostname of the current server.
-/// Returns "127.0.0.1" instead of "localhost" because VLC doesn't work well with localhost.
+///
+/// - WASM: reads from browser `window.location.hostname` (already the external address).
+/// - Native: uses the OS hostname via `gethostname`.
+///
+/// Falls back to `"127.0.0.1"` if detection fails.
 #[cfg(target_arch = "wasm32")]
-fn get_current_hostname() -> String {
+pub(crate) fn get_current_hostname() -> String {
     let hostname = web_sys::window()
         .and_then(|w| w.location().hostname().ok())
         .unwrap_or_else(|| "127.0.0.1".to_string());
 
-    // VLC doesn't work well with "localhost", use 127.0.0.1 instead
     if hostname == "localhost" {
         "127.0.0.1".to_string()
     } else {
@@ -307,9 +308,44 @@ fn get_current_hostname() -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn get_current_hostname() -> String {
-    // VLC doesn't work well with "localhost", use 127.0.0.1 instead
-    "127.0.0.1".to_string()
+pub(crate) fn get_current_hostname() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+/// Rewrite a URL so that `localhost` / `127.0.0.1` is replaced with the
+/// machine's actual hostname.
+///
+/// This is needed whenever a URL will be consumed by an external device
+/// (e.g. a phone scanning a QR code, or VLC connecting to an SRT stream).
+/// Returns the URL unchanged if the host is already external.
+///
+/// When `server_hostname` is provided (from backend `SystemInfo`), it takes
+/// precedence over local detection. This ensures correct results even in
+/// WASM mode where `window.location.hostname` may return "localhost".
+pub(crate) fn make_external_url(url: &str, server_hostname: Option<&str>) -> String {
+    // Quick check before doing any work
+    let is_local = url.contains("://localhost") || url.contains("://127.0.0.1");
+    if !is_local {
+        return url.to_string();
+    }
+
+    // Prefer the backend-provided hostname, fall back to local detection
+    let hostname = match server_hostname {
+        Some(h) if !h.is_empty() && h != "localhost" && h != "127.0.0.1" => h.to_string(),
+        _ => {
+            let h = get_current_hostname();
+            if h == "127.0.0.1" || h == "localhost" {
+                return url.to_string();
+            }
+            h
+        }
+    };
+
+    url.replace("://localhost", &format!("://{}", hostname))
+        .replace("://127.0.0.1", &format!("://{}", hostname))
 }
 
 /// Theme preference for the application
@@ -597,8 +633,8 @@ pub struct StromApp {
     settings: AppSettings,
     /// Whether we need to apply settings in the first update frame (workaround for iOS)
     needs_initial_settings_apply: bool,
-    /// Version information from the backend
-    version_info: Option<crate::api::VersionInfo>,
+    /// System information from the backend (version, host details, runtime environment)
+    system_info: Option<crate::api::SystemInfo>,
     /// Authentication status
     auth_status: Option<AuthStatusResponse>,
     /// Whether we're checking auth status
@@ -679,4 +715,8 @@ pub struct StromApp {
     key_sequence_buffer: Vec<egui::Key>,
     /// Interactive overlay state (activated by key sequence)
     interactive_overlay: Option<crate::interactive_overlay::OverlayState>,
+    /// Block ID and URL to show as inline QR code in the properties panel
+    qr_inline: Option<(String, String)>,
+    /// QR code texture cache (for properties popup)
+    qr_cache: crate::qr::QrCache,
 }

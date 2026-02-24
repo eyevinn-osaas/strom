@@ -1,9 +1,9 @@
-/// Version and build information embedded at compile time
+/// System information embedded at compile time
 use chrono::{DateTime, Local};
 use std::sync::OnceLock;
 use sysinfo::System;
 
-pub use strom_types::api::VersionInfo;
+pub use strom_types::api::SystemInfo;
 
 /// Global process startup time - initialized once when the Strom process starts
 static PROCESS_STARTUP_TIME: OnceLock<DateTime<Local>> = OnceLock::new();
@@ -18,8 +18,8 @@ pub fn get_process_startup_time() -> DateTime<Local> {
     *PROCESS_STARTUP_TIME.get_or_init(Local::now)
 }
 
-/// Get the current version information, collecting runtime data.
-pub fn get() -> VersionInfo {
+/// Get the current system information, collecting runtime data.
+pub fn get() -> SystemInfo {
     // Get GStreamer version at runtime
     let (major, minor, micro, nano) = gstreamer::version();
     let gstreamer_version = if nano > 0 {
@@ -39,7 +39,13 @@ pub fn get() -> VersionInfo {
     let boot_time = Local::now() - chrono::Duration::seconds(uptime_seconds);
     let system_boot_time = boot_time.to_rfc3339();
 
-    VersionInfo {
+    // Get system hostname
+    let hostname = hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_default();
+
+    SystemInfo {
         version: env!("CARGO_PKG_VERSION").to_string(),
         git_hash: env!("GIT_HASH").to_string(),
         git_tag: env!("GIT_TAG").to_string(),
@@ -52,6 +58,7 @@ pub fn get() -> VersionInfo {
         in_docker,
         process_started_at: get_process_startup_time().to_rfc3339(),
         system_boot_time,
+        hostname,
     }
 }
 
@@ -115,7 +122,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_version_info() {
+    fn test_system_info() {
         let info = get();
 
         // These should always be set by build.rs
