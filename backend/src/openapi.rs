@@ -2,9 +2,9 @@
 
 use crate::api::flows::DynamicPadsResponse;
 use crate::api::whep_player::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
-use crate::auth::{AuthStatusResponse, LoginRequest, LoginResponse};
+use crate::auth::{LoginRequest, LoginResponse};
 use crate::mcp::handler::JsonRpcRequest;
-use crate::version::VersionInfo;
+use strom_types::api::{AuthStatusResponse, SystemInfo};
 use strom_types::api::{
     CreateDirectoryRequest, CreateFlowRequest, ElementInfoResponse, ElementListResponse,
     ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse,
@@ -107,7 +107,7 @@ use utoipa::OpenApi;
             PropertyType,
             ExternalPads,
             ExternalPad,
-            VersionInfo,
+            SystemInfo,
             ParseGstLaunchRequest,
             ParseGstLaunchResponse,
             ExportGstLaunchRequest,

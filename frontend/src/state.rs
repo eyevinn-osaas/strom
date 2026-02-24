@@ -32,15 +32,6 @@ pub enum AppMessage {
     /// Element pad properties loading failed (element_type, error)
     ElementPadPropertiesError(String, String),
 
-    /// SDP loaded for a block
-    SdpLoaded {
-        flow_id: String,
-        block_id: String,
-        sdp: String,
-    },
-    /// SDP loading failed
-    SdpError(String),
-
     /// Event received from backend via WebSocket
     Event(StromEvent),
 
@@ -53,13 +44,11 @@ pub enum AppMessage {
     /// Request full refresh of flows
     RefreshNeeded,
 
-    /// Version information loaded from backend
-    VersionLoaded(crate::api::VersionInfo),
+    /// System information loaded from backend
+    SystemInfoLoaded(crate::api::SystemInfo),
 
     /// Authentication status loaded
     AuthStatusLoaded(crate::api::AuthStatusResponse),
-    /// Login result received
-    LoginResult(crate::api::LoginResponse),
     /// Logout completed
     LogoutComplete,
 
@@ -68,8 +57,6 @@ pub enum AppMessage {
         flow_id: strom_types::FlowId,
         stats: strom_types::api::WebRtcStats,
     },
-    /// WebRTC stats loading failed
-    WebRtcStatsError(String),
 
     /// Flow operation completed successfully
     FlowOperationSuccess(String),
@@ -82,7 +69,7 @@ pub enum AppMessage {
     /// Latency loaded for a flow
     LatencyLoaded {
         flow_id: String,
-        latency: crate::api::LatencyInfo,
+        latency: crate::api::LatencyResponse,
     },
     /// Latency loading failed (flow not running)
     LatencyNotAvailable(String),
@@ -90,7 +77,7 @@ pub enum AppMessage {
     /// RTP statistics loaded for a flow (jitterbuffer stats from AES67 Input blocks)
     RtpStatsLoaded {
         flow_id: String,
-        rtp_stats: crate::api::FlowRtpStatsInfo,
+        rtp_stats: strom_types::api::FlowStatsResponse,
     },
     /// RTP statistics not available (flow not running or no RTP blocks)
     RtpStatsNotAvailable(String),
@@ -150,14 +137,6 @@ pub enum ConnectionState {
 impl ConnectionState {
     pub fn is_connected(&self) -> bool {
         matches!(self, ConnectionState::Connected)
-    }
-
-    pub fn description(&self) -> &'static str {
-        match self {
-            ConnectionState::Connected => "Connected",
-            ConnectionState::Disconnected => "Disconnected",
-            ConnectionState::Reconnecting { .. } => "Reconnecting",
-        }
     }
 }
 

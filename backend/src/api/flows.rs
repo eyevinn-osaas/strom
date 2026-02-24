@@ -907,11 +907,6 @@ pub async fn update_element_property(
     Path((flow_id, element_id)): Path<(FlowId, String)>,
     Json(req): Json<UpdatePropertyRequest>,
 ) -> Result<Json<ElementPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    info!(
-        "Updating property {}.{} in flow {}",
-        element_id, req.property_name, flow_id
-    );
-
     state
         .update_element_property(&flow_id, &element_id, &req.property_name, req.value)
         .await

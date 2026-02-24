@@ -4,6 +4,19 @@
 
 **Strom** ("Ström" - Swedish for "stream") is a visual, web-based interface for creating and managing GStreamer media pipelines. Design complex media flows without writing code.
 
+---
+<div align="center">
+
+## Quick Demo: Open Source Cloud
+
+Run this service in the cloud with a single click.
+
+[![Badge OSC](https://img.shields.io/badge/Try%20it%20out!-1E3A8A?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8yODIxXzMxNjcyKSIvPgo8Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI3IiBzdHJva2U9ImJsYWNrIiBzdHJva2Utd2lkdGg9IjIiLz4KPGRlZnM+CjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhcl8yODIxXzMxNjcyIiB4MT0iMTIiIHkxPSIwIiB4Mj0iMTIiIHkyPSIyNCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjQzE4M0ZGIi8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzREQzlGRiIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo=)](https://app.osaas.io/browse/eyevinn-strom)
+
+</div>
+
+---
+
 ![Strom Screenshot](docs/images/strom-demo-flow.png)
 *Visual pipeline editor showing a simple test flow*
 
@@ -35,14 +48,6 @@
 - **WebSocket/SSE** - Real-time state updates and pipeline events
 
 ## Quick Start
-
-### Option 0: Try Strom in the Cloud (Fastest)
-
-Get started with Strom instantly on Open Source Cloud - no installation required!
-
-[![Badge OSC](https://img.shields.io/badge/Evaluate-24243B?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9InVybCgjcGFpbnQwX2xpbmVhcl8yODIxXzMxNjcyKSIvPgo8Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI3IiBzdHJva2U9ImJsYWNrIiBzdHJva2Utd2lkdGg9IjIiLz4KPGRlZnM%2BCjxsaW5lYXJHcmFkaWVudCBpZD0icGFpbnQwX2xpbmVhcl8yODIxXzMxNjcyIiB4MT0iMTIiIHkxPSIwIiB4Mj0iMTIiIHkyPSIyNCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjQzE4M0ZGIi8%2BCjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzREQzlGRiIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM%2BCjwvc3ZnPgo%3D)](https://app.osaas.io/browse/eyevinn-strom)
-
-Deploy Strom with just a few clicks - perfect for testing, demos, or production workloads.
 
 ### Option 1: One-liner Install (Recommended)
 
@@ -103,8 +108,9 @@ Access the web UI at `http://localhost:8080`
 ```bash
 # Install GStreamer (Ubuntu/Debian)
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+  libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   gstreamer1.0-tools libnice-dev gstreamer1.0-nice graphviz
 
 # Install GStreamer (macOS)
@@ -149,7 +155,7 @@ Pre-built multi-architecture images (amd64/arm64):
 
 ```bash
 docker pull eyevinntechnology/strom:latest
-docker pull eyevinntechnology/strom:0.3.8  # Specific version
+docker pull eyevinntechnology/strom:0.3.22  # Specific version
 
 # Extended image with HTML rendering support (CEF/Chromium)
 docker pull eyevinntechnology/strom-full:latest
@@ -224,15 +230,34 @@ Configure via config files, CLI arguments, or environment variables (in priority
 
 ```bash
 # Common options
---port 8080                    # or STROM_SERVER_PORT=8080
---data-dir /path/to/data       # or STROM_STORAGE_DATA_DIR=...
---database-url postgresql://...  # or STROM_STORAGE_DATABASE_URL=... (for production)
+--port 8080                    # or STROM_PORT=8080
+--data-dir /path/to/data       # or STROM_DATA_DIR=...
+--database-url postgresql://...  # or STROM_DATABASE_URL=... (for production)
 RUST_LOG=info                  # Logging level
 ```
 
 **Storage:** JSON files by default, PostgreSQL for production. See [docs/POSTGRESQL.md](docs/POSTGRESQL.md).
 
 **Config file:** Copy `.strom.toml.example` to `.strom.toml` for all options.
+
+### HTTPS/TLS
+
+Strom supports HTTPS with automatic certificate hot-reload (zero-downtime renewal):
+
+```bash
+# CLI
+strom --tls-cert cert.pem --tls-key key.pem
+
+# Environment variables
+STROM_TLS_CERT=cert.pem STROM_TLS_KEY=key.pem strom
+
+# Or in .strom.toml
+# [server]
+# tls_cert = "cert.pem"
+# tls_key = "key.pem"
+```
+
+Both certificate and key must be in PEM format. The certificate file can include intermediate certificates. For local development, generate certs with `mkcert localhost <your-ip>`.
 
 ## Authentication
 
@@ -273,6 +298,8 @@ Create reusable components from element groups:
 - **Inter Output** - Publishes streams for other flows to consume
 
 **Processing:**
+- **Audio Mixer** - Digital mixing console with up to 32 input channels, per-channel processing (gain, gate, compressor, EQ, pan, fader, mute), auxiliary sends, groups, PFL bus, and main stereo bus with metering
+- **Audio Router** - Flexible multi-input channel routing matrix with mixing and fan-out capabilities
 - **Video Encoder** - H.264/H.265/AV1/VP9 with automatic hardware acceleration (NVENC, QSV, VA-API, AMF, software)
 - **Video Format** - Resolution, framerate, and pixel format conversion
 - **Audio Format** - Sample rate, channels, and PCM format conversion (supports surround sound)
@@ -280,10 +307,11 @@ Create reusable components from element groups:
 
 **Analysis:**
 - **Audio Meter** - RMS and peak level monitoring per channel
+- **Audio Latency** - Measures audio round-trip latency using GStreamer's audiolatency element
 
 Custom blocks can also be created via JSON or API.
 
-See `docs/BLOCKS_IMPLEMENTATION.md`, `docs/VIDEO_ENCODER_BLOCK.md`, and `docs/WHEP_OUTPUT_BLOCK.md` for details.
+See `docs/BLOCKS_IMPLEMENTATION.md`, `docs/MIXER_BLOCK.md`, `docs/VIDEO_ENCODER_BLOCK.md`, and `docs/WHEP_OUTPUT_BLOCK.md` for details.
 
 ## MCP Integration
 
@@ -317,8 +345,9 @@ cd strom
 
 # Install dependencies (Ubuntu/Debian)
 sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-  gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+  libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly gstreamer1.0-libav \
   gstreamer1.0-tools libnice-dev gstreamer1.0-nice graphviz
 
 # Install Rust

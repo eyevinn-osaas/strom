@@ -3,8 +3,9 @@
 //! This module exposes the frontend application for embedding in native mode.
 
 #![warn(clippy::all, rust_2018_idioms)]
+// Do NOT blanket allow dead_code — use targeted #[allow(dead_code)] or #[cfg] gates instead
+// #![allow(dead_code)]
 #![deny(clippy::disallowed_types)]
-#![allow(dead_code)]
 
 mod api;
 mod app;
@@ -15,17 +16,19 @@ mod compositor_editor;
 mod discovery;
 mod graph;
 mod info_page;
+mod interactive_overlay;
 mod latency;
 mod links;
 mod list_navigator;
-mod login;
 mod media;
 mod mediaplayer;
 mod meter;
+mod mixer;
 mod palette;
 mod properties;
 mod ptp_monitor;
 mod qos_monitor;
+mod qr;
 mod state;
 mod system_monitor;
 mod themes;
@@ -40,7 +43,7 @@ pub use app::StromApp;
 
 /// Load the app icon for native windows
 #[cfg(not(target_arch = "wasm32"))]
-fn load_icon() -> Option<egui::IconData> {
+pub fn load_icon() -> Option<egui::IconData> {
     let icon_bytes = include_bytes!("icon.png");
     let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
@@ -49,6 +52,21 @@ fn load_icon() -> Option<egui::IconData> {
         width,
         height,
     })
+}
+
+/// Select the preferred renderer per platform.
+/// macOS: wgpu (Metal) to avoid OpenGL conflicts with GStreamer.
+/// Others: glow (OpenGL) as the stable default.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn preferred_renderer() -> eframe::Renderer {
+    #[cfg(target_os = "macos")]
+    {
+        eframe::Renderer::Wgpu
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        eframe::Renderer::Glow
+    }
 }
 
 // Re-export the native entry point (without tracing init - parent should handle that)
@@ -69,6 +87,7 @@ pub fn run_native_gui(port: u16, tls_enabled: bool) -> eframe::Result<()> {
 
     let native_options = eframe::NativeOptions {
         viewport,
+        renderer: preferred_renderer(),
         ..Default::default()
     };
 
@@ -105,6 +124,7 @@ pub fn run_native_gui_with_shutdown(
 
     let native_options = eframe::NativeOptions {
         viewport,
+        renderer: preferred_renderer(),
         ..Default::default()
     };
 

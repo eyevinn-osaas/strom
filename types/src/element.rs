@@ -18,7 +18,7 @@ pub struct Element {
     /// GStreamer element type (e.g., "videotestsrc", "x264enc", "filesink")
     pub element_type: String,
     /// Element properties as key-value pairs
-    #[serde(default)]
+    #[serde(default, serialize_with = "crate::block::sorted_properties")]
     pub properties: HashMap<String, PropertyValue>,
     /// Pad properties (pad_name -> property_name -> value)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

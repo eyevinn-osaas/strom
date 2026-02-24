@@ -20,6 +20,7 @@ pub struct BlockInspectorResult {
     /// VLC playlist download requested (for MPEG-TS/SRT blocks) - contains (srt_uri, latency_ms)
     pub vlc_playlist_requested: Option<(String, i32)>,
     /// VLC playlist download-only requested (native mode) - contains (srt_uri, latency_ms)
+    #[cfg(not(target_arch = "wasm32"))]
     pub vlc_playlist_download_only: Option<(String, i32)>,
     /// WHEP player endpoint_id (for WHEP Output blocks) - used to construct full player URL
     pub whep_player_url: Option<String>,
@@ -29,6 +30,10 @@ pub struct BlockInspectorResult {
     pub whip_ingest_url: Option<String>,
     /// Copy WHIP ingest URL to clipboard - contains endpoint_id
     pub copy_whip_url_requested: Option<String>,
+    /// Show QR code for WHEP player URL - contains endpoint_id
+    pub show_qr_whep: Option<String>,
+    /// Show QR code for WHIP ingest URL - contains endpoint_id
+    pub show_qr_whip: Option<String>,
 }
 
 /// Property inspector panel.
@@ -345,9 +350,11 @@ impl PropertyInspector {
         meter_data_store: &crate::meter::MeterDataStore,
         latency_data_store: &crate::latency::LatencyDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
-        rtp_stats: Option<&crate::api::FlowRtpStatsInfo>,
+        rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
+        qr_inline: &mut Option<(String, String)>,
+        qr_cache: &mut crate::qr::QrCache,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -421,6 +428,13 @@ impl PropertyInspector {
                     .clicked()
             {
                 result.browse_ndi_sources_requested = true;
+            }
+
+            // Open Mixer button for mixer blocks
+            if definition.id == "builtin.mixer"
+                && ui.button("🎤 Open Mixer").clicked()
+            {
+                crate::app::set_local_storage("open_mixer_editor", &block.id);
             }
 
             // Edit Layout button for compositor blocks
@@ -504,7 +518,17 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
+                    let is_qr_for_this_block = qr_inline
+                        .as_ref()
+                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
+                        if ui
+                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
+                            .on_hover_text("Toggle QR code for mobile access")
+                            .clicked()
+                        {
+                            result.show_qr_whep = Some(endpoint_id.clone());
+                        }
                         if ui
                             .button("▶ Open Player")
                             .on_hover_text("Open WHEP player in browser")
@@ -520,6 +544,18 @@ impl PropertyInspector {
                             result.copy_whep_url_requested = Some(endpoint_id.clone());
                         }
                     });
+
+                    // Render inline QR code below buttons (only for this block)
+                    if let Some((_, ref url)) = qr_inline.as_ref().filter(|(bid, _)| bid == &block_id) {
+                        ui.add_space(4.0);
+                        if let Some(texture) = qr_cache.get_or_create(ui.ctx(), url) {
+                            ui.image(egui::load::SizedTexture::new(
+                                texture.id(),
+                                egui::vec2(200.0, 200.0),
+                            ));
+                        }
+                        ui.label(egui::RichText::new(url.as_str()).monospace().small());
+                    }
                 } else {
                     // Flow not running, show disabled button with tooltip
                     ui.add_enabled_ui(false, |ui| {
@@ -544,7 +580,17 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
+                    let is_qr_for_this_block = qr_inline
+                        .as_ref()
+                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
+                        if ui
+                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
+                            .on_hover_text("Toggle QR code for mobile access")
+                            .clicked()
+                        {
+                            result.show_qr_whip = Some(endpoint_id.clone());
+                        }
                         if ui
                             .button("▶ Open Ingest Page")
                             .on_hover_text("Open WHIP ingest page in browser")
@@ -560,6 +606,18 @@ impl PropertyInspector {
                             result.copy_whip_url_requested = Some(endpoint_id.clone());
                         }
                     });
+
+                    // Render inline QR code below buttons (only for this block)
+                    if let Some((_, ref url)) = qr_inline.as_ref().filter(|(bid, _)| bid == &block_id) {
+                        ui.add_space(4.0);
+                        if let Some(texture) = qr_cache.get_or_create(ui.ctx(), url) {
+                            ui.image(egui::load::SizedTexture::new(
+                                texture.id(),
+                                egui::vec2(200.0, 200.0),
+                            ));
+                        }
+                        ui.label(egui::RichText::new(url.as_str()).monospace().small());
+                    }
                 } else {
                     ui.add_enabled_ui(false, |ui| {
                         ui.button("▶ Open Ingest Page")
@@ -768,7 +826,7 @@ impl PropertyInspector {
                             // Stats are prefixed with jitterbuffer name like "rtpjitterbuffer0_num_pushed"
                             // or have "(rtpjitterbuffer0)" in display_name
                             use std::collections::BTreeMap;
-                            let mut grouped: BTreeMap<String, Vec<&crate::api::RtpStatisticInfo>> =
+                            let mut grouped: BTreeMap<String, Vec<&strom_types::stats::Statistic>> =
                                 BTreeMap::new();
 
                             for stat in &block_stats.stats {
@@ -1397,6 +1455,13 @@ impl PropertyInspector {
         value: &mut PropertyValue,
         enum_values: &[EnumValue],
     ) -> bool {
+        // Normalize numeric values to strings so they match enum variant values.
+        // This handles values deserialized from JSON as Int/UInt (e.g. `4` instead of `"4"`).
+        match value {
+            PropertyValue::Int(i) => *value = PropertyValue::String(i.to_string()),
+            PropertyValue::UInt(u) => *value = PropertyValue::String(u.to_string()),
+            _ => {}
+        }
         if let PropertyValue::String(s) = value {
             let mut changed = false;
 
@@ -1625,9 +1690,9 @@ impl PropertyInspector {
                 (PropertyValue::Float(f), Some(PropertyType::Float { min, max })) => {
                     ui.add(egui::Slider::new(f, *min..=*max)).changed()
                 }
-                (PropertyValue::Float(f), _) => {
-                    ui.add(egui::DragValue::new(f).speed(0.1)).changed()
-                }
+                (PropertyValue::Float(f), _) => ui
+                    .add(egui::DragValue::new(f).speed(0.1).fixed_decimals(1))
+                    .changed(),
                 (PropertyValue::Bool(b), _) => ui.checkbox(b, "").changed(),
             }
         }

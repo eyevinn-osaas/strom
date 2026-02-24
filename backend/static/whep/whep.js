@@ -232,11 +232,11 @@ class WhepConnection {
                 }
 
                 if (state === 'connected' || state === 'completed') {
-                    this._updateStatus();
                     this._logConnectionStats();
                     if (this.callbacks.onConnected) {
                         this.callbacks.onConnected();
                     }
+                    this._updateStatus();
                     // Start periodic stats logging
                     this._startStatsLogging();
                     // Start video health monitor for freeze/artifact recovery
@@ -666,14 +666,8 @@ class WhepConnection {
 
 // UI Helper functions (setStatus, setElementClass, copyFallback are in webrtc.js)
 
-function createAudioIndicator() {
-    return `
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-        <div class="audio-bar"></div>
-    `;
+function createAudioIndicator(endpointId) {
+    return `<div class="meter-bar"><div class="meter-fill" id="meter-fill-${endpointId}"></div></div>`;
 }
 
 function escapeHtml(str) {

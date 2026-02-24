@@ -7,6 +7,9 @@
 
 set -euo pipefail
 
+# Use sudo only if not already root
+if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
+
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
@@ -50,20 +53,20 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 log_info "Removing NDI SDK files from /tmp..."
-sudo rm -rf "/tmp/NDI SDK for Linux"
+$SUDO rm -rf "/tmp/NDI SDK for Linux"
 rm -f /tmp/Install_NDI_SDK_v6_Linux.*
 
 log_info "Removing installed libraries..."
-sudo rm -f /usr/lib/$LIB_DIR/libndi.so*
-sudo rm -f /lib/$LIB_DIR/libndi.so*
+$SUDO rm -f /usr/lib/$LIB_DIR/libndi.so*
+$SUDO rm -f /lib/$LIB_DIR/libndi.so*
 
 log_info "Removing GStreamer NDI plugin..."
-sudo rm -f /usr/lib/$LIB_DIR/gstreamer-1.0/libgstndi.so
+$SUDO rm -f /usr/lib/$LIB_DIR/gstreamer-1.0/libgstndi.so
 
 log_info "Removing headers..."
-sudo rm -rf /usr/include/ndi
+$SUDO rm -rf /usr/include/ndi
 
 log_info "Updating library cache..."
-sudo ldconfig
+$SUDO ldconfig
 
 log_info "Cleanup complete! You can now run: ./1-install-ndi-sdk.sh"

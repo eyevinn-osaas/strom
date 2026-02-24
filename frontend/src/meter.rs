@@ -80,16 +80,6 @@ impl MeterDataStore {
         })
     }
 
-    /// Clear all meter data.
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
-
-    /// Remove meter data for a specific flow.
-    pub fn clear_flow(&mut self, flow_id: &FlowId) {
-        self.data.retain(|k, _| k.flow_id != *flow_id);
-    }
-
     /// Remove stale meter data entries (older than TTL).
     /// Can be called periodically to clean up memory.
     #[allow(dead_code)]
@@ -152,23 +142,6 @@ fn level_to_color_dim(level: f32) -> Color32 {
         Color32::from_rgb(60, 45, 0)
     } else {
         Color32::from_rgb(60, 0, 0)
-    }
-}
-
-/// Get light color for RMS bars (lighter than bright, darker than dim).
-fn level_to_color_light(level: f32) -> Color32 {
-    if level < ZONE_GREEN_END {
-        // Very light green
-        Color32::from_rgb(180, 255, 180)
-    } else if level < ZONE_YELLOW_END {
-        // Very light yellow
-        Color32::from_rgb(255, 255, 200)
-    } else if level < ZONE_ORANGE_END {
-        // Very light orange
-        Color32::from_rgb(255, 230, 180)
-    } else {
-        // Very light red/pink
-        Color32::from_rgb(255, 200, 200)
     }
 }
 

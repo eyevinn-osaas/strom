@@ -53,6 +53,8 @@ gst-plugin-webrtc.workspace = true
 gst-plugin-webrtchttp.workspace = true
 gst-plugin-inter.workspace = true
 gst-plugin-rtp.workspace = true
+gst-plugins-lsp = { git = "https://github.com/srperens/lsp-plugins-rs", tag = "v1.3.1", package = "gst-plugins-lsp" }
+agua-gst = { git = "https://github.com/srperens/agua", tag = "v0.1.0", package = "agua-gst" }
 
 # Error handling
 anyhow = "1.0"
@@ -69,7 +71,7 @@ libc = "0.2"
 # TLS
 axum-server.workspace = true
 rustls = { version = "0.23", features = ["ring"] }
-notify = { version = "7", default-features = false, features = ["macos_kqueue"] }
+notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # Authentication
 bcrypt = "0.18.0"
@@ -99,7 +101,7 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 
 # System monitoring
 sysinfo = "0.38"
-nvml-wrapper = { version = "0.11", optional = true }
+nvml-wrapper = { version = "0.12", optional = true }
 parking_lot = "0.12"
 
 # Network interface discovery
@@ -114,7 +116,7 @@ crossterm = "0.29"
 # Network discovery
 socket2 = "0.6"      # Multicast socket options for SAP
 flate2 = "1.1"       # Zlib decompression for SAP
-mdns-sd = "0.17"     # mDNS service discovery (RAVENNA, NDI, etc.)
+mdns-sd = "0.18"     # mDNS service discovery (RAVENNA, NDI, etc.)
 hostname = "0.4"     # Cross-platform hostname detection
 
 # GUI (native frontend) - use --features no-gui to disable
@@ -123,7 +125,7 @@ eframe = { workspace = true }
 
 [build-dependencies]
 chrono = "0.4"
-uuid = { version = "1.20", features = ["v4"] }
+uuid = { version = "1.21", features = ["v4"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

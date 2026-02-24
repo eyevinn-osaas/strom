@@ -67,12 +67,6 @@ impl DiscoveredDevice {
     pub fn url_address(&self) -> Option<&str> {
         self.properties.get("url-address").map(|s| s.as_str())
     }
-
-    /// Check if this is an NDI device.
-    pub fn is_ndi(&self) -> bool {
-        // Check provider name or NDI-specific property
-        self.provider.contains("ndi") || self.properties.contains_key("ndi-name")
-    }
 }
 
 /// Alias for backward compatibility.
@@ -116,8 +110,6 @@ pub struct DiscoveryPage {
     pub pending_create_flow: Option<(String, Option<String>)>,
     /// Pending flow ID to navigate to (set when "Go to Flow" is clicked)
     pub pending_go_to_flow: Option<String>,
-    /// Pending NDI source name to use (for NDI Input block)
-    pub pending_ndi_source: Option<String>,
     /// Error message if any
     pub error: Option<String>,
     /// Search filter
@@ -145,7 +137,6 @@ impl DiscoveryPage {
             loading: false,
             pending_create_flow: None,
             pending_go_to_flow: None,
-            pending_ndi_source: None,
             error: None,
             search_filter: String::new(),
             selected_stream: None,
@@ -822,12 +813,6 @@ impl DiscoveryPage {
         self.ndi_sources = sources;
     }
 
-    /// Set error message.
-    pub fn set_error(&mut self, error: String) {
-        self.error = Some(error);
-        self.loading = false;
-    }
-
     /// Fetch SDP for a discovered stream.
     fn fetch_stream_sdp(
         &self,
@@ -871,11 +856,6 @@ impl DiscoveryPage {
     /// Take pending go to flow ID if set.
     pub fn take_pending_go_to_flow(&mut self) -> Option<String> {
         self.pending_go_to_flow.take()
-    }
-
-    /// Take pending NDI source name if set.
-    pub fn take_pending_ndi_source(&mut self) -> Option<String> {
-        self.pending_ndi_source.take()
     }
 
     /// Get all NDI sources (for use in NDI Input block dropdown).

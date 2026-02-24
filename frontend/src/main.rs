@@ -3,8 +3,8 @@
 //! Supports both WASM (for web browsers) and native (embedded in backend) modes.
 
 #![warn(clippy::all, rust_2018_idioms)]
-// Allow dead code in frontend - code is used through WASM/eframe traits
-#![allow(dead_code)]
+// Do NOT blanket allow dead_code — use targeted #[allow(dead_code)] or #[cfg] gates instead
+// #![allow(dead_code)]
 
 mod api;
 mod app;
@@ -15,17 +15,19 @@ mod compositor_editor;
 mod discovery;
 mod graph;
 mod info_page;
+mod interactive_overlay;
 mod latency;
 mod links;
 mod list_navigator;
-mod login;
 mod media;
 mod mediaplayer;
 mod meter;
+mod mixer;
 mod palette;
 mod properties;
 mod ptp_monitor;
 mod qos_monitor;
+mod qr;
 mod state;
 mod system_monitor;
 mod themes;
@@ -149,19 +151,6 @@ fn main() {
 // Native Entry Point
 // ============================================================================
 
-/// Load the app icon for native windows
-#[cfg(not(target_arch = "wasm32"))]
-fn load_icon() -> Option<egui::IconData> {
-    let icon_bytes = include_bytes!("icon.png");
-    let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
-    let (width, height) = image.dimensions();
-    Some(egui::IconData {
-        rgba: image.into_raw(),
-        width,
-        height,
-    })
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     // Initialize tracing for native
@@ -178,12 +167,13 @@ fn main() -> eframe::Result<()> {
         .with_inner_size([1280.0, 720.0])
         .with_title("Strom");
 
-    if let Some(icon) = load_icon() {
+    if let Some(icon) = strom_frontend::load_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
 
     let native_options = eframe::NativeOptions {
         viewport,
+        renderer: strom_frontend::preferred_renderer(),
         ..Default::default()
     };
 

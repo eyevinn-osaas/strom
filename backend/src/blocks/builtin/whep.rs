@@ -56,6 +56,11 @@ impl BlockBuilder for WHEPOutputBuilder {
 
         if mode.has_audio() {
             inputs.push(ExternalPad {
+                label: if mode.has_video() {
+                    Some("Audio".to_string())
+                } else {
+                    None
+                },
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "audioconvert".to_string(),
@@ -65,6 +70,11 @@ impl BlockBuilder for WHEPOutputBuilder {
 
         if mode.has_video() {
             inputs.push(ExternalPad {
+                label: if mode.has_audio() {
+                    Some("Video".to_string())
+                } else {
+                    None
+                },
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "video_queue".to_string(),
@@ -163,6 +173,18 @@ fn build_whepsrc(
         })
         .unwrap_or(30);
 
+    // Get jitterbuffer latency (default 200ms is GStreamer's webrtcbin default)
+    let jitterbuffer_latency_ms = properties
+        .get("jitterbuffer_latency_ms")
+        .and_then(|v| {
+            if let PropertyValue::Int(i) = v {
+                Some(*i as u32)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(DEFAULT_JITTERBUFFER_LATENCY_MS as u32);
+
     // Create namespaced element IDs
     let instance_id_owned = instance_id.to_string();
     let whepsrc_id = format!("{}:whepsrc", instance_id);
@@ -191,6 +213,39 @@ fn build_whepsrc(
 
     if let Some(token) = &auth_token {
         whepsrc.set_property("auth-token", token);
+    }
+
+    // Set jitterbuffer latency on the internal webrtcbin.
+    // webrtcbin is created during whepsrc construction, so we must iterate
+    // existing children. We also install deep-element-added for any future additions.
+    if let Ok(bin) = whepsrc.clone().downcast::<gst::Bin>() {
+        // Set on already-existing webrtcbin children
+        for element in bin.iterate_recurse().into_iter().flatten() {
+            if element.name().starts_with("webrtcbin") && element.has_property("latency") {
+                element.set_property("latency", jitterbuffer_latency_ms);
+                info!(
+                    "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on existing {}",
+                    jitterbuffer_latency_ms,
+                    element.name()
+                );
+            }
+        }
+
+        // Also catch any dynamically added webrtcbins
+        bin.connect("deep-element-added", false, move |values| {
+            let element = values[2].get::<gst::Element>().unwrap();
+            let element_name = element.name();
+
+            if element_name.starts_with("webrtcbin") && element.has_property("latency") {
+                element.set_property("latency", jitterbuffer_latency_ms);
+                info!(
+                    "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on {}",
+                    jitterbuffer_latency_ms, element_name
+                );
+            }
+
+            None
+        });
     }
 
     // Create liveadder - this is our always-present mixer for dynamic audio streams
@@ -352,6 +407,18 @@ fn build_whepclientsrc(
         })
         .unwrap_or(30);
 
+    // Get jitterbuffer latency (default 200ms is GStreamer's webrtcbin default)
+    let jitterbuffer_latency_ms = properties
+        .get("jitterbuffer_latency_ms")
+        .and_then(|v| {
+            if let PropertyValue::Int(i) = v {
+                Some(*i as u32)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(DEFAULT_JITTERBUFFER_LATENCY_MS as u32);
+
     // Create namespaced element IDs
     let instance_id_owned = instance_id.to_string();
     let whepclientsrc_id = format!("{}:whepclientsrc", instance_id);
@@ -473,10 +540,18 @@ fn build_whepclientsrc(
                 if element_name.starts_with("webrtcbin") {
                     info!("WHEP: Found webrtcbin: {}", element_name);
 
+                    // Set jitterbuffer latency on webrtcbin
+                    if element.has_property("latency") {
+                        element.set_property("latency", jitterbuffer_latency_ms);
+                        info!(
+                            "WHEP Input (whepclientsrc): Set jitterbuffer latency={}ms on {}",
+                            jitterbuffer_latency_ms, element_name
+                        );
+                    }
+
                     // Set ICE transport policy on webrtcbin (from config)
                     if element.has_property("ice-transport-policy") {
-                        let policy_value: u32 = if ice_transport_policy == "relay" { 1 } else { 0 };
-                        element.set_property("ice-transport-policy", policy_value);
+                        element.set_property_from_str("ice-transport-policy", &ice_transport_policy);
                         info!(
                             "WHEP Input: Set ice-transport-policy={} on webrtcbin {}",
                             ice_transport_policy, element_name
@@ -1703,10 +1778,23 @@ fn whep_input_definition() -> BlockDefinition {
                     transform: None,
                 },
             },
+            ExposedProperty {
+                name: "jitterbuffer_latency_ms".to_string(),
+                label: "Jitterbuffer Latency (ms)".to_string(),
+                description: "WebRTC jitterbuffer latency in milliseconds (default 200ms). Lower values reduce delay but increase sensitivity to network jitter. For LAN use, 40-80ms is recommended.".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(DEFAULT_JITTERBUFFER_LATENCY_MS)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "jitterbuffer_latency_ms".to_string(),
+                    transform: None,
+                },
+            },
         ],
         external_pads: ExternalPads {
             inputs: vec![],
             outputs: vec![ExternalPad {
+                label: None,
                 name: "audio_out".to_string(),
                 media_type: MediaType::Audio,
                 internal_element_id: "output_audioresample".to_string(),
@@ -1771,15 +1859,25 @@ fn whep_output_definition() -> BlockDefinition {
                 },
             },
         ],
-        // Note: external_pads here are the static defaults. The actual pads are
-        // determined dynamically by WHEPOutputBuilder::get_external_pads() based on mode.
+        // Note: external_pads here are the static defaults for audio_video mode.
+        // The actual pads are determined dynamically by WHEPOutputBuilder::get_external_pads() based on mode.
         external_pads: ExternalPads {
-            inputs: vec![ExternalPad {
-                name: "video_in".to_string(),
-                media_type: MediaType::Video,
-                internal_element_id: "video_queue".to_string(),
-                internal_pad_name: "sink".to_string(),
-            }],
+            inputs: vec![
+                ExternalPad {
+                    label: Some("Audio".to_string()),
+                    name: "audio_in".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "audioconvert".to_string(),
+                    internal_pad_name: "sink".to_string(),
+                },
+                ExternalPad {
+                    label: Some("Video".to_string()),
+                    name: "video_in".to_string(),
+                    media_type: MediaType::Video,
+                    internal_element_id: "video_queue".to_string(),
+                    internal_pad_name: "sink".to_string(),
+                },
+            ],
             outputs: vec![],
         },
         built_in: true,

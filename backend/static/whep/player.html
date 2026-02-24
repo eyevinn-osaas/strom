@@ -10,7 +10,7 @@
 <body style="display: flex; flex-direction: column; align-items: center;">
     <div class="container">
         <div style="position: relative; margin-bottom: 8px;">
-            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v5</span>
+            <span style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); color: #666; font-size: 0.7em;">v7</span>
             <h1 style="text-align: center; margin: 0;">WHEP Player at <span id="hostAddress"></span></h1>
             <a href="/player/whep-streams" style="color: #888; font-size: 0.9em; position: absolute; right: 0; top: 50%; transform: translateY(-50%);">All streams</a>
         </div>
@@ -33,14 +33,10 @@
                 <video id="video" autoplay muted playsinline controls></video>
             </div>
             <div class="audio-indicator" id="audioIndicator">
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
-                <div class="audio-bar"></div>
+                <div class="meter-bar"><div class="meter-fill" id="meterFill"></div></div>
             </div>
             <div class="audio-controls" id="audioControls" style="width: 100%; max-width: 400px;">
-                <button class="mute-btn" id="muteBtn" onclick="toggleMute()" title="Toggle mute">&#128266;</button>
+                <button class="mute-btn muted" id="muteBtn" onclick="toggleMute()" title="Toggle mute">&#128263;</button>
                 <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="100" oninput="setVolume(this.value)">
                 <span class="volume-label" id="volumeLabel">100%</span>
             </div>
@@ -61,7 +57,7 @@
         <div class="log" id="log"></div>
     </div>
 
-    <audio id="audio" autoplay></audio>
+    <audio id="audio" autoplay muted></audio>
 
     <script src="/static/webrtc.js"></script>
     <script src="/static/whep.js"></script>
@@ -74,6 +70,8 @@
         let reconnectTimer = null;
         let transportSuffix = '';   // Debug: " - relay <addr>" or " - direct <addr>"
         let hasAudioStream = false;
+        let audioTrack = null;   // Stored for adding to video stream in A+V mode
+        let audioMeter = null;   // Audio level meter (AnalyserNode + animation)
         const MAX_RECONNECT_ATTEMPTS = 15;
         const RECONNECT_DELAY = 10000;
 
@@ -164,15 +162,24 @@
             connection = new WhepConnection(endpoint, {
                 onAudioTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
-                    document.getElementById('audio').srcObject = stream;
+                    audioTrack = stream.getAudioTracks()[0];
+                    startAudioMeter(audioTrack);
+                    // Set on audio element for now; if video arrives,
+                    // onVideoTrack will move it to the video stream
+                    const audio = document.getElementById('audio');
+                    audio.srcObject = stream;
+                    audio.play().catch(() => {});
                 },
                 onVideoTrack: (stream) => {
                     if (myConnectionId !== connectionId) return; // Stale
+                    // Add audio track to video stream so built-in controls
+                    // handle both audio and video
+                    if (audioTrack) {
+                        stream.addTrack(audioTrack);
+                    }
                     const video = document.getElementById('video');
                     video.srcObject = stream;
                     setElementClass('videoContainer', 'active', true);
-                    // Start playback muted (allowed by browsers)
-                    // User can unmute via video controls
                     video.muted = true;
                     video.play().catch(e => {
                         log('Autoplay blocked: ' + e.message, 'warning');
@@ -206,12 +213,15 @@
                 },
                 onMediaStatus: (hasAudio, hasVideo) => {
                     if (myConnectionId !== connectionId) return; // Stale
-                    // Show audio indicator if stream has audio (regardless of video)
-                    // Show audio controls only for audio-only streams (video has its own controls)
                     const isAudioOnly = hasAudio && !hasVideo;
                     setElementClass('audioIndicator', 'active', hasAudio);
                     setElementClass('audioControls', 'active', isAudioOnly);
                     hasAudioStream = hasAudio;
+                    if (hasVideo) {
+                        // Audio is on the video element now, clear the
+                        // separate audio element
+                        document.getElementById('audio').srcObject = null;
+                    }
                     // Re-enumerate devices now that we have an active media
                     // session — browsers restrict enumerateDevices until media
                     // is flowing, so the initial enumeration may have returned
@@ -235,6 +245,8 @@
                     setElementClass('audioControls', 'active', false);
                     setElementClass('videoContainer', 'active', false);
                     hasAudioStream = false;
+                    audioTrack = null;
+                    stopAudioMeter();
                     updateAudioOutputDropdown();
                     document.getElementById('audio').srcObject = null;
                     document.getElementById('video').srcObject = null;
@@ -279,6 +291,8 @@
             setElementClass('audioControls', 'active', false);
             setElementClass('videoContainer', 'active', false);
             hasAudioStream = false;
+            audioTrack = null;
+            stopAudioMeter();
             updateAudioOutputDropdown();
             document.getElementById('audio').srcObject = null;
             document.getElementById('video').srcObject = null;
@@ -310,6 +324,9 @@
             } else {
                 muteBtn.innerHTML = '&#128266;'; // Speaker with sound
                 muteBtn.classList.remove('muted');
+                // Ensure playback after user interaction (autoplay policy)
+                audio.play().catch(() => {});
+                if (audioMeter) audioMeter.ctx.resume();
             }
         }
 
@@ -319,7 +336,6 @@
             const muteBtn = document.getElementById('muteBtn');
             audio.volume = value / 100;
             volumeLabel.textContent = value + '%';
-            // Update mute button state based on volume
             if (value == 0) {
                 muteBtn.innerHTML = '&#128263;';
                 muteBtn.classList.add('muted');
@@ -327,6 +343,37 @@
                 muteBtn.innerHTML = '&#128266;';
                 muteBtn.classList.remove('muted');
             }
+        }
+
+        function startAudioMeter(track) {
+            stopAudioMeter();
+            const ctx = new AudioContext();
+            const source = ctx.createMediaStreamSource(new MediaStream([track]));
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            const data = new Uint8Array(analyser.frequencyBinCount);
+            const fill = document.getElementById('meterFill');
+            let rafId = null;
+
+            function update() {
+                analyser.getByteFrequencyData(data);
+                let sum = 0;
+                for (let i = 0; i < data.length; i++) sum += data[i];
+                const pct = Math.min(100, (sum / data.length / 128) * 100);
+                fill.style.width = pct + '%';
+                rafId = requestAnimationFrame(update);
+            }
+            rafId = requestAnimationFrame(update);
+            audioMeter = { ctx, rafId };
+        }
+
+        function stopAudioMeter() {
+            if (!audioMeter) return;
+            cancelAnimationFrame(audioMeter.rafId);
+            audioMeter.ctx.close();
+            audioMeter = null;
+            document.getElementById('meterFill').style.width = '0%';
         }
 
         // Auto-connect if endpoint is provided
@@ -341,7 +388,7 @@
             // Set endpoint from server-provided value
             const serverEndpoint = '{{ENDPOINT}}';
             if (serverEndpoint) {
-                document.getElementById('endpoint').value = location.protocol + '//' + location.host + serverEndpoint;
+                document.getElementById('endpoint').value = location.protocol + '//' + location.host + encodeURI(serverEndpoint);
             }
 
             // Auto-test mode: ?autotest=1

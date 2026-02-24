@@ -159,11 +159,6 @@ impl RoutingMatrixEditor {
         }
     }
 
-    /// Get the routing matrix as JSON string.
-    pub fn get_routing_json(&self) -> String {
-        serde_json::to_string(&self.routing).unwrap_or_else(|_| "{}".to_string())
-    }
-
     /// Show the routing matrix editor window.
     /// Returns Some(routing_json) if the user clicked Save.
     pub fn show(&mut self, ctx: &egui::Context) -> Option<String> {
