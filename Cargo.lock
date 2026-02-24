@@ -132,7 +132,7 @@ dependencies = [
 [[package]]
 name = "agua-core"
 version = "0.1.0"
-source = "git+https://github.com/srperens/agua#6cfc6b686f2e2c4c25832d956f2b5702185ccd9d"
+source = "git+https://github.com/srperens/agua?tag=v0.1.0#6cfc6b686f2e2c4c25832d956f2b5702185ccd9d"
 dependencies = [
  "aes",
  "cipher 0.5.0",
@@ -143,7 +143,7 @@ dependencies = [
 [[package]]
 name = "agua-gst"
 version = "0.1.0"
-source = "git+https://github.com/srperens/agua#6cfc6b686f2e2c4c25832d956f2b5702185ccd9d"
+source = "git+https://github.com/srperens/agua?tag=v0.1.0#6cfc6b686f2e2c4c25832d956f2b5702185ccd9d"
 dependencies = [
  "agua-core",
  "gstreamer",
