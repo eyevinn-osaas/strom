@@ -180,6 +180,15 @@ pub fn download_file(filename: &str, content: &str, _mime_type: &str) {
     }
 }
 
+/// Escape XML special characters in a string.
+pub(crate) fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 /// Generate XSPF playlist content for VLC to play an SRT stream.
 ///
 /// If the block is in listener mode (e.g., `srt://:5000?mode=listener`), VLC needs to
@@ -189,22 +198,11 @@ pub fn generate_vlc_playlist(srt_uri: &str, latency_ms: i32, stream_name: &str) 
     // Transform URI if it's in listener mode - VLC needs to connect as caller
     let vlc_uri = transform_srt_uri_for_vlc(srt_uri);
 
-    // Escape XML special characters in the URI
-    let escaped_uri = vlc_uri
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;");
+    let escaped_uri = escape_xml(&vlc_uri);
 
     // Include SRT URL in the track title for easy identification
     let title_with_url = format!("{} ({})", stream_name, vlc_uri);
-    let escaped_title = title_with_url
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;");
+    let escaped_title = escape_xml(&title_with_url);
 
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -717,8 +715,8 @@ pub struct StromApp {
     key_sequence_buffer: Vec<egui::Key>,
     /// Interactive overlay state (activated by key sequence)
     interactive_overlay: Option<crate::interactive_overlay::OverlayState>,
-    /// URL to show as inline QR code in the properties panel
-    qr_inline_url: Option<String>,
+    /// Block ID and URL to show as inline QR code in the properties panel
+    qr_inline: Option<(String, String)>,
     /// QR code texture cache (for properties popup)
     qr_cache: crate::qr::QrCache,
 }

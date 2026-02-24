@@ -166,7 +166,7 @@ impl StromApp {
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
             key_sequence_buffer: Vec::new(),
             interactive_overlay: None,
-            qr_inline_url: None,
+            qr_inline: None,
             qr_cache: crate::qr::QrCache::new(),
         };
 
@@ -312,7 +312,7 @@ impl StromApp {
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
             key_sequence_buffer: Vec::new(),
             interactive_overlay: None,
-            qr_inline_url: None,
+            qr_inline: None,
             qr_cache: crate::qr::QrCache::new(),
         };
 

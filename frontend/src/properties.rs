@@ -353,7 +353,7 @@ impl PropertyInspector {
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
-        qr_inline_url: &mut Option<String>,
+        qr_inline: &mut Option<(String, String)>,
         qr_cache: &mut crate::qr::QrCache,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
@@ -518,10 +518,12 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
+                    let is_qr_for_this_block = qr_inline
+                        .as_ref()
+                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
-                        let is_qr_visible = qr_inline_url.is_some();
                         if ui
-                            .button(if is_qr_visible { "Hide QR" } else { "QR" })
+                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
                             .on_hover_text("Toggle QR code for mobile access")
                             .clicked()
                         {
@@ -543,8 +545,8 @@ impl PropertyInspector {
                         }
                     });
 
-                    // Render inline QR code below buttons
-                    if let Some(ref url) = qr_inline_url {
+                    // Render inline QR code below buttons (only for this block)
+                    if let Some((_, ref url)) = qr_inline.as_ref().filter(|(bid, _)| bid == &block_id) {
                         ui.add_space(4.0);
                         if let Some(texture) = qr_cache.get_or_create(ui.ctx(), url) {
                             ui.image(egui::load::SizedTexture::new(
@@ -578,10 +580,12 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
+                    let is_qr_for_this_block = qr_inline
+                        .as_ref()
+                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
-                        let is_qr_visible = qr_inline_url.is_some();
                         if ui
-                            .button(if is_qr_visible { "Hide QR" } else { "QR" })
+                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
                             .on_hover_text("Toggle QR code for mobile access")
                             .clicked()
                         {
@@ -603,8 +607,8 @@ impl PropertyInspector {
                         }
                     });
 
-                    // Render inline QR code below buttons
-                    if let Some(ref url) = qr_inline_url {
+                    // Render inline QR code below buttons (only for this block)
+                    if let Some((_, ref url)) = qr_inline.as_ref().filter(|(bid, _)| bid == &block_id) {
                         ui.add_space(4.0);
                         if let Some(texture) = qr_cache.get_or_create(ui.ctx(), url) {
                             ui.image(egui::load::SizedTexture::new(

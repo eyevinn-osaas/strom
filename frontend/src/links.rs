@@ -5,14 +5,12 @@ use std::collections::HashSet;
 use strom_types::{Flow, PropertyValue};
 
 use crate::api::ApiClient;
-use crate::app::{download_file, generate_vlc_playlist};
+use crate::app::{download_file, escape_xml, generate_vlc_playlist};
 use crate::qr::QrCache;
 
 /// Information about an SRT listener stream.
 struct SrtListenerInfo {
     flow_name: String,
-    #[allow(dead_code)]
-    block_id: String,
     srt_uri: String,
 }
 
@@ -54,7 +52,6 @@ impl LinksPage {
                         if srt_uri.contains("mode=listener") {
                             listeners.push(SrtListenerInfo {
                                 flow_name: flow.name.clone(),
-                                block_id: block.id.clone(),
                                 srt_uri: srt_uri.clone(),
                             });
                         }
@@ -72,22 +69,8 @@ impl LinksPage {
 
         for listener in listeners {
             let vlc_uri = crate::app::transform_srt_uri_for_vlc(&listener.srt_uri);
-
-            // Escape XML special characters
-            let escaped_uri = vlc_uri
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;");
-
-            let title = format!("{} ({})", listener.flow_name, vlc_uri);
-            let escaped_title = title
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;");
+            let escaped_uri = escape_xml(&vlc_uri);
+            let escaped_title = escape_xml(&format!("{} ({})", listener.flow_name, vlc_uri));
 
             tracks.push_str(&format!(
                 r#"    <track>
@@ -184,18 +167,7 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
                     }
-                    let is_visible = qr_visible.contains(&ingest_url);
-                    if ui
-                        .small_button(if is_visible { "Hide QR" } else { "QR" })
-                        .on_hover_text("Toggle QR code for mobile access")
-                        .clicked()
-                    {
-                        if is_visible {
-                            qr_visible.remove(&ingest_url);
-                        } else {
-                            qr_visible.insert(ingest_url.clone());
-                        }
-                    }
+                    Self::qr_toggle_button(ui, &ingest_url, qr_visible);
                     if ui
                         .link(egui::RichText::new(&ingest_url).monospace())
                         .clicked()
@@ -234,18 +206,7 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &streams_url);
                     }
-                    let is_visible = qr_visible.contains(&streams_url);
-                    if ui
-                        .small_button(if is_visible { "Hide QR" } else { "QR" })
-                        .on_hover_text("Toggle QR code for mobile access")
-                        .clicked()
-                    {
-                        if is_visible {
-                            qr_visible.remove(&streams_url);
-                        } else {
-                            qr_visible.insert(streams_url.clone());
-                        }
-                    }
+                    Self::qr_toggle_button(ui, &streams_url, qr_visible);
                     if ui
                         .link(egui::RichText::new(&streams_url).monospace())
                         .clicked()
@@ -281,18 +242,7 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &player_base);
                     }
-                    let is_visible = qr_visible.contains(&player_base);
-                    if ui
-                        .small_button(if is_visible { "Hide QR" } else { "QR" })
-                        .on_hover_text("Toggle QR code for mobile access")
-                        .clicked()
-                    {
-                        if is_visible {
-                            qr_visible.remove(&player_base);
-                        } else {
-                            qr_visible.insert(player_base.clone());
-                        }
-                    }
+                    Self::qr_toggle_button(ui, &player_base, qr_visible);
                     if ui
                         .link(egui::RichText::new(&player_base).monospace())
                         .clicked()
@@ -314,6 +264,22 @@ impl LinksPage {
                     .weak(),
                 );
             });
+    }
+
+    /// Render a QR toggle button. Call inside a `ui.horizontal` block.
+    fn qr_toggle_button(ui: &mut Ui, url: &str, qr_visible: &mut HashSet<String>) {
+        let is_visible = qr_visible.contains(url);
+        if ui
+            .small_button(if is_visible { "Hide QR" } else { "QR" })
+            .on_hover_text("Toggle QR code for mobile access")
+            .clicked()
+        {
+            if is_visible {
+                qr_visible.remove(url);
+            } else {
+                qr_visible.insert(url.to_string());
+            }
+        }
     }
 
     /// Show an inline QR code image below the URL.

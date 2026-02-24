@@ -1238,7 +1238,7 @@ impl StromApp {
                             rtp_stats,
                             &self.network_interfaces,
                             &self.available_channels,
-                            &mut self.qr_inline_url,
+                            &mut self.qr_inline,
                             &mut self.qr_cache,
                         );
 
@@ -1348,10 +1348,10 @@ impl StromApp {
                                 &self.api.get_whep_player_url(&endpoint_id),
                                 server_hostname,
                             );
-                            if self.qr_inline_url.as_deref() == Some(&player_url) {
-                                self.qr_inline_url = None;
+                            if self.qr_inline.as_ref().is_some_and(|(bid, _)| bid == &block_id) {
+                                self.qr_inline = None;
                             } else {
-                                self.qr_inline_url = Some(player_url);
+                                self.qr_inline = Some((block_id.clone(), player_url));
                             }
                         }
 
@@ -1362,10 +1362,10 @@ impl StromApp {
                                 &self.api.get_whip_ingest_url(&endpoint_id),
                                 server_hostname,
                             );
-                            if self.qr_inline_url.as_deref() == Some(&ingest_url) {
-                                self.qr_inline_url = None;
+                            if self.qr_inline.as_ref().is_some_and(|(bid, _)| bid == &block_id) {
+                                self.qr_inline = None;
                             } else {
-                                self.qr_inline_url = Some(ingest_url);
+                                self.qr_inline = Some((block_id.clone(), ingest_url));
                             }
                         }
                     } else {
