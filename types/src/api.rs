@@ -496,13 +496,13 @@ pub struct ExportGstLaunchResponse {
 }
 
 // ============================================================================
-// Version and Auth Response Types
+// System Information and Auth Response Types
 // ============================================================================
 
-/// Build and version information.
+/// Server system information: version, build, runtime environment, and host details.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct VersionInfo {
+pub struct SystemInfo {
     /// Package version from Cargo.toml
     pub version: String,
     /// Git commit hash (short)
@@ -533,9 +533,12 @@ pub struct VersionInfo {
     /// When the system was booted (ISO 8601 format with timezone)
     #[serde(default)]
     pub system_boot_time: String,
+    /// Server hostname (for generating external URLs)
+    #[serde(default)]
+    pub hostname: String,
 }
 
-impl VersionInfo {
+impl SystemInfo {
     /// Get a human-readable version string.
     ///
     /// Returns:

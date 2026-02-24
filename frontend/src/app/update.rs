@@ -761,25 +761,25 @@ impl eframe::App for StromApp {
                     tracing::info!("Refresh requested due to flow fetch failure");
                     self.needs_refresh = true;
                 }
-                AppMessage::VersionLoaded(version_info) => {
+                AppMessage::SystemInfoLoaded(system_info) => {
                     tracing::info!(
-                        "Version info loaded: v{} ({}) build_id={}",
-                        version_info.version,
-                        version_info.git_hash,
-                        version_info.build_id
+                        "System info loaded: v{} ({}) build_id={}",
+                        system_info.version,
+                        system_info.git_hash,
+                        system_info.build_id
                     );
 
                     // Check if backend build_id differs from the one we got on initial load
                     // If so, the backend has been rebuilt and we need to reload the frontend
-                    if let Some(ref existing_info) = self.version_info {
-                        if !version_info.build_id.is_empty()
+                    if let Some(ref existing_info) = self.system_info {
+                        if !system_info.build_id.is_empty()
                             && !existing_info.build_id.is_empty()
-                            && version_info.build_id != existing_info.build_id
+                            && system_info.build_id != existing_info.build_id
                         {
                             tracing::warn!(
                                 "Build ID mismatch! Previous: {}, Current: {} - reloading frontend",
                                 existing_info.build_id,
-                                version_info.build_id
+                                system_info.build_id
                             );
 
                             // Force a hard reload to get the new frontend from the backend
@@ -795,7 +795,7 @@ impl eframe::App for StromApp {
                         }
                     }
 
-                    self.version_info = Some(version_info);
+                    self.system_info = Some(system_info);
                 }
                 AppMessage::AuthStatusLoaded(status) => {
                     tracing::info!(
@@ -1590,7 +1590,7 @@ impl eframe::App for StromApp {
                         CentralPanel::default().show(ctx, |ui| {
                             self.info_page.render(
                                 ui,
-                                self.version_info.as_ref(),
+                                self.system_info.as_ref(),
                                 &self.system_monitor,
                                 &self.network_interfaces,
                                 &self.flows,
@@ -1600,7 +1600,15 @@ impl eframe::App for StromApp {
                     }
                     AppPage::Links => {
                         CentralPanel::default().show(ctx, |ui| {
-                            self.links_page.render(ui, &self.api, ctx, &self.flows);
+                            let server_hostname =
+                                self.system_info.as_ref().map(|s| s.hostname.as_str());
+                            self.links_page.render(
+                                ui,
+                                &self.api,
+                                ctx,
+                                &self.flows,
+                                server_hostname,
+                            );
                         });
                     }
                 }

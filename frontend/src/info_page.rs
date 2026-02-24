@@ -4,7 +4,7 @@ use egui::{Color32, Pos2, Rect, Stroke, Ui, Vec2};
 use glow::HasContext;
 use std::collections::VecDeque;
 
-use crate::api::VersionInfo;
+use crate::api::SystemInfo;
 use crate::system_monitor::SystemMonitorStore;
 
 const HISTORY_SIZE: usize = 60;
@@ -201,7 +201,7 @@ impl InfoPage {
     pub fn render(
         &mut self,
         ui: &mut Ui,
-        version_info: Option<&VersionInfo>,
+        version_info: Option<&SystemInfo>,
         system_monitor: &SystemMonitorStore,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         flows: &[strom_types::Flow],
@@ -285,7 +285,7 @@ impl InfoPage {
             });
     }
 
-    fn render_version_content(&self, ui: &mut Ui, version_info: Option<&VersionInfo>) {
+    fn render_version_content(&self, ui: &mut Ui, version_info: Option<&SystemInfo>) {
         if let Some(info) = version_info {
             egui::Grid::new("version_grid")
                 .num_columns(2)
@@ -339,7 +339,7 @@ impl InfoPage {
     fn render_system_content(
         &self,
         ui: &mut Ui,
-        version_info: Option<&VersionInfo>,
+        version_info: Option<&SystemInfo>,
         _flows: &[strom_types::Flow],
     ) {
         egui::Grid::new("system_grid")
@@ -391,7 +391,7 @@ impl InfoPage {
     fn render_process_content(
         &self,
         ui: &mut Ui,
-        version_info: Option<&VersionInfo>,
+        version_info: Option<&SystemInfo>,
         flows: &[strom_types::Flow],
         renderer_info: &RendererInfo,
     ) {

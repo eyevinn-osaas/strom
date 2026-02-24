@@ -44,8 +44,8 @@ pub enum AppMessage {
     /// Request full refresh of flows
     RefreshNeeded,
 
-    /// Version information loaded from backend
-    VersionLoaded(crate::api::VersionInfo),
+    /// System information loaded from backend
+    SystemInfoLoaded(crate::api::SystemInfo),
 
     /// Authentication status loaded
     AuthStatusLoaded(crate::api::AuthStatusResponse),

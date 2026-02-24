@@ -1238,6 +1238,8 @@ impl StromApp {
                             rtp_stats,
                             &self.network_interfaces,
                             &self.available_channels,
+                            &mut self.qr_inline,
+                            &mut self.qr_cache,
                         );
 
                         // Handle deletion request
@@ -1337,6 +1339,34 @@ impl StromApp {
                             let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
                             crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
                             self.status = "Ingest URL copied to clipboard".to_string();
+                        }
+
+                        // Handle QR code toggle for WHEP player
+                        if let Some(endpoint_id) = result.show_qr_whep {
+                            let server_hostname = self.system_info.as_ref().map(|s| s.hostname.as_str());
+                            let player_url = make_external_url(
+                                &self.api.get_whep_player_url(&endpoint_id),
+                                server_hostname,
+                            );
+                            if self.qr_inline.as_ref().is_some_and(|(bid, _)| bid == &block_id) {
+                                self.qr_inline = None;
+                            } else {
+                                self.qr_inline = Some((block_id.clone(), player_url));
+                            }
+                        }
+
+                        // Handle QR code toggle for WHIP ingest
+                        if let Some(endpoint_id) = result.show_qr_whip {
+                            let server_hostname = self.system_info.as_ref().map(|s| s.hostname.as_str());
+                            let ingest_url = make_external_url(
+                                &self.api.get_whip_ingest_url(&endpoint_id),
+                                server_hostname,
+                            );
+                            if self.qr_inline.as_ref().is_some_and(|(bid, _)| bid == &block_id) {
+                                self.qr_inline = None;
+                            } else {
+                                self.qr_inline = Some((block_id.clone(), ingest_url));
+                            }
                         }
                     } else {
                         ui.label("Block definition not found");
@@ -1701,7 +1731,7 @@ impl StromApp {
                         ui.separator();
                     }
 
-                    if let Some(ref version_info) = self.version_info {
+                    if let Some(ref version_info) = self.system_info {
                         let version_text = if !version_info.git_tag.is_empty() {
                             // On a tagged release
                             version_info.git_tag.to_string()

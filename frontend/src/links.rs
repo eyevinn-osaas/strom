@@ -1,16 +1,16 @@
 //! Links page for quick access to WHEP players, SRT streams, and API endpoints.
 
 use egui::{Context, Ui};
+use std::collections::HashSet;
 use strom_types::{Flow, PropertyValue};
 
 use crate::api::ApiClient;
-use crate::app::{download_file, generate_vlc_playlist};
+use crate::app::{download_file, escape_xml, generate_vlc_playlist};
+use crate::qr::QrCache;
 
 /// Information about an SRT listener stream.
 struct SrtListenerInfo {
     flow_name: String,
-    #[allow(dead_code)]
-    block_id: String,
     srt_uri: String,
 }
 
@@ -26,12 +26,18 @@ enum LinksTab {
 /// Links page state.
 pub struct LinksPage {
     selected_tab: LinksTab,
+    /// URLs for which the QR code is currently shown.
+    qr_visible: HashSet<String>,
+    /// Cached QR code textures.
+    qr_cache: QrCache,
 }
 
 impl LinksPage {
     pub fn new() -> Self {
         Self {
             selected_tab: LinksTab::default(),
+            qr_visible: HashSet::new(),
+            qr_cache: QrCache::new(),
         }
     }
 
@@ -46,7 +52,6 @@ impl LinksPage {
                         if srt_uri.contains("mode=listener") {
                             listeners.push(SrtListenerInfo {
                                 flow_name: flow.name.clone(),
-                                block_id: block.id.clone(),
                                 srt_uri: srt_uri.clone(),
                             });
                         }
@@ -64,22 +69,8 @@ impl LinksPage {
 
         for listener in listeners {
             let vlc_uri = crate::app::transform_srt_uri_for_vlc(&listener.srt_uri);
-
-            // Escape XML special characters
-            let escaped_uri = vlc_uri
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;");
-
-            let title = format!("{} ({})", listener.flow_name, vlc_uri);
-            let escaped_title = title
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;")
-                .replace('"', "&quot;")
-                .replace('\'', "&apos;");
+            let escaped_uri = escape_xml(&vlc_uri);
+            let escaped_title = escape_xml(&format!("{} ({})", listener.flow_name, vlc_uri));
 
             tracks.push_str(&format!(
                 r#"    <track>
@@ -107,7 +98,14 @@ impl LinksPage {
     }
 
     /// Render the links page.
-    pub fn render(&mut self, ui: &mut Ui, api: &ApiClient, ctx: &Context, flows: &[Flow]) {
+    pub fn render(
+        &mut self,
+        ui: &mut Ui,
+        api: &ApiClient,
+        ctx: &Context,
+        flows: &[Flow],
+        server_hostname: Option<&str>,
+    ) {
         let server_base = api.base_url().trim_end_matches("/api");
 
         ui.add_space(8.0);
@@ -127,14 +125,28 @@ impl LinksPage {
                 ui.add_space(16.0);
 
                 match self.selected_tab {
-                    LinksTab::Whep => self.render_whep_tab(ui, ctx, server_base),
+                    LinksTab::Whep => Self::render_whep_tab(
+                        ui,
+                        ctx,
+                        server_base,
+                        &mut self.qr_visible,
+                        &mut self.qr_cache,
+                        server_hostname,
+                    ),
                     LinksTab::Srt => self.render_srt_tab(ui, ctx, flows),
                     LinksTab::Api => self.render_api_tab(ui, ctx, server_base),
                 }
             });
     }
 
-    fn render_whep_tab(&self, ui: &mut Ui, ctx: &Context, server_base: &str) {
+    fn render_whep_tab(
+        ui: &mut Ui,
+        ctx: &Context,
+        server_base: &str,
+        qr_visible: &mut HashSet<String>,
+        qr_cache: &mut QrCache,
+        server_hostname: Option<&str>,
+    ) {
         ui.heading("WHIP/WHEP");
         ui.add_space(8.0);
         ui.label("WebRTC ingest (WHIP) and playback (WHEP) for low-latency streaming.");
@@ -155,6 +167,7 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
                     }
+                    Self::qr_toggle_button(ui, &ingest_url, qr_visible);
                     if ui
                         .link(egui::RichText::new(&ingest_url).monospace())
                         .clicked()
@@ -162,6 +175,10 @@ impl LinksPage {
                         ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
                     }
                 });
+
+                if qr_visible.contains(&ingest_url) {
+                    Self::show_inline_qr(ui, ctx, &ingest_url, qr_cache, server_hostname);
+                }
 
                 ui.add_space(4.0);
                 ui.label(
@@ -189,6 +206,7 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &streams_url);
                     }
+                    Self::qr_toggle_button(ui, &streams_url, qr_visible);
                     if ui
                         .link(egui::RichText::new(&streams_url).monospace())
                         .clicked()
@@ -196,6 +214,10 @@ impl LinksPage {
                         ctx.open_url(egui::OpenUrl::new_tab(&streams_url));
                     }
                 });
+
+                if qr_visible.contains(&streams_url) {
+                    Self::show_inline_qr(ui, ctx, &streams_url, qr_cache, server_hostname);
+                }
 
                 ui.add_space(4.0);
                 ui.label(
@@ -220,6 +242,7 @@ impl LinksPage {
                     if ui.small_button("Copy").clicked() {
                         crate::clipboard::copy_text_with_ctx(ctx, &player_base);
                     }
+                    Self::qr_toggle_button(ui, &player_base, qr_visible);
                     if ui
                         .link(egui::RichText::new(&player_base).monospace())
                         .clicked()
@@ -227,6 +250,10 @@ impl LinksPage {
                         ctx.open_url(egui::OpenUrl::new_tab(&player_base));
                     }
                 });
+
+                if qr_visible.contains(&player_base) {
+                    Self::show_inline_qr(ui, ctx, &player_base, qr_cache, server_hostname);
+                }
 
                 ui.add_space(4.0);
                 ui.label(
@@ -237,6 +264,49 @@ impl LinksPage {
                     .weak(),
                 );
             });
+    }
+
+    /// Render a QR toggle button. Call inside a `ui.horizontal` block.
+    fn qr_toggle_button(ui: &mut Ui, url: &str, qr_visible: &mut HashSet<String>) {
+        let is_visible = qr_visible.contains(url);
+        if ui
+            .small_button(if is_visible { "Hide QR" } else { "QR" })
+            .on_hover_text("Toggle QR code for mobile access")
+            .clicked()
+        {
+            if is_visible {
+                qr_visible.remove(url);
+            } else {
+                qr_visible.insert(url.to_string());
+            }
+        }
+    }
+
+    /// Show an inline QR code image below the URL.
+    /// The QR code encodes the external URL (localhost replaced with hostname).
+    fn show_inline_qr(
+        ui: &mut Ui,
+        ctx: &Context,
+        url: &str,
+        qr_cache: &mut QrCache,
+        server_hostname: Option<&str>,
+    ) {
+        let external_url = crate::app::make_external_url(url, server_hostname);
+        ui.add_space(4.0);
+        if let Some(texture) = qr_cache.get_or_create(ctx, &external_url) {
+            ui.image(egui::load::SizedTexture::new(
+                texture.id(),
+                egui::vec2(160.0, 160.0),
+            ));
+        }
+        if external_url != url {
+            ui.label(
+                egui::RichText::new(&external_url)
+                    .monospace()
+                    .small()
+                    .weak(),
+            );
+        }
     }
 
     fn render_srt_tab(&self, ui: &mut Ui, ctx: &Context, flows: &[Flow]) {

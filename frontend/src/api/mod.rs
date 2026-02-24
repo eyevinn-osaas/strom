@@ -11,7 +11,7 @@ mod media;
 mod player;
 mod stats;
 
-pub use strom_types::api::{AuthStatusResponse, LatencyResponse, VersionInfo};
+pub use strom_types::api::{AuthStatusResponse, LatencyResponse, SystemInfo};
 
 /// Result type for API operations.
 pub type ApiResult<T> = Result<T, ApiError>;
