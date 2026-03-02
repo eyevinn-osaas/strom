@@ -863,7 +863,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             inputs: (0..DEFAULT_CHANNELS)
                 .map(|i| ExternalPad {
                     name: format!("input_{}", i + 1),
-                    label: Some(format!("{}", i + 1)),
+                    label: Some(format!("A{}", i)),
                     media_type: MediaType::Audio,
                     internal_element_id: format!("convert_{}", i),
                     internal_pad_name: "sink".to_string(),

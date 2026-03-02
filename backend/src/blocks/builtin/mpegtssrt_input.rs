@@ -58,11 +58,7 @@ impl BlockBuilder for MpegTsSrtInputBuilder {
         // Add video outputs
         for i in 0..num_video_tracks {
             outputs.push(ExternalPad {
-                label: Some(if num_video_tracks == 1 {
-                    "Video".to_string()
-                } else {
-                    format!("V{}", i)
-                }),
+                label: Some(format!("V{}", i)),
                 name: if num_video_tracks == 1 {
                     "video_out".to_string()
                 } else {
@@ -597,7 +593,7 @@ fn mpegtssrt_input_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![],
             outputs: vec![ExternalPad {
-                label: Some("Video".to_string()),
+                label: Some("V0".to_string()),
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "video_output".to_string(),
