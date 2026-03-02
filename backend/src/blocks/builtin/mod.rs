@@ -11,6 +11,7 @@ pub mod mediaplayer;
 pub mod meter;
 pub mod mixer;
 pub mod mpegtssrt;
+pub mod mpegtssrt_input;
 pub mod ndi;
 pub mod videoenc;
 pub mod videoformat;
@@ -58,6 +59,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
     // Add MPEG-TS/SRT blocks
     blocks.extend(mpegtssrt::get_blocks());
 
+    // Add MPEG-TS/SRT Input blocks
+    blocks.extend(mpegtssrt_input::get_blocks());
+
     // Add NDI blocks
     blocks.extend(ndi::get_blocks());
 
@@ -99,6 +103,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.meter" => Some(Arc::new(meter::MeterBuilder)),
         "builtin.mixer" => Some(Arc::new(mixer::MixerBuilder)),
         "builtin.mpegtssrt_output" => Some(Arc::new(mpegtssrt::MpegTsSrtOutputBuilder)),
+        "builtin.mpegtssrt_input" => Some(Arc::new(mpegtssrt_input::MpegTsSrtInputBuilder)),
         "builtin.ndi_input" => Some(Arc::new(ndi::NDIInputBuilder)),
         "builtin.ndi_output" => Some(Arc::new(ndi::NDIOutputBuilder)),
         "builtin.videoenc" => Some(Arc::new(videoenc::VideoEncBuilder)),

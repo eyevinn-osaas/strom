@@ -309,10 +309,11 @@ pub(crate) fn get_current_hostname() -> String {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn get_current_hostname() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "127.0.0.1".to_string())
+    // In native mode, the GUI runs on the same machine as the server.
+    // Using the OS hostname can resolve to IPv6 (e.g. ::1 or fe80::...)
+    // which won't work with SRT listeners bound to 0.0.0.0 (IPv4 only).
+    // Always use 127.0.0.1 for reliable local connectivity.
+    "127.0.0.1".to_string()
 }
 
 /// Rewrite a URL so that `localhost` / `127.0.0.1` is replaced with the

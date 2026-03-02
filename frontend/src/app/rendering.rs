@@ -1464,14 +1464,21 @@ impl StromApp {
 
                     for block_id in meter_blocks {
                         if let Some(meter_data) = self.meter_data.get(&flow_id, &block_id) {
-                            let height =
-                                crate::meter::calculate_compact_height(meter_data.rms.len());
+                            let channel_count = meter_data.rms.len();
                             let meter_data_clone = meter_data.clone();
+
+                            // For 1-2 channels the meters fit inside the base
+                            // block height — no need to expand the node.
+                            let additional_height = if channel_count <= 2 {
+                                0.0
+                            } else {
+                                crate::meter::calculate_compact_height(channel_count)
+                            };
 
                             self.graph.set_block_content(
                                 block_id,
                                 crate::graph::BlockContentInfo {
-                                    additional_height: height + 10.0,
+                                    additional_height,
                                     render_callback: Some(Box::new(move |ui, _rect| {
                                         crate::meter::show_compact(ui, &meter_data_clone);
                                     })),

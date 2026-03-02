@@ -57,7 +57,7 @@ impl BlockBuilder for AudioRouterBuilder {
         // Create input pads dynamically - connect to identity element
         let inputs = (0..num_inputs)
             .map(|i| ExternalPad {
-                label: Some(format!("{i}")),
+                label: Some(format!("A{i}")),
                 name: format!("audio_in_{}", i),
                 media_type: MediaType::Audio,
                 internal_element_id: format!("identity_in_{}", i),
@@ -68,7 +68,7 @@ impl BlockBuilder for AudioRouterBuilder {
         // Create output pads dynamically
         let outputs = (0..num_outputs)
             .map(|i| ExternalPad {
-                label: Some(format!("{i}")),
+                label: Some(format!("A{i}")),
                 name: format!("audio_out_{}", i),
                 media_type: MediaType::Audio,
                 internal_element_id: format!("queue_out_{}", i),
@@ -859,14 +859,14 @@ fn audiorouter_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![
                 ExternalPad {
-                    label: Some("0".to_string()),
+                    label: Some("A0".to_string()),
                     name: "audio_in_0".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "identity_in_0".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
-                    label: Some("1".to_string()),
+                    label: Some("A1".to_string()),
                     name: "audio_in_1".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "identity_in_1".to_string(),
@@ -875,14 +875,14 @@ fn audiorouter_definition() -> BlockDefinition {
             ],
             outputs: vec![
                 ExternalPad {
-                    label: Some("0".to_string()),
+                    label: Some("A0".to_string()),
                     name: "audio_out_0".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "queue_out_0".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
                 ExternalPad {
-                    label: Some("1".to_string()),
+                    label: Some("A1".to_string()),
                     name: "audio_out_1".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "queue_out_1".to_string(),

@@ -1,7 +1,48 @@
-use egui::{pos2, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
-use strom_types::{element::ElementInfo, BlockDefinition, BlockInstance, Element};
+use egui::{
+    pos2, text::LayoutJob, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
+};
+use strom_types::{
+    element::{ElementInfo, PropertyValue},
+    BlockDefinition, BlockInstance, Element,
+};
 
 use super::*;
+
+/// Font size for node type labels (element type / block definition name).
+const NODE_TYPE_FONT_SIZE: f32 = 13.0;
+/// Font size for custom node name labels (user-assigned names).
+const NODE_NAME_FONT_SIZE: f32 = 15.0;
+/// Vertical offset for the custom name label below the type label.
+const NODE_NAME_Y_OFFSET: f32 = 30.0;
+/// Maximum characters displayed for a custom node name.
+const NODE_NAME_MAX_CHARS: usize = 20;
+
+/// Draw a custom name label (italic, centered) below the type label on a node.
+fn draw_node_name(painter: &egui::Painter, ui: &Ui, name: &str, rect: Rect, zoom: f32) {
+    let name_color = if ui.visuals().dark_mode {
+        Color32::from_gray(180)
+    } else {
+        Color32::from_gray(100)
+    };
+    let display_name = if name.chars().count() > NODE_NAME_MAX_CHARS {
+        let truncated: String = name.chars().take(NODE_NAME_MAX_CHARS - 1).collect();
+        format!("{truncated}\u{2026}")
+    } else {
+        name.to_owned()
+    };
+    let mut job = LayoutJob::simple_singleline(
+        display_name,
+        FontId::proportional(NODE_NAME_FONT_SIZE * zoom),
+        name_color,
+    );
+    job.sections
+        .iter_mut()
+        .for_each(|s| s.format.italics = true);
+    let galley = painter.layout_job(job);
+    let name_x = rect.center().x - galley.size().x / 2.0;
+    let name_pos = pos2(name_x, rect.min.y + NODE_NAME_Y_OFFSET * zoom);
+    painter.galley(name_pos, galley, Color32::TRANSPARENT);
+}
 
 impl GraphEditor {
     /// Center the view on the currently selected element or block.
@@ -804,9 +845,16 @@ impl GraphEditor {
             text_pos,
             egui::Align2::LEFT_TOP,
             &element.element_type,
-            FontId::proportional(14.0 * self.zoom),
+            FontId::proportional(NODE_TYPE_FONT_SIZE * self.zoom),
             text_color,
         );
+
+        // Draw custom name (from GStreamer "name" property) below element type
+        if let Some(PropertyValue::String(custom_name)) = element.properties.get("name") {
+            if !custom_name.is_empty() {
+                draw_node_name(painter, ui, custom_name, rect, self.zoom);
+            }
+        }
 
         // Draw QoS indicator if there are issues - make it clickable
         if let Some(qos_health) = self.qos_health_map.get(&element.id.to_string()) {
@@ -1313,9 +1361,16 @@ impl GraphEditor {
             text_pos,
             egui::Align2::LEFT_TOP,
             block_name,
-            FontId::proportional(14.0 * self.zoom),
+            FontId::proportional(NODE_TYPE_FONT_SIZE * self.zoom),
             text_color,
         );
+
+        // Draw custom instance name below block type name
+        if let Some(custom_name) = &block.name {
+            if !custom_name.is_empty() {
+                draw_node_name(painter, ui, custom_name, rect, self.zoom);
+            }
+        }
 
         // Draw QoS indicator if there are issues - make it clickable
         if let Some(qos_health) = self.qos_health_map.get(&block.id) {
@@ -1350,12 +1405,16 @@ impl GraphEditor {
         if let Some(content_info) = self.block_content_map.get(&block.id) {
             if let Some(ref render_callback) = content_info.render_callback {
                 // Calculate content area (below the title, above the pads)
+                // Clamp content area to fit within the block rect.
+                // Use at least 20px (scaled by zoom) so callbacks with
+                // additional_height=0 (e.g. 1-2 channel meters) still
+                // have space to render within the base block area.
+                let max_content_height = (rect.height() - 35.0 * self.zoom).max(0.0);
+                let render_height =
+                    (content_info.additional_height * self.zoom).max(20.0 * self.zoom);
                 let content_area = Rect::from_min_size(
                     rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
-                    vec2(
-                        180.0 * self.zoom,
-                        content_info.additional_height * self.zoom,
-                    ),
+                    vec2(180.0 * self.zoom, render_height.min(max_content_height)),
                 );
 
                 // Create a child UI for the custom content

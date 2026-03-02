@@ -309,6 +309,9 @@ pub fn calculate_compact_height(channel_count: usize) -> f32 {
 }
 
 /// Render a compact meter widget (for graph nodes).
+///
+/// Adapts bar sizes to the available UI space so meters scale with zoom
+/// and many channels are packed without overflowing the block.
 pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
     let channel_count = meter_data.rms.len();
     tracing::trace!(
@@ -321,10 +324,13 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
         return;
     }
 
-    // Compact: show horizontal bars, one per channel
-    let bar_height = 8.0;
-    let spacing = 2.0;
-    let total_height = calculate_compact_height(channel_count);
+    // Derive bar sizes from the available height so meters scale with
+    // zoom and many channels pack without overflowing the block.
+    let available_height = ui.available_height();
+    let per_channel = available_height / channel_count as f32;
+    let spacing = per_channel * 0.2;
+    let bar_height = (per_channel - spacing).max(1.0);
+    let total_height = per_channel * channel_count as f32;
 
     let (rect, _response) = ui.allocate_exact_size(
         Vec2::new(ui.available_width().max(60.0), total_height),
@@ -332,6 +338,9 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
     );
 
     let painter = ui.painter();
+    let radius = (bar_height * 0.15).clamp(0.5, 1.0);
+    // RMS inset scales with bar size; skip when bars are tiny.
+    let rms_inset = if bar_height > 4.0 { 2.0 } else { 0.0 };
 
     for (i, (rms, peak, decay)) in meter_data
         .rms
@@ -341,22 +350,22 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
         .map(|((r, p), d)| (r, p, d))
         .enumerate()
     {
-        let y = rect.min.y + i as f32 * (bar_height + spacing);
+        let y = rect.min.y + i as f32 * per_channel;
         let bar_rect = Rect::from_min_size(
             egui::pos2(rect.min.x, y),
             Vec2::new(rect.width(), bar_height),
         );
 
         // Background zones (dim colors)
-        draw_horizontal_zones_background(painter, bar_rect, 1.0);
+        draw_horizontal_zones_background(painter, bar_rect, radius);
 
         // Peak level (bright multicolored bar)
         let peak_level = db_to_level(*peak);
-        draw_horizontal_level(painter, bar_rect, peak_level, 1.0);
+        draw_horizontal_level(painter, bar_rect, peak_level, radius);
 
         // RMS level (darker inner bar within the peak bar)
         let rms_level = db_to_level(*rms);
-        if rms_level > 0.0 {
+        if rms_level > 0.0 && rms_inset > 0.0 {
             let zones = [
                 (0.0, ZONE_GREEN_END, level_to_color_dim(0.0)),
                 (
@@ -380,8 +389,8 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
                 let x_start = bar_rect.min.x + bar_rect.width() * start;
                 let x_end = bar_rect.min.x + bar_rect.width() * zone_level;
                 let rms_rect = Rect::from_min_max(
-                    egui::pos2(x_start, bar_rect.min.y + 2.0),
-                    egui::pos2(x_end, bar_rect.max.y - 2.0),
+                    egui::pos2(x_start, bar_rect.min.y + rms_inset),
+                    egui::pos2(x_end, bar_rect.max.y - rms_inset),
                 );
                 painter.rect(
                     rms_rect,
@@ -406,23 +415,24 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
             );
         }
 
-        // Border
-        painter.rect(
-            bar_rect,
-            1.0,
-            Color32::TRANSPARENT,
-            Stroke::new(1.0, Color32::from_gray(80)),
-            egui::epaint::StrokeKind::Inside,
-        );
+        // Border (skip for very small bars to avoid visual noise)
+        if bar_height >= 3.0 {
+            painter.rect(
+                bar_rect,
+                radius,
+                Color32::TRANSPARENT,
+                Stroke::new(1.0, Color32::from_gray(80)),
+                egui::epaint::StrokeKind::Inside,
+            );
+        }
     }
 }
 
 /// Render a full meter widget (for property inspector).
-pub fn show_full(ui: &mut Ui, element_id: &str, meter_data: &MeterData) {
+pub fn show_full(ui: &mut Ui, meter_data: &MeterData) {
     let channel_count = meter_data.rms.len();
     tracing::trace!(
-        "show_full called for element {}: channels={}, rms={:?}",
-        element_id,
+        "show_full called: channels={}, rms={:?}",
         channel_count,
         meter_data.rms
     );
@@ -542,7 +552,4 @@ pub fn show_full(ui: &mut Ui, element_id: &str, meter_data: &MeterData) {
             });
         }
     });
-
-    ui.add_space(5.0);
-    ui.label(format!("Element: {}", element_id));
 }

@@ -22,7 +22,8 @@ pub mod thread_stats;
 pub use block::{
     common_video_resolution_enum_values, parse_resolution_string, BlockDefinition, BlockInstance,
     BlockListResponse, BlockResponse, CreateBlockRequest, EnumValue, ExposedProperty, ExternalPad,
-    ExternalPads, PropertyMapping, PropertyType, COMMON_VIDEO_RESOLUTIONS,
+    ExternalPads, PropertyMapping, PropertyType, COMMON_VIDEO_RESOLUTIONS, DEFAULT_SRT_INPUT_URI,
+    DEFAULT_SRT_LATENCY_MS, DEFAULT_SRT_OUTPUT_URI,
 };
 pub use element::{Element, ElementId, Link, MediaType, PropertyValue};
 pub use events::StromEvent;

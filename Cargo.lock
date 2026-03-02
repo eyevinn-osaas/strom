@@ -131,8 +131,8 @@ dependencies = [
 
 [[package]]
 name = "agua-core"
-version = "0.1.0"
-source = "git+https://github.com/srperens/agua?tag=v0.1.0#6cfc6b686f2e2c4c25832d956f2b5702185ccd9d"
+version = "0.2.4"
+source = "git+https://github.com/srperens/agua?tag=v0.2.4#07cae16b15c540203bf2f095950d82af888339f0"
 dependencies = [
  "aes",
  "cipher 0.5.0",
@@ -142,8 +142,8 @@ dependencies = [
 
 [[package]]
 name = "agua-gst"
-version = "0.1.0"
-source = "git+https://github.com/srperens/agua?tag=v0.1.0#6cfc6b686f2e2c4c25832d956f2b5702185ccd9d"
+version = "0.2.4"
+source = "git+https://github.com/srperens/agua?tag=v0.2.4#07cae16b15c540203bf2f095950d82af888339f0"
 dependencies = [
  "agua-core",
  "gstreamer",
@@ -253,7 +253,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -264,7 +264,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1449,7 +1449,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1793,7 +1793,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2181,7 +2181,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4002,7 +4002,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5342,7 +5342,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5401,7 +5401,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6122,7 +6122,7 @@ dependencies = [
 
 [[package]]
 name = "strom"
-version = "0.3.23"
+version = "0.3.24"
 dependencies = [
  "agua-gst",
  "anyhow",
@@ -6191,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "strom-frontend"
-version = "0.3.23"
+version = "0.3.24"
 dependencies = [
  "base64",
  "chrono",
@@ -6226,7 +6226,7 @@ dependencies = [
 
 [[package]]
 name = "strom-mcp-server"
-version = "0.3.23"
+version = "0.3.24"
 dependencies = [
  "anyhow",
  "reqwest 0.13.2",
@@ -6240,7 +6240,7 @@ dependencies = [
 
 [[package]]
 name = "strom-types"
-version = "0.3.23"
+version = "0.3.24"
 dependencies = [
  "serde",
  "serde_json",
@@ -6361,7 +6361,7 @@ dependencies = [
  "getrandom 0.4.1",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7741,7 +7741,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

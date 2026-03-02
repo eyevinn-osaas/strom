@@ -57,7 +57,7 @@ impl BlockBuilder for WHEPOutputBuilder {
         if mode.has_audio() {
             inputs.push(ExternalPad {
                 label: if mode.has_video() {
-                    Some("Audio".to_string())
+                    Some("A0".to_string())
                 } else {
                     None
                 },
@@ -71,7 +71,7 @@ impl BlockBuilder for WHEPOutputBuilder {
         if mode.has_video() {
             inputs.push(ExternalPad {
                 label: if mode.has_audio() {
-                    Some("Video".to_string())
+                    Some("V0".to_string())
                 } else {
                     None
                 },
@@ -1864,14 +1864,14 @@ fn whep_output_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![
                 ExternalPad {
-                    label: Some("Audio".to_string()),
+                    label: Some("A0".to_string()),
                     name: "audio_in".to_string(),
                     media_type: MediaType::Audio,
                     internal_element_id: "audioconvert".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
-                    label: Some("Video".to_string()),
+                    label: Some("V0".to_string()),
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "video_queue".to_string(),

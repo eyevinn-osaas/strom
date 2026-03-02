@@ -93,7 +93,7 @@ impl BlockBuilder for CompositorBuilder {
             };
 
             inputs.push(ExternalPad {
-                label: Some(format!("{}", i)),
+                label: Some(format!("V{}", i)),
                 name: format!("video_in_{}", i),
                 media_type: MediaType::Video,
                 internal_element_id,
@@ -104,7 +104,7 @@ impl BlockBuilder for CompositorBuilder {
         Some(ExternalPads {
             inputs,
             outputs: vec![ExternalPad {
-                label: Some("Out".to_string()),
+                label: Some("V0".to_string()),
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "capsfilter".to_string(),
@@ -1113,14 +1113,14 @@ fn compositor_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![
                 ExternalPad {
-                    label: Some("0".to_string()),
+                    label: Some("V0".to_string()),
                     name: "video_in_0".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "queue_0".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
                 ExternalPad {
-                    label: Some("1".to_string()),
+                    label: Some("V1".to_string()),
                     name: "video_in_1".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "queue_1".to_string(),
@@ -1128,7 +1128,7 @@ fn compositor_definition() -> BlockDefinition {
                 },
             ],
             outputs: vec![ExternalPad {
-                label: Some("Out".to_string()),
+                label: Some("V0".to_string()),
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "capsfilter".to_string(),

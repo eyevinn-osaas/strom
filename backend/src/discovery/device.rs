@@ -180,11 +180,13 @@ impl DeviceDiscovery {
         // Create device monitor
         let monitor = gst::DeviceMonitor::new();
 
-        // Add filters for different device types
-        // Note: We don't filter by caps to discover all devices
-        monitor.add_filter(Some("Audio/Source"), None);
-        monitor.add_filter(Some("Audio/Sink"), None);
-        monitor.add_filter(Some("Video/Source"), None);
+        // Add filters for device types we care about.
+        // Audio/Video device enumeration is disabled — it triggers heavy
+        // hardware probing (WASAPI, DirectSound, etc.) that is slow on Windows
+        // and not needed for our use case (network source discovery).
+        // monitor.add_filter(Some("Audio/Source"), None);
+        // monitor.add_filter(Some("Audio/Sink"), None);
+        // monitor.add_filter(Some("Video/Source"), None);
         monitor.add_filter(Some("Source/Network"), None);
 
         // Get the bus for device events

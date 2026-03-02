@@ -3,7 +3,7 @@
 use crate::graph::PropertyTab;
 use egui::{Color32, ScrollArea, Ui};
 use strom_types::{
-    block::{EnumValue, ExposedProperty},
+    block::{EnumValue, ExposedProperty, DEFAULT_SRT_OUTPUT_URI},
     element::{ElementInfo, PropertyInfo, PropertyType},
     BlockDefinition, BlockInstance, Element, PropertyValue,
 };
@@ -391,6 +391,24 @@ impl PropertyInspector {
                     }
                 });
 
+            // Editable instance name
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                let mut name_text = block.name.clone().unwrap_or_default();
+                if ui.text_edit_singleline(&mut name_text).changed() {
+                    block.name = if name_text.is_empty() {
+                        None
+                    } else {
+                        Some(name_text)
+                    };
+                }
+                if block.name.is_some()
+                    && ui.small_button("x").on_hover_text("Clear name").clicked()
+                {
+                    block.name = None;
+                }
+            });
+
             // Check if this block type has action buttons
             let has_action_buttons = matches!(
                 definition.id.as_str(),
@@ -468,7 +486,7 @@ impl PropertyInspector {
                         PropertyValue::String(s) => Some(s.clone()),
                         _ => None,
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| DEFAULT_SRT_OUTPUT_URI.to_string());
 
                 // Only show buttons if in listener mode (VLC can connect to us)
                 // Default SRT mode is caller, so we need explicit mode=listener
@@ -671,7 +689,7 @@ impl PropertyInspector {
                         if let Some(flow_id) = flow_id {
                             if let Some(meter_data) = meter_data_store.get(&flow_id, &block.id) {
                                 tracing::debug!("Found meter data, calling show_full");
-                                crate::meter::show_full(ui, &block.id, meter_data);
+                                crate::meter::show_full(ui, meter_data);
                             } else {
                                 tracing::debug!("No meter data found for this block");
                                 ui.colored_label(
