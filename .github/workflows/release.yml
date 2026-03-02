@@ -278,10 +278,3 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: release-assets/*
-          body: |
-            ## Installation
-
-            Download the binary for your platform from the assets below, or use Docker:
-            ```bash
-            docker run -p 8080:8080 eyevinntechnology/strom:${{ steps.version.outputs.version }}
-            ```
