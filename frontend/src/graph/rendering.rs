@@ -1350,12 +1350,13 @@ impl GraphEditor {
         if let Some(content_info) = self.block_content_map.get(&block.id) {
             if let Some(ref render_callback) = content_info.render_callback {
                 // Calculate content area (below the title, above the pads)
+                // Use at least 30px so callbacks with additional_height=0
+                // (e.g. 1-2 channel meters) still have space to render
+                // within the base block area.
+                let render_height = content_info.additional_height.max(30.0);
                 let content_area = Rect::from_min_size(
                     rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
-                    vec2(
-                        180.0 * self.zoom,
-                        content_info.additional_height * self.zoom,
-                    ),
+                    vec2(180.0 * self.zoom, render_height * self.zoom),
                 );
 
                 // Create a child UI for the custom content
