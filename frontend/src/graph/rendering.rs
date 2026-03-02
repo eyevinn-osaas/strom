@@ -13,7 +13,7 @@ const NODE_TYPE_FONT_SIZE: f32 = 13.0;
 /// Font size for custom node name labels (user-assigned names).
 const NODE_NAME_FONT_SIZE: f32 = 15.0;
 /// Vertical offset for the custom name label below the type label.
-const NODE_NAME_Y_OFFSET: f32 = 32.0;
+const NODE_NAME_Y_OFFSET: f32 = 30.0;
 /// Maximum characters displayed for a custom node name.
 const NODE_NAME_MAX_CHARS: usize = 20;
 
