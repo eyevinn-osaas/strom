@@ -2,6 +2,18 @@
 
 All notable changes to the Strom GStreamer Flow Engine project.
 
+## [0.3.24] - 2026-03-02
+
+### Added
+- MPEG-TS/SRT Input block for receiving and demuxing SRT streams (#391)
+
+### Changed
+- Standardize port labels to short form V0/A0 across all blocks (#395)
+- Limit DeviceMonitor to Source/Network only (#392)
+- Increase Windows CI/release build timeout to 45 minutes (#397)
+
+---
+
 ## [0.3.22] - 2026-02-19
 
 ### Added
