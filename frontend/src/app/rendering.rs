@@ -1472,8 +1472,7 @@ impl StromApp {
                             let additional_height = if channel_count <= 2 {
                                 0.0
                             } else {
-                                let height = crate::meter::calculate_compact_height(channel_count);
-                                height + 10.0
+                                crate::meter::calculate_compact_height(channel_count)
                             };
 
                             self.graph.set_block_content(

@@ -671,7 +671,7 @@ impl PropertyInspector {
                         if let Some(flow_id) = flow_id {
                             if let Some(meter_data) = meter_data_store.get(&flow_id, &block.id) {
                                 tracing::debug!("Found meter data, calling show_full");
-                                crate::meter::show_full(ui, &block.id, meter_data);
+                                crate::meter::show_full(ui, meter_data);
                             } else {
                                 tracing::debug!("No meter data found for this block");
                                 ui.colored_label(

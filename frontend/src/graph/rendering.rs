@@ -1351,11 +1351,12 @@ impl GraphEditor {
             if let Some(ref render_callback) = content_info.render_callback {
                 // Calculate content area (below the title, above the pads)
                 // Clamp content area to fit within the block rect.
-                // Use at least 30px so callbacks with additional_height=0
-                // (e.g. 1-2 channel meters) still have space to render.
+                // Use at least 20px (scaled by zoom) so callbacks with
+                // additional_height=0 (e.g. 1-2 channel meters) still
+                // have space to render within the base block area.
                 let max_content_height = (rect.height() - 35.0 * self.zoom).max(0.0);
                 let render_height =
-                    (content_info.additional_height * self.zoom).max(30.0 * self.zoom);
+                    (content_info.additional_height * self.zoom).max(20.0 * self.zoom);
                 let content_area = Rect::from_min_size(
                     rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
                     vec2(180.0 * self.zoom, render_height.min(max_content_height)),

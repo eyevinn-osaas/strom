@@ -324,10 +324,11 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
         return;
     }
 
-    // Scale bar sizes to fit the available height (handles zoom + many channels).
+    // Derive bar sizes from the available height so meters scale with
+    // zoom and many channels pack without overflowing the block.
     let available_height = ui.available_height();
-    let per_channel = (available_height / channel_count as f32).min(10.0);
-    let spacing = (per_channel * 0.2).clamp(1.0, 2.0);
+    let per_channel = available_height / channel_count as f32;
+    let spacing = per_channel * 0.2;
     let bar_height = (per_channel - spacing).max(1.0);
     let total_height = per_channel * channel_count as f32;
 
@@ -428,11 +429,10 @@ pub fn show_compact(ui: &mut Ui, meter_data: &MeterData) {
 }
 
 /// Render a full meter widget (for property inspector).
-pub fn show_full(ui: &mut Ui, element_id: &str, meter_data: &MeterData) {
+pub fn show_full(ui: &mut Ui, meter_data: &MeterData) {
     let channel_count = meter_data.rms.len();
     tracing::trace!(
-        "show_full called for element {}: channels={}, rms={:?}",
-        element_id,
+        "show_full called: channels={}, rms={:?}",
         channel_count,
         meter_data.rms
     );
@@ -552,7 +552,4 @@ pub fn show_full(ui: &mut Ui, element_id: &str, meter_data: &MeterData) {
             });
         }
     });
-
-    ui.add_space(5.0);
-    ui.label(format!("Element: {}", element_id));
 }
