@@ -6,11 +6,34 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ### Added
 - MPEG-TS/SRT Input block for receiving and demuxing SRT streams (#391)
+- Display custom names on element and block nodes (#393)
 
 ### Changed
 - Standardize port labels to short form V0/A0 across all blocks (#395)
 - Limit DeviceMonitor to Source/Network only (#392)
 - Increase Windows CI/release build timeout to 45 minutes (#397)
+- Simplify release notes to use auto-generated changelog (#390)
+
+### Fixed
+- Prevent audio meter block height jump for 1-2 channels (#394)
+
+---
+
+## [0.3.23] - 2026-02-24
+
+### Added
+- Agua watermark plugin support (#387)
+- QR codes for WHIP/WHEP mobile access (#386)
+- Interactive overlay for UI testing (#383)
+
+### Changed
+- Upgrade GStreamer bindings to stable releases (#385, #387)
+- Bump agua-gst to v0.2.4 (#389)
+- Clean dead code and consolidate shared types in strom-types (#380)
+
+### Fixed
+- Replace deprecated screen_rect() with content_rect() (#384)
+- Various small fixes (#382)
 
 ---
 
