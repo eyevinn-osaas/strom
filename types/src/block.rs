@@ -292,6 +292,15 @@ pub struct BlockCategoriesResponse {
 /// GStreamer's default is 200ms; we use 40ms for lower latency on LAN.
 pub const DEFAULT_JITTERBUFFER_LATENCY_MS: i64 = 40;
 
+/// Default SRT URI for output (listener mode).
+pub const DEFAULT_SRT_OUTPUT_URI: &str = "srt://:5000?mode=listener";
+
+/// Default SRT URI for input (caller connecting to the output listener).
+pub const DEFAULT_SRT_INPUT_URI: &str = "srt://127.0.0.1:5000?mode=caller";
+
+/// Default SRT latency in milliseconds.
+pub const DEFAULT_SRT_LATENCY_MS: i32 = 125;
+
 /// Common video resolutions for use in block property dropdowns.
 /// Ordered from largest to smallest.
 pub const COMMON_VIDEO_RESOLUTIONS: &[(&str, &str)] = &[

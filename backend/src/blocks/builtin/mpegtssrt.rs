@@ -119,18 +119,16 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             instance_id
         );
 
-        // Get SRT URI (required)
+        // Get SRT URI
         let srt_uri = properties
             .get("srt_uri")
             .and_then(|v| match v {
                 PropertyValue::String(s) => Some(s.clone()),
                 _ => None,
             })
-            .ok_or_else(|| {
-                BlockBuildError::InvalidProperty("srt_uri property required".to_string())
-            })?;
+            .unwrap_or_else(|| DEFAULT_SRT_OUTPUT_URI.to_string());
 
-        // Get SRT latency (optional, default 125ms)
+        // Get SRT latency
         let latency = properties
             .get("latency")
             .and_then(|v| match v {
@@ -138,7 +136,7 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
                 PropertyValue::Int(i) => Some(*i as i32),
                 _ => None,
             })
-            .unwrap_or(125);
+            .unwrap_or(DEFAULT_SRT_LATENCY_MS);
 
         // Get wait_for_connection (optional, default false per notes.txt)
         let wait_for_connection = properties
@@ -851,7 +849,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
             ExposedProperty {
                 name: "num_video_tracks".to_string(),
                 label: "Number of Video Tracks".to_string(),
-                description: "Number of video input tracks (0-16)".to_string(),
+                description: "Number of video input tracks".to_string(),
                 property_type: PropertyType::UInt,
                 default_value: Some(PropertyValue::UInt(1)),
                 mapping: PropertyMapping {
@@ -863,7 +861,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
             ExposedProperty {
                 name: "num_audio_tracks".to_string(),
                 label: "Number of Audio Tracks".to_string(),
-                description: "Number of audio input tracks (0-32)".to_string(),
+                description: "Number of audio input tracks".to_string(),
                 property_type: PropertyType::UInt,
                 default_value: Some(PropertyValue::UInt(1)),
                 mapping: PropertyMapping {
@@ -877,7 +875,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                 label: "SRT URI".to_string(),
                 description: "SRT URI (e.g., 'srt://127.0.0.1:5000?mode=caller' or 'srt://:5000?mode=listener')".to_string(),
                 property_type: PropertyType::String,
-                default_value: Some(PropertyValue::String("srt://:5000?mode=listener".to_string())),
+                default_value: Some(PropertyValue::String(DEFAULT_SRT_OUTPUT_URI.to_string())),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "srt_uri".to_string(),
@@ -889,7 +887,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                 label: "SRT Latency (ms)".to_string(),
                 description: "SRT latency in milliseconds (default: 125ms)".to_string(),
                 property_type: PropertyType::Int,
-                default_value: Some(PropertyValue::Int(125)),
+                default_value: Some(PropertyValue::Int(DEFAULT_SRT_LATENCY_MS as i64)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "latency".to_string(),
