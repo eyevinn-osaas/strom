@@ -3,7 +3,7 @@
 use crate::graph::PropertyTab;
 use egui::{Color32, ScrollArea, Ui};
 use strom_types::{
-    block::{EnumValue, ExposedProperty},
+    block::{EnumValue, ExposedProperty, DEFAULT_SRT_OUTPUT_URI},
     element::{ElementInfo, PropertyInfo, PropertyType},
     BlockDefinition, BlockInstance, Element, PropertyValue,
 };
@@ -468,7 +468,7 @@ impl PropertyInspector {
                         PropertyValue::String(s) => Some(s.clone()),
                         _ => None,
                     })
-                    .unwrap_or_default();
+                    .unwrap_or_else(|| DEFAULT_SRT_OUTPUT_URI.to_string());
 
                 // Only show buttons if in listener mode (VLC can connect to us)
                 // Default SRT mode is caller, so we need explicit mode=listener
