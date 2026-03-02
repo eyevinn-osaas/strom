@@ -1,7 +1,17 @@
-use egui::{pos2, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2};
-use strom_types::{element::ElementInfo, BlockDefinition, BlockInstance, Element};
+use egui::{
+    pos2, text::LayoutJob, vec2, Color32, FontId, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
+};
+use strom_types::{
+    element::{ElementInfo, PropertyValue},
+    BlockDefinition, BlockInstance, Element,
+};
 
 use super::*;
+
+/// Font size for node type labels (element type / block definition name).
+const NODE_TYPE_FONT_SIZE: f32 = 13.0;
+/// Font size for custom node name labels (user-assigned names).
+const NODE_NAME_FONT_SIZE: f32 = 15.0;
 
 impl GraphEditor {
     /// Center the view on the currently selected element or block.
@@ -804,9 +814,32 @@ impl GraphEditor {
             text_pos,
             egui::Align2::LEFT_TOP,
             &element.element_type,
-            FontId::proportional(14.0 * self.zoom),
+            FontId::proportional(NODE_TYPE_FONT_SIZE * self.zoom),
             text_color,
         );
+
+        // Draw custom name (from GStreamer "name" property) below element type
+        if let Some(PropertyValue::String(custom_name)) = element.properties.get("name") {
+            if !custom_name.is_empty() {
+                let name_color = if ui.visuals().dark_mode {
+                    Color32::from_gray(180)
+                } else {
+                    Color32::from_gray(100)
+                };
+                let mut job = LayoutJob::simple_singleline(
+                    custom_name.clone(),
+                    FontId::proportional(NODE_NAME_FONT_SIZE * self.zoom),
+                    name_color,
+                );
+                job.sections
+                    .iter_mut()
+                    .for_each(|s| s.format.italics = true);
+                let galley = painter.layout_job(job);
+                let name_x = rect.center().x - galley.size().x / 2.0;
+                let name_pos = pos2(name_x, rect.min.y + 28.0 * self.zoom);
+                painter.galley(name_pos, galley, Color32::TRANSPARENT);
+            }
+        }
 
         // Draw QoS indicator if there are issues - make it clickable
         if let Some(qos_health) = self.qos_health_map.get(&element.id.to_string()) {
@@ -1313,9 +1346,32 @@ impl GraphEditor {
             text_pos,
             egui::Align2::LEFT_TOP,
             block_name,
-            FontId::proportional(14.0 * self.zoom),
+            FontId::proportional(NODE_TYPE_FONT_SIZE * self.zoom),
             text_color,
         );
+
+        // Draw custom instance name below block type name
+        if let Some(custom_name) = &block.name {
+            if !custom_name.is_empty() {
+                let name_color = if ui.visuals().dark_mode {
+                    Color32::from_gray(180)
+                } else {
+                    Color32::from_gray(100)
+                };
+                let mut job = LayoutJob::simple_singleline(
+                    custom_name.clone(),
+                    FontId::proportional(NODE_NAME_FONT_SIZE * self.zoom),
+                    name_color,
+                );
+                job.sections
+                    .iter_mut()
+                    .for_each(|s| s.format.italics = true);
+                let galley = painter.layout_job(job);
+                let name_x = rect.center().x - galley.size().x / 2.0;
+                let name_pos = pos2(name_x, rect.min.y + 28.0 * self.zoom);
+                painter.galley(name_pos, galley, Color32::TRANSPARENT);
+            }
+        }
 
         // Draw QoS indicator if there are issues - make it clickable
         if let Some(qos_health) = self.qos_health_map.get(&block.id) {

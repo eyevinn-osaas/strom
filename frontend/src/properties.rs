@@ -391,6 +391,24 @@ impl PropertyInspector {
                     }
                 });
 
+            // Editable instance name
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                let mut name_text = block.name.clone().unwrap_or_default();
+                if ui.text_edit_singleline(&mut name_text).changed() {
+                    block.name = if name_text.is_empty() {
+                        None
+                    } else {
+                        Some(name_text)
+                    };
+                }
+                if block.name.is_some()
+                    && ui.small_button("x").on_hover_text("Clear name").clicked()
+                {
+                    block.name = None;
+                }
+            });
+
             // Check if this block type has action buttons
             let has_action_buttons = matches!(
                 definition.id.as_str(),
