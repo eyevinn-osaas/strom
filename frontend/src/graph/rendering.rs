@@ -1409,11 +1409,17 @@ impl GraphEditor {
                 // Use at least 20px (scaled by zoom) so callbacks with
                 // additional_height=0 (e.g. 1-2 channel meters) still
                 // have space to render within the base block area.
-                let max_content_height = (rect.height() - 35.0 * self.zoom).max(0.0);
+                let has_custom_name = block.name.as_ref().is_some_and(|n| !n.is_empty());
+                let content_top = if has_custom_name {
+                    55.0 * self.zoom
+                } else {
+                    35.0 * self.zoom
+                };
+                let max_content_height = (rect.height() - content_top).max(0.0);
                 let render_height =
                     (content_info.additional_height * self.zoom).max(20.0 * self.zoom);
                 let content_area = Rect::from_min_size(
-                    rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
+                    rect.min + vec2(10.0 * self.zoom, content_top),
                     vec2(180.0 * self.zoom, render_height.min(max_content_height)),
                 );
 

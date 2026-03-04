@@ -23,6 +23,7 @@ use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
 use crate::mixer::MixerEditor;
 use crate::palette::ElementPalette;
+use crate::spectrum::SpectrumDataStore;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
 use crate::thread_monitor::ThreadMonitorStore;
@@ -602,6 +603,8 @@ pub struct StromApp {
     last_inter_input_refresh: Option<String>,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
+    /// Spectrum data storage for all spectrum analyzer blocks
+    spectrum_data: SpectrumDataStore,
     /// Latency data storage for all audio latency measurements
     latency_data: LatencyDataStore,
     /// Media player data storage for all media player blocks

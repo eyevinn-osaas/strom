@@ -4,6 +4,7 @@ use crate::latency::LatencyDataStore;
 use crate::mediaplayer::MediaPlayerDataStore;
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
+use crate::spectrum::SpectrumDataStore;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
 use crate::thread_monitor::ThreadMonitorStore;
@@ -102,6 +103,7 @@ impl StromApp {
             properties_ptp_domain_buffer: String::new(),
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             meter_data: MeterDataStore::new(),
+            spectrum_data: SpectrumDataStore::new(),
             latency_data: LatencyDataStore::new(),
             mediaplayer_data: MediaPlayerDataStore::new(),
             webrtc_stats: WebRtcStatsStore::new(),
@@ -248,6 +250,7 @@ impl StromApp {
             tls_enabled,
             auth_token,
             meter_data: MeterDataStore::new(),
+            spectrum_data: SpectrumDataStore::new(),
             latency_data: LatencyDataStore::new(),
             mediaplayer_data: MediaPlayerDataStore::new(),
             webrtc_stats: WebRtcStatsStore::new(),
