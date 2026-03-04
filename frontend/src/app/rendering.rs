@@ -366,7 +366,7 @@ impl StromApp {
                     }
 
                     if ui
-                        .button(format!("{} Stop", egui_phosphor::regular::STOP))
+                        .button("■ Stop")
                         .on_hover_text("Stop pipeline (Shift+F9)")
                         .clicked()
                     {
@@ -927,7 +927,7 @@ impl StromApp {
                                         ui.add_space(4.0);
 
                                         // Single menu button with dropdown
-                                        ui.menu_button(egui_phosphor::regular::DOTS_THREE, |ui| {
+                                        ui.menu_button(egui_phosphor::regular::DOTS_THREE_VERTICAL, |ui| {
                                             ui.set_min_width(150.0);
 
                                             // Properties

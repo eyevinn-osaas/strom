@@ -87,12 +87,13 @@ impl StromApp {
         let is_mixer = self.mixer_editor.is_some();
 
         // Get flow and block names for display
-        let flow_name = self
-            .flows
-            .iter()
-            .find(|f| f.id == flow_id)
+        let flow = self.flows.iter().find(|f| f.id == flow_id);
+        let flow_name = flow
             .map(|f| f.name.clone())
             .unwrap_or_else(|| "Unknown Flow".to_string());
+        let block_label = flow
+            .and_then(|f| f.blocks.iter().find(|b| b.id == block_id))
+            .and_then(|b| b.name.clone());
 
         // Top bar with back button and info
         TopBottomPanel::top("live_bar")
@@ -122,8 +123,10 @@ impl StromApp {
 
                     // Flow and block info
                     ui.label(&flow_name);
-                    ui.label("›");
-                    ui.label(block_id);
+                    if let Some(ref label) = block_label {
+                        ui.label("›");
+                        ui.label(label);
+                    }
 
                     // Right side: connection status, theme picker, and copy URL button
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
