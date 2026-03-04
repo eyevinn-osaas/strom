@@ -50,7 +50,11 @@ impl StromApp {
                     let current_zoom = ctx.pixels_per_point();
                     let zoom_percent = (current_zoom * 100.0).round() as i32;
 
-                    if ui.small_button("-").on_hover_text("Zoom out").clicked() {
+                    if ui
+                        .small_button(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS)
+                        .on_hover_text("Zoom out")
+                        .clicked()
+                    {
                         let new_zoom = (current_zoom / 1.1).max(0.5);
                         ctx.set_pixels_per_point(new_zoom);
                         self.settings.zoom = Some(new_zoom);
@@ -65,7 +69,11 @@ impl StromApp {
                         self.settings.zoom = None; // Reset to system default
                     }
 
-                    if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                    if ui
+                        .small_button(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS)
+                        .on_hover_text("Zoom in")
+                        .clicked()
+                    {
                         let new_zoom = (current_zoom * 1.1).min(5.0);
                         ctx.set_pixels_per_point(new_zoom);
                         self.settings.zoom = Some(new_zoom);
@@ -249,7 +257,7 @@ impl StromApp {
                 ui.separator();
 
                 if ui
-                    .button("New Flow")
+                    .button(format!("{} New Flow", egui_phosphor::regular::PLUS))
                     .on_hover_text(format!("Create a new flow ({})", Self::format_shortcut("Ctrl+N")))
                     .clicked()
                 {
@@ -257,7 +265,7 @@ impl StromApp {
                 }
 
                 if ui
-                    .button("Import")
+                    .button(format!("{} Import", egui_phosphor::regular::DOWNLOAD_SIMPLE))
                     .on_hover_text(format!("Import flow from JSON ({})", Self::format_shortcut("Ctrl+O")))
                     .clicked()
                 {
@@ -267,7 +275,7 @@ impl StromApp {
                 }
 
                 if ui
-                    .button("Refresh")
+                    .button(format!("{} Refresh", egui_phosphor::regular::ARROWS_CLOCKWISE))
                     .on_hover_text("Reload flows from server (F5 or Ctrl+R)")
                     .clicked()
                 {
@@ -275,7 +283,7 @@ impl StromApp {
                 }
 
                 if ui
-                    .button("Save")
+                    .button(format!("{} Save", egui_phosphor::regular::FLOPPY_DISK))
                     .on_hover_text(format!("Save current flow ({})", Self::format_shortcut("Ctrl+S")))
                     .clicked()
                 {
@@ -311,9 +319,9 @@ impl StromApp {
 
                     // Show Start or Restart button depending on state
                     let button_text = if is_running {
-                        "🔄 Restart"
+                        format!("{} Restart", egui_phosphor::regular::ARROWS_CLOCKWISE)
                     } else {
-                        "▶ Start"
+                        "▶ Start".to_string()
                     };
 
                     if ui
@@ -542,7 +550,7 @@ impl StromApp {
                         response.request_focus();
                     }
                     if !self.flow_filter.is_empty()
-                        && ui.small_button(egui_phosphor::regular::X).clicked()
+                        && ui.small_button(egui_phosphor::regular::X).on_hover_text("Clear search").clicked()
                     {
                         self.flow_filter.clear();
                     }
@@ -753,7 +761,7 @@ impl StromApp {
                                     Some(PipelineState::Paused) => "⏸",
                                     Some(PipelineState::Ready)
                                     | Some(PipelineState::Null)
-                                    | None => "⏹",
+                                    | None => "■",
                                 };
                                 let state_color = match flow.state {
                                     Some(PipelineState::Playing) => Color32::from_rgb(0, 200, 0),
@@ -999,7 +1007,7 @@ impl StromApp {
                                             if ui
                                                 .add_enabled(
                                                     has_only_elements,
-                                                    egui::Button::new("🖥  Export as gst-launch"),
+                                                    egui::Button::new(format!("{} Export as gst-launch", egui_phosphor::regular::TERMINAL)),
                                                 )
                                                 .on_hover_text(tooltip)
                                                 .clicked()
@@ -1424,9 +1432,9 @@ impl StromApp {
                 .order(egui::Order::Middle)
                 .show(ctx, |ui| {
                     let icon = if self.show_flow_list_panel {
-                        "◀"
+                        egui_phosphor::regular::CARET_LEFT
                     } else {
-                        "▶"
+                        egui_phosphor::regular::CARET_RIGHT
                     };
                     let tooltip = if self.show_flow_list_panel {
                         "Hide flow list"
@@ -1457,9 +1465,9 @@ impl StromApp {
                     .order(egui::Order::Middle)
                     .show(ctx, |ui| {
                         let icon = if self.show_palette_panel {
-                            "▶"
+                            egui_phosphor::regular::CARET_RIGHT
                         } else {
-                            "◀"
+                            egui_phosphor::regular::CARET_LEFT
                         };
                         let tooltip = if self.show_palette_panel {
                             "Hide palette"

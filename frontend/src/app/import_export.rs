@@ -486,7 +486,7 @@ impl StromApp {
                     ConnectionState::Connected => {
                         // Should not reach here, but just in case
                         ui.heading(
-                            egui::RichText::new("✓")
+                            egui::RichText::new(egui_phosphor::regular::CHECK)
                                 .size(80.0)
                                 .color(Color32::from_rgb(0, 200, 0))
                         );

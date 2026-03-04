@@ -567,7 +567,12 @@ impl PlaylistEditor {
         // Path display and navigation
         ui.horizontal(|ui| {
             // Up button
-            if self.browser_parent.is_some() && ui.button("..").on_hover_text("Go up").clicked() {
+            if self.browser_parent.is_some()
+                && ui
+                    .button(egui_phosphor::regular::ARROW_BEND_UP_LEFT)
+                    .on_hover_text("Go up")
+                    .clicked()
+            {
                 self.browser_path = self.browser_parent.clone().unwrap_or_default();
                 self.browser_needs_refresh = true;
             }

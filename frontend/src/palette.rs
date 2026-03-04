@@ -406,9 +406,9 @@ impl ElementPalette {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let label_text = if built_in {
-                            format!("📦 {}", name)
+                            format!("{} {}", egui_phosphor::regular::PACKAGE, name)
                         } else {
-                            format!("⚙️ {}", name)
+                            format!("{} {}", egui_phosphor::regular::GEAR, name)
                         };
                         ui.add(egui::Label::new(&label_text).truncate())
                             .on_hover_text(&description);

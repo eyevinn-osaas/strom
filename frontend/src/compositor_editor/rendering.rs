@@ -211,7 +211,10 @@ impl CompositorEditor {
             // Deselect button
             if self.selected_input.is_some()
                 && ui
-                    .add(egui::Button::new("x").min_size(Vec2::new(18.0, 18.0)))
+                    .add(
+                        egui::Button::new(egui_phosphor::regular::X)
+                            .min_size(Vec2::new(18.0, 18.0)),
+                    )
                     .on_hover_text("Deselect (Esc)")
                     .clicked()
             {
@@ -270,13 +273,13 @@ impl CompositorEditor {
                 ("push_up", "Push Up"),
                 ("push_down", "Push Down"),
             ];
-            let selected_label = TRANSITION_TYPES
+            let selected_label: String = TRANSITION_TYPES
                 .iter()
                 .find(|(v, _)| *v == self.transition_type)
-                .map(|(_, l)| *l)
-                .unwrap_or(&self.transition_type);
+                .map(|(_, l)| l.to_string())
+                .unwrap_or_else(|| self.transition_type.clone());
             egui::ComboBox::from_id_salt("transition_type_fullscreen")
-                .selected_text(selected_label)
+                .selected_text(&selected_label)
                 .width(90.0)
                 .show_ui(ui, |ui| {
                     for (value, label) in TRANSITION_TYPES {
@@ -302,8 +305,8 @@ impl CompositorEditor {
                 .add_enabled(can_go, egui::Button::new("Go"))
                 .on_hover_text(if can_go {
                     format!(
-                        "{} {} → {} ({}ms) [Space]",
-                        self.transition_type,
+                        "{} {} -> {} ({}ms) [Space]",
+                        selected_label,
                         self.transition_from,
                         self.transition_to,
                         self.transition_duration_ms
@@ -317,7 +320,11 @@ impl CompositorEditor {
             }
 
             // Swap button
-            if ui.button("<>").on_hover_text("Swap from/to").clicked() {
+            if ui
+                .button(egui_phosphor::regular::ARROWS_LEFT_RIGHT)
+                .on_hover_text("Swap from/to")
+                .clicked()
+            {
                 std::mem::swap(&mut self.transition_from, &mut self.transition_to);
             }
 

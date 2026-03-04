@@ -47,9 +47,9 @@ impl QoSHealth {
 
     pub fn icon(&self) -> &'static str {
         match self {
-            QoSHealth::Ok => "✓",
-            QoSHealth::Warning => "⚠",
-            QoSHealth::Critical => "⛔",
+            QoSHealth::Ok => egui_phosphor::regular::CHECK,
+            QoSHealth::Warning => egui_phosphor::regular::WARNING,
+            QoSHealth::Critical => egui_phosphor::regular::PROHIBIT,
         }
     }
 }

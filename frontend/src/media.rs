@@ -230,7 +230,10 @@ impl MediaPage {
                 response.request_focus();
             }
             if !self.search_filter.is_empty()
-                && ui.small_button(egui_phosphor::regular::X).clicked()
+                && ui
+                    .small_button(egui_phosphor::regular::X)
+                    .on_hover_text("Clear search")
+                    .clicked()
             {
                 self.search_filter.clear();
             }

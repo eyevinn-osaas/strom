@@ -237,7 +237,11 @@ impl PropertyInspector {
                     if is_focused {
                         ui.colored_label(
                             Color32::from_rgb(255, 200, 100),
-                            format!("▶ Input Pad: {}", pad_name),
+                            format!(
+                                "{} Input Pad: {}",
+                                egui_phosphor::regular::CARET_RIGHT,
+                                pad_name
+                            ),
                         );
                     } else {
                         ui.label(format!("Input Pad: {}", pad_name));
@@ -302,7 +306,11 @@ impl PropertyInspector {
                     if is_focused {
                         ui.colored_label(
                             Color32::from_rgb(255, 200, 100),
-                            format!("▶ Output Pad: {}", pad_name),
+                            format!(
+                                "{} Output Pad: {}",
+                                egui_phosphor::regular::CARET_RIGHT,
+                                pad_name
+                            ),
                         );
                     } else {
                         ui.label(format!("Output Pad: {}", pad_name));
@@ -1598,7 +1606,11 @@ impl PropertyInspector {
                     .filter(|d| !d.is_empty())
                     .map(|d| d.as_str())
                     .unwrap_or(&ch.name);
-                let status = if ch.is_active { "▶" } else { "■" };
+                let status = if ch.is_active {
+                    egui_phosphor::regular::PLAY
+                } else {
+                    egui_phosphor::regular::STOP
+                };
                 format!("{} {} / {}", status, ch.flow_name, name_part)
             };
 

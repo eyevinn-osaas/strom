@@ -106,7 +106,7 @@ impl StromApp {
                     // Back button (only show if we didn't start in live mode via URL)
                     if !self.started_in_live_mode {
                         if ui
-                            .button("Back")
+                            .button(format!("{} Back", egui_phosphor::regular::ARROW_LEFT))
                             .on_hover_text("Return to admin interface")
                             .clicked()
                         {
@@ -124,7 +124,7 @@ impl StromApp {
                     // Flow and block info
                     ui.label(&flow_name);
                     if let Some(ref label) = block_label {
-                        ui.label("›");
+                        ui.label(egui_phosphor::regular::CARET_RIGHT);
                         ui.label(label);
                     }
 

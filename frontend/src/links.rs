@@ -337,7 +337,10 @@ impl LinksPage {
                         ));
 
                         if ui
-                            .button("Download All (VLC)")
+                            .button(format!(
+                                "{} Download All (VLC)",
+                                egui_phosphor::regular::DOWNLOAD_SIMPLE
+                            ))
                             .on_hover_text("Download a VLC playlist containing all SRT streams")
                             .clicked()
                         {
@@ -370,7 +373,10 @@ impl LinksPage {
                             }
 
                             if ui
-                                .small_button("VLC")
+                                .small_button(format!(
+                                    "{} VLC",
+                                    egui_phosphor::regular::DOWNLOAD_SIMPLE
+                                ))
                                 .on_hover_text("Download VLC playlist")
                                 .clicked()
                             {
