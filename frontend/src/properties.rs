@@ -536,12 +536,9 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
-                    let is_qr_for_this_block = qr_inline
-                        .as_ref()
-                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
                         if ui
-                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
+                            .button(egui_phosphor::regular::QR_CODE)
                             .on_hover_text("Toggle QR code for mobile access")
                             .clicked()
                         {
@@ -555,7 +552,7 @@ impl PropertyInspector {
                             result.whep_player_url = Some(endpoint_id.clone());
                         }
                         if ui
-                            .button("📋 Copy URL")
+                            .button(egui_phosphor::regular::COPY)
                             .on_hover_text("Copy player URL to clipboard")
                             .clicked()
                         {
@@ -598,12 +595,9 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
-                    let is_qr_for_this_block = qr_inline
-                        .as_ref()
-                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
                         if ui
-                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
+                            .button(egui_phosphor::regular::QR_CODE)
                             .on_hover_text("Toggle QR code for mobile access")
                             .clicked()
                         {
@@ -617,7 +611,7 @@ impl PropertyInspector {
                             result.whip_ingest_url = Some(endpoint_id.clone());
                         }
                         if ui
-                            .button("📋 Copy URL")
+                            .button(egui_phosphor::regular::COPY)
                             .on_hover_text("Copy ingest URL to clipboard")
                             .clicked()
                         {
@@ -763,7 +757,9 @@ impl PropertyInspector {
                             ui.add_space(4.0);
 
                             // Copy button
-                            if ui.button("📋 Copy to Clipboard").clicked() {
+                            if ui.button(egui_phosphor::regular::COPY)
+                                .on_hover_text("Copy SDP to clipboard")
+                                .clicked() {
                                 crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp_text);
                             }
                         } else {

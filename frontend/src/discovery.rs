@@ -696,7 +696,7 @@ impl DiscoveryPage {
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             if ui
-                                .button("📋 Copy NDI Name")
+                                .button(egui_phosphor::regular::COPY)
                                 .on_hover_text(
                                     "Copy NDI name to clipboard. Paste into NDI Input block's ndi-name property.",
                                 )
@@ -723,7 +723,10 @@ impl DiscoveryPage {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("📋 Copy SDP").clicked() {
+                        if ui.button(egui_phosphor::regular::COPY)
+                            .on_hover_text("Copy SDP to clipboard")
+                            .clicked()
+                        {
                             crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp);
                         }
                         // Only show "Create Flow" for discovered streams (not announced)

@@ -69,6 +69,11 @@ impl StromApp {
         // Install image loaders for egui (required for Image::from_bytes)
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Load Phosphor icon fonts
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        cc.egui_ctx.set_fonts(fonts);
+
         let renderer_info = crate::info_page::detect_renderer(cc);
 
         // Create channels for async communication
@@ -210,6 +215,11 @@ impl StromApp {
     ) -> Self {
         // Install image loaders for egui (required for Image::from_bytes)
         egui_extras::install_image_loaders(&cc.egui_ctx);
+
+        // Load Phosphor icon fonts
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        cc.egui_ctx.set_fonts(fonts);
 
         let renderer_info = crate::info_page::detect_renderer(cc);
 

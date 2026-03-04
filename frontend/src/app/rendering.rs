@@ -996,7 +996,13 @@ impl StromApp {
                                             ui.separator();
 
                                             // Copy flow
-                                            if ui.button("📋  Copy").clicked() {
+                                            if ui
+                                                .button(format!(
+                                                    "{} Copy",
+                                                    egui_phosphor::regular::COPY
+                                                ))
+                                                .clicked()
+                                            {
                                                 self.flow_pending_copy = Some(flow.clone());
                                                 ui.close();
                                             }

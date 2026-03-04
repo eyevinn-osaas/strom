@@ -131,7 +131,7 @@ impl StromApp {
                         #[cfg(target_arch = "wasm32")]
                         {
                             if ui
-                                .button("📋 Copy URL")
+                                .button(egui_phosphor::regular::COPY)
                                 .on_hover_text("Copy live URL to clipboard")
                                 .clicked()
                             {
