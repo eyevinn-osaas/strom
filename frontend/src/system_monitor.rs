@@ -271,8 +271,8 @@ impl SortDirection {
 
     fn arrow(&self) -> &'static str {
         match self {
-            SortDirection::Ascending => " ^",
-            SortDirection::Descending => " v",
+            SortDirection::Ascending => egui_phosphor::regular::CARET_UP,
+            SortDirection::Descending => egui_phosphor::regular::CARET_DOWN,
         }
     }
 }

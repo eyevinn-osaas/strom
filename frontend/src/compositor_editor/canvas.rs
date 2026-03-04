@@ -698,7 +698,10 @@ impl CompositorEditor {
                 let btn_size = Vec2::new(24.0, 18.0);
                 // Send to back
                 if ui
-                    .add(egui::Button::new("<<").min_size(btn_size))
+                    .add(
+                        egui::Button::new(egui_phosphor::regular::ARROW_LINE_DOWN)
+                            .min_size(btn_size),
+                    )
                     .on_hover_text("Send to back (Home)")
                     .clicked()
                 {
@@ -714,7 +717,7 @@ impl CompositorEditor {
                 }
                 // Move down
                 if ui
-                    .add(egui::Button::new("<").min_size(btn_size))
+                    .add(egui::Button::new(egui_phosphor::regular::CARET_DOWN).min_size(btn_size))
                     .on_hover_text("Move down (PgDn)")
                     .clicked()
                     && self.inputs[selected_idx].zorder > 0
@@ -731,7 +734,7 @@ impl CompositorEditor {
                 }
                 // Move up
                 if ui
-                    .add(egui::Button::new(">").min_size(btn_size))
+                    .add(egui::Button::new(egui_phosphor::regular::CARET_UP).min_size(btn_size))
                     .on_hover_text("Move up (PgUp)")
                     .clicked()
                 {
@@ -747,7 +750,9 @@ impl CompositorEditor {
                 }
                 // Bring to front
                 if ui
-                    .add(egui::Button::new(">>").min_size(btn_size))
+                    .add(
+                        egui::Button::new(egui_phosphor::regular::ARROW_LINE_UP).min_size(btn_size),
+                    )
                     .on_hover_text("Bring to front (End)")
                     .clicked()
                 {

@@ -56,7 +56,9 @@ impl StromApp {
                                 // Dismiss button (X) - small and subtle
                                 let dismiss_btn = ui.add(
                                     egui::Button::new(
-                                        egui::RichText::new("×").size(14.0).color(Color32::GRAY),
+                                        egui::RichText::new(egui_phosphor::regular::X)
+                                            .size(14.0)
+                                            .color(Color32::GRAY),
                                     )
                                     .frame(false)
                                     .min_size(egui::vec2(16.0, 16.0)),
@@ -213,7 +215,10 @@ impl StromApp {
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    if ui.button("❌ Delete").clicked() {
+                    if ui
+                        .button(format!("{} Delete", egui_phosphor::regular::TRASH))
+                        .clicked()
+                    {
                         self.delete_flow(flow_id, ctx);
                         self.flow_pending_deletion = None;
                     }
@@ -296,7 +301,7 @@ impl StromApp {
 
         let flow_name = flow.name.clone();
 
-        egui::Window::new(format!("⚙ {} - Properties", flow_name))
+        egui::Window::new(format!("{} {} - Properties", egui_phosphor::regular::GEAR, flow_name))
             .collapsible(false)
             .resizable(true)
             .default_width(400.0)
@@ -541,7 +546,7 @@ impl StromApp {
 
                 // Buttons (outside scroll area)
                 ui.horizontal(|ui| {
-                    if ui.button("💾 Save").clicked() {
+                    if ui.button(format!("{} Save", egui_phosphor::regular::FLOPPY_DISK)).clicked() {
                         // Update flow properties
                         if let Some(flow) = self.editing_properties_flow_id.and_then(|id| self.flows.iter_mut().find(|f| f.id == id)) {
                             // Update flow name
@@ -627,7 +632,7 @@ impl StromApp {
                     ui.label("No discovered streams available.");
                     ui.label("Make sure SAP discovery is running and streams are being announced on the network.");
                     ui.add_space(8.0);
-                    if ui.button("🔄 Refresh").clicked() {
+                    if ui.button(egui_phosphor::regular::ARROWS_CLOCKWISE).on_hover_text("Refresh").clicked() {
                         self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
                     }
                 } else {
@@ -658,7 +663,7 @@ impl StromApp {
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    let refresh_clicked = ui.button("🔄 Refresh").clicked();
+                    let refresh_clicked = ui.button(egui_phosphor::regular::ARROWS_CLOCKWISE).on_hover_text("Refresh").clicked();
                     if refresh_clicked {
                         self.discovery_page
                             .refresh(&self.api, ctx, &self.channels.tx);

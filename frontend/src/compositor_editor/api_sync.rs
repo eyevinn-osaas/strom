@@ -426,13 +426,21 @@ impl CompositorEditor {
                     let key = format!("transition_status_{}", block_id);
                     crate::app::set_local_storage(
                         &key,
-                        &format!("✓ {} → {}", from_input, to_input),
+                        &format!(
+                            "{} {} -> {}",
+                            egui_phosphor::regular::CHECK,
+                            from_input,
+                            to_input
+                        ),
                     );
                 }
                 Err(e) => {
                     tracing::error!("Transition failed: {}", e);
                     let key = format!("transition_status_{}", block_id);
-                    crate::app::set_local_storage(&key, &format!("✗ {}", e));
+                    crate::app::set_local_storage(
+                        &key,
+                        &format!("{} {}", egui_phosphor::regular::X, e),
+                    );
                 }
             }
             ctx.request_repaint();

@@ -199,22 +199,30 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
     let button_action = ui
         .horizontal(|ui| {
             // Playlist button
-            if ui.button("+").on_hover_text("Edit playlist").clicked() {
+            if ui
+                .button(egui_phosphor::regular::PLUS)
+                .on_hover_text("Edit playlist")
+                .clicked()
+            {
                 tracing::debug!("Playlist button clicked");
                 return Some(("playlist".to_string(), None));
             }
 
             // Previous button
-            if ui.button("|<").on_hover_text("Previous file").clicked() {
+            if ui
+                .button(egui_phosphor::regular::SKIP_BACK)
+                .on_hover_text("Previous file")
+                .clicked()
+            {
                 tracing::debug!("Previous button clicked");
                 return Some(("previous".to_string(), None));
             }
 
             // Play/Pause button
             let play_pause_text = if player_data.state == "playing" {
-                "||"
+                egui_phosphor::regular::PAUSE
             } else {
-                ">"
+                egui_phosphor::regular::PLAY
             };
             let play_hover = if player_data.state == "playing" {
                 "Pause"
@@ -235,7 +243,11 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
             }
 
             // Next button
-            if ui.button(">|").on_hover_text("Next file").clicked() {
+            if ui
+                .button(egui_phosphor::regular::SKIP_FORWARD)
+                .on_hover_text("Next file")
+                .clicked()
+            {
                 tracing::debug!("Next button clicked");
                 return Some(("next".to_string(), None));
             }
@@ -370,14 +382,17 @@ pub fn show_full(
 
     // Control buttons
     ui.horizontal(|ui| {
-        if ui.button("|< Prev").clicked() {
+        if ui
+            .button(format!("{} Prev", egui_phosphor::regular::SKIP_BACK))
+            .clicked()
+        {
             action = Some(("prev".to_string(), None));
         }
 
         let play_pause_text = if player_data.state == "playing" {
-            "|| Pause"
+            format!("{} Pause", egui_phosphor::regular::PAUSE)
         } else {
-            "> Play"
+            format!("{} Play", egui_phosphor::regular::PLAY)
         };
         if ui.button(play_pause_text).clicked() {
             if player_data.state == "playing" {
@@ -387,7 +402,10 @@ pub fn show_full(
             }
         }
 
-        if ui.button("Next >|").clicked() {
+        if ui
+            .button(format!("Next {}", egui_phosphor::regular::SKIP_FORWARD))
+            .clicked()
+        {
             action = Some(("next".to_string(), None));
         }
     });
@@ -549,7 +567,12 @@ impl PlaylistEditor {
         // Path display and navigation
         ui.horizontal(|ui| {
             // Up button
-            if self.browser_parent.is_some() && ui.button("..").on_hover_text("Go up").clicked() {
+            if self.browser_parent.is_some()
+                && ui
+                    .button(egui_phosphor::regular::ARROW_BEND_UP_LEFT)
+                    .on_hover_text("Go up")
+                    .clicked()
+            {
                 self.browser_path = self.browser_parent.clone().unwrap_or_default();
                 self.browser_needs_refresh = true;
             }
@@ -562,7 +585,11 @@ impl PlaylistEditor {
             ui.label(path_display);
 
             // Refresh button
-            if ui.button("⟳").on_hover_text("Refresh").clicked() {
+            if ui
+                .button(egui_phosphor::regular::ARROWS_CLOCKWISE)
+                .on_hover_text("Refresh")
+                .clicked()
+            {
                 self.browser_needs_refresh = true;
             }
         });
@@ -588,7 +615,11 @@ impl PlaylistEditor {
                             if entry.is_dir {
                                 // Folder - click to navigate
                                 let folder_btn = ui
-                                    .button(format!("📁 {}", entry.name))
+                                    .button(format!(
+                                        "{} {}",
+                                        egui_phosphor::regular::FOLDER,
+                                        entry.name
+                                    ))
                                     .on_hover_text("Open folder");
                                 if folder_btn.clicked() {
                                     nav_to_folder = Some(entry.path.clone());
@@ -597,7 +628,11 @@ impl PlaylistEditor {
                                 // File - click to add to playlist
                                 let size_str = format_file_size(entry.size);
                                 let file_btn = ui
-                                    .button(format!("🎬 {}", entry.name))
+                                    .button(format!(
+                                        "{} {}",
+                                        egui_phosphor::regular::FILE_VIDEO,
+                                        entry.name
+                                    ))
                                     .on_hover_text(format!("Add to playlist ({})", size_str));
                                 if file_btn.clicked() {
                                     add_file = Some(entry.path.clone());
@@ -661,7 +696,11 @@ impl PlaylistEditor {
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             // Remove button
-                            if ui.button("X").on_hover_text("Remove").clicked() {
+                            if ui
+                                .button(egui_phosphor::regular::X)
+                                .on_hover_text("Remove")
+                                .clicked()
+                            {
                                 to_remove = Some(i);
                             }
 

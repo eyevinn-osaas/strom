@@ -134,11 +134,11 @@ impl MixerEditor {
                                 None => {}
                             }
                             ui.checkbox(&mut self.live_updates, "Live");
-                            if ui.button("Save").clicked() {
+                            if ui.button(format!("{} Save", egui_phosphor::regular::FLOPPY_DISK)).clicked() {
                                 self.save_requested = true;
                                 self.status = "Saving mixer state...".to_string();
                             }
-                            if ui.button("Reset All").clicked() {
+                            if ui.button(format!("{} Reset All", egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)).clicked() {
                                 self.reset_to_defaults();
                                 self.save_requested = true;
                                 self.status = "Reset to defaults, saving...".to_string();

@@ -87,12 +87,13 @@ impl StromApp {
         let is_mixer = self.mixer_editor.is_some();
 
         // Get flow and block names for display
-        let flow_name = self
-            .flows
-            .iter()
-            .find(|f| f.id == flow_id)
+        let flow = self.flows.iter().find(|f| f.id == flow_id);
+        let flow_name = flow
             .map(|f| f.name.clone())
             .unwrap_or_else(|| "Unknown Flow".to_string());
+        let block_label = flow
+            .and_then(|f| f.blocks.iter().find(|b| b.id == block_id))
+            .and_then(|b| b.name.clone());
 
         // Top bar with back button and info
         TopBottomPanel::top("live_bar")
@@ -105,7 +106,7 @@ impl StromApp {
                     // Back button (only show if we didn't start in live mode via URL)
                     if !self.started_in_live_mode {
                         if ui
-                            .button("Back")
+                            .button(format!("{} Back", egui_phosphor::regular::ARROW_LEFT))
                             .on_hover_text("Return to admin interface")
                             .clicked()
                         {
@@ -122,8 +123,10 @@ impl StromApp {
 
                     // Flow and block info
                     ui.label(&flow_name);
-                    ui.label("›");
-                    ui.label(block_id);
+                    if let Some(ref label) = block_label {
+                        ui.label(egui_phosphor::regular::CARET_RIGHT);
+                        ui.label(label);
+                    }
 
                     // Right side: connection status, theme picker, and copy URL button
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -131,7 +134,7 @@ impl StromApp {
                         #[cfg(target_arch = "wasm32")]
                         {
                             if ui
-                                .button("📋 Copy URL")
+                                .button(egui_phosphor::regular::COPY)
                                 .on_hover_text("Copy live URL to clipboard")
                                 .clicked()
                             {

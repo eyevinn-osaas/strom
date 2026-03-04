@@ -156,24 +156,23 @@ impl LinksPage {
         egui::Frame::group(ui.style())
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.strong("WHIP Ingest");
-                ui.add_space(4.0);
-
                 let ingest_url = format!("{}/player/whip-ingest", server_base);
                 ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
-                    }
-                    Self::qr_toggle_button(ui, &ingest_url, qr_visible);
                     if ui
-                        .link(egui::RichText::new(&ingest_url).monospace())
+                        .link(egui::RichText::new("WHIP Ingest").strong())
+                        .on_hover_text(&ingest_url)
                         .clicked()
                     {
                         ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
                     }
+                    if ui
+                        .small_button(egui_phosphor::regular::COPY)
+                        .on_hover_text("Copy URL to clipboard")
+                        .clicked()
+                    {
+                        crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
+                    }
+                    Self::qr_toggle_button(ui, &ingest_url, qr_visible);
                 });
 
                 if qr_visible.contains(&ingest_url) {
@@ -195,24 +194,23 @@ impl LinksPage {
         egui::Frame::group(ui.style())
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.strong("All Streams");
-                ui.add_space(4.0);
-
                 let streams_url = format!("{}/player/whep-streams", server_base);
                 ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&streams_url));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &streams_url);
-                    }
-                    Self::qr_toggle_button(ui, &streams_url, qr_visible);
                     if ui
-                        .link(egui::RichText::new(&streams_url).monospace())
+                        .link(egui::RichText::new("WHEP Streams").strong())
+                        .on_hover_text(&streams_url)
                         .clicked()
                     {
                         ctx.open_url(egui::OpenUrl::new_tab(&streams_url));
                     }
+                    if ui
+                        .small_button(egui_phosphor::regular::COPY)
+                        .on_hover_text("Copy URL to clipboard")
+                        .clicked()
+                    {
+                        crate::clipboard::copy_text_with_ctx(ctx, &streams_url);
+                    }
+                    Self::qr_toggle_button(ui, &streams_url, qr_visible);
                 });
 
                 if qr_visible.contains(&streams_url) {
@@ -221,10 +219,8 @@ impl LinksPage {
 
                 ui.add_space(4.0);
                 ui.label(
-                    egui::RichText::new(
-                        "Opens a page showing all active WHEP streams with mini-players.",
-                    )
-                    .weak(),
+                    egui::RichText::new("Page showing all active WHEP streams with mini-players.")
+                        .weak(),
                 );
             });
 
@@ -234,21 +230,23 @@ impl LinksPage {
         egui::Frame::group(ui.style())
             .inner_margin(12.0)
             .show(ui, |ui| {
-                ui.strong("Single Stream Player");
-                ui.add_space(4.0);
-
                 let player_base = format!("{}/player/whep", server_base);
                 ui.horizontal(|ui| {
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &player_base);
-                    }
-                    Self::qr_toggle_button(ui, &player_base, qr_visible);
                     if ui
-                        .link(egui::RichText::new(&player_base).monospace())
+                        .link(egui::RichText::new("Single Stream Player").strong())
+                        .on_hover_text(&player_base)
                         .clicked()
                     {
                         ctx.open_url(egui::OpenUrl::new_tab(&player_base));
                     }
+                    if ui
+                        .small_button(egui_phosphor::regular::COPY)
+                        .on_hover_text("Copy URL to clipboard")
+                        .clicked()
+                    {
+                        crate::clipboard::copy_text_with_ctx(ctx, &player_base);
+                    }
+                    Self::qr_toggle_button(ui, &player_base, qr_visible);
                 });
 
                 if qr_visible.contains(&player_base) {
@@ -270,7 +268,7 @@ impl LinksPage {
     fn qr_toggle_button(ui: &mut Ui, url: &str, qr_visible: &mut HashSet<String>) {
         let is_visible = qr_visible.contains(url);
         if ui
-            .small_button(if is_visible { "Hide QR" } else { "QR" })
+            .small_button(egui_phosphor::regular::QR_CODE)
             .on_hover_text("Toggle QR code for mobile access")
             .clicked()
         {
@@ -315,7 +313,8 @@ impl LinksPage {
         ui.label("SRT listener streams that can be played with VLC or other players.");
         ui.add_space(16.0);
 
-        let listeners = Self::get_srt_listeners(flows);
+        let mut listeners = Self::get_srt_listeners(flows);
+        listeners.sort_by(|a, b| a.flow_name.cmp(&b.flow_name));
 
         egui::Frame::group(ui.style())
             .inner_margin(12.0)
@@ -338,7 +337,10 @@ impl LinksPage {
                         ));
 
                         if ui
-                            .button("Download All (VLC)")
+                            .button(format!(
+                                "{} Download All (VLC)",
+                                egui_phosphor::regular::DOWNLOAD_SIMPLE
+                            ))
                             .on_hover_text("Download a VLC playlist containing all SRT streams")
                             .clicked()
                         {
@@ -360,8 +362,21 @@ impl LinksPage {
                         let client_uri = crate::app::transform_srt_uri_for_vlc(&listener.srt_uri);
 
                         ui.horizontal(|ui| {
+                            ui.label(&listener.flow_name);
+
                             if ui
-                                .small_button("VLC")
+                                .small_button(egui_phosphor::regular::COPY)
+                                .on_hover_text(&client_uri)
+                                .clicked()
+                            {
+                                crate::clipboard::copy_text_with_ctx(ctx, &client_uri);
+                            }
+
+                            if ui
+                                .small_button(format!(
+                                    "{} VLC",
+                                    egui_phosphor::regular::DOWNLOAD_SIMPLE
+                                ))
                                 .on_hover_text("Download VLC playlist")
                                 .clicked()
                             {
@@ -387,17 +402,6 @@ impl LinksPage {
                                     "application/xspf+xml",
                                 );
                             }
-
-                            if ui
-                                .small_button("Copy")
-                                .on_hover_text("Copy SRT URI")
-                                .clicked()
-                            {
-                                crate::clipboard::copy_text_with_ctx(ctx, &client_uri);
-                            }
-
-                            ui.label(&listener.flow_name);
-                            ui.label(egui::RichText::new(&client_uri).monospace().weak());
                         });
                     }
                 }
@@ -417,43 +421,11 @@ impl LinksPage {
                 ui.strong("Documentation");
                 ui.add_space(8.0);
 
-                // Swagger UI
                 let swagger_url = format!("{}/swagger-ui/", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&swagger_url));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &swagger_url);
-                    }
-                    ui.label("Swagger UI");
-                    if ui
-                        .link(egui::RichText::new(&swagger_url).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&swagger_url));
-                    }
-                });
-
+                Self::link_row(ui, ctx, "Swagger UI", &swagger_url);
                 ui.add_space(4.0);
-
-                // OpenAPI spec
                 let openapi_url = format!("{}/api-docs/openapi.json", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&openapi_url));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &openapi_url);
-                    }
-                    ui.label("OpenAPI Spec");
-                    if ui
-                        .link(egui::RichText::new(&openapi_url).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&openapi_url));
-                    }
-                });
+                Self::link_row(ui, ctx, "OpenAPI Spec", &openapi_url);
             });
 
         ui.add_space(12.0);
@@ -465,103 +437,36 @@ impl LinksPage {
                 ui.strong("Endpoints");
                 ui.add_space(8.0);
 
-                // Flows API
-                let flows_api = format!("{}/api/flows", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&flows_api));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &flows_api);
-                    }
-                    ui.label("Flows");
-                    if ui
-                        .link(egui::RichText::new(&flows_api).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&flows_api));
-                    }
-                });
+                let endpoints = [
+                    ("Flows", format!("{}/api/flows", server_base)),
+                    ("WHEP Streams", format!("{}/api/whep-streams", server_base)),
+                    ("Version", format!("{}/api/version", server_base)),
+                    ("Blocks", format!("{}/api/blocks", server_base)),
+                    ("Elements", format!("{}/api/elements", server_base)),
+                ];
 
-                ui.add_space(4.0);
-
-                // WHEP streams API
-                let streams_api = format!("{}/api/whep-streams", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&streams_api));
+                for (i, (label, url)) in endpoints.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(4.0);
                     }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &streams_api);
-                    }
-                    ui.label("WHEP Streams");
-                    if ui
-                        .link(egui::RichText::new(&streams_api).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&streams_api));
-                    }
-                });
-
-                ui.add_space(4.0);
-
-                // Version API
-                let version_api = format!("{}/api/version", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&version_api));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &version_api);
-                    }
-                    ui.label("Version");
-                    if ui
-                        .link(egui::RichText::new(&version_api).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&version_api));
-                    }
-                });
-
-                ui.add_space(4.0);
-
-                // Blocks API
-                let blocks_api = format!("{}/api/blocks", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&blocks_api));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &blocks_api);
-                    }
-                    ui.label("Blocks");
-                    if ui
-                        .link(egui::RichText::new(&blocks_api).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&blocks_api));
-                    }
-                });
-
-                ui.add_space(4.0);
-
-                // Elements API
-                let elements_api = format!("{}/api/elements", server_base);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Open").clicked() {
-                        ctx.open_url(egui::OpenUrl::new_tab(&elements_api));
-                    }
-                    if ui.small_button("Copy").clicked() {
-                        crate::clipboard::copy_text_with_ctx(ctx, &elements_api);
-                    }
-                    ui.label("Elements");
-                    if ui
-                        .link(egui::RichText::new(&elements_api).monospace())
-                        .clicked()
-                    {
-                        ctx.open_url(egui::OpenUrl::new_tab(&elements_api));
-                    }
-                });
+                    Self::link_row(ui, ctx, label, url);
+                }
             });
+    }
+
+    /// Render a link row: clickable label (hover shows URL) + copy button.
+    fn link_row(ui: &mut Ui, ctx: &Context, label: &str, url: &str) {
+        ui.horizontal(|ui| {
+            if ui.link(label).on_hover_text(url).clicked() {
+                ctx.open_url(egui::OpenUrl::new_tab(url));
+            }
+            if ui
+                .small_button(egui_phosphor::regular::COPY)
+                .on_hover_text("Copy URL to clipboard")
+                .clicked()
+            {
+                crate::clipboard::copy_text_with_ctx(ctx, url);
+            }
+        });
     }
 }
