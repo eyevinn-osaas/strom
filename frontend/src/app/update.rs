@@ -437,6 +437,25 @@ impl eframe::App for StromApp {
                             );
                             tracing::trace!("Meter data stored for element {}", element_id);
                         }
+                        StromEvent::SpectrumData {
+                            flow_id,
+                            element_id,
+                            magnitudes,
+                        } => {
+                            tracing::trace!(
+                                "Spectrum data received: flow={}, element={}, channels={}, bands={}",
+                                flow_id,
+                                element_id,
+                                magnitudes.len(),
+                                magnitudes.first().map_or(0, |ch| ch.len())
+                            );
+                            self.spectrum_data.update(
+                                flow_id,
+                                element_id.clone(),
+                                crate::spectrum::SpectrumData { magnitudes },
+                            );
+                            tracing::trace!("Spectrum data stored for element {}", element_id);
+                        }
                         StromEvent::LatencyData {
                             flow_id,
                             element_id,

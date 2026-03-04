@@ -1273,6 +1273,7 @@ impl StromApp {
                             &def,
                             flow_id,
                             &self.meter_data,
+                            &self.spectrum_data,
                             &self.latency_data,
                             &self.webrtc_stats,
                             rtp_stats,
@@ -1521,6 +1522,40 @@ impl StromApp {
                                     additional_height,
                                     render_callback: Some(Box::new(move |ui, _rect| {
                                         crate::meter::show_compact(ui, &meter_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
+                    // Setup dynamic content for spectrum blocks
+                    let spectrum_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.spectrum")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in spectrum_blocks {
+                        if let Some(spectrum_data) = self.spectrum_data.get(&flow_id, &block_id) {
+                            let channel_count = spectrum_data.magnitudes.len();
+                            let spectrum_data_clone = spectrum_data.clone();
+
+                            // Single channel fits in the base block height.
+                            // Multi-channel: add 30px per extra channel.
+                            let additional_height = if channel_count <= 1 {
+                                0.0
+                            } else {
+                                (channel_count - 1) as f32 * 30.0
+                            };
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::spectrum::show_compact(ui, &spectrum_data_clone);
                                     })),
                                 },
                             );

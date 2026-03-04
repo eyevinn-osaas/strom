@@ -70,6 +70,13 @@ pub enum StromEvent {
         /// Decay values in dB for each channel
         decay: Vec<f64>,
     },
+    /// Audio spectrum analyzer data from GStreamer spectrum element
+    SpectrumData {
+        flow_id: FlowId,
+        element_id: String,
+        /// Magnitude values in dB per channel, each inner Vec is one channel's frequency bands
+        magnitudes: Vec<Vec<f32>>,
+    },
     /// Audio latency measurement data from GStreamer audiolatency element
     LatencyData {
         flow_id: FlowId,
@@ -280,6 +287,21 @@ impl StromEvent {
                     element_id,
                     flow_id,
                     rms.len()
+                )
+            }
+            StromEvent::SpectrumData {
+                flow_id,
+                element_id,
+                magnitudes,
+                ..
+            } => {
+                let bands = magnitudes.first().map_or(0, |ch| ch.len());
+                format!(
+                    "Spectrum data from {} in flow {} ({} ch, {} bands)",
+                    element_id,
+                    flow_id,
+                    magnitudes.len(),
+                    bands
                 )
             }
             StromEvent::LatencyData {

@@ -359,6 +359,7 @@ impl PropertyInspector {
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
         meter_data_store: &crate::meter::MeterDataStore,
+        spectrum_data_store: &crate::spectrum::SpectrumDataStore,
         latency_data_store: &crate::latency::LatencyDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
@@ -709,6 +710,28 @@ impl PropertyInspector {
                             ui.colored_label(
                                 Color32::from_rgb(200, 200, 100),
                                 "⚠ No flow selected",
+                            );
+                        }
+                    }
+
+                    // Show spectrum visualization for spectrum blocks
+                    if definition.id == "builtin.spectrum" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if let Some(spectrum_data) = spectrum_data_store.get(&flow_id, &block.id) {
+                                crate::spectrum::show_full(ui, spectrum_data);
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No spectrum data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Spectrum data will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "No flow selected",
                             );
                         }
                     }
