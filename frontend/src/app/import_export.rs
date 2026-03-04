@@ -107,7 +107,7 @@ impl StromApp {
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    if ui.button("📥 Import").clicked() {
+                    if ui.button(format!("{} Import", egui_phosphor::regular::DOWNLOAD_SIMPLE)).clicked() {
                         match self.import_format {
                             ImportFormat::Json => self.import_flow_from_json(ctx),
                             ImportFormat::GstLaunch => self.import_flow_from_gst_launch(ctx),

@@ -285,7 +285,10 @@ impl RoutingMatrixEditor {
 
                 // Save/Cancel buttons
                 ui.horizontal(|ui| {
-                    if ui.button("💾 Save").clicked() {
+                    if ui
+                        .button(format!("{} Save", egui_phosphor::regular::FLOPPY_DISK))
+                        .clicked()
+                    {
                         let json = serde_json::to_string(&self.routing)
                             .unwrap_or_else(|_| "{}".to_string());
                         tracing::debug!("Saving routing matrix: {}", json);

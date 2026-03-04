@@ -188,7 +188,9 @@ impl DiscoveryPage {
                         self.focus_search_requested = false;
                         response.request_focus();
                     }
-                    if !self.search_filter.is_empty() && ui.small_button("x").clicked() {
+                    if !self.search_filter.is_empty()
+                        && ui.small_button(egui_phosphor::regular::X).clicked()
+                    {
                         self.search_filter.clear();
                     }
                 });
@@ -731,7 +733,7 @@ impl DiscoveryPage {
                         }
                         // Only show "Create Flow" for discovered streams (not announced)
                         if let SelectedStream::Discovered(stream_id) = selected {
-                            if ui.button("➕ Create Flow").clicked() {
+                            if ui.button(format!("{} Create Flow", egui_phosphor::regular::PLUS)).clicked() {
                                 let interface = self
                                     .discovered_streams
                                     .iter()

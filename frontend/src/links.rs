@@ -197,7 +197,7 @@ impl LinksPage {
                 let streams_url = format!("{}/player/whep-streams", server_base);
                 ui.horizontal(|ui| {
                     if ui
-                        .link(egui::RichText::new("All Streams").strong())
+                        .link(egui::RichText::new("WHEP Streams").strong())
                         .on_hover_text(&streams_url)
                         .clicked()
                     {
@@ -313,7 +313,8 @@ impl LinksPage {
         ui.label("SRT listener streams that can be played with VLC or other players.");
         ui.add_space(16.0);
 
-        let listeners = Self::get_srt_listeners(flows);
+        let mut listeners = Self::get_srt_listeners(flows);
+        listeners.sort_by(|a, b| a.flow_name.cmp(&b.flow_name));
 
         egui::Frame::group(ui.style())
             .inner_margin(12.0)
@@ -358,6 +359,16 @@ impl LinksPage {
                         let client_uri = crate::app::transform_srt_uri_for_vlc(&listener.srt_uri);
 
                         ui.horizontal(|ui| {
+                            ui.label(&listener.flow_name);
+
+                            if ui
+                                .small_button(egui_phosphor::regular::COPY)
+                                .on_hover_text(&client_uri)
+                                .clicked()
+                            {
+                                crate::clipboard::copy_text_with_ctx(ctx, &client_uri);
+                            }
+
                             if ui
                                 .small_button("VLC")
                                 .on_hover_text("Download VLC playlist")
@@ -385,17 +396,6 @@ impl LinksPage {
                                     "application/xspf+xml",
                                 );
                             }
-
-                            if ui
-                                .small_button(egui_phosphor::regular::COPY)
-                                .on_hover_text("Copy SRT URI")
-                                .clicked()
-                            {
-                                crate::clipboard::copy_text_with_ctx(ctx, &client_uri);
-                            }
-
-                            ui.label(&listener.flow_name);
-                            ui.label(egui::RichText::new(&client_uri).monospace().weak());
                         });
                     }
                 }

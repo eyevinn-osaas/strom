@@ -95,7 +95,10 @@ impl PropertyInspector {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     // Delete button at top
-                    if ui.button("🗑 Delete Element").clicked() {
+                    if ui
+                        .button(format!("{} Delete Element", egui_phosphor::regular::TRASH))
+                        .clicked()
+                    {
                         delete_requested = true;
                     }
                     ui.separator();
@@ -366,7 +369,7 @@ impl PropertyInspector {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
             // Delete button at top, away from action buttons
-            if ui.button("🗑 Delete Block").clicked() {
+            if ui.button(format!("{} Delete Block", egui_phosphor::regular::TRASH)).clicked() {
                 result.delete_requested = true;
             }
             ui.separator();
@@ -403,7 +406,7 @@ impl PropertyInspector {
                     };
                 }
                 if block.name.is_some()
-                    && ui.small_button("x").on_hover_text("Clear name").clicked()
+                    && ui.small_button(egui_phosphor::regular::X).on_hover_text("Clear name").clicked()
                 {
                     block.name = None;
                 }
@@ -431,7 +434,7 @@ impl PropertyInspector {
             // Browse Streams button for AES67 Input blocks
             if definition.id == "builtin.aes67_input"
                 && ui
-                    .button("🔍 Browse Streams")
+                    .button(format!("{} Streams", egui_phosphor::regular::BROADCAST))
                     .on_hover_text("Select from discovered SAP streams")
                     .clicked()
             {
@@ -441,7 +444,7 @@ impl PropertyInspector {
             // Browse NDI Sources button for NDI Input blocks
             if definition.id == "builtin.ndi_input"
                 && ui
-                    .button("🔍 Browse NDI Sources")
+                    .button(format!("{} NDI Sources", egui_phosphor::regular::BROADCAST))
                     .on_hover_text("Select from discovered NDI sources")
                     .clicked()
             {
@@ -450,28 +453,28 @@ impl PropertyInspector {
 
             // Open Mixer button for mixer blocks
             if definition.id == "builtin.mixer"
-                && ui.button("🎤 Open Mixer").clicked()
+                && ui.button(format!("{} Mixer", egui_phosphor::regular::SLIDERS)).clicked()
             {
                 crate::app::set_local_storage("open_mixer_editor", &block.id);
             }
 
             // Edit Layout button for compositor blocks
             if (definition.id == "builtin.glcompositor" || definition.id == "builtin.compositor")
-                && ui.button("✏ Edit Layout").clicked()
+                && ui.button(format!("{} Layout", egui_phosphor::regular::PENCIL_SIMPLE)).clicked()
             {
                 crate::app::set_local_storage("open_compositor_editor", &block.id);
             }
 
             // Edit Playlist button for media player blocks
             if definition.id == "builtin.media_player"
-                && ui.button("🎵 Edit Playlist").clicked()
+                && ui.button(format!("{} Playlist", egui_phosphor::regular::PLAYLIST)).clicked()
             {
                 crate::app::set_local_storage("open_playlist_editor", &block.id);
             }
 
             // Edit Routing Matrix button for Audio Router blocks
             if definition.id == "builtin.audiorouter"
-                && ui.button("🔀 Edit Routing Matrix").clicked()
+                && ui.button(format!("{} Routing", egui_phosphor::regular::GRAPH)).clicked()
             {
                 crate::app::set_local_storage("open_routing_editor", &block.id);
             }
@@ -498,7 +501,7 @@ impl PropertyInspector {
                     ui.horizontal(|ui| {
                         // Open in VLC button (saves and opens automatically in native mode)
                         if ui
-                            .button("📺 Open in VLC")
+                            .button(format!("{} Open in VLC", egui_phosphor::regular::PLAY))
                             .on_hover_text("Download XSPF playlist and open in VLC")
                             .clicked()
                         {
@@ -509,7 +512,7 @@ impl PropertyInspector {
                         // Download-only button (native mode only - lets user save to specific location)
                         #[cfg(not(target_arch = "wasm32"))]
                         if ui
-                            .button("💾 Download")
+                            .button(format!("{} Download", egui_phosphor::regular::DOWNLOAD_SIMPLE))
                             .on_hover_text("Download XSPF playlist file")
                             .clicked()
                         {
@@ -1097,7 +1100,7 @@ impl PropertyInspector {
                 // Reset button if modified
                 if has_custom_value
                     && ui
-                        .small_button("↺")
+                        .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                         .on_hover_text("Reset to default")
                         .clicked()
                 {
@@ -1201,7 +1204,7 @@ impl PropertyInspector {
                 // Reset button if modified
                 if has_custom_value
                     && ui
-                        .small_button("↺")
+                        .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                         .on_hover_text("Reset to default")
                         .clicked()
                 {
@@ -1310,7 +1313,7 @@ impl PropertyInspector {
             if has_custom_value
                 && prop_info.writable
                 && ui
-                    .small_button("↺")
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                     .on_hover_text("Reset to default")
                     .clicked()
             {
@@ -1420,7 +1423,7 @@ impl PropertyInspector {
             if has_custom_value
                 && prop_info.writable
                 && ui
-                    .small_button("↺")
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                     .on_hover_text("Reset to default")
                     .clicked()
             {
