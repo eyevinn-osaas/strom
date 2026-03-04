@@ -155,7 +155,7 @@ Pre-built multi-architecture images (amd64/arm64):
 
 ```bash
 docker pull eyevinntechnology/strom:latest
-docker pull eyevinntechnology/strom:0.3.22  # Specific version
+docker pull eyevinntechnology/strom:0.3.24  # Specific version
 
 # Extended image with HTML rendering support (CEF/Chromium)
 docker pull eyevinntechnology/strom-full:latest
@@ -284,6 +284,8 @@ Create reusable components from element groups:
 - **Media Player** - File and playlist playback with position tracking, loop support, and decode/passthrough modes
 - **AES67 Input** - Receives AES67/Ravenna audio via RTP multicast using SDP
 - **WHEP Input** - Receives audio/video via WebRTC WHEP protocol
+- **WHIP Input** - Hosts a WHIP server for browser/encoder ingest
+- **MPEG-TS/SRT Input** - Receives MPEG Transport Stream over SRT with decode or passthrough modes
 - **DeckLink Video/Audio Input** - Captures from Blackmagic DeckLink SDI/HDMI cards
 - **NDI Input** - Receives video/audio via NewTek NDI protocol
 - **Inter Input** - Subscribes to streams from other flows (inter-pipeline routing)

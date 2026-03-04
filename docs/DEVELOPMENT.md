@@ -51,8 +51,8 @@ cargo build
 
 ### Build specific crates
 ```bash
-cargo build -p strom-types
-cargo build -p strom
+# All crates are built from the workspace root (never use -p flag)
+cargo build
 # Frontend builds with trunk (see below)
 ```
 
@@ -67,7 +67,7 @@ cargo check --workspace
 
 Start the backend server:
 ```bash
-cargo run -p strom
+cargo run
 ```
 
 The server will start on `http://localhost:8080` by default.
@@ -75,10 +75,10 @@ The server will start on `http://localhost:8080` by default.
 **Configuration options:**
 ```bash
 # Via CLI arguments
-cargo run -p strom -- --port 8080 --data-dir ./my-data
+cargo run -- --port 8080 --data-dir ./my-data
 
 # Via environment variables
-STROM_PORT=8080 STROM_DATA_DIR=./my-data cargo run -p strom
+STROM_PORT=8080 STROM_DATA_DIR=./my-data cargo run
 ```
 
 **Available options:**
@@ -123,7 +123,7 @@ Run both backend and frontend simultaneously:
 
 **Terminal 1: Backend**
 ```bash
-cargo run -p strom
+cargo run
 ```
 
 **Terminal 2: Frontend**
@@ -184,21 +184,7 @@ cargo update
 
 ## Project Status
 
-Currently implemented:
-- ✅ Workspace structure with 3 crates
-- ✅ Shared types library (Flow, Element, Link, API types, SSE events)
-- ✅ Complete backend server with REST API and SSE
-- ✅ Full Flow CRUD endpoints
-- ✅ GStreamer pipeline execution with dynamic pad linking
-- ✅ Element discovery/introspection with media type classification
-- ✅ Server-Sent Events for real-time updates
-- ✅ Visual flow editor with multi-port support
-- ✅ JSON file persistence with auto-save
-- ✅ Auto-start flows on server boot
-- ✅ Automatic tee insertion for multiple outputs
-- ✅ Pipeline debug graph visualization
-- ✅ egui frontend with color-coded ports
-- ✅ CORS enabled for local development
+See [README.md](../README.md) for a full list of features and capabilities.
 
 ## Troubleshooting
 
@@ -217,9 +203,9 @@ rustup target add wasm32-unknown-unknown
 ### Port already in use
 Change the backend port:
 ```bash
-cargo run -p strom -- --port 8081
+cargo run -- --port 8081
 # or
-STROM_PORT=8081 cargo run -p strom
+STROM_PORT=8081 cargo run
 ```
 
 Then update the frontend API URL if needed.
@@ -227,5 +213,5 @@ Then update the frontend API URL if needed.
 ### Storage files in unexpected location
 By default, storage files go to platform-specific directories. To use current directory:
 ```bash
-cargo run -p strom -- --data-dir ./data
+cargo run -- --data-dir ./data
 ```
