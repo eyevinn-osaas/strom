@@ -377,6 +377,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
         gstrsinter::plugin_register_static().expect("Could not register inter plugins");
         gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
+        gstrsaudiofx::plugin_register_static().expect("Could not register audiofx plugins");
         gst_plugins_lsp::plugin_register_static().expect("Could not register lsp-dsp-rs plugins");
         agua_gst::plugin_register_static().expect("Could not register agua watermark plugins");
 
@@ -513,6 +514,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
     gstrsinter::plugin_register_static().expect("Could not register inter plugins");
     gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
+    gstrsaudiofx::plugin_register_static().expect("Could not register audiofx plugins");
     gst_plugins_lsp::plugin_register_static().expect("Could not register lsp-dsp-rs plugins");
     agua_gst::plugin_register_static().expect("Could not register agua watermark plugins");
 

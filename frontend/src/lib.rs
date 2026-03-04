@@ -20,6 +20,7 @@ mod interactive_overlay;
 mod latency;
 mod links;
 mod list_navigator;
+mod loudness;
 mod media;
 mod mediaplayer;
 mod meter;

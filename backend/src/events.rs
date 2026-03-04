@@ -25,7 +25,7 @@ impl EventBroadcaster {
     pub fn broadcast(&self, event: StromEvent) {
         // Use trace for high-frequency events, debug for others
         match &event {
-            StromEvent::MeterData { .. } => {
+            StromEvent::MeterData { .. } | StromEvent::LoudnessData { .. } => {
                 trace!("Broadcasting event: {}", event.description());
             }
             _ => {

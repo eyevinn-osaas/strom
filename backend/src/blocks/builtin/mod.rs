@@ -7,6 +7,7 @@ pub mod compositor;
 pub mod decklink;
 pub mod inter;
 pub mod latency;
+pub mod loudness;
 pub mod mediaplayer;
 pub mod meter;
 pub mod mixer;
@@ -47,6 +48,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
 
     // Add Latency blocks
     blocks.extend(latency::get_blocks());
+
+    // Add Loudness blocks
+    blocks.extend(loudness::get_blocks());
 
     // Add Media Player blocks
     blocks.extend(mediaplayer::get_blocks());
@@ -103,6 +107,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.inter_output" => Some(Arc::new(inter::InterOutputBuilder)),
         "builtin.inter_input" => Some(Arc::new(inter::InterInputBuilder)),
         "builtin.latency" => Some(Arc::new(latency::LatencyBuilder)),
+        "builtin.loudness" => Some(Arc::new(loudness::LoudnessBuilder)),
         "builtin.media_player" => Some(Arc::new(mediaplayer::MediaPlayerBuilder)),
         "builtin.meter" => Some(Arc::new(meter::MeterBuilder)),
         "builtin.mixer" => Some(Arc::new(mixer::MixerBuilder)),

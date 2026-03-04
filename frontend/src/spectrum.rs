@@ -1,5 +1,6 @@
 //! Audio spectrum analyzer visualization widget.
 
+use crate::meter::BlockDataKey;
 use egui::{Color32, Rect, Stroke, Ui, Vec2};
 use instant::Instant;
 use std::collections::HashMap;
@@ -24,17 +25,10 @@ struct TimestampedSpectrumData {
     updated_at: Instant,
 }
 
-/// Key for identifying spectrum data (flow + element).
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct SpectrumKey {
-    pub flow_id: FlowId,
-    pub element_id: String,
-}
-
 /// Storage for all spectrum data in the application.
 #[derive(Debug, Clone, Default)]
 pub struct SpectrumDataStore {
-    data: HashMap<SpectrumKey, TimestampedSpectrumData>,
+    data: HashMap<BlockDataKey, TimestampedSpectrumData>,
 }
 
 impl SpectrumDataStore {
@@ -46,7 +40,7 @@ impl SpectrumDataStore {
 
     /// Update spectrum data for a specific element.
     pub fn update(&mut self, flow_id: FlowId, element_id: String, data: SpectrumData) {
-        let key = SpectrumKey {
+        let key = BlockDataKey {
             flow_id,
             element_id,
         };
@@ -62,7 +56,7 @@ impl SpectrumDataStore {
     /// Get spectrum data for a specific element.
     /// Returns None if the data is stale (older than TTL).
     pub fn get(&self, flow_id: &FlowId, element_id: &str) -> Option<&SpectrumData> {
-        let key = SpectrumKey {
+        let key = BlockDataKey {
             flow_id: *flow_id,
             element_id: element_id.to_string(),
         };

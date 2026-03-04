@@ -456,6 +456,35 @@ impl eframe::App for StromApp {
                             );
                             tracing::trace!("Spectrum data stored for element {}", element_id);
                         }
+                        StromEvent::LoudnessData {
+                            flow_id,
+                            element_id,
+                            momentary,
+                            shortterm,
+                            integrated,
+                            loudness_range,
+                            true_peak,
+                        } => {
+                            tracing::trace!(
+                                "Loudness data received: flow={}, element={}, M={:.1}, S={:?}, I={:?}",
+                                flow_id,
+                                element_id,
+                                momentary,
+                                shortterm,
+                                integrated
+                            );
+                            self.loudness_data.update(
+                                flow_id,
+                                element_id,
+                                crate::loudness::LoudnessData {
+                                    momentary,
+                                    shortterm,
+                                    integrated,
+                                    loudness_range,
+                                    true_peak,
+                                },
+                            );
+                        }
                         StromEvent::LatencyData {
                             flow_id,
                             element_id,

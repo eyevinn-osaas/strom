@@ -77,6 +77,21 @@ pub enum StromEvent {
         /// Magnitude values in dB per channel, each inner Vec is one channel's frequency bands
         magnitudes: Vec<Vec<f32>>,
     },
+    /// EBU R128 loudness measurement data from GStreamer ebur128level element
+    LoudnessData {
+        flow_id: FlowId,
+        element_id: String,
+        /// Momentary loudness in LUFS (400ms window)
+        momentary: f64,
+        /// Short-term loudness in LUFS (3s window)
+        shortterm: Option<f64>,
+        /// Integrated (global) loudness in LUFS (from start)
+        integrated: Option<f64>,
+        /// Loudness range in LU
+        loudness_range: Option<f64>,
+        /// True peak per channel in dBTP
+        true_peak: Vec<f64>,
+    },
     /// Audio latency measurement data from GStreamer audiolatency element
     LatencyData {
         flow_id: FlowId,
@@ -302,6 +317,21 @@ impl StromEvent {
                     flow_id,
                     magnitudes.len(),
                     bands
+                )
+            }
+            StromEvent::LoudnessData {
+                flow_id,
+                element_id,
+                momentary,
+                integrated,
+                ..
+            } => {
+                let i_str = integrated
+                    .map(|v| format!("{:.1}", v))
+                    .unwrap_or_else(|| "---".to_string());
+                format!(
+                    "Loudness data from {} in flow {}: M={:.1} LUFS, I={} LUFS",
+                    element_id, flow_id, momentary, i_str
                 )
             }
             StromEvent::LatencyData {

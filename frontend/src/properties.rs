@@ -360,6 +360,7 @@ impl PropertyInspector {
         flow_id: Option<strom_types::FlowId>,
         meter_data_store: &crate::meter::MeterDataStore,
         spectrum_data_store: &crate::spectrum::SpectrumDataStore,
+        loudness_data_store: &crate::loudness::LoudnessDataStore,
         latency_data_store: &crate::latency::LatencyDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
@@ -727,6 +728,28 @@ impl PropertyInspector {
                                 );
                                 ui.add_space(4.0);
                                 ui.small("Spectrum data will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "No flow selected",
+                            );
+                        }
+                    }
+
+                    // Show loudness visualization for loudness blocks
+                    if definition.id == "builtin.loudness" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if let Some(loudness_data) = loudness_data_store.get(&flow_id, &block.id) {
+                                crate::loudness::show_full(ui, loudness_data);
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No loudness data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Loudness data will appear when audio is flowing through this block.");
                             }
                         } else {
                             ui.colored_label(
