@@ -360,6 +360,7 @@ impl PropertyInspector {
         block: &mut BlockInstance,
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
+        audioanalyzer_data_store: &crate::audioanalyzer::AudioAnalyzerDataStore,
         meter_data_store: &crate::meter::MeterDataStore,
         spectrum_data_store: &crate::spectrum::SpectrumDataStore,
         loudness_data_store: &crate::loudness::LoudnessDataStore,
@@ -689,6 +690,30 @@ impl PropertyInspector {
                         }
                     } else {
                         ui.label("This block has no configurable properties");
+                    }
+
+                    // Show audio analyzer visualization for audio analyzer blocks
+                    if definition.id == "builtin.audioanalyzer" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if let Some(analyzer_data) =
+                                audioanalyzer_data_store.get(&flow_id, &block.id)
+                            {
+                                crate::audioanalyzer::show_full(ui, analyzer_data);
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No audio analyzer data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Waveform and vectorscope will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "No flow selected",
+                            );
+                        }
                     }
 
                     // Show meter visualization for meter blocks

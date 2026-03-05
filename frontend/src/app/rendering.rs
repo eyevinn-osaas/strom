@@ -1272,6 +1272,7 @@ impl StromApp {
                             block,
                             &def,
                             flow_id,
+                            &self.audioanalyzer_data,
                             &self.meter_data,
                             &self.spectrum_data,
                             &self.loudness_data,

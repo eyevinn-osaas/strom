@@ -123,6 +123,40 @@ pub fn calculate_compact_height() -> f32 {
 }
 
 /// Render a compact audio analyzer (waveform + vectorscope side by side).
+/// Render a full audio analyzer view (for property inspector panel).
+pub fn show_full(ui: &mut Ui, data: &AudioAnalyzerData) {
+    ui.heading("Audio Analyzer");
+    ui.separator();
+
+    if data.waveform_l_min.is_empty() && data.vectorscope_l.is_empty() {
+        ui.label("No signal detected");
+        return;
+    }
+
+    let available_width = ui.available_width().max(200.0);
+
+    // Waveform section
+    ui.label("Waveform");
+    let waveform_height = 120.0;
+    let (waveform_rect, _) = ui.allocate_exact_size(
+        Vec2::new(available_width, waveform_height),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter_at(waveform_rect);
+    draw_waveform(&painter, waveform_rect, data);
+
+    ui.add_space(8.0);
+
+    // Vectorscope section
+    ui.label("Vectorscope");
+    let scope_size = available_width.min(250.0);
+    let (scope_rect, _) =
+        ui.allocate_exact_size(Vec2::new(scope_size, scope_size), egui::Sense::hover());
+    let painter = ui.painter_at(scope_rect);
+    draw_vectorscope(&painter, scope_rect, data);
+}
+
+/// Render a compact audio analyzer (waveform + vectorscope side by side).
 pub fn show_compact(ui: &mut Ui, data: &AudioAnalyzerData) {
     let available = ui.available_size();
     let total_width = available.x.max(120.0);
@@ -219,6 +253,10 @@ fn draw_waveform(painter: &egui::Painter, rect: Rect, data: &AudioAnalyzerData) 
 }
 
 /// Draw a single channel's waveform in the given rect.
+///
+/// When there are more data columns than pixels, adjacent columns are merged
+/// (taking min-of-mins and max-of-maxes). Draws vertical min/max bars plus
+/// line segments connecting midpoints of adjacent columns to eliminate gaps.
 fn draw_channel_waveform(
     painter: &egui::Painter,
     rect: Rect,
@@ -233,19 +271,50 @@ fn draw_channel_waveform(
 
     let center_y = rect.center().y;
     let half_h = rect.height() / 2.0 * 0.9; // 90% to leave a small margin
-    let col_width = rect.width() / num_columns as f32;
+    let pixel_cols = (rect.width() as usize).max(1);
 
-    for (i, (&min_val, &max_val)) in mins.iter().zip(maxs.iter()).enumerate() {
-        let x = rect.min.x + (i as f32 + 0.5) * col_width;
+    // Number of render columns is the smaller of data columns and pixel columns
+    let render_cols = pixel_cols.min(num_columns);
+    let data_per_render = num_columns as f64 / render_cols as f64;
+    let px_per_col = rect.width() / render_cols as f32;
+
+    let mut prev_mid: Option<egui::Pos2> = None;
+
+    for i in 0..render_cols {
+        // Map render column back to data range
+        let d_start = (i as f64 * data_per_render) as usize;
+        let d_end = (((i + 1) as f64) * data_per_render) as usize;
+        let d_end = d_end.min(num_columns);
+
+        let mut col_min: f32 = 0.0;
+        let mut col_max: f32 = 0.0;
+        for j in d_start..d_end {
+            if mins[j] < col_min {
+                col_min = mins[j];
+            }
+            if maxs[j] > col_max {
+                col_max = maxs[j];
+            }
+        }
+
+        let x = rect.min.x + (i as f32 + 0.5) * px_per_col;
 
         // Map -1.0..1.0 to pixel Y (inverted: -1.0 is bottom, 1.0 is top)
-        let y_min = center_y - max_val * half_h; // max_val maps to higher on screen (lower Y)
-        let y_max = center_y - min_val * half_h; // min_val maps to lower on screen (higher Y)
+        let y_top = center_y - col_max * half_h;
+        let y_bot = center_y - col_min * half_h;
 
+        // Vertical min/max bar
         painter.line_segment(
-            [egui::pos2(x, y_min), egui::pos2(x, y_max)],
+            [egui::pos2(x, y_top), egui::pos2(x, y_bot)],
             Stroke::new(1.0, color),
         );
+
+        // Connect midpoints of adjacent columns to fill gaps
+        let mid = egui::pos2(x, (y_top + y_bot) / 2.0);
+        if let Some(prev) = prev_mid {
+            painter.line_segment([prev, mid], Stroke::new(1.0, color));
+        }
+        prev_mid = Some(mid);
     }
 }
 
