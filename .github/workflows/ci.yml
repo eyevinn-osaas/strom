@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -274,8 +275,10 @@ jobs:
           if-no-files-found: error
 
   # Windows: clippy + test + build
+  # Only runs manually (workflow_dispatch) to save CI cost (2× multiplier).
   build-windows:
     name: Build (Windows)
+    if: github.event_name == 'workflow_dispatch'
     needs: check-wasm
     runs-on: windows-latest
     timeout-minutes: 45
@@ -368,8 +371,10 @@ jobs:
           if-no-files-found: error
 
   # macOS: clippy + test + build
+  # Only runs manually (workflow_dispatch) to save CI cost (10× multiplier).
   build-macos:
     name: Build (macOS)
+    if: github.event_name == 'workflow_dispatch'
     needs: check-wasm
     runs-on: macos-latest
     timeout-minutes: 30
