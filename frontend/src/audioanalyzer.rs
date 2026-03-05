@@ -3,7 +3,7 @@
 use crate::meter::BlockDataKey;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use egui::{Color32, Rect, Stroke, Ui, Vec2};
-use egui_plot::{HLine, Legend, Line, Plot, PlotMemory, PlotPoints, Points, VLine};
+use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Points, VLine};
 use instant::Instant;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -216,8 +216,10 @@ pub fn show_full(ui: &mut Ui, data: &AudioAnalyzerData) {
         .legend({
             let legend = Legend::default();
             // Only hide L min / R min on first render; after that the user controls visibility
-            let plot_id = egui::Id::new("waveform_full");
-            if PlotMemory::load(ui.ctx(), plot_id).is_none() {
+            let init_id = ui.id().with("wf_legend_init");
+            let already_init = ui.data_mut(|d| d.get_temp::<bool>(init_id).unwrap_or(false));
+            if !already_init {
+                ui.data_mut(|d| d.insert_temp(init_id, true));
                 legend.hidden_items([egui::Id::new("L min"), egui::Id::new("R min")])
             } else {
                 legend
