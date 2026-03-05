@@ -1,6 +1,7 @@
 //! Audio analyzer visualization widgets (waveform oscilloscope and vectorscope).
 
 use crate::meter::BlockDataKey;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use egui::{Color32, Rect, Stroke, Ui, Vec2};
 use instant::Instant;
 use std::collections::HashMap;
@@ -37,25 +38,30 @@ pub struct AudioAnalyzerData {
 }
 
 impl AudioAnalyzerData {
-    /// Create from i8 wire data, normalizing to -1.0..1.0.
-    pub fn from_i8(
-        waveform_l_min: &[i8],
-        waveform_l_max: &[i8],
-        waveform_r_min: &[i8],
-        waveform_r_max: &[i8],
-        vectorscope_l: &[i8],
-        vectorscope_r: &[i8],
+    /// Decode base64-encoded i8 samples and normalize to -1.0..1.0.
+    pub fn from_base64(
+        waveform_l_min: &str,
+        waveform_l_max: &str,
+        waveform_r_min: &str,
+        waveform_r_max: &str,
+        vectorscope_l: &str,
+        vectorscope_r: &str,
     ) -> Self {
-        let norm = |v: &[i8]| -> Vec<f32> { v.iter().map(|&s| s as f32 / 128.0).collect() };
         Self {
-            waveform_l_min: norm(waveform_l_min),
-            waveform_l_max: norm(waveform_l_max),
-            waveform_r_min: norm(waveform_r_min),
-            waveform_r_max: norm(waveform_r_max),
-            vectorscope_l: norm(vectorscope_l),
-            vectorscope_r: norm(vectorscope_r),
+            waveform_l_min: decode_and_normalize(waveform_l_min),
+            waveform_l_max: decode_and_normalize(waveform_l_max),
+            waveform_r_min: decode_and_normalize(waveform_r_min),
+            waveform_r_max: decode_and_normalize(waveform_r_max),
+            vectorscope_l: decode_and_normalize(vectorscope_l),
+            vectorscope_r: decode_and_normalize(vectorscope_r),
         }
     }
+}
+
+/// Decode a base64 string of i8 bytes and normalize each to -1.0..1.0.
+fn decode_and_normalize(b64: &str) -> Vec<f32> {
+    let bytes = STANDARD.decode(b64).unwrap_or_default();
+    bytes.iter().map(|&b| (b as i8) as f32 / 128.0).collect()
 }
 
 /// Analyzer data with timestamp for TTL tracking.

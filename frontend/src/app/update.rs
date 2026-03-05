@@ -476,7 +476,7 @@ impl eframe::App for StromApp {
                             self.audioanalyzer_data.update(
                                 flow_id,
                                 element_id,
-                                crate::audioanalyzer::AudioAnalyzerData::from_i8(
+                                crate::audioanalyzer::AudioAnalyzerData::from_base64(
                                     &waveform_l_min,
                                     &waveform_l_max,
                                     &waveform_r_min,

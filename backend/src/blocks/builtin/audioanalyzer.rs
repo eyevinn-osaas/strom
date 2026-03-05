@@ -7,6 +7,7 @@
 
 use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use crate::events::EventBroadcaster;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
@@ -196,12 +197,12 @@ impl BlockBuilder for AudioAnalyzerBuilder {
                         events.broadcast(StromEvent::AudioAnalyzerData {
                             flow_id,
                             element_id,
-                            waveform_l_min,
-                            waveform_l_max,
-                            waveform_r_min,
-                            waveform_r_max,
-                            vectorscope_l,
-                            vectorscope_r,
+                            waveform_l_min: encode_i8(&waveform_l_min),
+                            waveform_l_max: encode_i8(&waveform_l_max),
+                            waveform_r_min: encode_i8(&waveform_r_min),
+                            waveform_r_max: encode_i8(&waveform_r_max),
+                            vectorscope_l: encode_i8(&vectorscope_l),
+                            vectorscope_r: encode_i8(&vectorscope_r),
                         });
                     }
 
@@ -262,6 +263,14 @@ impl BlockBuilder for AudioAnalyzerBuilder {
 }
 
 /// Compute waveform min/max per column from samples, quantized to i8.
+/// Base64-encode a slice of i8 values (reinterpreted as u8).
+fn encode_i8(data: &[i8]) -> String {
+    // SAFETY: i8 and u8 have identical layout; this is a no-op reinterpret.
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(data.as_ptr().cast::<u8>(), data.len()) };
+    STANDARD.encode(bytes)
+}
+
 fn compute_waveform(samples: &[i16], num_columns: usize) -> (Vec<i8>, Vec<i8>) {
     if samples.is_empty() || num_columns == 0 {
         return (vec![0i8; num_columns], vec![0i8; num_columns]);

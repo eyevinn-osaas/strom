@@ -215,18 +215,18 @@ pub enum StromEvent {
     AudioAnalyzerData {
         flow_id: FlowId,
         element_id: String,
-        /// Waveform min values per column for L channel (i8 range: -128..127)
-        waveform_l_min: Vec<i8>,
-        /// Waveform max values per column for L channel
-        waveform_l_max: Vec<i8>,
-        /// Waveform min values per column for R channel
-        waveform_r_min: Vec<i8>,
-        /// Waveform max values per column for R channel
-        waveform_r_max: Vec<i8>,
-        /// Vectorscope L channel samples (decimated, i8 range)
-        vectorscope_l: Vec<i8>,
-        /// Vectorscope R channel samples (decimated, i8 range)
-        vectorscope_r: Vec<i8>,
+        /// Waveform min values per column for L channel (base64-encoded i8 samples)
+        waveform_l_min: String,
+        /// Waveform max values per column for L channel (base64-encoded i8 samples)
+        waveform_l_max: String,
+        /// Waveform min values per column for R channel (base64-encoded i8 samples)
+        waveform_r_min: String,
+        /// Waveform max values per column for R channel (base64-encoded i8 samples)
+        waveform_r_max: String,
+        /// Vectorscope L channel samples (base64-encoded i8 samples)
+        vectorscope_l: String,
+        /// Vectorscope R channel samples (base64-encoded i8 samples)
+        vectorscope_r: String,
     },
 }
 
