@@ -1599,6 +1599,37 @@ impl StromApp {
                         }
                     }
 
+                    // Setup dynamic content for audio analyzer blocks
+                    let analyzer_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.audioanalyzer")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in analyzer_blocks {
+                        if let Some(analyzer_data) =
+                            self.audioanalyzer_data.get(&flow_id, &block_id)
+                        {
+                            let analyzer_data_clone = analyzer_data.clone();
+                            let height = crate::audioanalyzer::calculate_compact_height();
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: height + 10.0,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::audioanalyzer::show_compact(
+                                            ui,
+                                            &analyzer_data_clone,
+                                        );
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
                     // Setup dynamic content for latency blocks
                     let latency_blocks: Vec<_> = self
                         .graph

@@ -15,6 +15,7 @@ use egui::Color32;
 use strom_types::Flow;
 
 use crate::api::{ApiClient, AuthStatusResponse};
+use crate::audioanalyzer::AudioAnalyzerDataStore;
 use crate::audiorouter::RoutingMatrixEditor;
 use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
@@ -602,6 +603,8 @@ pub struct StromApp {
     available_channels_loaded: bool,
     /// Last InterInput block ID we refreshed channels for (to avoid repeated refreshes)
     last_inter_input_refresh: Option<String>,
+    /// Audio analyzer data storage for all audio analyzer blocks
+    audioanalyzer_data: AudioAnalyzerDataStore,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
     /// Spectrum data storage for all spectrum analyzer blocks

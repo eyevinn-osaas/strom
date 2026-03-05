@@ -211,6 +211,23 @@ pub enum StromEvent {
         transition_type: String,
         duration_ms: u64,
     },
+    /// Audio analyzer waveform and vectorscope data from appsink
+    AudioAnalyzerData {
+        flow_id: FlowId,
+        element_id: String,
+        /// Waveform min values per column for L channel (i8 range: -128..127)
+        waveform_l_min: Vec<i8>,
+        /// Waveform max values per column for L channel
+        waveform_l_max: Vec<i8>,
+        /// Waveform min values per column for R channel
+        waveform_r_min: Vec<i8>,
+        /// Waveform max values per column for R channel
+        waveform_r_max: Vec<i8>,
+        /// Vectorscope L channel samples (decimated, i8 range)
+        vectorscope_l: Vec<i8>,
+        /// Vectorscope R channel samples (decimated, i8 range)
+        vectorscope_r: Vec<i8>,
+    },
 }
 
 impl StromEvent {
@@ -510,6 +527,21 @@ impl StromEvent {
                 format!(
                     "Transition {} triggered on {} in flow {}: {} -> {} ({}ms)",
                     transition_type, block_instance_id, flow_id, from_input, to_input, duration_ms
+                )
+            }
+            StromEvent::AudioAnalyzerData {
+                flow_id,
+                element_id,
+                waveform_l_min,
+                vectorscope_l,
+                ..
+            } => {
+                format!(
+                    "Audio analyzer data from {} in flow {} ({} columns, {} vector pairs)",
+                    element_id,
+                    flow_id,
+                    waveform_l_min.len(),
+                    vectorscope_l.len()
                 )
             }
         }
