@@ -3,6 +3,7 @@
 use crate::meter::BlockDataKey;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use egui::{Color32, Rect, Stroke, Ui, Vec2};
+use egui_plot::{HLine, Legend, Line, Plot, PlotMemory, PlotPoints, Points, VLine};
 use instant::Instant;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -122,8 +123,38 @@ pub fn calculate_compact_height() -> f32 {
     80.0
 }
 
-/// Render a compact audio analyzer (waveform + vectorscope side by side).
-/// Render a full audio analyzer view (for property inspector panel).
+/// Persistent zoom state for the waveform plot, stored in egui memory.
+#[derive(Clone, Debug)]
+struct WaveformZoom {
+    /// Amplitude range (symmetric around 0). 1.0 = full scale, 0.1 = zoomed in 10x.
+    amplitude: f32,
+    /// Fraction of total bins visible (1.0 = all, 0.1 = 10%).
+    bin_fraction: f32,
+}
+
+impl Default for WaveformZoom {
+    fn default() -> Self {
+        Self {
+            amplitude: 1.0,
+            bin_fraction: 1.0,
+        }
+    }
+}
+
+/// Persistent zoom state for the vectorscope plot, stored in egui memory.
+#[derive(Clone, Debug)]
+struct VectorscopeZoom {
+    /// Scale (symmetric around 0). 1.0 = full scale, 0.5 = zoomed in 2x.
+    scale: f32,
+}
+
+impl Default for VectorscopeZoom {
+    fn default() -> Self {
+        Self { scale: 1.0 }
+    }
+}
+
+/// Render a full audio analyzer view (for property inspector panel) using egui_plot.
 pub fn show_full(ui: &mut Ui, data: &AudioAnalyzerData) {
     ui.heading("Audio Analyzer");
     ui.separator();
@@ -135,25 +166,143 @@ pub fn show_full(ui: &mut Ui, data: &AudioAnalyzerData) {
 
     let available_width = ui.available_width().max(200.0);
 
-    // Waveform section
+    // --- Waveform section ---
     ui.label("Waveform");
-    let waveform_height = 120.0;
-    let (waveform_rect, _) = ui.allocate_exact_size(
-        Vec2::new(available_width, waveform_height),
-        egui::Sense::hover(),
-    );
-    let painter = ui.painter_at(waveform_rect);
-    draw_waveform(&painter, waveform_rect, data);
+
+    // Zoom controls stored in egui temp memory
+    let wf_zoom_id = ui.id().with("wf_zoom");
+    let mut wf_zoom = ui
+        .data_mut(|d| d.get_temp::<WaveformZoom>(wf_zoom_id))
+        .unwrap_or_default();
+
+    ui.horizontal(|ui| {
+        ui.label("Amplitude:");
+        ui.add(egui::Slider::new(&mut wf_zoom.amplitude, 0.01..=1.0).logarithmic(true));
+        ui.label("Bins:");
+        ui.add(egui::Slider::new(&mut wf_zoom.bin_fraction, 0.01..=1.0).logarithmic(true));
+        if ui.small_button("Reset").clicked() {
+            wf_zoom = WaveformZoom::default();
+        }
+    });
+
+    ui.data_mut(|d| d.insert_temp(wf_zoom_id, wf_zoom.clone()));
+
+    let n_l = data.waveform_l_min.len();
+    let n_r = data.waveform_r_min.len();
+    let n_max = n_l.max(n_r);
+
+    let l_max_points: PlotPoints<'_> = (0..n_l)
+        .map(|i| [i as f64, data.waveform_l_max[i] as f64])
+        .collect();
+    let l_min_points: PlotPoints<'_> = (0..n_l)
+        .map(|i| [i as f64, data.waveform_l_min[i] as f64])
+        .collect();
+    let r_max_points: PlotPoints<'_> = (0..n_r)
+        .map(|i| [i as f64, data.waveform_r_max[i] as f64])
+        .collect();
+    let r_min_points: PlotPoints<'_> = (0..n_r)
+        .map(|i| [i as f64, data.waveform_r_min[i] as f64])
+        .collect();
+
+    let amp = wf_zoom.amplitude as f64;
+    let bin_visible = (n_max as f64 * wf_zoom.bin_fraction as f64).max(1.0);
+
+    let waveform_height = 150.0;
+    Plot::new("waveform_full")
+        .height(waveform_height)
+        .width(available_width)
+        .y_axis_label("Amplitude")
+        .x_axis_label("Sample bin")
+        .legend({
+            let legend = Legend::default();
+            // Only hide L min / R min on first render; after that the user controls visibility
+            let plot_id = egui::Id::new("waveform_full");
+            if PlotMemory::load(ui.ctx(), plot_id).is_none() {
+                legend.hidden_items([egui::Id::new("L min"), egui::Id::new("R min")])
+            } else {
+                legend
+            }
+        })
+        .allow_zoom(false)
+        .allow_scroll(false)
+        .allow_drag(false)
+        .allow_boxed_zoom(false)
+        .show(ui, |plot_ui| {
+            plot_ui.set_plot_bounds_y(-amp..=amp);
+            plot_ui.set_plot_bounds_x(0.0..=bin_visible);
+
+            plot_ui.hline(HLine::new("", 0.0).color(COLOR_REF).width(0.5));
+
+            plot_ui.line(Line::new("L", l_max_points).color(COLOR_L).width(1.0));
+            plot_ui.line(Line::new("L min", l_min_points).color(COLOR_L).width(1.0));
+
+            plot_ui.line(Line::new("R", r_max_points).color(COLOR_R).width(1.0));
+            plot_ui.line(Line::new("R min", r_min_points).color(COLOR_R).width(1.0));
+        });
 
     ui.add_space(8.0);
 
-    // Vectorscope section
+    // --- Vectorscope section ---
     ui.label("Vectorscope");
-    let scope_size = available_width.min(250.0);
-    let (scope_rect, _) =
-        ui.allocate_exact_size(Vec2::new(scope_size, scope_size), egui::Sense::hover());
-    let painter = ui.painter_at(scope_rect);
-    draw_vectorscope(&painter, scope_rect, data);
+
+    let vs_zoom_id = ui.id().with("vs_zoom");
+    let mut vs_zoom = ui
+        .data_mut(|d| d.get_temp::<VectorscopeZoom>(vs_zoom_id))
+        .unwrap_or_default();
+
+    ui.horizontal(|ui| {
+        ui.label("Scale:");
+        ui.add(egui::Slider::new(&mut vs_zoom.scale, 0.01..=1.0).logarithmic(true));
+        if ui.small_button("Reset").clicked() {
+            vs_zoom = VectorscopeZoom::default();
+        }
+    });
+
+    ui.data_mut(|d| d.insert_temp(vs_zoom_id, vs_zoom.clone()));
+
+    let scope_size = available_width.min(300.0);
+    let scatter: PlotPoints<'_> = data
+        .vectorscope_l
+        .iter()
+        .zip(data.vectorscope_r.iter())
+        .map(|(&l, &r)| [l as f64, r as f64])
+        .collect();
+
+    let vs_scale = vs_zoom.scale as f64;
+
+    Plot::new("vectorscope_full")
+        .height(scope_size)
+        .width(scope_size)
+        .data_aspect(1.0)
+        .x_axis_label("L")
+        .y_axis_label("R")
+        .legend(egui_plot::Legend::default())
+        .allow_zoom(false)
+        .allow_scroll(false)
+        .allow_drag(false)
+        .allow_boxed_zoom(false)
+        .show(ui, |plot_ui| {
+            plot_ui.set_plot_bounds_x(-vs_scale..=vs_scale);
+            plot_ui.set_plot_bounds_y(-vs_scale..=vs_scale);
+
+            plot_ui.hline(HLine::new("", 0.0).color(COLOR_REF).width(0.5));
+            plot_ui.vline(VLine::new("", 0.0).color(COLOR_REF).width(0.5));
+
+            // +45deg (mono) diagonal
+            plot_ui.line(
+                Line::new("", PlotPoints::new(vec![[-1.0, -1.0], [1.0, 1.0]]))
+                    .color(Color32::from_rgb(40, 40, 50))
+                    .width(0.5),
+            );
+            // -45deg (phase inversion) diagonal
+            plot_ui.line(
+                Line::new("", PlotPoints::new(vec![[-1.0, 1.0], [1.0, -1.0]]))
+                    .color(Color32::from_rgb(40, 40, 50))
+                    .width(0.5),
+            );
+
+            plot_ui.points(Points::new("L/R", scatter).color(COLOR_VECTOR).radius(1.5));
+        });
 }
 
 /// Render a compact audio analyzer (waveform + vectorscope side by side).

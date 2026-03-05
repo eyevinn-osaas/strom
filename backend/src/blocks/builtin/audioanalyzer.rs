@@ -305,15 +305,18 @@ fn compute_waveform(samples: &[i16], num_columns: usize) -> (Vec<i8>, Vec<i8>) {
 
         // Quantize i16 -> i8: round min down, max up, so even quiet
         // signal is visible (min/max won't both be zero unless truly silent).
-        let min_q = if min_val < 0 {
-            ((min_val - 255) / 256).max(-128) as i8
+        // Cast to i32 to avoid overflow at i16 extremes.
+        let min_i32 = min_val as i32;
+        let max_i32 = max_val as i32;
+        let min_q = if min_i32 < 0 {
+            ((min_i32 - 255) / 256).max(-128) as i8
         } else {
-            (min_val / 256) as i8
+            (min_i32 / 256) as i8
         };
-        let max_q = if max_val > 0 {
-            ((max_val + 255) / 256).min(127) as i8
+        let max_q = if max_i32 > 0 {
+            ((max_i32 + 255) / 256).min(127) as i8
         } else {
-            (max_val / 256) as i8
+            (max_i32 / 256) as i8
         };
         mins.push(min_q);
         maxs.push(max_q);
