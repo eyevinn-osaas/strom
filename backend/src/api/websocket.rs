@@ -147,7 +147,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 if messages_sent > 0 {
                     let kb_per_sec = bytes_sent as f64 / 1024.0;
                     let msgs_per_sec = messages_sent as f64;
-                    info!("WebSocket throughput: {:.1} KB/s, {:.0} msgs/s", kb_per_sec, msgs_per_sec);
+                    trace!("WebSocket throughput: {:.1} KB/s, {:.0} msgs/s", kb_per_sec, msgs_per_sec);
                     bytes_sent = 0;
                     messages_sent = 0;
                 }
