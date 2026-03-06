@@ -549,9 +549,9 @@ impl PlaylistEditor {
                 const DIVIDER_WIDTH: f32 = 6.0;
                 let available = ui.available_rect_before_wrap();
                 let total_width = available.width();
-                let left_width =
-                    (total_width * self.browser_width_fraction - DIVIDER_WIDTH / 2.0).max(80.0);
-                let right_width = (total_width - left_width - DIVIDER_WIDTH).max(80.0);
+                let left_width = (total_width * self.browser_width_fraction)
+                    .clamp(80.0, total_width - 80.0 - DIVIDER_WIDTH);
+                let right_width = total_width - left_width - DIVIDER_WIDTH;
                 let height = available.height();
 
                 // Left pane rect
@@ -577,6 +577,7 @@ impl PlaylistEditor {
                         .max_rect(left_rect)
                         .layout(egui::Layout::top_down(egui::Align::LEFT)),
                 );
+                left_ui.style_mut().spacing.scroll.bar_outer_margin = 0.0;
                 left_ui.heading("Server Media Files");
                 self.show_browser_panel(&mut left_ui);
 
@@ -598,12 +599,15 @@ impl PlaylistEditor {
                     egui::Stroke::new(1.0, divider_color),
                 );
                 if divider_response.dragged() {
-                    let delta = divider_response.drag_delta().x;
-                    self.browser_width_fraction =
-                        ((left_width + delta) / total_width).clamp(0.2, 0.8);
+                    if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
+                        let new_left = pointer_pos.x - available.min.x - DIVIDER_WIDTH / 2.0;
+                        self.browser_width_fraction = (new_left / total_width).clamp(0.2, 0.8);
+                    }
                 }
 
-                // Render right pane
+                // Render right pane (fill background to match left pane)
+                ui.painter()
+                    .rect_filled(right_rect, 0.0, ui.style().visuals.panel_fill);
                 let mut right_ui = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(right_rect)
@@ -667,7 +671,6 @@ impl PlaylistEditor {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("media_browser_scroll")
-                .max_height(250.0)
                 .show(ui, |ui| {
                     let mut nav_to_folder: Option<String> = None;
                     let mut add_file: Option<String> = None;
@@ -737,26 +740,15 @@ impl PlaylistEditor {
                 for (i, file) in self.playlist.iter().enumerate() {
                     let is_playing = self.current_playing_index == Some(i);
                     ui.horizontal(|ui| {
-                        // Playing indicator or index
+                        // Fixed-width left: playing indicator + index number
                         if is_playing {
                             ui.colored_label(Color32::GREEN, egui_phosphor::regular::PLAY);
                         }
                         ui.label(format!("{}.", i + 1));
 
-                        // File name (truncated)
-                        let display_name = std::path::Path::new(file)
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| file.clone());
-                        if is_playing {
-                            ui.colored_label(Color32::GREEN, &display_name)
-                                .on_hover_text(file);
-                        } else {
-                            ui.label(&display_name).on_hover_text(file);
-                        }
-
+                        // Remaining space: buttons on the right, filename fills the middle
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Remove button
+                            // Buttons — added right-to-left (X is rightmost)
                             if ui
                                 .button(egui_phosphor::regular::X)
                                 .on_hover_text("Remove")
@@ -765,7 +757,6 @@ impl PlaylistEditor {
                                 to_remove = Some(i);
                             }
 
-                            // Move down button
                             let can_move_down = i < self.playlist.len() - 1;
                             if ui
                                 .add_enabled(
@@ -778,7 +769,6 @@ impl PlaylistEditor {
                                 to_move_down = Some(i);
                             }
 
-                            // Move up button
                             let can_move_up = i > 0;
                             if ui
                                 .add_enabled(
@@ -790,6 +780,23 @@ impl PlaylistEditor {
                             {
                                 to_move_up = Some(i);
                             }
+
+                            // Filename fills the remaining space with truncation
+                            let display_name = std::path::Path::new(file)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| file.clone());
+                            let color = if is_playing {
+                                Color32::GREEN
+                            } else {
+                                ui.style().visuals.text_color()
+                            };
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&display_name).color(color))
+                                    .truncate()
+                                    .sense(egui::Sense::hover()),
+                            )
+                            .on_hover_text(file);
                         });
                     });
                 }
