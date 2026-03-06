@@ -495,7 +495,7 @@ impl PlaylistEditor {
             browser_loading: false,
             browser_needs_refresh: true, // Load on first show
             current_playing_index: None,
-            browser_width_fraction: 0.6,
+            browser_width_fraction: 350.0,
         }
     }
 
@@ -547,80 +547,53 @@ impl PlaylistEditor {
             .resizable(true)
             .show(ctx, |ui| {
                 const DIVIDER_WIDTH: f32 = 6.0;
-                let available = ui.available_rect_before_wrap();
-                let total_width = available.width();
-                let left_width = (total_width * self.browser_width_fraction)
-                    .clamp(80.0, total_width - 80.0 - DIVIDER_WIDTH);
-                let right_width = total_width - left_width - DIVIDER_WIDTH;
-                let height = available.height();
+                // Store left pane width in pixels (reusing browser_width_fraction field).
+                // Default 350px; right pane takes whatever remains — no feedback loop.
+                let left_width = self.browser_width_fraction.clamp(80.0, 800.0);
+                let pane_height = ui.available_height();
 
-                // Left pane rect
-                let left_rect =
-                    egui::Rect::from_min_size(available.min, egui::Vec2::new(left_width, height));
-                // Divider rect
-                let divider_rect = egui::Rect::from_min_size(
-                    egui::Pos2::new(available.min.x + left_width, available.min.y),
-                    egui::Vec2::new(DIVIDER_WIDTH, height),
-                );
-                // Right pane rect
-                let right_rect = egui::Rect::from_min_size(
-                    egui::Pos2::new(
-                        available.min.x + left_width + DIVIDER_WIDTH,
-                        available.min.y,
-                    ),
-                    egui::Vec2::new(right_width, height),
-                );
+                ui.horizontal_top(|ui| {
+                    // Left pane — exact pixel width, vertical layout
+                    ui.allocate_ui(egui::Vec2::new(left_width, pane_height), |ui| {
+                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                            ui.heading("Server Media Files");
+                            self.show_browser_panel(ui);
+                        });
+                    });
 
-                // Render left pane
-                let mut left_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(left_rect)
-                        .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                );
-                left_ui.style_mut().spacing.scroll.bar_outer_margin = 0.0;
-                left_ui.heading("Server Media Files");
-                self.show_browser_panel(&mut left_ui);
-
-                // Draggable divider
-                let divider_id = ui.id().with("playlist_divider");
-                let divider_response = ui.interact(divider_rect, divider_id, egui::Sense::drag());
-                let divider_color = if divider_response.hovered() || divider_response.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                    Color32::from_gray(120)
-                } else {
-                    Color32::from_gray(60)
-                };
-                let cx = divider_rect.center().x;
-                ui.painter().line_segment(
-                    [
-                        egui::Pos2::new(cx, divider_rect.top()),
-                        egui::Pos2::new(cx, divider_rect.bottom()),
-                    ],
-                    egui::Stroke::new(1.0, divider_color),
-                );
-                if divider_response.dragged() {
-                    if let Some(pointer_pos) = ui.ctx().pointer_interact_pos() {
-                        let new_left = pointer_pos.x - available.min.x - DIVIDER_WIDTH / 2.0;
-                        self.browser_width_fraction = (new_left / total_width).clamp(0.2, 0.8);
+                    // Draggable divider
+                    let (divider_rect, divider_resp) = ui.allocate_exact_size(
+                        egui::Vec2::new(DIVIDER_WIDTH, pane_height),
+                        egui::Sense::drag(),
+                    );
+                    let color = if divider_resp.hovered() || divider_resp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                        Color32::from_gray(120)
+                    } else {
+                        Color32::from_gray(60)
+                    };
+                    let cx = divider_rect.center().x;
+                    ui.painter().line_segment(
+                        [
+                            egui::Pos2::new(cx, divider_rect.top()),
+                            egui::Pos2::new(cx, divider_rect.bottom()),
+                        ],
+                        egui::Stroke::new(1.0, color),
+                    );
+                    if divider_resp.dragged() {
+                        if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                            // divider_rect.left() is at (strip_origin + left_width)
+                            let strip_origin = divider_rect.left() - left_width;
+                            self.browser_width_fraction = (pos.x - strip_origin).clamp(80.0, 800.0);
+                        }
                     }
-                }
 
-                // Render right pane (fill background to match left pane)
-                ui.painter()
-                    .rect_filled(right_rect, 0.0, ui.style().visuals.panel_fill);
-                let mut right_ui = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(right_rect)
-                        .layout(egui::Layout::top_down(egui::Align::LEFT)),
-                );
-                right_ui.heading("Playlist");
-                self.show_playlist_panel(&mut right_ui, &mut result);
-
-                // Advance parent cursor past the entire area
-                ui.advance_cursor_after_rect(egui::Rect::from_min_size(
-                    available.min,
-                    egui::Vec2::new(total_width, height),
-                ));
+                    // Right pane — takes remaining width naturally, no explicit size
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        ui.heading("Playlist");
+                        self.show_playlist_panel(ui, &mut result);
+                    });
+                });
             });
 
         // Sync open state back
