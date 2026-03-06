@@ -41,6 +41,7 @@ const DEFAULT_FILENAME_PREFIX: &str = "recording";
 const DEFAULT_CONTAINER: &str = "mp4";
 const DEFAULT_MAX_SIZE_TIME_SECS: u64 = 0; // 0 = unlimited
 const DEFAULT_MAX_SIZE_BYTES: u64 = 0; // 0 = unlimited
+const DEFAULT_MAX_DURATION_MINS: u64 = 0; // 0 = disabled
 const DEFAULT_NUM_VIDEO_TRACKS: usize = 1;
 const DEFAULT_NUM_AUDIO_TRACKS: usize = 1;
 
@@ -193,6 +194,15 @@ impl BlockBuilder for RecorderBuilder {
                 _ => None,
             })
             .unwrap_or(DEFAULT_MAX_SIZE_BYTES);
+
+        let max_duration_mins = properties
+            .get("max_duration_mins")
+            .and_then(|v| match v {
+                PropertyValue::UInt(u) => Some(*u),
+                PropertyValue::Int(i) if *i >= 0 => Some(*i as u64),
+                _ => None,
+            })
+            .unwrap_or(DEFAULT_MAX_DURATION_MINS);
 
         let num_video_tracks = properties
             .get("num_video_tracks")
@@ -712,6 +722,7 @@ impl BlockBuilder for RecorderBuilder {
 
         // Register element setup to connect format-location signal at pipeline start.
         // The signal fires each time splitmuxsink opens a new file, giving us the actual filename.
+        // Also starts the auto-stop timer if max_duration_mins > 0.
         let splitmuxsink_for_signal = splitmuxsink.clone();
         let location_template = location.clone();
         let block_id_for_signal = instance_id.to_string();
@@ -735,6 +746,27 @@ impl BlockBuilder for RecorderBuilder {
                 // Return the filename — the signal requires a gchararray return value
                 Some(filename.to_value())
             });
+
+            if max_duration_mins > 0 {
+                let events_for_timer = events.clone();
+                let block_id_for_timer = block_id_for_signal.clone();
+                info!(
+                    "Recorder {}: auto-stop scheduled after {} minute(s)",
+                    block_id_for_signal, max_duration_mins
+                );
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(max_duration_mins * 60))
+                        .await;
+                    info!(
+                        "Recorder {}: max duration reached, requesting flow stop",
+                        block_id_for_timer
+                    );
+                    events_for_timer.broadcast(strom_types::StromEvent::RecorderAutoStop {
+                        flow_id,
+                        block_id: block_id_for_timer,
+                    });
+                });
+            }
         }));
 
         Ok(BlockBuildResult {
@@ -910,6 +942,18 @@ fn recorder_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "max_size_mb".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "max_duration_mins".to_string(),
+                label: "Auto-stop After (min)".to_string(),
+                description: "Stop the flow automatically after this many minutes of recording. 0 = disabled.".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(0)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "max_duration_mins".to_string(),
                     transform: None,
                 },
             },

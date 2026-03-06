@@ -235,6 +235,8 @@ pub enum StromEvent {
         /// Full path to the file currently being written
         filename: String,
     },
+    /// Recorder block reached its configured max duration and requests the flow to stop
+    RecorderAutoStop { flow_id: FlowId, block_id: String },
 }
 
 impl StromEvent {
@@ -559,6 +561,12 @@ impl StromEvent {
                 format!(
                     "Recorder {} in flow {} writing: {}",
                     block_id, flow_id, filename
+                )
+            }
+            StromEvent::RecorderAutoStop { flow_id, block_id } => {
+                format!(
+                    "Recorder {} in flow {} reached max duration, stopping flow",
+                    block_id, flow_id
                 )
             }
         }

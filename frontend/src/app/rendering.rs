@@ -1270,6 +1270,9 @@ impl StromApp {
                         let recorder_filename = flow_id
                             .and_then(|fid| self.recorder_filenames.get(&(fid, block_id.clone())))
                             .map(|s| s.as_str());
+                        let recorder_start_time = flow_id
+                            .and_then(|fid| self.recorder_start_times.get(&(fid, block_id.clone())))
+                            .copied();
                         let result = PropertyInspector::show_block(
                             ui,
                             block,
@@ -1287,6 +1290,7 @@ impl StromApp {
                             &mut self.qr_inline,
                             &mut self.qr_cache,
                             recorder_filename,
+                            recorder_start_time,
                         );
 
                         // Handle deletion request

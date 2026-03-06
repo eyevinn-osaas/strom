@@ -404,6 +404,32 @@ impl StromApp {
         }
     }
 
+    /// Stop a specific flow by ID (used for auto-stop triggered by recorder or other blocks).
+    pub(super) fn stop_flow_by_id(&mut self, flow_id: strom_types::FlowId, ctx: &Context) {
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+        let ctx = ctx.clone();
+
+        self.status = "Stopping flow...".to_string();
+
+        spawn_task(async move {
+            match api.stop_flow(flow_id).await {
+                Ok(_) => {
+                    tracing::info!("Flow {} stopped by auto-stop", flow_id);
+                    let _ = tx.send(AppMessage::FlowOperationSuccess("Flow stopped".to_string()));
+                }
+                Err(e) => {
+                    tracing::error!("Failed to stop flow {}: {}", flow_id, e);
+                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                        "Failed to stop flow: {}",
+                        e
+                    )));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Delete a flow.
     pub(super) fn delete_flow(&mut self, flow_id: strom_types::FlowId, ctx: &Context) {
         let api = self.api.clone();

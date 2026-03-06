@@ -374,6 +374,7 @@ impl PropertyInspector {
         qr_inline: &mut Option<(String, String)>,
         qr_cache: &mut crate::qr::QrCache,
         recorder_filename: Option<&str>,
+        recorder_start_time: Option<instant::Instant>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -793,17 +794,26 @@ impl PropertyInspector {
                         }
                     }
 
-                    // Show split-now button and current filename for recorder blocks
+                    // Show recording status, duration counter, and split button for recorder blocks
                     if definition.id == "builtin.recorder" {
                         ui.separator();
+                        if let Some(start) = recorder_start_time {
+                            let elapsed = start.elapsed();
+                            let total_secs = elapsed.as_secs();
+                            let h = total_secs / 3600;
+                            let m = (total_secs % 3600) / 60;
+                            let s = total_secs % 60;
+                            ui.horizontal(|ui| {
+                                ui.label("Recording:");
+                                ui.monospace(format!("{:02}:{:02}:{:02}", h, m, s));
+                            });
+                        }
                         if let Some(filename) = recorder_filename {
-                            ui.label("Recording:");
                             let short_name = std::path::Path::new(filename)
                                 .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or(filename);
-                            ui.monospace(short_name)
-                                .on_hover_text(filename);
+                            ui.monospace(short_name).on_hover_text(filename);
                         }
                         if let Some(flow_id) = flow_id {
                             if ui.button("Split Now").clicked() {
