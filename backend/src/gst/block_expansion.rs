@@ -94,9 +94,14 @@ pub async fn expand_blocks(
             "_block_id".to_string(),
             PropertyValue::String(block_instance.id.clone()),
         );
+        // Canonicalize media_path so blocks always get an absolute path,
+        // even if the config uses a relative path like "./strom-data/media".
+        let canonical_media = media_path
+            .canonicalize()
+            .unwrap_or_else(|_| media_path.to_path_buf());
         properties.insert(
             "_media_path".to_string(),
-            PropertyValue::String(media_path.to_string_lossy().to_string()),
+            PropertyValue::String(canonical_media.to_string_lossy().to_string()),
         );
 
         // Call the builder to create GStreamer elements

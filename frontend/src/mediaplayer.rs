@@ -477,6 +477,8 @@ pub struct PlaylistEditor {
     pub browser_needs_refresh: bool,
     /// Index of the currently playing file (for highlighting)
     pub current_playing_index: Option<usize>,
+    /// Fraction of the window width given to the file browser (left pane)
+    pub browser_width_fraction: f32,
 }
 
 impl PlaylistEditor {
@@ -493,6 +495,7 @@ impl PlaylistEditor {
             browser_loading: false,
             browser_needs_refresh: true, // Load on first show
             current_playing_index: None,
+            browser_width_fraction: 0.6,
         }
     }
 
@@ -543,21 +546,77 @@ impl PlaylistEditor {
             .default_height(400.0)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("Block: {}", self.block_id));
-                });
-                ui.separator();
+                const DIVIDER_WIDTH: f32 = 6.0;
+                let available = ui.available_rect_before_wrap();
+                let total_width = available.width();
+                let left_width =
+                    (total_width * self.browser_width_fraction - DIVIDER_WIDTH / 2.0).max(80.0);
+                let right_width = (total_width - left_width - DIVIDER_WIDTH).max(80.0);
+                let height = available.height();
 
-                // Two columns: file browser on left, playlist on right
-                ui.columns(2, |columns| {
-                    // Left column: File browser
-                    columns[0].heading("Server Media Files");
-                    self.show_browser_panel(&mut columns[0]);
+                // Left pane rect
+                let left_rect =
+                    egui::Rect::from_min_size(available.min, egui::Vec2::new(left_width, height));
+                // Divider rect
+                let divider_rect = egui::Rect::from_min_size(
+                    egui::Pos2::new(available.min.x + left_width, available.min.y),
+                    egui::Vec2::new(DIVIDER_WIDTH, height),
+                );
+                // Right pane rect
+                let right_rect = egui::Rect::from_min_size(
+                    egui::Pos2::new(
+                        available.min.x + left_width + DIVIDER_WIDTH,
+                        available.min.y,
+                    ),
+                    egui::Vec2::new(right_width, height),
+                );
 
-                    // Right column: Playlist
-                    columns[1].heading("Playlist");
-                    self.show_playlist_panel(&mut columns[1], &mut result);
-                });
+                // Render left pane
+                let mut left_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(left_rect)
+                        .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                );
+                left_ui.heading("Server Media Files");
+                self.show_browser_panel(&mut left_ui);
+
+                // Draggable divider
+                let divider_id = ui.id().with("playlist_divider");
+                let divider_response = ui.interact(divider_rect, divider_id, egui::Sense::drag());
+                let divider_color = if divider_response.hovered() || divider_response.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                    Color32::from_gray(120)
+                } else {
+                    Color32::from_gray(60)
+                };
+                let cx = divider_rect.center().x;
+                ui.painter().line_segment(
+                    [
+                        egui::Pos2::new(cx, divider_rect.top()),
+                        egui::Pos2::new(cx, divider_rect.bottom()),
+                    ],
+                    egui::Stroke::new(1.0, divider_color),
+                );
+                if divider_response.dragged() {
+                    let delta = divider_response.drag_delta().x;
+                    self.browser_width_fraction =
+                        ((left_width + delta) / total_width).clamp(0.2, 0.8);
+                }
+
+                // Render right pane
+                let mut right_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(right_rect)
+                        .layout(egui::Layout::top_down(egui::Align::LEFT)),
+                );
+                right_ui.heading("Playlist");
+                self.show_playlist_panel(&mut right_ui, &mut result);
+
+                // Advance parent cursor past the entire area
+                ui.advance_cursor_after_rect(egui::Rect::from_min_size(
+                    available.min,
+                    egui::Vec2::new(total_width, height),
+                ));
             });
 
         // Sync open state back
@@ -581,9 +640,9 @@ impl PlaylistEditor {
             }
             // Current path
             let path_display = if self.browser_path.is_empty() {
-                "./media/".to_string()
+                "media/".to_string()
             } else {
-                format!("./media/{}/", self.browser_path)
+                format!("media/{}/", self.browser_path)
             };
             ui.label(path_display);
 
