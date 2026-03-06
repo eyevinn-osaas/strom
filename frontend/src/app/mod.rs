@@ -729,4 +729,6 @@ pub struct StromApp {
     qr_inline: Option<(String, String)>,
     /// QR code texture cache (for properties popup)
     qr_cache: crate::qr::QrCache,
+    /// Current recording filename per recorder block (flow_id, block_id) -> filename
+    recorder_filenames: std::collections::HashMap<(strom_types::FlowId, String), String>,
 }

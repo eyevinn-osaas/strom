@@ -179,6 +179,7 @@ impl StromApp {
             interactive_overlay: None,
             qr_inline: None,
             qr_cache: crate::qr::QrCache::new(),
+            recorder_filenames: std::collections::HashMap::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility
@@ -333,6 +334,7 @@ impl StromApp {
             interactive_overlay: None,
             qr_inline: None,
             qr_cache: crate::qr::QrCache::new(),
+            recorder_filenames: std::collections::HashMap::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility

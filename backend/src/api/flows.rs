@@ -1398,6 +1398,42 @@ pub async fn reset_loudness(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Force an immediate file split on a recorder block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/recorder/split",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID")
+    ),
+    responses(
+        (status = 204, description = "File split triggered"),
+        (status = 400, description = "Failed to trigger split (e.g. ts_passthrough mode)", body = ErrorResponse),
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse)
+    )
+)]
+pub async fn recorder_split_now(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .recorder_split_now(&flow_id, &block_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to trigger recorder split: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to trigger recorder split",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Animate a single input's position and/or size.
 ///
 /// Smoothly animates the specified input from its current position/size

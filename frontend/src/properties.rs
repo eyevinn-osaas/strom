@@ -36,6 +36,8 @@ pub struct BlockInspectorResult {
     pub show_qr_whip: Option<String>,
     /// Loudness reset requested - contains (flow_id, block_id)
     pub loudness_reset_requested: Option<(FlowId, String)>,
+    /// Recorder split-now requested - contains (flow_id, block_id)
+    pub recorder_split_requested: Option<(FlowId, String)>,
 }
 
 /// Property inspector panel.
@@ -371,6 +373,7 @@ impl PropertyInspector {
         available_channels: &[strom_types::api::AvailableOutput],
         qr_inline: &mut Option<(String, String)>,
         qr_cache: &mut crate::qr::QrCache,
+        recorder_filename: Option<&str>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -787,6 +790,28 @@ impl PropertyInspector {
                                 Color32::from_rgb(200, 200, 100),
                                 "No flow selected",
                             );
+                        }
+                    }
+
+                    // Show split-now button and current filename for recorder blocks
+                    if definition.id == "builtin.recorder" {
+                        ui.separator();
+                        if let Some(filename) = recorder_filename {
+                            ui.label("Recording:");
+                            let short_name = std::path::Path::new(filename)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(filename);
+                            ui.monospace(short_name)
+                                .on_hover_text(filename);
+                        }
+                        if let Some(flow_id) = flow_id {
+                            if ui.button("Split Now").clicked() {
+                                result.recorder_split_requested =
+                                    Some((flow_id, block.id.clone()));
+                            }
+                        } else {
+                            ui.add_enabled(false, egui::Button::new("Split Now"));
                         }
                     }
 

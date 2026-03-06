@@ -270,9 +270,11 @@ impl eframe::App for StromApp {
                         }
                         StromEvent::FlowStopped { flow_id } => {
                             tracing::info!("Flow {} stopped, clearing QoS stats", flow_id);
-                            // Clear QoS stats, WebRTC stats and start time when flow is stopped
+                            // Clear QoS stats, WebRTC stats, recorder filenames and start time when flow is stopped
                             self.qos_stats.clear_flow(&flow_id);
                             self.webrtc_stats.clear_flow(&flow_id);
+                            self.recorder_filenames
+                                .retain(|(fid, _), _| *fid != flow_id);
                             // Refresh available channels (channels may have been removed)
                             self.refresh_available_channels();
                             self.flow_start_times.remove(&flow_id);
@@ -718,6 +720,14 @@ impl eframe::App for StromApp {
                                     Some(flow_id),
                                 ));
                             }
+                        }
+                        StromEvent::RecorderFileChanged {
+                            flow_id,
+                            block_id,
+                            filename,
+                        } => {
+                            self.recorder_filenames
+                                .insert((flow_id, block_id), filename);
                         }
                         _ => {}
                     }

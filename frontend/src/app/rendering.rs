@@ -1267,6 +1267,9 @@ impl StromApp {
                         (self.graph.get_selected_block_mut(), definition_opt)
                     {
                         let block_id = block.id.clone();
+                        let recorder_filename = flow_id
+                            .and_then(|fid| self.recorder_filenames.get(&(fid, block_id.clone())))
+                            .map(|s| s.as_str());
                         let result = PropertyInspector::show_block(
                             ui,
                             block,
@@ -1283,6 +1286,7 @@ impl StromApp {
                             &self.available_channels,
                             &mut self.qr_inline,
                             &mut self.qr_cache,
+                            recorder_filename,
                         );
 
                         // Handle deletion request
@@ -1418,6 +1422,16 @@ impl StromApp {
                             spawn_task(async move {
                                 if let Err(e) = api.reset_loudness(&flow_id, &block_id).await {
                                     tracing::warn!("Failed to reset loudness: {}", e);
+                                }
+                            });
+                        }
+
+                        // Handle recorder split-now request
+                        if let Some((flow_id, block_id)) = result.recorder_split_requested {
+                            let api = self.api.clone();
+                            spawn_task(async move {
+                                if let Err(e) = api.recorder_split_now(&flow_id, &block_id).await {
+                                    tracing::warn!("Failed to trigger recorder split: {}", e);
                                 }
                             });
                         }
