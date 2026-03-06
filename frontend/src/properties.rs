@@ -38,6 +38,8 @@ pub struct BlockInspectorResult {
     pub loudness_reset_requested: Option<(FlowId, String)>,
     /// Recorder split-now requested - contains (flow_id, block_id)
     pub recorder_split_requested: Option<(FlowId, String)>,
+    /// Recorder file download requested - contains relative path
+    pub recorder_download_requested: Option<String>,
 }
 
 /// Property inspector panel.
@@ -813,7 +815,17 @@ impl PropertyInspector {
                                 .file_name()
                                 .and_then(|n| n.to_str())
                                 .unwrap_or(filename);
-                            ui.monospace(short_name).on_hover_text(filename);
+                            ui.horizontal(|ui| {
+                                ui.monospace(short_name).on_hover_text(filename);
+                                if ui
+                                    .button(egui_phosphor::regular::DOWNLOAD_SIMPLE)
+                                    .on_hover_text("Download recording")
+                                    .clicked()
+                                {
+                                    result.recorder_download_requested =
+                                        Some(filename.to_string());
+                                }
+                            });
                         }
                         if let Some(flow_id) = flow_id {
                             if ui.button("Split Now").clicked() {

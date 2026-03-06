@@ -1439,6 +1439,12 @@ impl StromApp {
                                 }
                             });
                         }
+
+                        // Handle recorder file download request
+                        if let Some(relative_path) = result.recorder_download_requested {
+                            let url = self.api.get_media_download_url(&relative_path);
+                            ctx.open_url(egui::OpenUrl::new_tab(&url));
+                        }
                     } else {
                         ui.label("Block definition not found");
                     }

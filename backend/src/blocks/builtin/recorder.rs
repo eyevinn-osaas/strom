@@ -255,6 +255,11 @@ impl BlockBuilder for RecorderBuilder {
             timestamp,
             file_ext
         );
+        // Relative path template (relative to media root) — used in download URLs.
+        let relative_location = format!(
+            "{}/{}_{}_%05d.{}",
+            output_dir, filename_prefix, timestamp, file_ext
+        );
 
         info!(
             "Recorder {}: output location template: {}, container: {}, max_size_time: {}s",
@@ -725,15 +730,19 @@ impl BlockBuilder for RecorderBuilder {
         // Also starts the auto-stop timer if max_duration_mins > 0.
         let splitmuxsink_for_signal = splitmuxsink.clone();
         let location_template = location.clone();
+        let relative_location_template = relative_location.clone();
         let block_id_for_signal = instance_id.to_string();
         ctx.register_element_setup(Box::new(move |flow_id, events| {
             let events_clone = events.clone();
             let block_id_clone = block_id_for_signal.clone();
             let location_clone = location_template.clone();
+            let relative_location_clone = relative_location_template.clone();
             splitmuxsink_for_signal.connect("format-location", false, move |args| {
                 let index = args[1].get::<u32>().unwrap_or(0);
                 // Reproduce the filename that splitmuxsink uses (same %05d format)
                 let filename = location_clone.replace("%05d", &format!("{:05}", index));
+                let relative_path =
+                    relative_location_clone.replace("%05d", &format!("{:05}", index));
                 debug!(
                     "Recorder {}: writing file index {}: {}",
                     block_id_clone, index, filename
@@ -741,7 +750,7 @@ impl BlockBuilder for RecorderBuilder {
                 events_clone.broadcast(strom_types::StromEvent::RecorderFileChanged {
                     flow_id,
                     block_id: block_id_clone.clone(),
-                    filename: filename.clone(),
+                    filename: relative_path,
                 });
                 // Return the filename — the signal requires a gchararray return value
                 Some(filename.to_value())
