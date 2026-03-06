@@ -91,7 +91,7 @@ impl BlockBuilder for RecorderBuilder {
             .get("num_audio_tracks")
             .and_then(|v| match v {
                 PropertyValue::UInt(u) => Some(*u as usize),
-                PropertyValue::Int(i) => Some(*i as usize),
+                PropertyValue::Int(i) if *i >= 0 => Some(*i as usize),
                 _ => None,
             })
             .unwrap_or(DEFAULT_NUM_AUDIO_TRACKS);
@@ -860,7 +860,7 @@ fn recorder_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.recorder".to_string(),
         name: "Recorder".to_string(),
-        description: "Records audio/video streams to file. Supports MP4 and MPEG-TS containers with optional time/size-based file splitting.".to_string(),
+        description: "Records audio/video streams to file. Supports MP4, MKV, and MPEG-TS containers with optional time/size-based file splitting.".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
