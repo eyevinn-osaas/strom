@@ -540,8 +540,8 @@ impl StromEvent {
                     "Audio analyzer data from {} in flow {} ({} columns, {} vector pairs)",
                     element_id,
                     flow_id,
-                    waveform_l_min.len(),
-                    vectorscope_l.len()
+                    waveform_l_min.len() * 3 / 4,
+                    vectorscope_l.len() * 3 / 4
                 )
             }
         }
