@@ -180,13 +180,16 @@ pub fn calculate_compact_height() -> f32 {
 pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, Option<u64>)> {
     let available_width = ui.available_width().max(100.0);
 
-    // Show current file name (if any)
+    // Show current file name (if any), truncated with hover for full path
     if let Some(ref file) = player_data.current_file {
         let filename = std::path::Path::new(file)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| file.clone());
-        ui.label(filename);
+        let label = egui::Label::new(filename)
+            .truncate()
+            .sense(egui::Sense::hover());
+        ui.add(label).on_hover_text(file);
     }
 
     // Show playback state and file count
@@ -649,10 +652,9 @@ impl PlaylistEditor {
 
                     // Handle file add
                     if let Some(file_path) = add_file {
-                        // Convert relative path to file:// URI with absolute path
-                        let uri = format!("./media/{}", file_path);
-                        if !self.playlist.contains(&uri) {
-                            self.playlist.push(uri);
+                        // Store as path relative to media root; the backend resolves it
+                        if !self.playlist.contains(&file_path) {
+                            self.playlist.push(file_path);
                             self.dirty = true;
                         }
                     }
@@ -678,7 +680,7 @@ impl PlaylistEditor {
                     ui.horizontal(|ui| {
                         // Playing indicator or index
                         if is_playing {
-                            ui.colored_label(Color32::GREEN, ">");
+                            ui.colored_label(Color32::GREEN, egui_phosphor::regular::PLAY);
                         }
                         ui.label(format!("{}.", i + 1));
 
@@ -707,7 +709,10 @@ impl PlaylistEditor {
                             // Move down button
                             let can_move_down = i < self.playlist.len() - 1;
                             if ui
-                                .add_enabled(can_move_down, egui::Button::new("v"))
+                                .add_enabled(
+                                    can_move_down,
+                                    egui::Button::new(egui_phosphor::regular::ARROW_DOWN),
+                                )
                                 .on_hover_text("Move down")
                                 .clicked()
                             {
@@ -717,7 +722,10 @@ impl PlaylistEditor {
                             // Move up button
                             let can_move_up = i > 0;
                             if ui
-                                .add_enabled(can_move_up, egui::Button::new("^"))
+                                .add_enabled(
+                                    can_move_up,
+                                    egui::Button::new(egui_phosphor::regular::ARROW_UP),
+                                )
                                 .on_hover_text("Move up")
                                 .clicked()
                             {
@@ -751,12 +759,21 @@ impl PlaylistEditor {
 
         // Action buttons
         ui.horizontal(|ui| {
-            if ui.button("Save & Apply").clicked() {
+            if ui
+                .button(format!(
+                    "{} Save & Apply",
+                    egui_phosphor::regular::FLOPPY_DISK
+                ))
+                .clicked()
+            {
                 *result = Some(self.playlist.clone());
                 self.dirty = false;
             }
 
-            if ui.button("Clear All").clicked() {
+            if ui
+                .button(format!("{} Clear All", egui_phosphor::regular::TRASH))
+                .clicked()
+            {
                 self.playlist.clear();
                 self.dirty = true;
             }

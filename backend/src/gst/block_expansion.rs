@@ -40,10 +40,14 @@ pub struct ExpandedPipeline {
 ///
 /// The `flow_id` is injected as a special `_flow_id` property for blocks that need it
 /// (e.g., InterOutput blocks use it to generate unique channel names).
+/// The `media_path` is injected as `_media_path` for blocks that resolve media files
+/// (e.g., MediaPlayer block).
+#[allow(clippy::too_many_arguments)]
 pub async fn expand_blocks(
     blocks: &[BlockInstance],
     regular_links: &[Link],
     flow_id: &strom_types::FlowId,
+    media_path: &std::path::Path,
     ice_servers: Vec<String>,
     ice_transport_policy: String,
     dynamic_webrtcbins: DynamicWebrtcbinStore,
@@ -80,7 +84,7 @@ pub async fn expand_blocks(
             block_instance.id, block_instance.block_definition_id
         );
 
-        // Inject _flow_id and _block_id into properties for blocks that need them
+        // Inject _flow_id, _block_id, and _media_path into properties for blocks that need them
         let mut properties = block_instance.properties.clone();
         properties.insert(
             "_flow_id".to_string(),
@@ -89,6 +93,10 @@ pub async fn expand_blocks(
         properties.insert(
             "_block_id".to_string(),
             PropertyValue::String(block_instance.id.clone()),
+        );
+        properties.insert(
+            "_media_path".to_string(),
+            PropertyValue::String(media_path.to_string_lossy().to_string()),
         );
 
         // Call the builder to create GStreamer elements
@@ -304,6 +312,7 @@ mod tests {
             &[],
             &[],
             &flow_id,
+            std::path::Path::new("./media"),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,

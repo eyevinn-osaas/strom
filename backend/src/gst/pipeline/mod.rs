@@ -258,6 +258,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         );
         assert!(manager.is_ok());
     }
@@ -275,6 +276,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         )
         .unwrap();
 
@@ -308,6 +310,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         );
         assert!(manager.is_err());
     }
@@ -361,6 +364,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         );
         assert!(manager.is_ok());
 
@@ -386,6 +390,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         )
         .unwrap();
 

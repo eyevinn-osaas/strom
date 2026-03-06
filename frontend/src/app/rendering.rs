@@ -1695,7 +1695,20 @@ impl StromApp {
                             block_id,
                             crate::graph::BlockContentInfo {
                                 additional_height: height + 10.0,
-                                render_callback: Some(Box::new(move |ui, _rect| {
+                                render_callback: Some(Box::new(move |ui, rect| {
+                                    // Double-click anywhere on the media player node opens the playlist
+                                    let interact_id = egui::Id::new("media_player_dblclick")
+                                        .with(&block_id_for_action);
+                                    if ui
+                                        .interact(rect, interact_id, egui::Sense::click())
+                                        .double_clicked()
+                                    {
+                                        set_local_storage(
+                                            "player_action",
+                                            &format!("{}:playlist", block_id_for_action),
+                                        );
+                                    }
+
                                     if let Some((action, seek_pos)) =
                                         crate::mediaplayer::show_compact(ui, &player_data_clone)
                                     {

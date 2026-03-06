@@ -20,6 +20,7 @@ impl PipelineManager {
         ice_servers: Vec<String>,
         ice_transport_policy: String,
         whip_registry: Option<WhipRegistry>,
+        media_path: std::path::PathBuf,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
         info!(
@@ -74,6 +75,7 @@ impl PipelineManager {
                     &flow.blocks,
                     &flow.links,
                     &flow_id,
+                    &media_path,
                     ice_servers,
                     ice_transport_policy,
                     dynamic_webrtcbins,
