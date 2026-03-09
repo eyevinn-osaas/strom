@@ -557,7 +557,7 @@ impl PlaylistEditor {
                     ui.allocate_ui(egui::Vec2::new(left_width, pane_height), |ui| {
                         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                             ui.heading("Server Media Files");
-                            self.show_browser_panel(ui);
+                            self.show_browser_panel(ui, pane_height);
                         });
                     });
 
@@ -602,7 +602,7 @@ impl PlaylistEditor {
         result
     }
 
-    fn show_browser_panel(&mut self, ui: &mut Ui) {
+    fn show_browser_panel(&mut self, ui: &mut Ui, max_height: f32) {
         // Path display and navigation
         ui.horizontal(|ui| {
             // Up button
@@ -644,7 +644,7 @@ impl PlaylistEditor {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("media_browser_scroll")
-                .max_height(ui.available_height())
+                .max_height(max_height)
                 .show(ui, |ui| {
                     let mut nav_to_folder: Option<String> = None;
                     let mut add_file: Option<String> = None;
