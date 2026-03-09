@@ -545,55 +545,68 @@ impl PlaylistEditor {
             .default_width(600.0)
             .default_height(400.0)
             .resizable(true)
+            .vscroll(false)
+            .hscroll(false)
             .show(ctx, |ui| {
                 const DIVIDER_WIDTH: f32 = 6.0;
-                // Left pane width in pixels; default 350px.
-                // Right pane takes whatever remains — no feedback loop.
                 let left_width = self.browser_width_px.clamp(80.0, 800.0);
-                let pane_height = ui.available_height();
 
-                ui.horizontal_top(|ui| {
-                    // Left pane — exact pixel width, vertical layout
-                    ui.allocate_ui(egui::Vec2::new(left_width, pane_height), |ui| {
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            ui.heading("Server Media Files");
-                            self.show_browser_panel(ui, pane_height);
+                // StripBuilder cells don't grow with children — no feedback loop.
+                // clip(true) prevents content overflow from affecting the Resize container.
+                egui_extras::StripBuilder::new(ui)
+                    .size(egui_extras::Size::remainder())
+                    .clip(true)
+                    .vertical(|mut strip| {
+                        strip.cell(|ui| {
+                            egui_extras::StripBuilder::new(ui)
+                                .size(egui_extras::Size::exact(left_width))
+                                .size(egui_extras::Size::exact(DIVIDER_WIDTH))
+                                .size(egui_extras::Size::remainder().at_least(120.0))
+                                .clip(true)
+                                .horizontal(|mut strip| {
+                                    // Left pane — file browser
+                                    strip.cell(|ui| {
+                                        ui.heading("Server Media Files");
+                                        self.show_browser_panel(ui);
+                                    });
+
+                                    // Draggable divider
+                                    strip.cell(|ui| {
+                                        let rect = ui.available_rect_before_wrap();
+                                        let resp = ui.interact(
+                                            rect,
+                                            egui::Id::new("playlist_divider").with(&self.block_id),
+                                            egui::Sense::drag(),
+                                        );
+                                        let color = if resp.hovered() || resp.dragged() {
+                                            ui.ctx().set_cursor_icon(
+                                                egui::CursorIcon::ResizeHorizontal,
+                                            );
+                                            Color32::from_gray(120)
+                                        } else {
+                                            Color32::from_gray(60)
+                                        };
+                                        ui.painter().line_segment(
+                                            [rect.center_top(), rect.center_bottom()],
+                                            egui::Stroke::new(1.0, color),
+                                        );
+                                        if resp.dragged() {
+                                            if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                                                self.browser_width_px = (pos.x - rect.left()
+                                                    + left_width / 2.0)
+                                                    .clamp(80.0, 800.0);
+                                            }
+                                        }
+                                    });
+
+                                    // Right pane — playlist
+                                    strip.cell(|ui| {
+                                        ui.heading("Playlist");
+                                        self.show_playlist_panel(ui, &mut result);
+                                    });
+                                });
                         });
                     });
-
-                    // Draggable divider
-                    let (divider_rect, divider_resp) = ui.allocate_exact_size(
-                        egui::Vec2::new(DIVIDER_WIDTH, pane_height),
-                        egui::Sense::drag(),
-                    );
-                    let color = if divider_resp.hovered() || divider_resp.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-                        Color32::from_gray(120)
-                    } else {
-                        Color32::from_gray(60)
-                    };
-                    let cx = divider_rect.center().x;
-                    ui.painter().line_segment(
-                        [
-                            egui::Pos2::new(cx, divider_rect.top()),
-                            egui::Pos2::new(cx, divider_rect.bottom()),
-                        ],
-                        egui::Stroke::new(1.0, color),
-                    );
-                    if divider_resp.dragged() {
-                        if let Some(pos) = ui.ctx().pointer_interact_pos() {
-                            // divider_rect.left() is at (strip_origin + left_width)
-                            let strip_origin = divider_rect.left() - left_width;
-                            self.browser_width_px = (pos.x - strip_origin).clamp(80.0, 800.0);
-                        }
-                    }
-
-                    // Right pane — takes remaining width naturally, no explicit size
-                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                        ui.heading("Playlist");
-                        self.show_playlist_panel(ui, &mut result);
-                    });
-                });
             });
 
         // Sync open state back
@@ -602,7 +615,7 @@ impl PlaylistEditor {
         result
     }
 
-    fn show_browser_panel(&mut self, ui: &mut Ui, max_height: f32) {
+    fn show_browser_panel(&mut self, ui: &mut Ui) {
         // Path display and navigation
         ui.horizontal(|ui| {
             // Up button
@@ -634,8 +647,9 @@ impl PlaylistEditor {
         });
 
         ui.separator();
+        ui.label("Click a file to add it to the playlist.");
 
-        // File list
+        // File list (scroll area LAST so it fills the remaining cell height)
         if self.browser_loading {
             ui.spinner();
             ui.label("Loading...");
@@ -644,7 +658,7 @@ impl PlaylistEditor {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("media_browser_scroll")
-                .max_height(max_height)
+                .max_height(ui.available_height())
                 .show(ui, |ui| {
                     let mut nav_to_folder: Option<String> = None;
                     let mut add_file: Option<String> = None;
@@ -696,16 +710,44 @@ impl PlaylistEditor {
                     }
                 });
         }
-
-        ui.separator();
-        ui.label("Click a file to add it to the playlist.");
     }
 
     fn show_playlist_panel(&mut self, ui: &mut Ui, result: &mut Option<Vec<String>>) {
-        // Scrollable playlist
+        // Action buttons BEFORE scroll area so they don't overflow the cell
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!(
+                    "{} Save & Apply",
+                    egui_phosphor::regular::FLOPPY_DISK
+                ))
+                .clicked()
+            {
+                *result = Some(self.playlist.clone());
+                self.dirty = false;
+            }
+
+            if ui
+                .button(format!("{} Clear All", egui_phosphor::regular::TRASH))
+                .clicked()
+            {
+                self.playlist.clear();
+                self.dirty = true;
+            }
+
+            if self.dirty {
+                ui.label("*");
+            }
+        });
+        ui.separator();
+
+        if self.playlist.is_empty() {
+            ui.label("(empty - click files on the left or enter path above)");
+        }
+
+        // Scrollable playlist (LAST so it fills the remaining cell height)
         egui::ScrollArea::vertical()
             .id_salt("playlist_scroll")
-            .max_height(200.0)
+            .max_height(ui.available_height())
             .show(ui, |ui| {
                 let mut to_remove = None;
                 let mut to_move_up = None;
@@ -789,39 +831,6 @@ impl PlaylistEditor {
                     self.dirty = true;
                 }
             });
-
-        if self.playlist.is_empty() {
-            ui.label("(empty - click files on the left or enter path above)");
-        }
-
-        ui.add_space(10.0);
-        ui.separator();
-
-        // Action buttons
-        ui.horizontal(|ui| {
-            if ui
-                .button(format!(
-                    "{} Save & Apply",
-                    egui_phosphor::regular::FLOPPY_DISK
-                ))
-                .clicked()
-            {
-                *result = Some(self.playlist.clone());
-                self.dirty = false;
-            }
-
-            if ui
-                .button(format!("{} Clear All", egui_phosphor::regular::TRASH))
-                .clicked()
-            {
-                self.playlist.clear();
-                self.dirty = true;
-            }
-
-            if self.dirty {
-                ui.label("*");
-            }
-        });
     }
 }
 
