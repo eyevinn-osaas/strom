@@ -1,4 +1,5 @@
 use crate::api::ApiClient;
+use crate::audioanalyzer::AudioAnalyzerDataStore;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
 use crate::loudness::LoudnessDataStore;
@@ -108,6 +109,7 @@ impl StromApp {
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
+            audioanalyzer_data: AudioAnalyzerDataStore::new(),
             meter_data: MeterDataStore::new(),
             spectrum_data: SpectrumDataStore::new(),
             loudness_data: LoudnessDataStore::new(),
@@ -261,6 +263,7 @@ impl StromApp {
             port,
             tls_enabled,
             auth_token,
+            audioanalyzer_data: AudioAnalyzerDataStore::new(),
             meter_data: MeterDataStore::new(),
             spectrum_data: SpectrumDataStore::new(),
             loudness_data: LoudnessDataStore::new(),

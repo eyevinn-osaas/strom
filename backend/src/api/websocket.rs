@@ -59,12 +59,24 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     // System stats interval (send every 1 second)
     let mut stats_interval = interval(Duration::from_secs(1));
 
+    // WebSocket throughput tracking
+    let mut bytes_sent: u64 = 0;
+    let mut messages_sent: u64 = 0;
+    let mut throughput_interval = interval(Duration::from_secs(1));
+
     info!("WebSocket client connected");
 
     // Send a Ping event immediately to confirm connection
     // This is a valid StromEvent that the frontend can parse
     let welcome_event = StromEvent::Ping;
-    if let Err(e) = send_event(&mut sender, welcome_event).await {
+    if let Err(e) = send_event(
+        &mut sender,
+        &mut bytes_sent,
+        &mut messages_sent,
+        welcome_event,
+    )
+    .await
+    {
         error!("Failed to send welcome message: {}", e);
         return;
     }
@@ -76,7 +88,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             event_result = rx.recv() => {
                 match event_result {
                     Ok(event) => {
-                        if let Err(e) = send_event(&mut sender, event).await {
+                        if let Err(e) = send_event(&mut sender, &mut bytes_sent, &mut messages_sent, event).await {
                             error!("Failed to send event to client: {}", e);
                             break;
                         }
@@ -106,7 +118,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 // Send system stats
                 let stats = state.get_system_stats().await;
                 let event = StromEvent::SystemStats(stats);
-                if let Err(e) = send_event(&mut sender, event).await {
+                if let Err(e) = send_event(&mut sender, &mut bytes_sent, &mut messages_sent, event).await {
                     debug!("Failed to send system stats, client likely disconnected: {}", e);
                     break;
                 }
@@ -115,7 +127,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 // Always send, even when empty, so frontend clears stale data
                 let thread_stats = state.get_thread_stats();
                 let event = StromEvent::ThreadStats(thread_stats);
-                if let Err(e) = send_event(&mut sender, event).await {
+                if let Err(e) = send_event(&mut sender, &mut bytes_sent, &mut messages_sent, event).await {
                     debug!("Failed to send thread stats, client likely disconnected: {}", e);
                     break;
                 }
@@ -123,10 +135,21 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 // Send PTP stats for flows with PTP clocks
                 let ptp_events = state.get_ptp_stats_events().await;
                 for ptp_event in ptp_events {
-                    if let Err(e) = send_event(&mut sender, ptp_event).await {
+                    if let Err(e) = send_event(&mut sender, &mut bytes_sent, &mut messages_sent, ptp_event).await {
                         debug!("Failed to send PTP stats, client likely disconnected: {}", e);
                         break;
                     }
+                }
+            }
+
+            // WebSocket throughput logging
+            _ = throughput_interval.tick() => {
+                if messages_sent > 0 {
+                    let kb_per_sec = bytes_sent as f64 / 1024.0;
+                    let msgs_per_sec = messages_sent as f64;
+                    trace!("WebSocket throughput: {:.1} KB/s, {:.0} msgs/s", kb_per_sec, msgs_per_sec);
+                    bytes_sent = 0;
+                    messages_sent = 0;
                 }
             }
 
@@ -171,15 +194,19 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     info!("WebSocket client disconnected");
 }
 
-/// Send an event to the client as a JSON message.
+/// Send an event to the client as a JSON message, tracking bytes sent.
 async fn send_event(
     sender: &mut futures::stream::SplitSink<WebSocket, Message>,
+    bytes_sent: &mut u64,
+    messages_sent: &mut u64,
     event: StromEvent,
 ) -> Result<(), axum::Error> {
     trace!("Sending event to client: {}", event.description());
 
     match serde_json::to_string(&event) {
         Ok(json) => {
+            *bytes_sent += json.len() as u64;
+            *messages_sent += 1;
             sender.send(Message::Text(json.into())).await?;
             Ok(())
         }

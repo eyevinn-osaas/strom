@@ -456,6 +456,36 @@ impl eframe::App for StromApp {
                             );
                             tracing::trace!("Spectrum data stored for element {}", element_id);
                         }
+                        StromEvent::AudioAnalyzerData {
+                            flow_id,
+                            element_id,
+                            waveform_l_min,
+                            waveform_l_max,
+                            waveform_r_min,
+                            waveform_r_max,
+                            vectorscope_l,
+                            vectorscope_r,
+                        } => {
+                            tracing::trace!(
+                                "AudioAnalyzer data received: flow={}, element={}, columns={}, pairs={}",
+                                flow_id,
+                                element_id,
+                                waveform_l_min.len(),
+                                vectorscope_l.len()
+                            );
+                            self.audioanalyzer_data.update(
+                                flow_id,
+                                element_id,
+                                crate::audioanalyzer::AudioAnalyzerData::from_base64(
+                                    &waveform_l_min,
+                                    &waveform_l_max,
+                                    &waveform_r_min,
+                                    &waveform_r_max,
+                                    &vectorscope_l,
+                                    &vectorscope_r,
+                                ),
+                            );
+                        }
                         StromEvent::LoudnessData {
                             flow_id,
                             element_id,
