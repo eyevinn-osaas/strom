@@ -9,6 +9,7 @@
 
 mod api;
 mod app;
+mod audioanalyzer;
 mod audiorouter;
 mod clipboard;
 mod clocks;

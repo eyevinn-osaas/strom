@@ -1,6 +1,7 @@
 //! Built-in block definitions organized by protocol/function.
 
 pub mod aes67;
+pub mod audioanalyzer;
 pub mod audioformat;
 pub mod audiorouter;
 pub mod compositor;
@@ -14,6 +15,7 @@ pub mod mixer;
 pub mod mpegtssrt;
 pub mod mpegtssrt_input;
 pub mod ndi;
+pub mod recorder;
 pub mod spectrum;
 pub mod videoenc;
 pub mod videoformat;
@@ -30,6 +32,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
 
     // Add AES67 blocks
     blocks.extend(aes67::get_blocks());
+
+    // Add AudioAnalyzer blocks
+    blocks.extend(audioanalyzer::get_blocks());
 
     // Add AudioFormat blocks
     blocks.extend(audioformat::get_blocks());
@@ -70,6 +75,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
     // Add NDI blocks
     blocks.extend(ndi::get_blocks());
 
+    // Add Recorder blocks
+    blocks.extend(recorder::get_blocks());
+
     // Add Spectrum blocks
     blocks.extend(spectrum::get_blocks());
 
@@ -97,6 +105,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
     match block_definition_id {
         "builtin.aes67_input" => Some(Arc::new(aes67::AES67InputBuilder)),
         "builtin.aes67_output" => Some(Arc::new(aes67::AES67OutputBuilder)),
+        "builtin.audioanalyzer" => Some(Arc::new(audioanalyzer::AudioAnalyzerBuilder)),
         "builtin.audioformat" => Some(Arc::new(audioformat::AudioFormatBuilder)),
         "builtin.audiorouter" => Some(Arc::new(audiorouter::AudioRouterBuilder)),
         "builtin.compositor" => Some(Arc::new(compositor::CompositorBuilder)),
@@ -115,6 +124,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.mpegtssrt_input" => Some(Arc::new(mpegtssrt_input::MpegTsSrtInputBuilder)),
         "builtin.ndi_input" => Some(Arc::new(ndi::NDIInputBuilder)),
         "builtin.ndi_output" => Some(Arc::new(ndi::NDIOutputBuilder)),
+        "builtin.recorder" => Some(Arc::new(recorder::RecorderBuilder)),
         "builtin.spectrum" => Some(Arc::new(spectrum::SpectrumBuilder)),
         "builtin.videoenc" => Some(Arc::new(videoenc::VideoEncBuilder)),
         "builtin.videoformat" => Some(Arc::new(videoformat::VideoFormatBuilder)),

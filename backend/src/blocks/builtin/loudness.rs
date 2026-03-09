@@ -6,7 +6,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
 use strom_types::{block::*, EnumValue, PropertyValue, StromEvent, *};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 
 /// EBU R128 Loudness Meter block builder.
 pub struct LoudnessBuilder;
@@ -141,7 +141,7 @@ fn connect_loudness_message_handler(
                                 true_peak,
                             });
                         } else {
-                            warn!("Momentary loudness is not finite, not broadcasting LoudnessData");
+                            trace!("Momentary loudness is not finite, not broadcasting LoudnessData");
                         }
                     }
                 }

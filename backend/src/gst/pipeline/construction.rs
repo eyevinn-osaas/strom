@@ -50,6 +50,7 @@ impl PipelineManager {
             pad_properties: HashMap::new(),
             block_message_handlers: Vec::new(),
             block_message_connect_fns: Vec::new(),
+            element_setup_fns: Vec::new(),
             thread_priority_state: None,
             thread_registry: None,
             cached_state: std::sync::Arc::new(std::sync::RwLock::new(PipelineState::Null)),
@@ -133,6 +134,15 @@ impl PipelineManager {
             expanded.bus_message_handlers.len()
         );
         manager.block_message_connect_fns = expanded.bus_message_handlers;
+
+        // Store element signal setup functions from blocks
+        if !expanded.element_setups.is_empty() {
+            debug!(
+                "Storing {} element signal setup(s) from blocks",
+                expanded.element_setups.len()
+            );
+        }
+        manager.element_setup_fns = expanded.element_setups;
 
         // Merge pad properties from blocks with existing pad properties
         info!(

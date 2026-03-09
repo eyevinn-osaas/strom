@@ -1267,11 +1267,18 @@ impl StromApp {
                         (self.graph.get_selected_block_mut(), definition_opt)
                     {
                         let block_id = block.id.clone();
+                        let recorder_filename = flow_id
+                            .and_then(|fid| self.recorder_filenames.get(&(fid, block_id.clone())))
+                            .map(|s| s.as_str());
+                        let recorder_start_time = flow_id
+                            .and_then(|fid| self.recorder_start_times.get(&(fid, block_id.clone())))
+                            .copied();
                         let result = PropertyInspector::show_block(
                             ui,
                             block,
                             &def,
                             flow_id,
+                            &self.audioanalyzer_data,
                             &self.meter_data,
                             &self.spectrum_data,
                             &self.loudness_data,
@@ -1282,6 +1289,8 @@ impl StromApp {
                             &self.available_channels,
                             &mut self.qr_inline,
                             &mut self.qr_cache,
+                            recorder_filename,
+                            recorder_start_time,
                         );
 
                         // Handle deletion request
@@ -1419,6 +1428,22 @@ impl StromApp {
                                     tracing::warn!("Failed to reset loudness: {}", e);
                                 }
                             });
+                        }
+
+                        // Handle recorder split-now request
+                        if let Some((flow_id, block_id)) = result.recorder_split_requested {
+                            let api = self.api.clone();
+                            spawn_task(async move {
+                                if let Err(e) = api.recorder_split_now(&flow_id, &block_id).await {
+                                    tracing::warn!("Failed to trigger recorder split: {}", e);
+                                }
+                            });
+                        }
+
+                        // Handle recorder file download request
+                        if let Some(relative_path) = result.recorder_download_requested {
+                            let url = self.api.get_media_download_url(&relative_path);
+                            ctx.open_url(egui::OpenUrl::new_tab(&url));
                         }
                     } else {
                         ui.label("Block definition not found");
@@ -1593,6 +1618,37 @@ impl StromApp {
                                     additional_height: height + 10.0,
                                     render_callback: Some(Box::new(move |ui, _rect| {
                                         crate::loudness::show_compact(ui, &loudness_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
+                    // Setup dynamic content for audio analyzer blocks
+                    let analyzer_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.audioanalyzer")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in analyzer_blocks {
+                        if let Some(analyzer_data) =
+                            self.audioanalyzer_data.get(&flow_id, &block_id)
+                        {
+                            let analyzer_data_clone = analyzer_data.clone();
+                            let height = crate::audioanalyzer::calculate_compact_height();
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: height + 10.0,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::audioanalyzer::show_compact(
+                                            ui,
+                                            &analyzer_data_clone,
+                                        );
                                     })),
                                 },
                             );

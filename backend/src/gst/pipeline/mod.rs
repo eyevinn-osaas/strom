@@ -168,6 +168,8 @@ pub struct PipelineManager {
     block_message_handlers: Vec<gst::glib::SignalHandlerId>,
     /// Bus message handler connection functions from blocks (called when pipeline starts)
     block_message_connect_fns: Vec<crate::blocks::BusMessageConnectFn>,
+    /// Element signal setup functions from blocks (called when pipeline starts)
+    element_setup_fns: Vec<crate::blocks::ElementSetupFn>,
     /// Thread priority state tracker (tracks whether priority was successfully set)
     thread_priority_state: Option<ThreadPriorityState>,
     /// Thread registry for tracking streaming threads (optional, for CPU monitoring)

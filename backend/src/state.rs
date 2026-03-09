@@ -1234,6 +1234,22 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn recorder_split_now(
+        &self,
+        flow_id: &FlowId,
+        block_id: &str,
+    ) -> Result<(), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.recorder_split_now(block_id)?;
+
+        Ok(())
+    }
+
     /// Animate a single input's position/size on a compositor block.
     #[allow(clippy::too_many_arguments)]
     pub async fn animate_input(

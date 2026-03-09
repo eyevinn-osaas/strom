@@ -2,8 +2,8 @@
 
 use crate::blocks::builtin;
 use crate::blocks::{
-    BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, WhepEndpointInfo,
-    WhipEndpointInfo,
+    BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, ElementSetupFn,
+    WhepEndpointInfo, WhipEndpointInfo,
 };
 use crate::whip_registry::WhipRegistry;
 use gstreamer as gst;
@@ -23,6 +23,8 @@ pub struct ExpandedPipeline {
     pub links: Vec<Link>,
     /// Bus message handler connection functions from blocks
     pub bus_message_handlers: Vec<BusMessageConnectFn>,
+    /// Element signal setup functions from blocks
+    pub element_setups: Vec<ElementSetupFn>,
     /// Pad properties from blocks (element_id -> pad_name -> property_name -> value)
     pub pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
     /// WHEP endpoints registered by blocks
@@ -161,6 +163,15 @@ pub async fn expand_blocks(
         all_links.push(Link { from, to });
     }
 
+    // Collect element signal setup functions from context
+    let element_setups = ctx.take_element_setups();
+    if !element_setups.is_empty() {
+        debug!(
+            "Collected {} element signal setup(s) from blocks",
+            element_setups.len()
+        );
+    }
+
     // Collect WHEP endpoints from context
     let whep_endpoints = ctx.take_whep_endpoints();
     if !whep_endpoints.is_empty() {
@@ -184,10 +195,11 @@ pub async fn expand_blocks(
     }
 
     debug!(
-        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
+        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} element setups, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
         gst_elements.len(),
         all_links.len(),
         bus_message_handlers.len(),
+        element_setups.len(),
         all_pad_properties.len(),
         whep_endpoints.len(),
         whip_endpoints.len()
@@ -197,6 +209,7 @@ pub async fn expand_blocks(
         gst_elements,
         links: all_links,
         bus_message_handlers,
+        element_setups,
         pad_properties: all_pad_properties,
         whep_endpoints,
         whip_endpoints,

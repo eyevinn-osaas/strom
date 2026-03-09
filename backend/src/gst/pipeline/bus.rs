@@ -44,6 +44,13 @@ impl PipelineManager {
             self.block_message_handlers.push(handler_id);
         }
 
+        // Call element signal setup functions (FnOnce closures that connect GLib signals)
+        let element_setups = std::mem::take(&mut self.element_setup_fns);
+        for setup_fn in element_setups {
+            setup_fn(flow_id, events_for_blocks.clone());
+            debug!("Successfully called element signal setup");
+        }
+
         // Enable signal watch on the bus (ref-counted, safe to call multiple times)
         // This allows using connect_message for multiple handlers
         bus.add_signal_watch();
