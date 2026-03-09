@@ -2,6 +2,42 @@
 
 All notable changes to the Strom GStreamer Flow Engine project.
 
+## [0.3.25] - 2026-03-09
+
+### Added
+- Recorder block for writing audio/video streams to file with splitmuxsink (#411)
+  - Configurable output path, segment duration, and max file size
+  - Recording duration counter and auto-stop after configurable duration
+  - Download button for current recording file in properties panel
+- Audio Analyzer block with real-time waveform and vectorscope visualization (#410)
+  - Full analyzer view with zoom sliders and legends via egui_plot
+  - Base64-encoded WebSocket transport to reduce throughput
+- EBU R128 Loudness Meter block with reset button (#406)
+- Spectrum Analyzer block (`builtin.spectrum`) (#405)
+
+### Changed
+- Replace all emoji/unicode buttons with Phosphor icons throughout the UI (#404)
+- Limit macOS and Windows CI builds to manual trigger only (#408)
+
+### Fixed
+- Media player file path resolution to use configured `data_dir` media path (#412)
+  - Backend injects `_media_path` as block property (canonicalized at expansion time)
+  - Frontend stores playlist paths relative to media root instead of hardcoded `./media/`
+  - Legacy `./media/` prefix stripped for backward compatibility
+- Fix negative `num_audio_tracks` in `get_external_pads` (#411)
+
+### Security
+- Update aws-lc-rs/aws-lc-sys to fix 3 high-severity vulnerabilities (#407)
+
+### Dependencies
+- Bump gstreamer from 0.25.0 to 0.25.1 (#402)
+- Bump gst-plugin-rtp from 0.15.0 to 0.15.1 (#399)
+- Bump rustls from 0.23.36 to 0.23.37 (#400)
+- Bump mdns-sd from 0.18.0 to 0.18.1 (#403)
+- Bump wasm-bindgen-futures from 0.4.62 to 0.4.64 (#401)
+
+---
+
 ## [0.3.24] - 2026-03-02
 
 ### Added

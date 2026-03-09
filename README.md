@@ -155,7 +155,7 @@ Pre-built multi-architecture images (amd64/arm64):
 
 ```bash
 docker pull eyevinntechnology/strom:latest
-docker pull eyevinntechnology/strom:0.3.24  # Specific version
+docker pull eyevinntechnology/strom:0.3.25  # Specific version
 
 # Extended image with HTML rendering support (CEF/Chromium)
 docker pull eyevinntechnology/strom-full:latest
@@ -298,6 +298,7 @@ Create reusable components from element groups:
 - **DeckLink Video/Audio Output** - Outputs to Blackmagic DeckLink SDI/HDMI cards
 - **NDI Output** - Sends video/audio via NewTek NDI protocol
 - **Inter Output** - Publishes streams for other flows to consume
+- **Recorder** - Writes audio/video streams to file with configurable segmentation and auto-stop
 
 **Processing:**
 - **Audio Mixer** - Digital mixing console with up to 32 input channels, per-channel processing (gain, gate, compressor, EQ, pan, fader, mute), auxiliary sends, groups, PFL bus, and main stereo bus with metering
@@ -310,6 +311,9 @@ Create reusable components from element groups:
 **Analysis:**
 - **Audio Meter** - RMS and peak level monitoring per channel
 - **Audio Latency** - Measures audio round-trip latency using GStreamer's audiolatency element
+- **Loudness Meter** - EBU R128 real-time integrated loudness, LRA, and true-peak measurement
+- **Spectrum Analyzer** - Real-time audio frequency spectrum visualization
+- **Audio Analyzer** - Real-time waveform and vectorscope visualization
 
 Custom blocks can also be created via JSON or API.
 
