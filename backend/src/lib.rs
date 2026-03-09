@@ -150,6 +150,10 @@ pub async fn create_app_with_config(
             post(api::flows::reset_loudness),
         )
         .route(
+            "/flows/{flow_id}/blocks/{block_id}/recorder/split",
+            post(api::flows::recorder_split_now),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/transition",
             post(api::flows::trigger_transition),
         )

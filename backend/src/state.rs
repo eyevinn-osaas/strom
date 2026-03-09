@@ -636,6 +636,7 @@ impl AppState {
             self.inner.ice_servers.clone(),
             self.inner.ice_transport_policy.clone(),
             Some(self.inner.whip_registry.clone()),
+            self.inner.media_path.clone(),
         )?;
         info!("PipelineManager created successfully");
 
@@ -1229,6 +1230,22 @@ impl AppState {
         })?;
 
         manager.reset_loudness(block_id)?;
+
+        Ok(())
+    }
+
+    pub async fn recorder_split_now(
+        &self,
+        flow_id: &FlowId,
+        block_id: &str,
+    ) -> Result<(), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.recorder_split_now(block_id)?;
 
         Ok(())
     }

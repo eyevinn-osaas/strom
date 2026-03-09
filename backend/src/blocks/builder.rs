@@ -47,6 +47,12 @@ pub type BusMessageConnectFn = Box<
 #[deprecated(note = "Use BusMessageConnectFn instead")]
 pub type BusWatchSetupFn = BusMessageConnectFn;
 
+/// Function type for setting up block-specific GLib element signal handlers.
+///
+/// Called at pipeline start with the flow ID and event broadcaster.
+/// The GStreamer element(s) to connect signals on are captured in the closure during build time.
+pub type ElementSetupFn = Box<dyn FnOnce(FlowId, EventBroadcaster) + Send + Sync>;
+
 /// Stream mode for WHEP endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WhepStreamMode {
@@ -131,6 +137,8 @@ pub struct BlockBuildContext {
     dynamic_webrtcbins: DynamicWebrtcbinStore,
     /// WHIP endpoint registry (optional, only set when WHIP blocks need it for element recreation)
     whip_registry: Option<WhipRegistry>,
+    /// Element signal setup functions queued for connection at pipeline start
+    element_setups: RefCell<Vec<ElementSetupFn>>,
 }
 
 impl BlockBuildContext {
@@ -143,6 +151,7 @@ impl BlockBuildContext {
             ice_transport_policy,
             dynamic_webrtcbins: Arc::new(Mutex::new(HashMap::new())),
             whip_registry: None,
+            element_setups: RefCell::new(Vec::new()),
         }
     }
 
@@ -160,6 +169,7 @@ impl BlockBuildContext {
             ice_transport_policy,
             dynamic_webrtcbins,
             whip_registry,
+            element_setups: RefCell::new(Vec::new()),
         }
     }
 
@@ -288,6 +298,22 @@ impl BlockBuildContext {
     /// Called after block expansion to process the registrations.
     pub fn take_whip_endpoints(&self) -> Vec<WhipEndpointInfo> {
         self.whip_endpoints.borrow_mut().drain(..).collect()
+    }
+
+    /// Register an element signal setup function to be called at pipeline start.
+    ///
+    /// Use this to connect GLib signals on elements that need the event broadcaster
+    /// (e.g., splitmuxsink's format-location signal for recording status).
+    /// The GStreamer element(s) should be captured in the closure during build time.
+    pub fn register_element_setup(&self, setup: ElementSetupFn) {
+        self.element_setups.borrow_mut().push(setup);
+    }
+
+    /// Take all queued element signal setup functions.
+    ///
+    /// Called after block expansion to process the setups.
+    pub fn take_element_setups(&self) -> Vec<ElementSetupFn> {
+        self.element_setups.borrow_mut().drain(..).collect()
     }
 }
 

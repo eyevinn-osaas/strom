@@ -2,8 +2,8 @@
 
 use crate::blocks::builtin;
 use crate::blocks::{
-    BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, WhepEndpointInfo,
-    WhipEndpointInfo,
+    BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, ElementSetupFn,
+    WhepEndpointInfo, WhipEndpointInfo,
 };
 use crate::whip_registry::WhipRegistry;
 use gstreamer as gst;
@@ -23,6 +23,8 @@ pub struct ExpandedPipeline {
     pub links: Vec<Link>,
     /// Bus message handler connection functions from blocks
     pub bus_message_handlers: Vec<BusMessageConnectFn>,
+    /// Element signal setup functions from blocks
+    pub element_setups: Vec<ElementSetupFn>,
     /// Pad properties from blocks (element_id -> pad_name -> property_name -> value)
     pub pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
     /// WHEP endpoints registered by blocks
@@ -40,6 +42,7 @@ pub struct ExpandedPipeline {
 ///
 /// The `flow_id` is injected as a special `_flow_id` property for blocks that need it
 /// (e.g., InterOutput blocks use it to generate unique channel names).
+#[allow(clippy::too_many_arguments)]
 pub async fn expand_blocks(
     blocks: &[BlockInstance],
     regular_links: &[Link],
@@ -48,6 +51,7 @@ pub async fn expand_blocks(
     ice_transport_policy: String,
     dynamic_webrtcbins: DynamicWebrtcbinStore,
     whip_registry: Option<WhipRegistry>,
+    media_path: std::path::PathBuf,
 ) -> Result<ExpandedPipeline, PipelineError> {
     let mut gst_elements = Vec::new();
     let mut all_links = Vec::new();
@@ -80,7 +84,7 @@ pub async fn expand_blocks(
             block_instance.id, block_instance.block_definition_id
         );
 
-        // Inject _flow_id and _block_id into properties for blocks that need them
+        // Inject _flow_id, _block_id, and _media_path into properties for blocks that need them
         let mut properties = block_instance.properties.clone();
         properties.insert(
             "_flow_id".to_string(),
@@ -89,6 +93,10 @@ pub async fn expand_blocks(
         properties.insert(
             "_block_id".to_string(),
             PropertyValue::String(block_instance.id.clone()),
+        );
+        properties.insert(
+            "_media_path".to_string(),
+            PropertyValue::String(media_path.to_string_lossy().into_owned()),
         );
 
         // Call the builder to create GStreamer elements
@@ -146,6 +154,15 @@ pub async fn expand_blocks(
         all_links.push(Link { from, to });
     }
 
+    // Collect element signal setup functions from context
+    let element_setups = ctx.take_element_setups();
+    if !element_setups.is_empty() {
+        debug!(
+            "Collected {} element signal setup(s) from blocks",
+            element_setups.len()
+        );
+    }
+
     // Collect WHEP endpoints from context
     let whep_endpoints = ctx.take_whep_endpoints();
     if !whep_endpoints.is_empty() {
@@ -169,10 +186,11 @@ pub async fn expand_blocks(
     }
 
     debug!(
-        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
+        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} element setups, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
         gst_elements.len(),
         all_links.len(),
         bus_message_handlers.len(),
+        element_setups.len(),
         all_pad_properties.len(),
         whep_endpoints.len(),
         whip_endpoints.len()
@@ -182,6 +200,7 @@ pub async fn expand_blocks(
         gst_elements,
         links: all_links,
         bus_message_handlers,
+        element_setups,
         pad_properties: all_pad_properties,
         whep_endpoints,
         whip_endpoints,
@@ -308,6 +327,7 @@ mod tests {
             ice_transport_policy,
             dynamic_webrtcbins,
             None,
+            std::path::PathBuf::from("./media"),
         )
         .await;
         assert!(result.is_ok());

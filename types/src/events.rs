@@ -228,6 +228,15 @@ pub enum StromEvent {
         /// Vectorscope R channel samples (base64-encoded i8 samples)
         vectorscope_r: String,
     },
+    /// Recorder block started writing a new file
+    RecorderFileChanged {
+        flow_id: FlowId,
+        block_id: String,
+        /// Full path to the file currently being written
+        filename: String,
+    },
+    /// Recorder block reached its configured max duration and requests the flow to stop
+    RecorderAutoStop { flow_id: FlowId, block_id: String },
 }
 
 impl StromEvent {
@@ -542,6 +551,22 @@ impl StromEvent {
                     flow_id,
                     waveform_l_min.len() * 3 / 4,
                     vectorscope_l.len() * 3 / 4
+                )
+            }
+            StromEvent::RecorderFileChanged {
+                flow_id,
+                block_id,
+                filename,
+            } => {
+                format!(
+                    "Recorder {} in flow {} writing: {}",
+                    block_id, flow_id, filename
+                )
+            }
+            StromEvent::RecorderAutoStop { flow_id, block_id } => {
+                format!(
+                    "Recorder {} in flow {} reached max duration, stopping flow",
+                    block_id, flow_id
                 )
             }
         }

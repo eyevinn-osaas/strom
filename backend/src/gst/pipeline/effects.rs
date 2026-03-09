@@ -140,6 +140,27 @@ impl PipelineManager {
         Ok(())
     }
 
+    /// Force an immediate file split on a recorder block.
+    ///
+    /// Emits the `split-now` signal on the splitmuxsink element, which triggers
+    /// a file split at the next keyframe boundary.
+    pub fn recorder_split_now(&self, block_instance_id: &str) -> Result<(), PipelineError> {
+        use crate::blocks::builtin::recorder::SPLITMUXSINK_SUFFIX;
+        let element_id = format!("{}:{}", block_instance_id, SPLITMUXSINK_SUFFIX);
+        let element = self.elements.get(&element_id).ok_or_else(|| {
+            PipelineError::ElementNotFound(format!(
+                "{} (is this a recorder block in ts_passthrough mode?)",
+                element_id
+            ))
+        })?;
+        element.emit_by_name::<()>("split-now", &[]);
+        info!(
+            "Triggered split-now on recorder block {}",
+            block_instance_id
+        );
+        Ok(())
+    }
+
     /// Capture a thumbnail from a compositor input.
     ///
     /// Captures a single frame from the queue element feeding the specified

@@ -36,6 +36,10 @@ pub struct BlockInspectorResult {
     pub show_qr_whip: Option<String>,
     /// Loudness reset requested - contains (flow_id, block_id)
     pub loudness_reset_requested: Option<(FlowId, String)>,
+    /// Recorder split-now requested - contains (flow_id, block_id)
+    pub recorder_split_requested: Option<(FlowId, String)>,
+    /// Recorder file download requested - contains relative path
+    pub recorder_download_requested: Option<String>,
 }
 
 /// Property inspector panel.
@@ -371,6 +375,8 @@ impl PropertyInspector {
         available_channels: &[strom_types::api::AvailableOutput],
         qr_inline: &mut Option<(String, String)>,
         qr_cache: &mut crate::qr::QrCache,
+        recorder_filename: Option<&str>,
+        recorder_start_time: Option<instant::Instant>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -787,6 +793,47 @@ impl PropertyInspector {
                                 Color32::from_rgb(200, 200, 100),
                                 "No flow selected",
                             );
+                        }
+                    }
+
+                    // Show recording status, duration counter, and split button for recorder blocks
+                    if definition.id == "builtin.recorder" {
+                        ui.separator();
+                        if let Some(start) = recorder_start_time {
+                            let elapsed = start.elapsed();
+                            let total_secs = elapsed.as_secs();
+                            let h = total_secs / 3600;
+                            let m = (total_secs % 3600) / 60;
+                            let s = total_secs % 60;
+                            ui.horizontal(|ui| {
+                                ui.label("Recording:");
+                                ui.monospace(format!("{:02}:{:02}:{:02}", h, m, s));
+                            });
+                        }
+                        if let Some(filename) = recorder_filename {
+                            let short_name = std::path::Path::new(filename)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(filename);
+                            ui.horizontal(|ui| {
+                                ui.monospace(short_name).on_hover_text(filename);
+                                if ui
+                                    .button(egui_phosphor::regular::DOWNLOAD_SIMPLE)
+                                    .on_hover_text("Download recording")
+                                    .clicked()
+                                {
+                                    result.recorder_download_requested =
+                                        Some(filename.to_string());
+                                }
+                            });
+                        }
+                        if let Some(flow_id) = flow_id {
+                            if ui.button("Split Now").clicked() {
+                                result.recorder_split_requested =
+                                    Some((flow_id, block.id.clone()));
+                            }
+                        } else {
+                            ui.add_enabled(false, egui::Button::new("Split Now"));
                         }
                     }
 

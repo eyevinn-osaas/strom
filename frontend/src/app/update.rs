@@ -270,9 +270,13 @@ impl eframe::App for StromApp {
                         }
                         StromEvent::FlowStopped { flow_id } => {
                             tracing::info!("Flow {} stopped, clearing QoS stats", flow_id);
-                            // Clear QoS stats, WebRTC stats and start time when flow is stopped
+                            // Clear QoS stats, WebRTC stats, recorder filenames and start time when flow is stopped
                             self.qos_stats.clear_flow(&flow_id);
                             self.webrtc_stats.clear_flow(&flow_id);
+                            self.recorder_filenames
+                                .retain(|(fid, _), _| *fid != flow_id);
+                            self.recorder_start_times
+                                .retain(|(fid, _), _| *fid != flow_id);
                             // Refresh available channels (channels may have been removed)
                             self.refresh_available_channels();
                             self.flow_start_times.remove(&flow_id);
@@ -719,6 +723,25 @@ impl eframe::App for StromApp {
                                 ));
                             }
                         }
+                        StromEvent::RecorderFileChanged {
+                            flow_id,
+                            block_id,
+                            filename,
+                        } => {
+                            let key = (flow_id, block_id);
+                            self.recorder_start_times
+                                .entry(key.clone())
+                                .or_insert_with(instant::Instant::now);
+                            self.recorder_filenames.insert(key, filename);
+                        }
+                        StromEvent::RecorderAutoStop { flow_id, block_id } => {
+                            tracing::info!(
+                                "Recorder {} requested auto-stop for flow {}",
+                                block_id,
+                                flow_id
+                            );
+                            self.stop_flow_by_id(flow_id, ctx);
+                        }
                         _ => {}
                     }
                 }
@@ -1093,6 +1116,12 @@ impl eframe::App for StromApp {
                 }
                 ctx.request_repaint();
             });
+        }
+
+        // If any recorder is actively recording, request a repaint every second
+        // so the duration counter stays up to date.
+        if !self.recorder_start_times.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
         // Check authentication - if required and not authenticated, don't render
