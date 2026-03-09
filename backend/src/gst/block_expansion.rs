@@ -42,16 +42,18 @@ pub struct ExpandedPipeline {
 ///
 /// The `flow_id` is injected as a special `_flow_id` property for blocks that need it
 /// (e.g., InterOutput blocks use it to generate unique channel names).
+/// The `media_path` is injected as `_media_path` for blocks that resolve media files
+/// (e.g., MediaPlayer block).
 #[allow(clippy::too_many_arguments)]
 pub async fn expand_blocks(
     blocks: &[BlockInstance],
     regular_links: &[Link],
     flow_id: &strom_types::FlowId,
+    media_path: &std::path::Path,
     ice_servers: Vec<String>,
     ice_transport_policy: String,
     dynamic_webrtcbins: DynamicWebrtcbinStore,
     whip_registry: Option<WhipRegistry>,
-    media_path: std::path::PathBuf,
 ) -> Result<ExpandedPipeline, PipelineError> {
     let mut gst_elements = Vec::new();
     let mut all_links = Vec::new();
@@ -68,6 +70,13 @@ pub async fn expand_blocks(
     );
 
     debug!("Expanding {} block instance(s)", blocks.len());
+
+    // Canonicalize media_path once so all blocks get an absolute path,
+    // even if the config uses a relative path like "./strom-data/media".
+    let canonical_media = media_path
+        .canonicalize()
+        .unwrap_or_else(|_| media_path.to_path_buf());
+    let canonical_media_str = canonical_media.to_string_lossy().to_string();
 
     for block_instance in blocks {
         // Get builder for this block type
@@ -96,7 +105,7 @@ pub async fn expand_blocks(
         );
         properties.insert(
             "_media_path".to_string(),
-            PropertyValue::String(media_path.to_string_lossy().into_owned()),
+            PropertyValue::String(canonical_media_str.clone()),
         );
 
         // Call the builder to create GStreamer elements
@@ -323,11 +332,11 @@ mod tests {
             &[],
             &[],
             &flow_id,
+            std::path::Path::new("./media"),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,
             None,
-            std::path::PathBuf::from("./media"),
         )
         .await;
         assert!(result.is_ok());

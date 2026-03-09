@@ -76,11 +76,11 @@ impl PipelineManager {
                     &flow.blocks,
                     &flow.links,
                     &flow_id,
+                    &media_path,
                     ice_servers,
                     ice_transport_policy,
                     dynamic_webrtcbins,
                     whip_registry,
-                    media_path,
                 )
                 .await;
                 info!("expand_blocks completed");
