@@ -47,6 +47,10 @@ Current built-in blocks in `backend/src/blocks/builtin/`:
 | Media Player | `mediaplayer.rs` | File playback with playlist support |
 | Audio Mixer | `mixer/` | Stereo mixer with per-channel processing, aux sends, subgroups |
 | Audio Router | `audiorouter.rs` | Multi-stream channel routing matrix with mixing and fan-out |
+| Loudness Meter | `loudness.rs` | EBU R128 real-time loudness measurement with reset |
+| Spectrum Analyzer | `spectrum.rs` | Real-time audio spectrum visualization |
+| Audio Analyzer | `audioanalyzer.rs` | Real-time waveform and vectorscope visualization |
+| Recorder | `recorder.rs` | Write audio/video streams to file with splitmuxsink |
 
 See [MIXER_BLOCK.md](MIXER_BLOCK.md), [VIDEO_ENCODER_BLOCK.md](VIDEO_ENCODER_BLOCK.md) and [WHEP_OUTPUT_BLOCK.md](WHEP_OUTPUT_BLOCK.md) for detailed documentation.
 
