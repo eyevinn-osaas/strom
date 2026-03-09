@@ -477,8 +477,8 @@ pub struct PlaylistEditor {
     pub browser_needs_refresh: bool,
     /// Index of the currently playing file (for highlighting)
     pub current_playing_index: Option<usize>,
-    /// Fraction of the window width given to the file browser (left pane)
-    pub browser_width_fraction: f32,
+    /// Width in pixels of the file browser left pane (draggable)
+    pub browser_width_px: f32,
 }
 
 impl PlaylistEditor {
@@ -495,7 +495,7 @@ impl PlaylistEditor {
             browser_loading: false,
             browser_needs_refresh: true, // Load on first show
             current_playing_index: None,
-            browser_width_fraction: 350.0,
+            browser_width_px: 350.0,
         }
     }
 
@@ -547,9 +547,9 @@ impl PlaylistEditor {
             .resizable(true)
             .show(ctx, |ui| {
                 const DIVIDER_WIDTH: f32 = 6.0;
-                // Store left pane width in pixels (reusing browser_width_fraction field).
-                // Default 350px; right pane takes whatever remains — no feedback loop.
-                let left_width = self.browser_width_fraction.clamp(80.0, 800.0);
+                // Left pane width in pixels; default 350px.
+                // Right pane takes whatever remains — no feedback loop.
+                let left_width = self.browser_width_px.clamp(80.0, 800.0);
                 let pane_height = ui.available_height();
 
                 ui.horizontal_top(|ui| {
@@ -584,7 +584,7 @@ impl PlaylistEditor {
                         if let Some(pos) = ui.ctx().pointer_interact_pos() {
                             // divider_rect.left() is at (strip_origin + left_width)
                             let strip_origin = divider_rect.left() - left_width;
-                            self.browser_width_fraction = (pos.x - strip_origin).clamp(80.0, 800.0);
+                            self.browser_width_px = (pos.x - strip_origin).clamp(80.0, 800.0);
                         }
                     }
 
