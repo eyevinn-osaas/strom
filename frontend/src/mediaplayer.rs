@@ -658,6 +658,7 @@ impl PlaylistEditor {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("media_browser_scroll")
+                .auto_shrink(false)
                 .max_height(ui.available_height())
                 .show(ui, |ui| {
                     let mut nav_to_folder: Option<String> = None;
