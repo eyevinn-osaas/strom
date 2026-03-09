@@ -78,7 +78,7 @@ rustls = { version = "0.23", features = ["ring"] }
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # Authentication
-bcrypt = "0.18.0"
+bcrypt = "0.19.0"
 tower-sessions = "0.15"
 
 # CLI argument parsing
