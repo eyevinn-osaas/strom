@@ -1,7 +1,7 @@
 //! Info page for displaying system and version information.
 
+use eframe::glow::{self, HasContext};
 use egui::{Color32, Pos2, Rect, Stroke, Ui, Vec2};
-use glow::HasContext;
 use std::collections::VecDeque;
 
 use crate::api::SystemInfo;
