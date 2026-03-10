@@ -18,7 +18,6 @@ egui-phosphor.workspace = true
 eframe.workspace = true
 egui_extras.workspace = true
 egui_plot.workspace = true
-glow = "0.16"
 
 # HTTP client - works on both WASM and native
 reqwest = { workspace = true, features = ["json", "multipart"] }
