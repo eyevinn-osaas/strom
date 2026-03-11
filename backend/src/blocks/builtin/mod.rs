@@ -6,6 +6,8 @@ pub mod audioformat;
 pub mod audiorouter;
 pub mod compositor;
 pub mod decklink;
+pub mod efpsrt;
+pub mod efpsrt_input;
 pub mod inter;
 pub mod latency;
 pub mod loudness;
@@ -47,6 +49,12 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
 
     // Add DeckLink blocks
     blocks.extend(decklink::get_blocks());
+
+    // Add EFP/SRT blocks
+    blocks.extend(efpsrt::get_blocks());
+
+    // Add EFP/SRT Input blocks
+    blocks.extend(efpsrt_input::get_blocks());
 
     // Add Inter-pipeline blocks
     blocks.extend(inter::get_blocks());
@@ -120,6 +128,8 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.media_player" => Some(Arc::new(mediaplayer::MediaPlayerBuilder)),
         "builtin.meter" => Some(Arc::new(meter::MeterBuilder)),
         "builtin.mixer" => Some(Arc::new(mixer::MixerBuilder)),
+        "builtin.efpsrt_output" => Some(Arc::new(efpsrt::EfpSrtOutputBuilder)),
+        "builtin.efpsrt_input" => Some(Arc::new(efpsrt_input::EfpSrtInputBuilder)),
         "builtin.mpegtssrt_output" => Some(Arc::new(mpegtssrt::MpegTsSrtOutputBuilder)),
         "builtin.mpegtssrt_input" => Some(Arc::new(mpegtssrt_input::MpegTsSrtInputBuilder)),
         "builtin.ndi_input" => Some(Arc::new(ndi::NDIInputBuilder)),
