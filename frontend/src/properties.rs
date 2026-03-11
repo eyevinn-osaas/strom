@@ -877,7 +877,14 @@ impl PropertyInspector {
                             .map(|s| s.as_str());
 
                         if let Some(mut sdp_text) = sdp {
-                            ui.label("Copy this SDP to configure receivers:");
+                            ui.horizontal(|ui| {
+                                ui.label("Copy this SDP to configure receivers:");
+                                if ui.button(egui_phosphor::regular::COPY)
+                                    .on_hover_text("Copy SDP to clipboard")
+                                    .clicked() {
+                                    crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp_text);
+                                }
+                            });
                             ui.add_space(4.0);
 
                             // Display SDP in a code-style text box
@@ -888,15 +895,6 @@ impl PropertyInspector {
                                     .code_editor()
                                     .interactive(false),
                             );
-
-                            ui.add_space(4.0);
-
-                            // Copy button
-                            if ui.button(egui_phosphor::regular::COPY)
-                                .on_hover_text("Copy SDP to clipboard")
-                                .clicked() {
-                                crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp_text);
-                            }
                         } else {
                             ui.colored_label(
                                 Color32::from_rgb(200, 200, 100),
