@@ -54,20 +54,6 @@ impl BlockBuilder for WHEPOutputBuilder {
 
         let mut inputs = Vec::new();
 
-        if mode.has_audio() {
-            inputs.push(ExternalPad {
-                label: if mode.has_video() {
-                    Some("A0".to_string())
-                } else {
-                    None
-                },
-                name: "audio_in".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "audioconvert".to_string(),
-                internal_pad_name: "sink".to_string(),
-            });
-        }
-
         if mode.has_video() {
             inputs.push(ExternalPad {
                 label: if mode.has_audio() {
@@ -78,6 +64,20 @@ impl BlockBuilder for WHEPOutputBuilder {
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "video_queue".to_string(),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        if mode.has_audio() {
+            inputs.push(ExternalPad {
+                label: if mode.has_video() {
+                    Some("A0".to_string())
+                } else {
+                    None
+                },
+                name: "audio_in".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "audioconvert".to_string(),
                 internal_pad_name: "sink".to_string(),
             });
         }
@@ -1864,17 +1864,17 @@ fn whep_output_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![
                 ExternalPad {
-                    label: Some("A0".to_string()),
-                    name: "audio_in".to_string(),
-                    media_type: MediaType::Audio,
-                    internal_element_id: "audioconvert".to_string(),
-                    internal_pad_name: "sink".to_string(),
-                },
-                ExternalPad {
                     label: Some("V0".to_string()),
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "video_queue".to_string(),
+                    internal_pad_name: "sink".to_string(),
+                },
+                ExternalPad {
+                    label: Some("A0".to_string()),
+                    name: "audio_in".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "audioconvert".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
             ],

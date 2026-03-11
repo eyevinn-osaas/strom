@@ -813,22 +813,22 @@ impl BlockBuilder for WHIPInputBuilder {
 
         let mut outputs = Vec::new();
 
-        if mode.has_audio() {
-            outputs.push(ExternalPad {
-                label: Some("A0".to_string()),
-                name: "audio_out".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "output_audioresample".to_string(),
-                internal_pad_name: "src".to_string(),
-            });
-        }
-
         if mode.has_video() {
             outputs.push(ExternalPad {
                 label: Some("V0".to_string()),
                 name: "video_out".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "output_videoconvert".to_string(),
+                internal_pad_name: "src".to_string(),
+            });
+        }
+
+        if mode.has_audio() {
+            outputs.push(ExternalPad {
+                label: Some("A0".to_string()),
+                name: "audio_out".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "output_audioresample".to_string(),
                 internal_pad_name: "src".to_string(),
             });
         }
@@ -1642,17 +1642,17 @@ fn whip_input_definition() -> BlockDefinition {
             inputs: vec![],
             outputs: vec![
                 ExternalPad {
-                    label: Some("A0".to_string()),
-                    name: "audio_out".to_string(),
-                    media_type: MediaType::Audio,
-                    internal_element_id: "output_audioresample".to_string(),
-                    internal_pad_name: "src".to_string(),
-                },
-                ExternalPad {
                     label: Some("V0".to_string()),
                     name: "video_out".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "output_videoconvert".to_string(),
+                    internal_pad_name: "src".to_string(),
+                },
+                ExternalPad {
+                    label: Some("A0".to_string()),
+                    name: "audio_out".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "output_audioresample".to_string(),
                     internal_pad_name: "src".to_string(),
                 },
             ],
