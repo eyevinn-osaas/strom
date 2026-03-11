@@ -144,7 +144,7 @@ impl BlockBuilder for EfpSrtOutputBuilder {
                 PropertyValue::Bool(b) => Some(*b),
                 _ => None,
             })
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         let mtu = properties
             .get("mtu")
@@ -788,9 +788,9 @@ fn efpsrt_output_definition() -> BlockDefinition {
             ExposedProperty {
                 name: "sync".to_string(),
                 label: "Sync".to_string(),
-                description: "Synchronize output to pipeline clock. Set to false for transcoding workloads with discontinuous timestamps (default: true)".to_string(),
+                description: "Synchronize output to pipeline clock (default: false). Enable for playout scenarios where timing matters.".to_string(),
                 property_type: PropertyType::Bool,
-                default_value: Some(PropertyValue::Bool(true)),
+                default_value: Some(PropertyValue::Bool(false)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "sync".to_string(),

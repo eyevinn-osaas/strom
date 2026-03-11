@@ -77,7 +77,7 @@ impl BlockBuilder for WHEPOutputBuilder {
                 },
                 name: "audio_in".to_string(),
                 media_type: MediaType::Audio,
-                internal_element_id: "audioconvert".to_string(),
+                internal_element_id: "audio_queue".to_string(),
                 internal_pad_name: "sink".to_string(),
             });
         }
@@ -1129,33 +1129,86 @@ fn build_whepserversink(
     let mut elements: Vec<(String, gst::Element)> = Vec::new();
     let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
 
-    // Create audio processing elements if mode includes audio
+    // Create audio processing elements if mode includes audio.
+    // Uses a queue as entry point (same pattern as video) linked directly to
+    // whepserversink. A caps probe detects the audio format and sets audio-caps:
+    // - Encoded audio (opus etc.): whepserversink passes through directly
+    // - Raw audio: whepserversink runs codec discovery and encodes internally
     if mode.has_audio() {
-        let audioconvert_id = format!("{}:audioconvert", instance_id);
-        let audioresample_id = format!("{}:audioresample", instance_id);
-
-        let audioconvert = gst::ElementFactory::make("audioconvert")
-            .name(&audioconvert_id)
+        let audio_queue_id = format!("{}:audio_queue", instance_id);
+        let audio_queue = gst::ElementFactory::make("queue")
+            .name(&audio_queue_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+            .map_err(|e| BlockBuildError::ElementCreation(format!("audio_queue: {}", e)))?;
 
-        let audioresample = gst::ElementFactory::make("audioresample")
-            .name(&audioresample_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+        // Dynamic audio caps detection (same pattern as video caps probe)
+        let whepserversink_weak = whepserversink.downgrade();
+        let audio_caps_set = Arc::new(AtomicBool::new(false));
+        let audio_caps_set_clone = audio_caps_set.clone();
+        let instance_id_owned = instance_id.to_string();
 
-        // Audio links: audioconvert -> audioresample -> whepserversink (audio_0 request pad)
+        let audio_queue_sink = audio_queue.static_pad("sink").expect("queue has sink pad");
+        audio_queue_sink.add_probe(
+            gst::PadProbeType::EVENT_DOWNSTREAM,
+            move |_pad, info| {
+                if audio_caps_set_clone.load(Ordering::SeqCst) {
+                    return gst::PadProbeReturn::Pass;
+                }
+
+                if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                    if event.type_() == gst::EventType::Caps {
+                        if let gst::EventView::Caps(caps_event) = event.view() {
+                            let caps = caps_event.caps();
+                            if let Some(structure) = caps.structure(0) {
+                                let caps_name = structure.name().as_str();
+
+                                let audio_caps: Option<gst::Caps> = match caps_name {
+                                    "audio/x-opus" => {
+                                        debug!(
+                                            "WHEP Output {}: Detected Opus input, setting audio-caps",
+                                            instance_id_owned
+                                        );
+                                        Some(gst::Caps::builder("audio/x-opus").build())
+                                    }
+                                    "audio/x-raw" => {
+                                        debug!(
+                                            "WHEP Output {}: Detected raw audio, using default audio-caps",
+                                            instance_id_owned
+                                        );
+                                        None
+                                    }
+                                    _ => {
+                                        warn!(
+                                            "WHEP Output {}: Unknown audio format '{}', using default",
+                                            instance_id_owned, caps_name
+                                        );
+                                        None
+                                    }
+                                };
+
+                                if let Some(caps) = audio_caps {
+                                    if let Some(whepserversink) = whepserversink_weak.upgrade() {
+                                        whepserversink.set_property("audio-caps", &caps);
+                                    }
+                                }
+                                audio_caps_set_clone.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Pass
+            },
+        );
+
+        // Audio link: queue -> whepserversink (audio_0 request pad)
+        // whepserversink handles both raw audio (encodes internally) and
+        // pre-encoded audio (passes through) based on audio-caps.
         internal_links.push((
-            ElementPadRef::pad(&audioconvert_id, "src"),
-            ElementPadRef::pad(&audioresample_id, "sink"),
-        ));
-        internal_links.push((
-            ElementPadRef::pad(&audioresample_id, "src"),
+            ElementPadRef::pad(&audio_queue_id, "src"),
             ElementPadRef::pad(&whepserversink_id, "audio_0"),
         ));
 
-        elements.push((audioconvert_id, audioconvert));
-        elements.push((audioresample_id, audioresample));
+        elements.push((audio_queue_id, audio_queue));
     }
 
     // Create video queue and link to whepserversink if mode includes video
@@ -1874,7 +1927,7 @@ fn whep_output_definition() -> BlockDefinition {
                     label: Some("A0".to_string()),
                     name: "audio_in".to_string(),
                     media_type: MediaType::Audio,
-                    internal_element_id: "audioconvert".to_string(),
+                    internal_element_id: "audio_queue".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
             ],

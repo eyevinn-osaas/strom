@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// EFP/SRT Input block builder.
 pub struct EfpSrtInputBuilder;
@@ -103,7 +103,7 @@ impl BlockBuilder for EfpSrtInputBuilder {
             })
             .unwrap_or(true);
 
-        info!(
+        debug!(
             "Building EFP/SRT Input block instance: {} (decode={})",
             instance_id, decode
         );
@@ -171,9 +171,21 @@ impl BlockBuilder for EfpSrtInputBuilder {
         srtsrc.set_property("uri", &srt_uri);
         srtsrc.set_property("latency", latency);
 
-        info!(
-            "SRT source configured: uri={}, latency={}ms",
-            srt_uri, latency
+        let keep_listening = properties
+            .get("keep_listening")
+            .and_then(|v| match v {
+                PropertyValue::Bool(b) => Some(*b),
+                _ => None,
+            })
+            .unwrap_or(true);
+
+        if srtsrc.has_property("keep-listening") {
+            srtsrc.set_property("keep-listening", keep_listening);
+        }
+
+        debug!(
+            "SRT source configured: uri={}, latency={}ms, keep-listening={}",
+            srt_uri, latency, keep_listening
         );
 
         // Create efpdemux
@@ -186,99 +198,90 @@ impl BlockBuilder for EfpSrtInputBuilder {
         demux_element.set_property("bucket-timeout", bucket_timeout);
         demux_element.set_property("hol-timeout", hol_timeout);
 
-        info!(
+        debug!(
             "EFP demuxer configured: bucket-timeout={}, hol-timeout={}",
             bucket_timeout, hol_timeout
         );
 
         let mut elements = vec![(src_id.clone(), srtsrc)];
+        let internal_links = vec![(
+            ElementPadRef::pad(&src_id, "src"),
+            ElementPadRef::pad(&demux_id, "sink"),
+        )];
 
-        // Create video output identity elements
-        let mut video_guards = Vec::new();
-        for i in 0..num_video_tracks {
-            let element_id = if num_video_tracks == 1 {
-                format!("{}:video_output", instance_id)
-            } else {
-                format!("{}:video_output_{}", instance_id, i)
-            };
-
-            let identity = gst::ElementFactory::make("identity")
-                .name(&element_id)
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("video identity {}: {}", i, e))
-                })?;
-
-            let guard = Arc::new(AtomicBool::new(false));
-            video_guards.push((identity.downgrade(), guard));
-            elements.push((element_id, identity));
-        }
-
-        // Create audio output identity elements
-        let mut audio_guards = Vec::new();
-        for i in 0..num_audio_tracks {
-            let element_id = format!("{}:audio_output_{}", instance_id, i);
-
-            let identity = gst::ElementFactory::make("identity")
-                .name(&element_id)
-                .build()
-                .map_err(|e| {
-                    BlockBuildError::ElementCreation(format!("audio identity {}: {}", i, e))
-                })?;
-
-            let guard = Arc::new(AtomicBool::new(false));
-            audio_guards.push((identity.downgrade(), guard));
-            elements.push((element_id, identity));
-        }
-
-        // Setup dynamic pad linking from efpdemux
-        let instance_id_clone = instance_id.to_string();
-        let mode_label = if decode { "decode" } else { "passthrough" };
-        let mode_label_owned = mode_label.to_string();
-
-        // Connect pad-added callback before moving demux_element into the elements vec
-        demux_element.connect_pad_added(move |element, pad| {
-            let caps = pad.current_caps().or_else(|| {
-                let query_caps = pad.query_caps(None);
-                if !query_caps.is_any() && !query_caps.is_empty() {
-                    Some(query_caps)
+        if decode {
+            // Decode mode: use connect_pad_added like mpegtssrt_input does.
+            // decodebin provides caps at pad-added time, so linking works immediately.
+            let mut video_guards = Vec::new();
+            for i in 0..num_video_tracks {
+                let element_id = if num_video_tracks == 1 {
+                    format!("{}:video_output", instance_id)
                 } else {
-                    None
-                }
-            });
+                    format!("{}:video_output_{}", instance_id, i)
+                };
+                let identity = gst::ElementFactory::make("identity")
+                    .name(&element_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("video identity {}: {}", i, e))
+                    })?;
+                let guard = Arc::new(AtomicBool::new(false));
+                video_guards.push((identity.downgrade(), guard));
+                elements.push((element_id, identity));
+            }
 
-            let caps_name = caps
-                .as_ref()
-                .and_then(|c| c.structure(0))
-                .map(|s| s.name().to_string());
+            let mut audio_guards = Vec::new();
+            for i in 0..num_audio_tracks {
+                let element_id = format!("{}:audio_output_{}", instance_id, i);
+                let identity = gst::ElementFactory::make("identity")
+                    .name(&element_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audio identity {}: {}", i, e))
+                    })?;
+                let guard = Arc::new(AtomicBool::new(false));
+                audio_guards.push((identity.downgrade(), guard));
+                elements.push((element_id, identity));
+            }
 
-            let pad_name = pad.name().to_string();
-
-            let is_video = caps_name
-                .as_ref()
-                .map(|n| n.starts_with("video/"))
-                .unwrap_or(false);
-            let is_audio = caps_name
-                .as_ref()
-                .map(|n| n.starts_with("audio/"))
-                .unwrap_or(false);
-
-            debug!(
-                "EFPSRT Input {} ({}): pad added: {} (caps: {})",
-                instance_id_clone,
-                mode_label_owned,
-                pad_name,
-                caps_name.as_deref().unwrap_or("unknown")
-            );
-
-            if is_video {
-                for (weak_identity, guard) in &video_guards {
-                    if guard.swap(true, Ordering::SeqCst) {
-                        continue;
+            let instance_id_clone = instance_id.to_string();
+            demux_element.connect_pad_added(move |element, pad| {
+                let caps = pad.current_caps().or_else(|| {
+                    let query_caps = pad.query_caps(None);
+                    if !query_caps.is_any() && !query_caps.is_empty() {
+                        Some(query_caps)
+                    } else {
+                        None
                     }
+                });
+                let caps_name = caps
+                    .as_ref()
+                    .and_then(|c| c.structure(0))
+                    .map(|s| s.name().to_string());
+                let pad_name = pad.name().to_string();
 
-                    if let Some(identity) = weak_identity.upgrade() {
-                        if decode {
+                let is_video = caps_name
+                    .as_ref()
+                    .map(|n| n.starts_with("video/"))
+                    .unwrap_or(false);
+                let is_audio = caps_name
+                    .as_ref()
+                    .map(|n| n.starts_with("audio/"))
+                    .unwrap_or(false);
+
+                debug!(
+                    "EFPSRT Input {} (decode): pad added: {} (caps: {})",
+                    instance_id_clone,
+                    pad_name,
+                    caps_name.as_deref().unwrap_or("unknown")
+                );
+
+                if is_video {
+                    for (weak_identity, guard) in &video_guards {
+                        if guard.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        if let Some(identity) = weak_identity.upgrade() {
                             if let Err(e) =
                                 link_decoded_video(element, pad, &identity, &instance_id_clone)
                             {
@@ -289,37 +292,25 @@ impl BlockBuilder for EfpSrtInputBuilder {
                                 guard.store(false, Ordering::SeqCst);
                                 continue;
                             }
-                        } else if let Some(sink_pad) = identity.static_pad("sink") {
-                            if let Err(e) = pad.link(&sink_pad) {
-                                error!(
-                                    "EFPSRT Input {}: Failed to link video pad {}: {:?}",
-                                    instance_id_clone, pad_name, e
-                                );
-                                guard.store(false, Ordering::SeqCst);
-                                continue;
-                            }
+                            debug!(
+                                "EFPSRT Input {}: Linked video pad {} -> {}",
+                                instance_id_clone,
+                                pad_name,
+                                identity.name()
+                            );
+                            return;
                         }
-                        info!(
-                            "EFPSRT Input {}: Linked video pad {} -> {}",
-                            instance_id_clone,
-                            pad_name,
-                            identity.name()
-                        );
-                        return;
                     }
-                }
-                warn!(
-                    "EFPSRT Input {}: No available video output for pad {}",
-                    instance_id_clone, pad_name
-                );
-            } else if is_audio {
-                for (weak_identity, guard) in &audio_guards {
-                    if guard.swap(true, Ordering::SeqCst) {
-                        continue;
-                    }
-
-                    if let Some(identity) = weak_identity.upgrade() {
-                        if decode {
+                    warn!(
+                        "EFPSRT Input {}: No available video output for pad {}",
+                        instance_id_clone, pad_name
+                    );
+                } else if is_audio {
+                    for (weak_identity, guard) in &audio_guards {
+                        if guard.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        if let Some(identity) = weak_identity.upgrade() {
                             if let Err(e) =
                                 link_decoded_audio(element, pad, &identity, &instance_id_clone)
                             {
@@ -330,49 +321,174 @@ impl BlockBuilder for EfpSrtInputBuilder {
                                 guard.store(false, Ordering::SeqCst);
                                 continue;
                             }
-                        } else if let Some(sink_pad) = identity.static_pad("sink") {
-                            if let Err(e) = pad.link(&sink_pad) {
+                            debug!(
+                                "EFPSRT Input {}: Linked audio pad {} -> {}",
+                                instance_id_clone,
+                                pad_name,
+                                identity.name()
+                            );
+                            return;
+                        }
+                    }
+                    warn!(
+                        "EFPSRT Input {}: No available audio output for pad {}",
+                        instance_id_clone, pad_name
+                    );
+                } else {
+                    debug!(
+                        "EFPSRT Input {}: Ignoring pad {} with caps {}",
+                        instance_id_clone,
+                        pad_name,
+                        caps_name.as_deref().unwrap_or("unknown")
+                    );
+                }
+            });
+        } else {
+            // Passthrough mode: use connect_pad_added with caps-based parser insertion.
+            // Cannot use pending links because efpdemux produces multiple dynamic src pads
+            // of different media types, and the pipeline's dynamic pad handler matches by
+            // pad name pattern only — it cannot distinguish video from audio pads.
+            let mut video_guards = Vec::new();
+            for i in 0..num_video_tracks {
+                let element_id = if num_video_tracks == 1 {
+                    format!("{}:video_output", instance_id)
+                } else {
+                    format!("{}:video_output_{}", instance_id, i)
+                };
+                let identity = gst::ElementFactory::make("identity")
+                    .name(&element_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("video identity {}: {}", i, e))
+                    })?;
+                let guard = Arc::new(AtomicBool::new(false));
+                video_guards.push((identity.downgrade(), guard));
+                elements.push((element_id, identity));
+            }
+
+            let mut audio_guards = Vec::new();
+            for i in 0..num_audio_tracks {
+                let element_id = format!("{}:audio_output_{}", instance_id, i);
+                let identity = gst::ElementFactory::make("identity")
+                    .name(&element_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audio identity {}: {}", i, e))
+                    })?;
+                let guard = Arc::new(AtomicBool::new(false));
+                audio_guards.push((identity.downgrade(), guard));
+                elements.push((element_id, identity));
+            }
+
+            let instance_id_clone = instance_id.to_string();
+            demux_element.connect_pad_added(move |element, pad| {
+                let caps = pad.current_caps().or_else(|| {
+                    let query_caps = pad.query_caps(None);
+                    if !query_caps.is_any() && !query_caps.is_empty() {
+                        Some(query_caps)
+                    } else {
+                        None
+                    }
+                });
+                let caps_name = caps
+                    .as_ref()
+                    .and_then(|c| c.structure(0))
+                    .map(|s| s.name().to_string());
+                let pad_name = pad.name().to_string();
+
+                let is_video = caps_name
+                    .as_ref()
+                    .map(|n| n.starts_with("video/"))
+                    .unwrap_or(false);
+                let is_audio = caps_name
+                    .as_ref()
+                    .map(|n| n.starts_with("audio/"))
+                    .unwrap_or(false);
+
+                debug!(
+                    "EFPSRT Input {} (passthrough): pad added: {} (caps: {})",
+                    instance_id_clone,
+                    pad_name,
+                    caps_name.as_deref().unwrap_or("NONE")
+                );
+
+                if is_video {
+                    for (weak_identity, guard) in &video_guards {
+                        if guard.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        if let Some(identity) = weak_identity.upgrade() {
+                            if let Err(e) =
+                                link_passthrough_video(element, pad, &identity, &instance_id_clone)
+                            {
                                 error!(
-                                    "EFPSRT Input {}: Failed to link audio pad {}: {:?}",
+                                    "EFPSRT Input {}: Failed to link passthrough video pad {}: {}",
                                     instance_id_clone, pad_name, e
                                 );
                                 guard.store(false, Ordering::SeqCst);
                                 continue;
                             }
+                            debug!(
+                                "EFPSRT Input {}: Linked video pad {} -> {}",
+                                instance_id_clone,
+                                pad_name,
+                                identity.name()
+                            );
+                            return;
                         }
-                        info!(
-                            "EFPSRT Input {}: Linked audio pad {} -> {}",
-                            instance_id_clone,
-                            pad_name,
-                            identity.name()
-                        );
-                        return;
                     }
+                    warn!(
+                        "EFPSRT Input {}: No available video output for pad {}",
+                        instance_id_clone, pad_name
+                    );
+                } else if is_audio {
+                    for (weak_identity, guard) in &audio_guards {
+                        if guard.swap(true, Ordering::SeqCst) {
+                            continue;
+                        }
+                        if let Some(identity) = weak_identity.upgrade() {
+                            if let Err(e) =
+                                link_passthrough_audio(element, pad, &identity, &instance_id_clone)
+                            {
+                                error!(
+                                    "EFPSRT Input {}: Failed to link passthrough audio pad {}: {}",
+                                    instance_id_clone, pad_name, e
+                                );
+                                guard.store(false, Ordering::SeqCst);
+                                continue;
+                            }
+                            debug!(
+                                "EFPSRT Input {}: Linked audio pad {} -> {}",
+                                instance_id_clone,
+                                pad_name,
+                                identity.name()
+                            );
+                            return;
+                        }
+                    }
+                    warn!(
+                        "EFPSRT Input {}: No available audio output for pad {}",
+                        instance_id_clone, pad_name
+                    );
+                } else {
+                    debug!(
+                        "EFPSRT Input {}: Ignoring pad {} with caps {}",
+                        instance_id_clone,
+                        pad_name,
+                        caps_name.as_deref().unwrap_or("unknown")
+                    );
                 }
-                warn!(
-                    "EFPSRT Input {}: No available audio output for pad {}",
-                    instance_id_clone, pad_name
-                );
-            } else {
-                debug!(
-                    "EFPSRT Input {}: Ignoring pad {} with caps {}",
-                    instance_id_clone,
-                    pad_name,
-                    caps_name.as_deref().unwrap_or("unknown")
-                );
-            }
-        });
+            });
 
-        // Add demux_element to elements after setting up the pad-added callback
+            debug!(
+                "Passthrough mode: dynamic parser insertion (h264parse with config-interval=1 for video, opusparse for audio)"
+            );
+        }
+
         elements.push((demux_id.clone(), demux_element));
 
-        // Internal link: srtsrc -> efpdemux
-        let internal_links = vec![(
-            ElementPadRef::pad(&src_id, "src"),
-            ElementPadRef::pad(&demux_id, "sink"),
-        )];
-
-        info!(
+        let mode_label = if decode { "decode" } else { "passthrough" };
+        debug!(
             "Created EFP/SRT Input block ({}) with {} video output(s) and {} audio output(s)",
             mode_label, num_video_tracks, num_audio_tracks
         );
@@ -591,6 +707,83 @@ fn link_decoded_audio(
     Ok(())
 }
 
+/// Dynamically insert h264parse between an efpdemux video pad and an identity element (passthrough mode).
+/// efpdemux pad -> h264parse (config-interval=1) -> identity
+fn link_passthrough_video(
+    element: &gst::Element,
+    src_pad: &gst::Pad,
+    identity: &gst::Element,
+    instance_id: &str,
+) -> Result<(), String> {
+    let bin = element
+        .parent()
+        .and_then(|p| p.downcast::<gst::Bin>().ok())
+        .ok_or("parent is not a Bin")?;
+
+    let parser_name = format!("{}:video_parser_{}", instance_id, src_pad.name());
+    let parser = gst::ElementFactory::make("h264parse")
+        .name(&parser_name)
+        .property("config-interval", 1i32)
+        .build()
+        .map_err(|e| format!("h264parse: {}", e))?;
+
+    bin.add(&parser)
+        .map_err(|e| format!("add h264parse: {}", e))?;
+
+    // Link downstream first: h264parse -> identity
+    let parser_src = parser.static_pad("src").ok_or("h264parse has no src pad")?;
+    let identity_sink = identity
+        .static_pad("sink")
+        .ok_or("identity has no sink pad")?;
+    parser_src
+        .link(&identity_sink)
+        .map_err(|e| format!("link h264parse -> identity: {:?}", e))?;
+
+    parser
+        .sync_state_with_parent()
+        .map_err(|e| format!("sync h264parse: {}", e))?;
+
+    // Link source pad last to start data flow when chain is ready
+    let parser_sink = parser
+        .static_pad("sink")
+        .ok_or("h264parse has no sink pad")?;
+    src_pad
+        .link(&parser_sink)
+        .map_err(|e| format!("link efpdemux -> h264parse: {:?}", e))?;
+
+    debug!(
+        "EFPSRT Input {}: Inserted h264parse (config-interval=1) for pad {}",
+        instance_id,
+        src_pad.name()
+    );
+    Ok(())
+}
+
+/// Link an efpdemux audio pad directly to an identity element (passthrough mode).
+/// EFP already provides properly framed opus packets, so no parser is needed.
+/// efpdemux pad -> identity
+fn link_passthrough_audio(
+    _element: &gst::Element,
+    src_pad: &gst::Pad,
+    identity: &gst::Element,
+    instance_id: &str,
+) -> Result<(), String> {
+    let identity_sink = identity
+        .static_pad("sink")
+        .ok_or("identity has no sink pad")?;
+    src_pad
+        .link(&identity_sink)
+        .map_err(|e| format!("link efpdemux -> identity: {:?}", e))?;
+
+    debug!(
+        "EFPSRT Input {}: Linked audio pad {} directly to {}",
+        instance_id,
+        src_pad.name(),
+        identity.name()
+    );
+    Ok(())
+}
+
 /// Get metadata for EFP/SRT input blocks (for UI/API).
 pub fn get_blocks() -> Vec<BlockDefinition> {
     vec![efpsrt_input_definition()]
@@ -663,6 +856,18 @@ fn efpsrt_input_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "hol_timeout".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "keep_listening".to_string(),
+                label: "Keep Listening".to_string(),
+                description: "Keep SRT source alive after disconnect, allowing reconnection (default: true)".to_string(),
+                property_type: PropertyType::Bool,
+                default_value: Some(PropertyValue::Bool(true)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "keep_listening".to_string(),
                     transform: None,
                 },
             },
