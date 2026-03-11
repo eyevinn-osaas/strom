@@ -502,8 +502,11 @@ impl BlockBuilder for EfpSrtInputBuilder {
     }
 }
 
-/// Dynamically insert decodebin + videoconvert between an efpdemux video pad and an identity element.
-/// efpdemux pad -> decodebin -> videoconvert -> identity
+/// Dynamically insert decodebin between an efpdemux video pad and an identity element.
+/// No videoconvert is added — downstream blocks handle format conversion.
+/// This preserves GPU memory (e.g. CUDAMemory from nvh264dec) for downstream
+/// elements that can use it (compositor, encoder).
+/// efpdemux pad -> decodebin -> identity
 fn link_decoded_video(
     element: &gst::Element,
     src_pad: &gst::Pad,
@@ -521,28 +524,11 @@ fn link_decoded_video(
         .build()
         .map_err(|e| format!("decodebin: {}", e))?;
 
-    let convert_name = format!("{}:videoconvert_{}", instance_id, src_pad.name());
-    let videoconvert = gst::ElementFactory::make("videoconvert")
-        .name(&convert_name)
-        .build()
-        .map_err(|e| format!("videoconvert: {}", e))?;
+    bin.add(&decodebin)
+        .map_err(|e| format!("add decodebin: {}", e))?;
 
-    bin.add_many([&decodebin, &videoconvert])
-        .map_err(|e| format!("add decode elements: {}", e))?;
-
-    // Link videoconvert -> identity first (downstream before upstream)
-    let convert_src = videoconvert
-        .static_pad("src")
-        .ok_or("videoconvert has no src pad")?;
-    let identity_sink = identity
-        .static_pad("sink")
-        .ok_or("identity has no sink pad")?;
-    convert_src
-        .link(&identity_sink)
-        .map_err(|e| format!("link videoconvert -> identity: {:?}", e))?;
-
-    // Connect decodebin's dynamic pad to videoconvert
-    let videoconvert_weak = videoconvert.downgrade();
+    // Connect decodebin's dynamic pad directly to identity
+    let identity_weak = identity.downgrade();
     let instance_id_owned = instance_id.to_string();
     decodebin.connect_pad_added(move |_element, pad| {
         let caps_name = pad
@@ -562,11 +548,11 @@ fn link_decoded_video(
             .map(|n| n.starts_with("video/"))
             .unwrap_or(false)
         {
-            if let Some(videoconvert) = videoconvert_weak.upgrade() {
-                if let Some(sink) = videoconvert.static_pad("sink") {
+            if let Some(identity) = identity_weak.upgrade() {
+                if let Some(sink) = identity.static_pad("sink") {
                     if let Err(e) = pad.link(&sink) {
                         error!(
-                            "EFPSRT Input {}: Failed to link decodebin to videoconvert: {:?}",
+                            "EFPSRT Input {}: Failed to link decodebin to identity: {:?}",
                             instance_id_owned, e
                         );
                     }
@@ -575,9 +561,6 @@ fn link_decoded_video(
         }
     });
 
-    videoconvert
-        .sync_state_with_parent()
-        .map_err(|e| format!("sync videoconvert: {}", e))?;
     decodebin
         .sync_state_with_parent()
         .map_err(|e| format!("sync decodebin: {}", e))?;
@@ -591,7 +574,7 @@ fn link_decoded_video(
         .map_err(|e| format!("link efpdemux -> decodebin: {:?}", e))?;
 
     debug!(
-        "EFPSRT Input {}: Inserted decodebin + videoconvert for pad {}",
+        "EFPSRT Input {}: Inserted decodebin for pad {}",
         instance_id,
         src_pad.name()
     );
