@@ -25,19 +25,21 @@ if nvidia-smi > /dev/null 2>&1; then
 
     # Fully isolate CEF from GPU to prevent SharedImageManager crashes.
     # disable-gpu alone is not enough - Chromium still starts a GPU subprocess that
-    # probes the NVIDIA driver and initializes SharedImage mailboxes. When this
-    # partially-initialized GPU context becomes unstable, Chromium exhausts its
-    # fallback modes and deliberately crashes with SIGILL (exit code 132).
-    # disable-gpu-compositing: prevents GPU-based compositing in the renderer
-    # use-gl=disabled: prevents GL initialization entirely in the GPU process
-    export GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,disable-gpu,disable-gpu-compositing,use-gl=disabled,enable-logging=stderr"
+    # probes the NVIDIA driver and initializes SharedImage mailboxes.
+    #
+    # Also disable MemoryInfra background tracing to prevent SIGILL crashes.
+    # Chromium's MemoryInfra thread periodically dumps PartitionAlloc stats;
+    # in long-running processes the allocator metadata can become inconsistent,
+    # causing a CHECK() failure that crashes with ud2/SIGILL (exit code 132).
+    # See docs/CEF_SIGILL_CRASH.md for full investigation.
+    export GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,disable-gpu,disable-gpu-compositing,use-gl=disabled,disable-background-tracing,disable-field-trial-config,disable-breakpad,disable-crash-reporter,disable-dev-shm-usage,disable-background-networking,disable-component-update,enable-logging=stderr"
 else
     echo "No GPU detected - using software rendering for both GStreamer and CEF"
     # Override base image GL settings to use Xvfb (X11/Mesa software renderer)
     # Without GPU, egl-device will fail since there's no EGL device available
     export GST_GL_WINDOW=x11
     export GST_GL_PLATFORM=glx
-    export GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,disable-gpu,disable-gpu-compositing,use-gl=disabled,enable-logging=stderr"
+    export GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,disable-gpu,disable-gpu-compositing,use-gl=disabled,disable-background-tracing,disable-field-trial-config,disable-breakpad,disable-crash-reporter,disable-dev-shm-usage,disable-background-networking,disable-component-update,enable-logging=stderr"
 fi
 
 # Set CEF cache location to avoid singleton behavior warning
