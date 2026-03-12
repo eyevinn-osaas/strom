@@ -122,6 +122,21 @@ rustup target add wasm32-unknown-unknown
 cargo install trunk
 ```
 
+#### Optional Features
+
+| Feature | Description | Extra dependencies |
+|---------|-------------|-------------------|
+| `nvidia` | NVIDIA GPU monitoring (default) | None |
+| `efp` | EFP/SRT input and output blocks | `cmake`, `libclang-dev` (Linux) |
+
+```bash
+# Build with EFP support (Linux)
+sudo apt install cmake libclang-dev
+cargo run --release --features efp
+```
+
+EFP support is currently Linux-only. Pre-built Linux releases and Docker images include EFP by default.
+
 #### Run
 
 ```bash
@@ -286,6 +301,7 @@ Create reusable components from element groups:
 - **WHEP Input** - Receives audio/video via WebRTC WHEP protocol
 - **WHIP Input** - Hosts a WHIP server for browser/encoder ingest
 - **MPEG-TS/SRT Input** - Receives MPEG Transport Stream over SRT with decode or passthrough modes
+- **EFP/SRT Input** - Receives EFP (Elastic Frame Protocol) over SRT with decode or passthrough modes *(Linux only, requires `efp` feature)*
 - **DeckLink Video/Audio Input** - Captures from Blackmagic DeckLink SDI/HDMI cards
 - **NDI Input** - Receives video/audio via NewTek NDI protocol
 - **Inter Input** - Subscribes to streams from other flows (inter-pipeline routing)
@@ -295,6 +311,7 @@ Create reusable components from element groups:
 - **WHIP Output** - Sends audio via WebRTC WHIP protocol
 - **WHEP Output** - Serves audio/video streams via WebRTC WHEP with built-in player pages
 - **MPEG-TS/SRT Output** - Muxes audio/video to MPEG Transport Stream over SRT
+- **EFP/SRT Output** - Muxes audio/video to EFP over SRT *(Linux only, requires `efp` feature)*
 - **DeckLink Video/Audio Output** - Outputs to Blackmagic DeckLink SDI/HDMI cards
 - **NDI Output** - Sends video/audio via NewTek NDI protocol
 - **Inter Output** - Publishes streams for other flows to consume

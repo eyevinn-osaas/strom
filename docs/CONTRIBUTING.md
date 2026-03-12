@@ -63,7 +63,7 @@ cargo fmt --all
 Code must pass clippy with no warnings:
 
 ```bash
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ### Testing
@@ -172,7 +172,7 @@ All checks must pass before a PR can be merged.
 2. Make your changes and ensure all checks pass:
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features -- -D warnings
+   cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    ```
 
