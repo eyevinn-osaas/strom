@@ -301,6 +301,15 @@ pub const DEFAULT_SRT_INPUT_URI: &str = "srt://127.0.0.1:5000?mode=caller";
 /// Default SRT latency in milliseconds.
 pub const DEFAULT_SRT_LATENCY_MS: i32 = 125;
 
+/// Default MTU for EFP fragmentation (bytes).
+pub const DEFAULT_EFP_MTU: u32 = 1400;
+
+/// Default EFP bucket timeout (units of 10ms).
+pub const DEFAULT_EFP_BUCKET_TIMEOUT: u32 = 5;
+
+/// Default EFP head-of-line timeout (units of 10ms).
+pub const DEFAULT_EFP_HOL_TIMEOUT: u32 = 5;
+
 /// Common video resolutions for use in block property dropdowns.
 /// Ordered from largest to smallest.
 pub const COMMON_VIDEO_RESOLUTIONS: &[(&str, &str)] = &[
