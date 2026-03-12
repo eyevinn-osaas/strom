@@ -114,7 +114,7 @@ jobs:
           zig version
           cargo install --locked cargo-zigbuild
 
-      # Linux: Install GStreamer dev packages
+      # Linux: Install GStreamer dev packages and cmake (needed for EFP feature)
       - name: Install GStreamer (Linux)
         if: startsWith(matrix.platform, 'linux')
         run: |
@@ -125,7 +125,8 @@ jobs:
             libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
             libssl-dev \
-            pkg-config
+            pkg-config \
+            cmake
 
       # Windows: Install Strawberry Perl (needed for OpenSSL build)
       - name: Install Strawberry Perl (Windows)
@@ -184,14 +185,14 @@ jobs:
           shared-key: release-${{ matrix.platform }}
           cache-on-failure: true
 
-      # Linux: Build with zigbuild for glibc compatibility
+      # Linux: Build with zigbuild for glibc compatibility (EFP enabled on Linux only)
       - name: Build backend (Linux - glibc ${{ matrix.glibc }})
         if: startsWith(matrix.platform, 'linux')
         env:
           RUSTFLAGS: "-L /usr/lib/${{ matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64-linux-gnu' || 'x86_64-linux-gnu' }}"
         run: |
           set -e
-          cargo zigbuild --release --package strom --target ${{ matrix.target }}.${{ matrix.glibc }}
+          cargo zigbuild --release --package strom --features efp --target ${{ matrix.target }}.${{ matrix.glibc }}
           cargo zigbuild --release --package strom-mcp-server --target ${{ matrix.target }}.${{ matrix.glibc }}
 
       # Non-Linux: Build with regular cargo
