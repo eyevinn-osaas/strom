@@ -16,7 +16,7 @@ Fixes #(issue number)
 ## Checklist
 
 - [ ] I have run `cargo fmt --all`
-- [ ] I have run `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [ ] I have run `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] I have run `cargo test --workspace`
 - [ ] I have updated documentation as needed
 - [ ] I have added tests for new functionality
