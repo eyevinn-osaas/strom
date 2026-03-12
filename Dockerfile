@@ -91,7 +91,8 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
         libgstreamer1.0-dev:arm64 \
         libgstreamer-plugins-base1.0-dev:arm64 \
         libgstreamer-plugins-bad1.0-dev:arm64 \
-        cmake && \
+        cmake \
+        libclang-dev && \
     rm -rf /var/lib/apt/lists/*; \
 else \
     echo "==> Native build for $TARGETPLATFORM - Installing native GStreamer libs"; \
@@ -100,7 +101,8 @@ else \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
         libgstreamer-plugins-bad1.0-dev \
-        cmake && \
+        cmake \
+        libclang-dev && \
     rm -rf /var/lib/apt/lists/*; \
 fi
 

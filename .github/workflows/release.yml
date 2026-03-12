@@ -126,7 +126,8 @@ jobs:
             libgstreamer-plugins-bad1.0-dev \
             libssl-dev \
             pkg-config \
-            cmake
+            cmake \
+            libclang-dev
 
       # Windows: Install Strawberry Perl (needed for OpenSSL build)
       - name: Install Strawberry Perl (Windows)
