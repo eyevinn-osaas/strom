@@ -171,6 +171,8 @@ RUN apt-get update && apt-get install -y \
         libgl1-mesa-dri \
         graphviz \
         ca-certificates \
+        dbus \
+        avahi-daemon \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binaries from backend-builder to /app
@@ -205,8 +207,12 @@ RUN mkdir -p /usr/share/glvnd/egl_vendor.d && \
 # Create data directory for persistent storage
 RUN mkdir -p /data
 
+# Copy entrypoint script that starts dbus/avahi for NDI discovery
+COPY docker/strom/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Expose the server port
 EXPOSE 8080
 
-# Run the server from /app
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/app/strom"]

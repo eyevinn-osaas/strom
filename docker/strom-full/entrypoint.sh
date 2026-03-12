@@ -10,6 +10,14 @@
 # - With GPU: Keep egl-device for GStreamer GL (CUDA-GL interop), fully isolate CEF from GPU
 # - Without GPU: Override to x11/glx so GStreamer GL falls back via Xvfb/Mesa
 
+# Start dbus and avahi-daemon for NDI network discovery
+# NDI uses mDNS (Avahi) to discover streams on the local network.
+rm -f /run/dbus/pid
+mkdir -p /run/dbus
+dbus-daemon --system 2>/dev/null
+rm -f /run/avahi-daemon/pid
+avahi-daemon -D 2>/dev/null
+
 # Clean up stale X server lock files from previous runs/crashes
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null
 
