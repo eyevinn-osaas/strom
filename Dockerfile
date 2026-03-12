@@ -48,6 +48,7 @@ ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     pkg-config \
+    cmake \
     curl \
     xz-utils \
     build-essential \
