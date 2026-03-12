@@ -1,6 +1,6 @@
 //! EFP over SRT output block builder.
 //!
-//! This block muxes multiple video and audio streams into EFP (Eyevinn Fragment Protocol)
+//! This block muxes multiple video and audio streams into EFP (Elastic Frame Protocol)
 //! and outputs via SRT (Secure Reliable Transport).
 //!
 //! Features:
@@ -710,7 +710,7 @@ fn efpsrt_output_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.efpsrt_output".to_string(),
         name: "EFP/SRT Output".to_string(),
-        description: "Muxes multiple audio/video streams using EFP (Eyevinn Fragment Protocol) and outputs via SRT. Supports H.264, H.265 video and Opus audio natively. Auto-encodes raw audio to Opus. Other formats are transported as private data.".to_string(),
+        description: "Muxes multiple audio/video streams using EFP (Elastic Frame Protocol) and outputs via SRT. Supports H.264, H.265 video and Opus audio natively. Auto-encodes raw audio to Opus. Other formats are transported as private data.".to_string(),
         category: "Outputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {

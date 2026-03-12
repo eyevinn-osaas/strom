@@ -1,6 +1,6 @@
 //! EFP over SRT input block builder.
 //!
-//! This block receives an SRT stream carrying EFP (Eyevinn Fragment Protocol) and demuxes
+//! This block receives an SRT stream carrying EFP (Elastic Frame Protocol) and demuxes
 //! it into separate video and audio output pads.
 //!
 //! Pipeline structure (decode=true, default):
@@ -622,7 +622,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
     BlockDefinition {
         id: "builtin.efpsrt_input".to_string(),
         name: "EFP/SRT Input".to_string(),
-        description: "Receives an SRT stream carrying EFP (Eyevinn Fragment Protocol) and demuxes it into separate video and audio outputs. Supports decode (default) and passthrough modes.".to_string(),
+        description: "Receives an SRT stream carrying EFP (Elastic Frame Protocol) and demuxes it into separate video and audio outputs. Supports decode (default) and passthrough modes.".to_string(),
         category: "Inputs".to_string(),
         exposed_properties: vec![
             ExposedProperty {
