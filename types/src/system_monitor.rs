@@ -11,6 +11,8 @@ use utoipa::ToSchema;
 pub struct SystemStats {
     /// CPU usage percentage (0-100)
     pub cpu_usage: f32,
+    /// Number of CPU cores available to this process (cgroup-aware)
+    pub num_cores: usize,
     /// Total system memory in bytes
     pub total_memory: u64,
     /// Used system memory in bytes

@@ -303,17 +303,6 @@ pub fn setup_thread_priority_handler(
                         thread_id, owner, flow_name
                     );
 
-                    // Register thread with the registry
-                    if let Some(ref registry) = thread_registry {
-                        // Try to extract block ID from element name (format: "block_id:element_type")
-                        let block_id = if owner.contains(':') {
-                            owner.split(':').next().map(|s| s.to_string())
-                        } else {
-                            None
-                        };
-                        registry.register(thread_id, owner.clone(), flow_id, block_id, assigned_core);
-                    }
-
                     // Set thread priority (if not Normal)
                     if !matches!(state_clone.requested, ThreadPriority::Normal) {
                         match set_current_thread_priority(state_clone.requested) {
@@ -337,22 +326,37 @@ pub fn setup_thread_priority_handler(
                         state_clone.record_success();
                     }
 
-                    // Set CPU affinity (if configured)
-                    if let Some(ref cpus) = affinity_cpus {
+                    // Set CPU affinity (if configured) — track actual result
+                    let actual_pinned_core = if let Some(ref cpus) = affinity_cpus {
                         match set_thread_cpu_affinity(thread_id, cpus) {
                             Ok(()) => {
                                 info!(
                                     "Set CPU affinity {:?} for thread {} (element: {}, pipeline: {})",
                                     cpus, thread_id, owner, flow_name
                                 );
+                                assigned_core
                             }
                             Err(e) => {
                                 warn!(
                                     "Failed to set CPU affinity for thread {} (element: {}, pipeline: {}): {}",
                                     thread_id, owner, flow_name, e
                                 );
+                                None
                             }
                         }
+                    } else {
+                        None
+                    };
+
+                    // Register thread with the registry (using actual pinned core, not intended)
+                    if let Some(ref registry) = thread_registry {
+                        // Try to extract block ID from element name (format: "block_id:element_type")
+                        let block_id = if owner.contains(':') {
+                            owner.split(':').next().map(|s| s.to_string())
+                        } else {
+                            None
+                        };
+                        registry.register(thread_id, owner.clone(), flow_id, block_id, actual_pinned_core);
                     }
                 }
                 gst::StreamStatusType::Leave => {

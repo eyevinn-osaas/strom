@@ -461,7 +461,10 @@ impl InfoPage {
 
     fn render_cpu_content(&self, ui: &mut Ui, system_monitor: &SystemMonitorStore, box_width: f32) {
         if let Some(stats) = system_monitor.latest() {
-            ui.label(format!("Usage: {:.1}%", stats.cpu_usage));
+            ui.label(format!(
+                "{} cores, usage: {:.1}%",
+                stats.num_cores, stats.cpu_usage
+            ));
             ui.add_space(4.0);
 
             // Graph width = box width minus inner margin on both sides

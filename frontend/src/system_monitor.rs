@@ -353,7 +353,10 @@ impl<'a> DetailedSystemMonitor<'a> {
                         bg_color,
                         stroke_color,
                     );
-                    ui.label(format!("Current: {:.1}%", stats.cpu_usage));
+                    ui.label(format!(
+                        "{} cores, current: {:.1}%",
+                        stats.num_cores, stats.cpu_usage
+                    ));
                 });
 
                 ui.separator();

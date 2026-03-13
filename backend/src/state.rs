@@ -81,6 +81,8 @@ impl AppState {
         sap_multicast_addresses: Vec<String>,
     ) -> Self {
         let events = EventBroadcaster::default();
+        let affinity_manager = AffinityManager::new();
+        let num_cores = affinity_manager.num_cores();
         Self {
             inner: Arc::new(AppStateInner {
                 flows: RwLock::new(HashMap::new()),
@@ -90,9 +92,9 @@ impl AppState {
                 pipelines: RwLock::new(HashMap::new()),
                 events: events.clone(),
                 block_registry: BlockRegistry::new(blocks_path),
-                system_monitor: SystemMonitor::new(),
+                system_monitor: SystemMonitor::new(num_cores),
                 thread_registry: ThreadRegistry::new(),
-                affinity_manager: AffinityManager::new(),
+                affinity_manager,
                 thread_cpu_sampler: parking_lot::Mutex::new(ThreadCpuSampler::new()),
                 channel_registry: ChannelRegistry::new(),
                 discovery: DiscoveryService::new(events, sap_multicast_addresses.clone()),

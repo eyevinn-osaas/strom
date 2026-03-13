@@ -18,6 +18,8 @@ pub struct AffinityManager {
 }
 
 struct AffinityManagerInner {
+    /// Total number of cores visible to this process (cgroup-aware)
+    total_cores: usize,
     /// Cores available for flow pinning (excludes reserved system cores)
     available_cores: Vec<usize>,
     /// Flow -> assigned core mapping
@@ -30,40 +32,39 @@ impl AffinityManager {
     /// Create a new affinity manager.
     ///
     /// Detects available cores and reserves the highest-numbered cores
-    /// for system/tokio tasks:
+    /// for system/tokio tasks only on larger systems where the overhead
+    /// is negligible:
     /// - 1 core: no pinning (skip)
-    /// - 2 cores: reserve 1, available: 1
-    /// - 3-8 cores: reserve 1, available: 2-7
-    /// - 9-32 cores: reserve 2, available: 7-30
-    /// - 33+ cores: reserve 3, available: 30+
+    /// - 2-7 cores: all cores available (tokio shares, not worth reserving)
+    /// - 8-32 cores: reserve 1, available: 7-31
+    /// - 33+ cores: reserve 2, available: 31+
     pub fn new() -> Self {
         #[cfg(target_os = "linux")]
         {
-            let num_cpus = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1);
+            let allowed_cores = detect_allowed_cores();
+            let num_cpus = allowed_cores.len();
 
             let reserved = match num_cpus {
-                0..=1 => 0,
-                2..=8 => 1,
-                9..=32 => 2,
-                _ => 3,
+                0..=7 => 0,
+                8..=32 => 1,
+                _ => 2,
             };
 
             let available_cores: Vec<usize> = if num_cpus <= 1 {
                 // Single core - no pinning possible
                 Vec::new()
             } else {
-                // Reserve highest-numbered cores, use the rest
-                (0..num_cpus - reserved).collect()
+                // Use all allowed cores on small systems, reserve highest-numbered on large
+                allowed_cores[..num_cpus - reserved].to_vec()
             };
 
             let core_flow_count: HashMap<usize, usize> =
                 available_cores.iter().map(|&core| (core, 0)).collect();
 
             info!(
-                "AffinityManager: {} cores detected, {} reserved for system, {} available for flows: {:?}",
+                "AffinityManager: {} cores detected (allowed: {:?}), {} reserved for system, {} available for flows: {:?}",
                 num_cpus,
+                allowed_cores,
                 reserved,
                 available_cores.len(),
                 available_cores
@@ -71,6 +72,7 @@ impl AffinityManager {
 
             Self {
                 inner: RwLock::new(AffinityManagerInner {
+                    total_cores: num_cpus,
                     available_cores,
                     flow_assignments: HashMap::new(),
                     core_flow_count,
@@ -80,9 +82,13 @@ impl AffinityManager {
 
         #[cfg(not(target_os = "linux"))]
         {
+            let num_cpus = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
             info!("AffinityManager: CPU affinity not supported on this platform, core pinning disabled");
             Self {
                 inner: RwLock::new(AffinityManagerInner {
+                    total_cores: num_cpus,
                     available_cores: Vec::new(),
                     flow_assignments: HashMap::new(),
                     core_flow_count: HashMap::new(),
@@ -94,16 +100,23 @@ impl AffinityManager {
     /// Create an affinity manager with a specific set of available cores (for testing).
     #[cfg(test)]
     fn with_cores(available_cores: Vec<usize>) -> Self {
+        let total_cores = available_cores.len();
         let core_flow_count: HashMap<usize, usize> =
             available_cores.iter().map(|&core| (core, 0)).collect();
 
         Self {
             inner: RwLock::new(AffinityManagerInner {
+                total_cores,
                 available_cores,
                 flow_assignments: HashMap::new(),
                 core_flow_count,
             }),
         }
+    }
+
+    /// Get the total number of CPU cores visible to this process (cgroup-aware).
+    pub fn num_cores(&self) -> usize {
+        self.inner.read().total_cores
     }
 
     /// Allocate a core for a flow using least-loaded strategy.
@@ -174,6 +187,63 @@ impl Default for AffinityManager {
     }
 }
 
+/// Detect which CPU cores this process is allowed to use.
+///
+/// On Linux, checks cgroup cpuset constraints (both v2 and v1) to handle
+/// container environments (Docker, k8s) where the process may only have
+/// access to a subset of host cores. Falls back to `available_parallelism()`
+/// if cgroup info is unavailable.
+#[cfg(target_os = "linux")]
+fn detect_allowed_cores() -> Vec<usize> {
+    // Try cgroups v2 first, then v1
+    let cpuset = std::fs::read_to_string("/sys/fs/cgroup/cpuset.cpus.effective")
+        .or_else(|_| std::fs::read_to_string("/sys/fs/cgroup/cpuset/cpuset.cpus"));
+
+    if let Ok(cpuset_str) = cpuset {
+        let cores = parse_cpuset(&cpuset_str);
+        if !cores.is_empty() {
+            info!(
+                "AffinityManager: detected cgroup cpuset: {} cores {:?}",
+                cores.len(),
+                cores
+            );
+            return cores;
+        }
+    }
+
+    // Fallback: assume all cores 0..N are available
+    let num_cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    info!(
+        "AffinityManager: no cgroup cpuset found, assuming {} cores (0..{})",
+        num_cpus, num_cpus
+    );
+    (0..num_cpus).collect()
+}
+
+/// Parse a cpuset string like "0-3,7,9-11" into a sorted Vec of core indices.
+#[cfg(target_os = "linux")]
+fn parse_cpuset(s: &str) -> Vec<usize> {
+    let mut cores = Vec::new();
+    for part in s.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((start, end)) = part.split_once('-') {
+            if let (Ok(s), Ok(e)) = (start.trim().parse::<usize>(), end.trim().parse::<usize>()) {
+                cores.extend(s..=e);
+            }
+        } else if let Ok(n) = part.parse::<usize>() {
+            cores.push(n);
+        }
+    }
+    cores.sort_unstable();
+    cores.dedup();
+    cores
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,13 +258,13 @@ mod tests {
 
     #[test]
     fn test_two_core_system() {
-        // 2-core: reserve 1, available: core 0
-        let manager = AffinityManager::with_cores(vec![0]);
+        // 2-core: no reservation, available: cores 0-1
+        let manager = AffinityManager::with_cores(vec![0, 1]);
         let flow1 = Uuid::new_v4();
         let flow2 = Uuid::new_v4();
 
         assert_eq!(manager.allocate(flow1), Some(0));
-        assert_eq!(manager.allocate(flow2), Some(0)); // Both share core 0
+        assert_eq!(manager.allocate(flow2), Some(1)); // Spread across both cores
     }
 
     #[test]
@@ -276,5 +346,41 @@ mod tests {
         assert_eq!(manager.get_assignment(&flow), Some(core));
         manager.deallocate(&flow);
         assert_eq!(manager.get_assignment(&flow), None);
+    }
+
+    #[test]
+    fn test_num_cores() {
+        let manager = AffinityManager::with_cores(vec![0, 1, 2, 3]);
+        assert_eq!(manager.num_cores(), 4);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_cpuset_range() {
+        assert_eq!(parse_cpuset("0-3"), vec![0, 1, 2, 3]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_cpuset_mixed() {
+        assert_eq!(parse_cpuset("0-3,7,9-11"), vec![0, 1, 2, 3, 7, 9, 10, 11]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_cpuset_single() {
+        assert_eq!(parse_cpuset("5"), vec![5]);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_cpuset_empty() {
+        assert_eq!(parse_cpuset(""), Vec::<usize>::new());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_parse_cpuset_whitespace() {
+        assert_eq!(parse_cpuset("  0-2 , 5 \n"), vec![0, 1, 2, 5]);
     }
 }
