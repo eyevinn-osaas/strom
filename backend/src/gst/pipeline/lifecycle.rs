@@ -21,6 +21,7 @@ impl PipelineManager {
         let priority_state = thread_priority::setup_thread_priority_handler(
             &self.pipeline,
             self.properties.thread_priority,
+            self.assigned_core,
             self.flow_id,
             self.thread_registry.clone(),
         );

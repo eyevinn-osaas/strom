@@ -246,6 +246,7 @@ fn set_nice_value(nice: i32) -> Result<(), String> {
 pub fn setup_thread_priority_handler(
     pipeline: &gst::Pipeline,
     priority: ThreadPriority,
+    assigned_core: Option<usize>,
     flow_id: FlowId,
     thread_registry: Option<ThreadRegistry>,
 ) -> ThreadPriorityState {
@@ -256,13 +257,25 @@ pub fn setup_thread_priority_handler(
 
     // Always set up handler if we have a thread registry (for CPU monitoring),
     // even if priority is Normal
-    let need_handler = !matches!(priority, ThreadPriority::Normal) || has_registry;
+    let need_handler =
+        !matches!(priority, ThreadPriority::Normal) || assigned_core.is_some() || has_registry;
 
     if !need_handler {
-        info!("Thread priority set to Normal and no thread registry - no sync handler needed");
+        info!("Thread priority set to Normal, no affinity, no registry - no sync handler needed");
         state.achieved.store(true, Ordering::SeqCst);
         return state;
     }
+
+    // Pre-compute the CPU affinity mask
+    let affinity_cpus = if let Some(core) = assigned_core {
+        info!(
+            "SingleCore CPU affinity: flow {} pinned to core {}",
+            flow_id, core
+        );
+        Some(vec![core])
+    } else {
+        None
+    };
 
     let Some(bus) = pipeline.bus() else {
         error!("Pipeline has no bus - cannot set up thread priority handler");
@@ -298,7 +311,7 @@ pub fn setup_thread_priority_handler(
                         } else {
                             None
                         };
-                        registry.register(thread_id, owner.clone(), flow_id, block_id);
+                        registry.register(thread_id, owner.clone(), flow_id, block_id, assigned_core);
                     }
 
                     // Set thread priority (if not Normal)
@@ -323,6 +336,24 @@ pub fn setup_thread_priority_handler(
                         // For Normal priority, still count as success for status reporting
                         state_clone.record_success();
                     }
+
+                    // Set CPU affinity (if configured)
+                    if let Some(ref cpus) = affinity_cpus {
+                        match set_thread_cpu_affinity(thread_id, cpus) {
+                            Ok(()) => {
+                                info!(
+                                    "Set CPU affinity {:?} for thread {} (element: {}, pipeline: {})",
+                                    cpus, thread_id, owner, flow_name
+                                );
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to set CPU affinity for thread {} (element: {}, pipeline: {}): {}",
+                                    thread_id, owner, flow_name, e
+                                );
+                            }
+                        }
+                    }
                 }
                 gst::StreamStatusType::Leave => {
                     let thread_id = get_current_thread_native_id();
@@ -346,9 +377,10 @@ pub fn setup_thread_priority_handler(
     });
 
     info!(
-        "Thread priority sync handler installed for pipeline '{}' (requested: {:?}, registry: {})",
+        "Thread priority sync handler installed for pipeline '{}' (priority: {:?}, assigned_core: {:?}, registry: {})",
         pipeline.name(),
         priority,
+        assigned_core,
         has_registry
     );
 
@@ -386,6 +418,36 @@ fn get_current_thread_native_id() -> u64 {
     {
         0
     }
+}
+
+/// Set CPU affinity for a specific thread (Linux only).
+#[cfg(target_os = "linux")]
+fn set_thread_cpu_affinity(thread_id: u64, cpus: &[usize]) -> Result<(), String> {
+    use std::mem;
+
+    unsafe {
+        let mut cpuset: libc::cpu_set_t = mem::zeroed();
+        for &cpu in cpus {
+            libc::CPU_SET(cpu, &mut cpuset);
+        }
+        let ret = libc::sched_setaffinity(
+            thread_id as libc::pid_t,
+            mem::size_of::<libc::cpu_set_t>(),
+            &cpuset,
+        );
+        if ret == 0 {
+            Ok(())
+        } else {
+            let errno = *libc::__errno_location();
+            Err(format!("sched_setaffinity failed: errno {}", errno))
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set_thread_cpu_affinity(_thread_id: u64, _cpus: &[usize]) -> Result<(), String> {
+    debug!("CPU affinity not supported on this platform");
+    Ok(())
 }
 
 /// Remove the sync handler from the pipeline bus.

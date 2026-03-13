@@ -415,6 +415,7 @@ impl ThreadCpuSampler {
                 element_name: thread.element_name.clone(),
                 flow_id: thread.flow_id,
                 block_id: thread.block_id.clone(),
+                pinned_core: thread.pinned_core,
             });
         }
 
@@ -488,6 +489,7 @@ impl ThreadCpuSampler {
                 element_name: thread.element_name.clone(),
                 flow_id: thread.flow_id,
                 block_id: thread.block_id.clone(),
+                pinned_core: thread.pinned_core,
             })
             .collect()
     }

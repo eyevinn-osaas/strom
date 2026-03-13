@@ -16,6 +16,7 @@ use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManager
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+pub mod affinity_manager;
 pub mod api;
 pub mod assets;
 pub mod auth;

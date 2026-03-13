@@ -493,6 +493,32 @@ impl StromApp {
                     }
                 }
 
+                ui.add_space(10.0);
+
+                // CPU Affinity
+                ui.label("CPU Affinity:");
+                ui.horizontal(|ui| {
+                    use strom_types::flow::CpuAffinity;
+
+                    egui::ComboBox::from_id_salt("cpu_affinity_selector")
+                        .selected_text(match self.properties_cpu_affinity_buffer {
+                            CpuAffinity::Off => "Off",
+                            CpuAffinity::SingleCore => "Single Core",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.properties_cpu_affinity_buffer,
+                                CpuAffinity::Off,
+                                "Off (OS scheduler decides)",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_cpu_affinity_buffer,
+                                CpuAffinity::SingleCore,
+                                "Single Core (max cache locality)",
+                            );
+                        });
+                });
+
                 // Show timestamps section
                 if let Some(flow) = self.editing_properties_flow_id.and_then(|id| self.flows.iter().find(|f| f.id == id)) {
                     let has_timestamps = flow.properties.created_at.is_some()
@@ -573,6 +599,10 @@ impl StromApp {
                             // Set thread priority
                             flow.properties.thread_priority =
                                 self.properties_thread_priority_buffer;
+
+                            // Set CPU affinity
+                            flow.properties.cpu_affinity =
+                                self.properties_cpu_affinity_buffer;
 
                             let flow_clone = flow.clone();
                             let api = self.api.clone();

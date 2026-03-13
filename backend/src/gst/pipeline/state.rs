@@ -135,6 +135,14 @@ impl PipelineManager {
         self.thread_registry = Some(registry);
     }
 
+    /// Set the assigned CPU core for SingleCore affinity.
+    ///
+    /// This should be called before start() so the thread priority handler
+    /// can pin threads to the correct core.
+    pub fn set_assigned_core(&mut self, core: Option<usize>) {
+        self.assigned_core = core;
+    }
+
     /// Get WHEP endpoints registered by blocks in this pipeline.
     pub fn whep_endpoints(&self) -> &[crate::blocks::WhepEndpointInfo] {
         &self.whep_endpoints

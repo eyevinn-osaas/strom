@@ -251,6 +251,7 @@ pub enum ThreadSortColumn {
     Block,
     Flow,
     ThreadId,
+    Core,
 }
 
 /// Sort direction.
@@ -527,6 +528,16 @@ impl<'a> DetailedSystemMonitor<'a> {
                     }
                 });
             }
+            ThreadSortColumn::Core => {
+                threads.sort_by(|a, b| {
+                    let cmp = a.pinned_core.cmp(&b.pinned_core);
+                    if matches!(sort_dir, SortDirection::Descending) {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                });
+            }
         }
 
         let mut nav_action: Option<ThreadNavigationAction> = None;
@@ -536,12 +547,13 @@ impl<'a> DetailedSystemMonitor<'a> {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 egui::Grid::new("thread_grid")
-                    .num_columns(5)
+                    .num_columns(6)
                     .spacing([20.0, 4.0])
                     .striped(true)
                     .show(ui, |ui| {
                         // Clickable headers for sorting
                         self.sortable_header(ui, "CPU %", ThreadSortColumn::Cpu);
+                        self.sortable_header(ui, "Core", ThreadSortColumn::Core);
                         self.sortable_header(ui, "Element", ThreadSortColumn::Element);
                         self.sortable_header(ui, "Block", ThreadSortColumn::Block);
                         self.sortable_header(ui, "Flow", ThreadSortColumn::Flow);
@@ -560,6 +572,13 @@ impl<'a> DetailedSystemMonitor<'a> {
                                 ui.visuals().text_color()
                             };
                             ui.colored_label(color, format!("{:.1}%", cpu));
+
+                            // Pinned core
+                            if let Some(core) = stats.pinned_core {
+                                ui.label(format!("{}", core));
+                            } else {
+                                ui.label("-");
+                            }
 
                             // Element name (clickable)
                             if ui.link(&stats.element_name).clicked() {

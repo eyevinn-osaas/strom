@@ -1,5 +1,6 @@
 //! Application state management.
 
+use crate::affinity_manager::AffinityManager;
 use crate::blocks::BlockRegistry;
 use crate::discovery::DiscoveryService;
 use crate::events::EventBroadcaster;
@@ -45,6 +46,8 @@ struct AppStateInner {
     system_monitor: SystemMonitor,
     /// Thread registry for tracking GStreamer streaming threads
     thread_registry: ThreadRegistry,
+    /// CPU affinity manager for smart core allocation
+    affinity_manager: AffinityManager,
     /// Thread CPU sampler for measuring per-thread CPU usage
     thread_cpu_sampler: parking_lot::Mutex<ThreadCpuSampler>,
     /// Channel registry for inter-pipeline sharing
@@ -89,6 +92,7 @@ impl AppState {
                 block_registry: BlockRegistry::new(blocks_path),
                 system_monitor: SystemMonitor::new(),
                 thread_registry: ThreadRegistry::new(),
+                affinity_manager: AffinityManager::new(),
                 thread_cpu_sampler: parking_lot::Mutex::new(ThreadCpuSampler::new()),
                 channel_registry: ChannelRegistry::new(),
                 discovery: DiscoveryService::new(events, sap_multicast_addresses.clone()),
@@ -643,6 +647,15 @@ impl AppState {
         // Set thread registry for CPU monitoring
         manager.set_thread_registry(self.inner.thread_registry.clone());
 
+        // Allocate CPU core for SingleCore affinity
+        if matches!(
+            flow.properties.cpu_affinity,
+            strom_types::flow::CpuAffinity::SingleCore
+        ) {
+            let assigned_core = self.inner.affinity_manager.allocate(*id);
+            manager.set_assigned_core(assigned_core);
+        }
+
         // Start pipeline
         info!("Calling manager.start() (this may block)...");
         let state = manager.start()?;
@@ -1011,6 +1024,9 @@ impl AppState {
 
         // Stop the pipeline
         let state = manager.stop()?;
+
+        // Deallocate CPU core assignment
+        self.inner.affinity_manager.deallocate(id);
 
         // Clear runtime_data from all blocks (SDP is only valid while running)
         let flow = {
