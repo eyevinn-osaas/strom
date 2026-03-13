@@ -1470,6 +1470,9 @@ impl AppState {
     }
 
     /// Get WebRTC statistics from a running flow's pipeline.
+    ///
+    /// Uses block_in_place so the synchronous GStreamer promise.wait() calls
+    /// don't prevent tokio from scheduling other tasks on other threads.
     pub async fn get_webrtc_stats(
         &self,
         flow_id: &FlowId,
@@ -1480,7 +1483,8 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        Ok(manager.get_webrtc_stats())
+        let stats = tokio::task::block_in_place(|| manager.get_webrtc_stats());
+        Ok(stats)
     }
 
     /// Query the latency of a running pipeline.

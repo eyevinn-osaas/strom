@@ -7,12 +7,14 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::str::FromStr;
 use strom_types::{block::*, element::ElementPadRef, EnumValue, PropertyValue, *};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 // AES67 Input defaults
 const AES67_INPUT_DEFAULT_DECODE: bool = true;
 const AES67_INPUT_DEFAULT_LATENCY_MS: i64 = 20;
 const AES67_INPUT_DEFAULT_TIMEOUT_MS: i64 = 0;
+const AES67_INPUT_DEFAULT_BUFFER_DURATION_MS: i64 =
+    strom_types::block::DEFAULT_AES67_INPUT_BUFFER_DURATION_MS;
 
 // AES67 Output defaults
 const AES67_OUTPUT_DEFAULT_TTL: i64 = 32;
@@ -123,9 +125,19 @@ impl BlockBuilder for AES67InputBuilder {
             }
         });
 
+        // Get buffer_duration_ms property (for audiobuffersplit, 0 = disabled)
+        let buffer_duration_ms = properties
+            .get("buffer_duration_ms")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some(*i),
+                PropertyValue::String(s) => s.parse::<i64>().ok(),
+                _ => None,
+            })
+            .unwrap_or(AES67_INPUT_DEFAULT_BUFFER_DURATION_MS);
+
         debug!(
-            "AES67 Input [{}]: decode={}, latency_ms={}, timeout_ms={}, interface={:?}",
-            instance_id, decode, latency_ms, timeout_ms, interface
+            "AES67 Input [{}]: decode={}, latency_ms={}, timeout_ms={}, buffer_duration_ms={}, interface={:?}",
+            instance_id, decode, latency_ms, timeout_ms, buffer_duration_ms, interface
         );
 
         // Write SDP to temp file
@@ -356,6 +368,51 @@ impl BlockBuilder for AES67InputBuilder {
                 .build()
                 .map_err(|e| BlockBuildError::ElementCreation(format!("capssetter: {}", e)))?;
 
+            // audiobuffersplit (gst-plugins-bad, available since GStreamer 1.12) compacts
+            // 1ms AES67 buffers into larger chunks, reducing downstream wakeups and
+            // context switches significantly. Falls back to identity if not available.
+            let buffersplit_id = format!("{}:audiobuffersplit", instance_id);
+            let audiobuffersplit = if buffer_duration_ms > 0 {
+                match gst::ElementFactory::make("audiobuffersplit")
+                    .name(&buffersplit_id)
+                    .property(
+                        "output-buffer-duration",
+                        gst::Fraction::new(buffer_duration_ms as i32, 1000),
+                    )
+                    .build()
+                {
+                    Ok(elem) => {
+                        info!(
+                            "AES67 Input [{}]: audiobuffersplit output-buffer-duration={}ms",
+                            instance_id, buffer_duration_ms
+                        );
+                        elem
+                    }
+                    Err(_) => {
+                        error!(
+                            "AES67 Input [{}]: audiobuffersplit not available (install gstreamer1.0-plugins-bad), \
+                             falling back to identity - 1ms buffers will pass through without compaction",
+                            instance_id
+                        );
+                        gst::ElementFactory::make("identity")
+                            .name(&buffersplit_id)
+                            .build()
+                            .map_err(|e| {
+                                BlockBuildError::ElementCreation(format!("identity: {}", e))
+                            })?
+                    }
+                }
+            } else {
+                info!(
+                    "AES67 Input [{}]: buffer compaction disabled (buffer_duration_ms=0)",
+                    instance_id
+                );
+                gst::ElementFactory::make("identity")
+                    .name(&buffersplit_id)
+                    .build()
+                    .map_err(|e| BlockBuildError::ElementCreation(format!("identity: {}", e)))?
+            };
+
             let audioconvert = gst::ElementFactory::make("audioconvert")
                 .name(&audioconvert_id)
                 .build()
@@ -430,6 +487,7 @@ impl BlockBuilder for AES67InputBuilder {
                     (sdpdemux_id.clone(), sdpdemux),
                     (decodebin_id.clone(), decodebin),
                     (capssetter_id.clone(), capssetter),
+                    (buffersplit_id.clone(), audiobuffersplit),
                     (audioconvert_id.clone(), audioconvert),
                     (audioresample_id.clone(), audioresample),
                 ],
@@ -444,8 +502,13 @@ impl BlockBuilder for AES67InputBuilder {
                         ElementPadRef::pad(&decodebin_id, "sink"),
                     ),
                     // decodebin -> capssetter is dynamic (handled by pad-added above)
+                    // capssetter -> audiobuffersplit (or identity) -> audioconvert -> audioresample
                     (
                         ElementPadRef::pad(&capssetter_id, "src"),
+                        ElementPadRef::pad(&buffersplit_id, "sink"),
+                    ),
+                    (
+                        ElementPadRef::pad(&buffersplit_id, "src"),
                         ElementPadRef::pad(&audioconvert_id, "sink"),
                     ),
                     (
@@ -804,6 +867,18 @@ fn aes67_input_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "interface".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "buffer_duration_ms".to_string(),
+                label: "Buffer Duration (ms)".to_string(),
+                description: "Compact small AES67 buffers into larger chunks to reduce downstream wakeups. Set to 0 to disable.".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(AES67_INPUT_DEFAULT_BUFFER_DURATION_MS)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "buffer_duration_ms".to_string(),
                     transform: None,
                 },
             },
