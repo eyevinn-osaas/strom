@@ -137,14 +137,14 @@ jobs:
         run: cp backend/tests/openapi_snapshot.json openapi-current.json
 
       - name: Check for breaking changes
-        uses: oasdiff/oasdiff-action/breaking@main
+        uses: oasdiff/oasdiff-action/breaking@v0.0.32
         with:
           base: openapi-base.json
           revision: openapi-current.json
 
       - name: API changelog
         if: always()
-        uses: oasdiff/oasdiff-action/changelog@main
+        uses: oasdiff/oasdiff-action/changelog@v0.0.32
         with:
           base: openapi-base.json
           revision: openapi-current.json

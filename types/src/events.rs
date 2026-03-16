@@ -476,10 +476,10 @@ impl StromEvent {
             } => {
                 let status = if *synced { "synced" } else { "not synced" };
                 let delay = mean_path_delay_ns
-                    .map(|ns| format!("{:.1}us delay", ns as f64 / 1000.0))
+                    .map(|ns| format!("{:.1}µs delay", ns as f64 / 1000.0))
                     .unwrap_or_default();
                 let offset = clock_offset_ns
-                    .map(|ns| format!("{:.1}us offset", ns as f64 / 1000.0))
+                    .map(|ns| format!("{:.1}µs offset", ns as f64 / 1000.0))
                     .unwrap_or_default();
                 format!(
                     "PTP stats for flow {}: {} {} {}",
