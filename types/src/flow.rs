@@ -12,6 +12,36 @@ use utoipa::ToSchema;
 /// Unique identifier for a flow.
 pub type FlowId = Uuid;
 
+/// CPU affinity strategy for GStreamer streaming threads.
+///
+/// Controls whether pipeline threads are pinned to a single CPU core
+/// for better cache locality and reduced context switches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CpuAffinity {
+    /// No pinning, OS scheduler decides thread placement
+    Off,
+    /// Pin all pipeline threads to a single core for maximum cache locality.
+    /// Core is assigned by the AffinityManager using least-loaded strategy.
+    #[default]
+    SingleCore,
+}
+
+impl<'de> Deserialize<'de> for CpuAffinity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "off" => Ok(CpuAffinity::Off),
+            "single_core" => Ok(CpuAffinity::SingleCore),
+            _ => Ok(CpuAffinity::default()),
+        }
+    }
+}
+
 /// Thread priority level for GStreamer streaming threads.
 ///
 /// Controls the scheduling priority of GStreamer's internal streaming threads.
@@ -216,6 +246,11 @@ pub struct FlowProperties {
     /// Default is High (elevated but not realtime)
     #[serde(default)]
     pub thread_priority: ThreadPriority,
+
+    /// CPU affinity for GStreamer streaming threads
+    /// SingleCore pins all threads to one core for better cache locality
+    #[serde(default)]
+    pub cpu_affinity: CpuAffinity,
 
     /// Status of thread priority configuration (updated by backend when pipeline starts)
     #[serde(default, skip_serializing_if = "Option::is_none")]

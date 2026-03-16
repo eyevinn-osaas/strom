@@ -877,6 +877,17 @@ impl StromApp {
                                         }
                                     }
 
+                                    // Show pinned core if available from thread monitor
+                                    let pinned_core = self.thread_monitor
+                                        .get_sorted_threads()
+                                        .iter()
+                                        .filter_map(|h| h.latest.as_ref())
+                                        .find(|s| s.flow_id == flow.id)
+                                        .and_then(|s| s.pinned_core);
+                                    if let Some(core) = pinned_core {
+                                        ui.label(format!("Pinned to core: {}", core));
+                                    }
+
                                     ui.add_space(5.0);
                                     let state_text = match flow.state {
                                         Some(PipelineState::Playing) => "Running",
@@ -962,6 +973,8 @@ impl StromApp {
                                                     .unwrap_or_else(|| "0".to_string());
                                                 self.properties_thread_priority_buffer =
                                                     flow.properties.thread_priority;
+                                                self.properties_cpu_affinity_buffer =
+                                                    flow.properties.cpu_affinity;
                                                 ui.close();
                                             }
 

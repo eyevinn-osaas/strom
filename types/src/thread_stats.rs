@@ -21,6 +21,9 @@ pub struct ThreadCpuStats {
     pub flow_id: FlowId,
     /// Block ID if the element is inside a block
     pub block_id: Option<String>,
+    /// CPU core this thread is pinned to (None if Auto affinity)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_core: Option<usize>,
 }
 
 /// Aggregated thread statistics for all GStreamer streaming threads.

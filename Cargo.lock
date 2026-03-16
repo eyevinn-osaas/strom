@@ -6398,7 +6398,7 @@ dependencies = [
 
 [[package]]
 name = "strom"
-version = "0.3.25"
+version = "0.3.26"
 dependencies = [
  "agua-gst",
  "anyhow",
@@ -6470,7 +6470,7 @@ dependencies = [
 
 [[package]]
 name = "strom-frontend"
-version = "0.3.25"
+version = "0.3.26"
 dependencies = [
  "base64",
  "chrono",
@@ -6506,7 +6506,7 @@ dependencies = [
 
 [[package]]
 name = "strom-mcp-server"
-version = "0.3.25"
+version = "0.3.26"
 dependencies = [
  "anyhow",
  "reqwest 0.13.2",
@@ -6520,7 +6520,7 @@ dependencies = [
 
 [[package]]
 name = "strom-types"
-version = "0.3.25"
+version = "0.3.26"
 dependencies = [
  "serde",
  "serde_json",

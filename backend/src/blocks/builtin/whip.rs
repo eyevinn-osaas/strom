@@ -1333,7 +1333,26 @@ fn build_whipclientsink(
         signaller.set_property("auth-token", token);
     }
 
-    // Set ICE transport policy on internal webrtcbin via deep-element-added
+    // Read Opus encoder settings
+    let opus_complexity = properties
+        .get("opus_complexity")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i as i32),
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_OPUS_COMPLEXITY);
+
+    let opus_bitrate = properties
+        .get("opus_bitrate")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i as i32),
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_OPUS_BITRATE);
+
+    // Configure internal elements via deep-element-added:
+    // - ICE transport policy on webrtcbin
+    // - Opus encoder settings on opusenc
     if let Ok(bin) = whipclientsink.clone().downcast::<gst::Bin>() {
         let ice_transport_policy = ctx.ice_transport_policy().to_string();
         bin.connect("deep-element-added", false, move |values| {
@@ -1346,6 +1365,15 @@ fn build_whipclientsink(
                 info!(
                     "WHIP (whipclientsink): Set ice-transport-policy={} on webrtcbin {}",
                     ice_transport_policy, element_name
+                );
+            }
+
+            if element_name.starts_with("opusenc") {
+                element.set_property("complexity", opus_complexity);
+                element.set_property("bitrate", opus_bitrate);
+                info!(
+                    "WHIP (whipclientsink): Set opusenc {}: complexity={}, bitrate={}",
+                    element_name, opus_complexity, opus_bitrate
                 );
             }
             None
@@ -1433,10 +1461,33 @@ fn build_whipsink(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
 
+    let opus_complexity = properties
+        .get("opus_complexity")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i as i32),
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_OPUS_COMPLEXITY);
+
+    let opus_bitrate = properties
+        .get("opus_bitrate")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some(*i as i32),
+            _ => None,
+        })
+        .unwrap_or(DEFAULT_OPUS_BITRATE);
+
     let opusenc = gst::ElementFactory::make("opusenc")
         .name(&opusenc_id)
+        .property("complexity", opus_complexity)
+        .property("bitrate", opus_bitrate)
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("opusenc: {}", e)))?;
+
+    info!(
+        "WHIP Output opusenc: complexity={}, bitrate={}",
+        opus_complexity, opus_bitrate
+    );
 
     let rtpopuspay = gst::ElementFactory::make("rtpopuspay")
         .name(&rtpopuspay_id)
@@ -1564,6 +1615,30 @@ fn whip_output_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "auth_token".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "opus_complexity".to_string(),
+                label: "Opus Complexity".to_string(),
+                description: "Opus encoder complexity (0-10). Lower values use less CPU. 5 is recommended for real-time.".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(DEFAULT_OPUS_COMPLEXITY as i64)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "opus_complexity".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "opus_bitrate".to_string(),
+                label: "Opus Bitrate".to_string(),
+                description: "Opus encoder bitrate in bps (4000-650000)".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(DEFAULT_OPUS_BITRATE as i64)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "opus_bitrate".to_string(),
                     transform: None,
                 },
             },

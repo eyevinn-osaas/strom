@@ -23,12 +23,13 @@ pub use block::{
     common_video_resolution_enum_values, parse_resolution_string, BlockDefinition, BlockInstance,
     BlockListResponse, BlockResponse, CreateBlockRequest, EnumValue, ExposedProperty, ExternalPad,
     ExternalPads, PropertyMapping, PropertyType, COMMON_VIDEO_RESOLUTIONS,
-    DEFAULT_EFP_BUCKET_TIMEOUT, DEFAULT_EFP_HOL_TIMEOUT, DEFAULT_EFP_MTU, DEFAULT_SRT_INPUT_URI,
+    DEFAULT_AES67_INPUT_BUFFER_DURATION_MS, DEFAULT_EFP_BUCKET_TIMEOUT, DEFAULT_EFP_HOL_TIMEOUT,
+    DEFAULT_EFP_MTU, DEFAULT_OPUS_BITRATE, DEFAULT_OPUS_COMPLEXITY, DEFAULT_SRT_INPUT_URI,
     DEFAULT_SRT_LATENCY_MS, DEFAULT_SRT_OUTPUT_URI,
 };
 pub use element::{Element, ElementId, Link, MediaType, PropertyValue};
 pub use events::StromEvent;
-pub use flow::{Flow, FlowId, ThreadPriority, ThreadPriorityStatus};
+pub use flow::{CpuAffinity, Flow, FlowId, ThreadPriority, ThreadPriorityStatus};
 pub use network::{
     Ipv4AddressInfo, Ipv6AddressInfo, NetworkInterfaceInfo, NetworkInterfacesResponse,
 };

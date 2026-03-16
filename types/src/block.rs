@@ -310,6 +310,18 @@ pub const DEFAULT_EFP_BUCKET_TIMEOUT: u32 = 5;
 /// Default EFP head-of-line timeout (units of 10ms).
 pub const DEFAULT_EFP_HOL_TIMEOUT: u32 = 5;
 
+/// Default audiobuffersplit output buffer duration in milliseconds.
+/// Compacts small AES67 buffers (typically 1ms) into larger chunks to reduce
+/// downstream wakeups and context switches.
+pub const DEFAULT_AES67_INPUT_BUFFER_DURATION_MS: i64 = 20;
+
+/// Default Opus encoder complexity (0-10). GStreamer defaults to 10 (max CPU).
+/// 5 is a good balance between quality and CPU for real-time use cases.
+pub const DEFAULT_OPUS_COMPLEXITY: i32 = 5;
+
+/// Default Opus encoder bitrate in bps.
+pub const DEFAULT_OPUS_BITRATE: i32 = 64000;
+
 /// Common video resolutions for use in block property dropdowns.
 /// Ordered from largest to smallest.
 pub const COMMON_VIDEO_RESOLUTIONS: &[(&str, &str)] = &[

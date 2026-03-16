@@ -34,9 +34,10 @@ pub struct SystemMonitor {
 
 impl SystemMonitor {
     /// Create a new system monitor with background stats collection.
-    pub fn new() -> Self {
+    pub fn new(num_cores: usize) -> Self {
         let cached_stats = Arc::new(RwLock::new(SystemStats {
             cpu_usage: 0.0,
+            num_cores,
             total_memory: 0,
             used_memory: 0,
             gpu_stats: Vec::new(),
@@ -49,7 +50,7 @@ impl SystemMonitor {
 
         // Spawn background thread for stats collection
         let collector_handle = thread::spawn(move || {
-            Self::collector_loop(stats_clone, shutdown_clone);
+            Self::collector_loop(stats_clone, shutdown_clone, num_cores);
         });
 
         Self {
@@ -60,7 +61,11 @@ impl SystemMonitor {
     }
 
     /// Background loop that collects stats periodically.
-    fn collector_loop(cached_stats: Arc<RwLock<SystemStats>>, shutdown: Arc<AtomicBool>) {
+    fn collector_loop(
+        cached_stats: Arc<RwLock<SystemStats>>,
+        shutdown: Arc<AtomicBool>,
+        num_cores: usize,
+    ) {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::everything())
@@ -131,6 +136,7 @@ impl SystemMonitor {
                 let mut stats = cached_stats.write();
                 *stats = SystemStats {
                     cpu_usage,
+                    num_cores,
                     total_memory,
                     used_memory,
                     gpu_stats,
@@ -275,7 +281,10 @@ impl SystemMonitor {
 
 impl Default for SystemMonitor {
     fn default() -> Self {
-        Self::new()
+        let num_cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        Self::new(num_cores)
     }
 }
 
@@ -415,6 +424,7 @@ impl ThreadCpuSampler {
                 element_name: thread.element_name.clone(),
                 flow_id: thread.flow_id,
                 block_id: thread.block_id.clone(),
+                pinned_core: thread.pinned_core,
             });
         }
 
@@ -488,6 +498,7 @@ impl ThreadCpuSampler {
                 element_name: thread.element_name.clone(),
                 flow_id: thread.flow_id,
                 block_id: thread.block_id.clone(),
+                pinned_core: thread.pinned_core,
             })
             .collect()
     }

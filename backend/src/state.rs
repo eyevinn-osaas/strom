@@ -1,5 +1,6 @@
 //! Application state management.
 
+use crate::affinity_manager::AffinityManager;
 use crate::blocks::BlockRegistry;
 use crate::discovery::DiscoveryService;
 use crate::events::EventBroadcaster;
@@ -45,6 +46,8 @@ struct AppStateInner {
     system_monitor: SystemMonitor,
     /// Thread registry for tracking GStreamer streaming threads
     thread_registry: ThreadRegistry,
+    /// CPU affinity manager for smart core allocation
+    affinity_manager: AffinityManager,
     /// Thread CPU sampler for measuring per-thread CPU usage
     thread_cpu_sampler: parking_lot::Mutex<ThreadCpuSampler>,
     /// Channel registry for inter-pipeline sharing
@@ -78,6 +81,8 @@ impl AppState {
         sap_multicast_addresses: Vec<String>,
     ) -> Self {
         let events = EventBroadcaster::default();
+        let affinity_manager = AffinityManager::new();
+        let num_cores = affinity_manager.num_cores();
         Self {
             inner: Arc::new(AppStateInner {
                 flows: RwLock::new(HashMap::new()),
@@ -87,8 +92,9 @@ impl AppState {
                 pipelines: RwLock::new(HashMap::new()),
                 events: events.clone(),
                 block_registry: BlockRegistry::new(blocks_path),
-                system_monitor: SystemMonitor::new(),
+                system_monitor: SystemMonitor::new(num_cores),
                 thread_registry: ThreadRegistry::new(),
+                affinity_manager,
                 thread_cpu_sampler: parking_lot::Mutex::new(ThreadCpuSampler::new()),
                 channel_registry: ChannelRegistry::new(),
                 discovery: DiscoveryService::new(events, sap_multicast_addresses.clone()),
@@ -643,6 +649,15 @@ impl AppState {
         // Set thread registry for CPU monitoring
         manager.set_thread_registry(self.inner.thread_registry.clone());
 
+        // Allocate CPU core for SingleCore affinity
+        if matches!(
+            flow.properties.cpu_affinity,
+            strom_types::flow::CpuAffinity::SingleCore
+        ) {
+            let assigned_core = self.inner.affinity_manager.allocate(*id);
+            manager.set_assigned_core(assigned_core);
+        }
+
         // Start pipeline
         info!("Calling manager.start() (this may block)...");
         let state = manager.start()?;
@@ -1011,6 +1026,9 @@ impl AppState {
 
         // Stop the pipeline
         let state = manager.stop()?;
+
+        // Deallocate CPU core assignment
+        self.inner.affinity_manager.deallocate(id);
 
         // Clear runtime_data from all blocks (SDP is only valid while running)
         let flow = {
@@ -1470,6 +1488,9 @@ impl AppState {
     }
 
     /// Get WebRTC statistics from a running flow's pipeline.
+    ///
+    /// Uses block_in_place so the synchronous GStreamer promise.wait() calls
+    /// don't prevent tokio from scheduling other tasks on other threads.
     pub async fn get_webrtc_stats(
         &self,
         flow_id: &FlowId,
@@ -1480,7 +1501,8 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        Ok(manager.get_webrtc_stats())
+        let stats = tokio::task::block_in_place(|| manager.get_webrtc_stats());
+        Ok(stats)
     }
 
     /// Query the latency of a running pipeline.
