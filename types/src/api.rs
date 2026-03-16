@@ -690,6 +690,19 @@ pub struct AvailableSourcesResponse {
 }
 
 // ============================================================================
+// Dynamic Pads API Types
+// ============================================================================
+
+/// Response containing runtime dynamic pads information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DynamicPadsResponse {
+    /// Map of element_id -> {pad_name -> tee_element_name}
+    /// These are pads that appeared at runtime without defined links.
+    pub pads: HashMap<String, HashMap<String, String>>,
+}
+
+// ============================================================================
 // Media File API Types
 // ============================================================================
 

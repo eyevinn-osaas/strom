@@ -1,38 +1,38 @@
 //! OpenAPI documentation configuration.
 
-use crate::api::discovery::{
-    AnnouncedStreamResponse, DeviceCountByCategory, DeviceDiscoveryStatus, NdiDiscoveryStatus,
-};
-use crate::api::flows::DynamicPadsResponse;
-use crate::api::mediaplayer::{
-    GotoRequest, PlayerAction, PlayerControlRequest, PlayerStateResponse, SeekRequest,
-    SetPlaylistRequest,
-};
-use crate::api::whep_player::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
-use crate::auth::{LoginRequest, LoginResponse};
-use crate::discovery::{DeviceCategory, DeviceResponse, DiscoveredStreamResponse};
 use crate::mcp::handler::JsonRpcRequest;
 use strom_types::api::{
     AnimateInputRequest, AuthStatusResponse, AvailableOutput, AvailableSourcesResponse,
-    ClientMessage, CodecStats, CreateDirectoryRequest, CreateFlowRequest, ElementInfoResponse,
-    ElementListResponse, ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest,
-    ExportGstLaunchResponse, FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse,
-    IceCandidateStats, LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
-    PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, RenameMediaRequest,
-    RtpStreamStats, ServerMessage, SourceFlowInfo, SystemInfo, TransitionResponse, TransportStats,
-    TriggerTransitionRequest, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
-    UpdatePropertyRequest, WebRtcConnectionStats, WebRtcStats, WebRtcStatsResponse,
+    ClientMessage, CodecStats, CreateDirectoryRequest, CreateFlowRequest, DynamicPadsResponse,
+    ElementInfoResponse, ElementListResponse, ElementPropertiesResponse, ErrorResponse,
+    ExportGstLaunchRequest, ExportGstLaunchResponse, FlowDebugInfo, FlowListResponse, FlowResponse,
+    FlowStatsResponse, IceCandidateStats, LatencyResponse, ListMediaResponse, MediaFileEntry,
+    MediaOperationResponse, PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse,
+    RenameMediaRequest, RtpStreamStats, ServerMessage, SourceFlowInfo, SystemInfo,
+    TransitionResponse, TransportStats, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
+    UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcConnectionStats, WebRtcStats,
+    WebRtcStatsResponse,
 };
+use strom_types::auth::{LoginRequest, LoginResponse};
 use strom_types::block::{
     BlockCategoriesResponse, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
     CreateBlockRequest, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
 };
+use strom_types::discovery::{
+    AnnouncedStreamResponse, DeviceCategory, DeviceCountByCategory, DeviceDiscoveryStatus,
+    DeviceResponse, DiscoveredStreamResponse, NdiDiscoveryStatus,
+};
 use strom_types::events::StromEvent;
 use strom_types::flow::{FlowProperties, GStreamerClockType};
+use strom_types::mediaplayer::{
+    GotoRequest, PlayerAction, PlayerControlRequest, PlayerStateResponse, SeekRequest,
+    SetPlaylistRequest,
+};
 use strom_types::network::{
     Ipv4AddressInfo, Ipv6AddressInfo, NetworkInterfaceInfo, NetworkInterfacesResponse,
 };
 use strom_types::stats::{BlockStats, StatMetadata, StatValue, Statistic};
+use strom_types::whep::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]

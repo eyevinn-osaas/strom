@@ -298,19 +298,6 @@
         "summary": "Receive client-side log messages from the WHIP ingest page.",
         "description": "Accepts a JSON array of log entries and writes them to the server log\nprefixed with `[WHIP-CLIENT]` so they can be correlated with server-side events.",
         "operationId": "client_log",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/ClientLogEntry"
-                }
-              }
-            }
-          },
-          "required": true
-        },
         "responses": {
           "204": {
             "description": "Log entries accepted"
@@ -3941,23 +3928,6 @@
           }
         }
       },
-      "ClientLogEntry": {
-        "type": "object",
-        "required": [
-          "msg"
-        ],
-        "properties": {
-          "level": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "msg": {
-            "type": "string"
-          }
-        }
-      },
       "ClientMessage": {
         "oneOf": [
           {
@@ -4281,7 +4251,7 @@
       },
       "DiscoveredStreamResponse": {
         "type": "object",
-        "description": "API response for a discovered stream.",
+        "description": "API response for a discovered AES67 stream.",
         "required": [
           "id",
           "name",
@@ -5400,7 +5370,7 @@
       },
       "LoginRequest": {
         "type": "object",
-        "description": "Login request payload",
+        "description": "Login request payload.",
         "required": [
           "username",
           "password"
@@ -5418,7 +5388,7 @@
       },
       "LoginResponse": {
         "type": "object",
-        "description": "Login response",
+        "description": "Login response.",
         "required": [
           "success",
           "message"

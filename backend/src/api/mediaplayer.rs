@@ -1,77 +1,20 @@
 //! Media player API handlers.
 
+use crate::json_rejection::{JsonBody, ValidatedJson};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     Json,
 };
-use serde::{Deserialize, Serialize};
+pub use strom_types::mediaplayer::{
+    GotoRequest, PlayerAction, PlayerControlRequest, PlayerStateResponse, SeekRequest,
+    SetPlaylistRequest,
+};
 use strom_types::{api::ErrorResponse, element::PropertyValue, FlowId};
 use tracing::{info, warn};
-use utoipa::ToSchema;
 
 use crate::blocks::builtin::mediaplayer::{MediaPlayerKey, MEDIA_PLAYER_REGISTRY};
 use crate::state::AppState;
-
-/// Player control action.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum PlayerAction {
-    Play,
-    Pause,
-    Stop,
-    Next,
-    Previous,
-}
-
-/// Request to control the media player.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-pub struct PlayerControlRequest {
-    pub action: PlayerAction,
-}
-
-/// Request to set the playlist.
-#[derive(Debug, Clone, Deserialize, ToSchema, garde::Validate)]
-pub struct SetPlaylistRequest {
-    /// List of file URIs (e.g., "file:///path/to/video.mp4")
-    #[garde(length(min = 1))]
-    pub files: Vec<String>,
-}
-
-/// Request to seek to a position.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-pub struct SeekRequest {
-    /// Position in nanoseconds
-    pub position_ns: u64,
-}
-
-/// Request to go to a specific file.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
-pub struct GotoRequest {
-    /// File index (0-based)
-    pub index: usize,
-}
-
-/// Response with the current player state.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct PlayerStateResponse {
-    /// Current playback state: "playing", "paused", "stopped"
-    pub state: String,
-    /// Current position in nanoseconds
-    pub position_ns: u64,
-    /// Total duration in nanoseconds
-    pub duration_ns: u64,
-    /// Current file index (0-based)
-    pub current_file_index: usize,
-    /// Total number of files in playlist
-    pub total_files: usize,
-    /// Current file path/URI
-    pub current_file: Option<String>,
-    /// Full playlist
-    pub playlist: Vec<String>,
-    /// Whether playlist loops
-    pub loop_playlist: bool,
-}
 
 /// Get the current state of a media player block.
 #[utoipa::path(
@@ -138,7 +81,7 @@ pub async fn get_player_state(
 pub async fn set_playlist(
     State(state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<SetPlaylistRequest>,
+    ValidatedJson(req): ValidatedJson<SetPlaylistRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Setting playlist for player {}: {} files",
@@ -212,7 +155,7 @@ pub async fn set_playlist(
 pub async fn control_player(
     State(_state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<PlayerControlRequest>,
+    JsonBody(req): JsonBody<PlayerControlRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let key = MediaPlayerKey {
         flow_id,
@@ -263,7 +206,7 @@ pub async fn control_player(
 pub async fn seek_player(
     State(_state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<SeekRequest>,
+    JsonBody(req): JsonBody<SeekRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let key = MediaPlayerKey {
         flow_id,
@@ -311,7 +254,7 @@ pub async fn seek_player(
 pub async fn goto_file(
     State(_state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<GotoRequest>,
+    JsonBody(req): JsonBody<GotoRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let key = MediaPlayerKey {
         flow_id,

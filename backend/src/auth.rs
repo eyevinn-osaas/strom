@@ -1,3 +1,4 @@
+use crate::json_rejection::JsonBody;
 use axum::{
     extract::Request,
     http::{header, StatusCode},
@@ -5,9 +6,9 @@ use axum::{
     response::Response,
     Extension, Json,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 pub use strom_types::api::AuthStatusResponse;
+pub use strom_types::auth::{LoginRequest, LoginResponse};
 use tower_sessions::Session;
 
 const SESSION_USER_KEY: &str = "user_authenticated";
@@ -100,24 +101,6 @@ impl AuthConfig {
     }
 }
 
-/// Login request payload
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct LoginRequest {
-    /// Username for authentication
-    pub username: String,
-    /// Password for authentication
-    pub password: String,
-}
-
-/// Login response
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct LoginResponse {
-    /// Whether the login was successful
-    pub success: bool,
-    /// Human-readable message describing the result
-    pub message: String,
-}
-
 /// Authentication middleware that checks session, API key, native GUI token, and query param
 pub async fn auth_middleware(
     Extension(config): Extension<Arc<AuthConfig>>,
@@ -185,7 +168,7 @@ pub async fn auth_middleware(
 pub async fn login_handler(
     Extension(config): Extension<Arc<AuthConfig>>,
     session: Session,
-    Json(payload): Json<LoginRequest>,
+    JsonBody(payload): JsonBody<LoginRequest>,
 ) -> Result<Json<LoginResponse>, StatusCode> {
     if !config.has_session_auth() {
         return Ok(Json(LoginResponse {

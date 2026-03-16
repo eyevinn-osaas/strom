@@ -8,13 +8,13 @@
 use crate::api::sdp_transform::{
     add_goog_remb, fix_video_bitrate_hints, strip_cvo_extension, strip_redundancy_codecs,
 };
+use crate::json_rejection::JsonBody;
 use crate::state::AppState;
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
-    Json,
 };
 use tracing::{debug, error, info, warn};
 
@@ -67,7 +67,7 @@ pub async fn list_whip_endpoints(State(state): State<AppState>) -> impl IntoResp
         (status = 204, description = "Log entries accepted")
     )
 )]
-pub async fn client_log(Json(entries): Json<Vec<ClientLogEntry>>) -> impl IntoResponse {
+pub async fn client_log(JsonBody(entries): JsonBody<Vec<ClientLogEntry>>) -> impl IntoResponse {
     for entry in &entries {
         match entry.level.as_deref().unwrap_or("info") {
             "error" => error!("[WHIP-CLIENT] {}", entry.msg),
@@ -79,11 +79,7 @@ pub async fn client_log(Json(entries): Json<Vec<ClientLogEntry>>) -> impl IntoRe
     StatusCode::NO_CONTENT
 }
 
-#[derive(serde::Deserialize, utoipa::ToSchema)]
-pub struct ClientLogEntry {
-    pub msg: String,
-    pub level: Option<String>,
-}
+pub use strom_types::whip::ClientLogEntry;
 
 /// Handle WHIP POST request (SDP offer from client).
 ///

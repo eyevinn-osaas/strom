@@ -6,11 +6,14 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use utoipa::ToSchema;
 
 use crate::discovery::{DeviceCategory, DeviceResponse, DiscoveredStreamResponse};
 use crate::state::AppState;
+pub use strom_types::discovery::{
+    AnnouncedStreamResponse, DeviceCountByCategory, DeviceDiscoveryStatus, NdiDiscoveryStatus,
+};
 
 /// List all discovered AES67 streams.
 #[utoipa::path(
@@ -74,18 +77,6 @@ pub async fn get_stream_sdp(
     }
 }
 
-/// Response for announced streams list.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct AnnouncedStreamResponse {
-    pub flow_id: String,
-    pub block_id: String,
-    pub origin_ip: String,
-    pub sdp: String,
-    /// Network interface the stream is announced on (None = all interfaces).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub announce_interface: Option<String>,
-}
-
 /// List streams being announced by this Strom instance.
 #[utoipa::path(
     get,
@@ -111,29 +102,6 @@ pub async fn list_announced(State(state): State<AppState>) -> impl IntoResponse 
 }
 
 // --- Device Discovery Endpoints ---
-
-/// Device discovery status response.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DeviceDiscoveryStatus {
-    /// Whether device discovery is running.
-    pub running: bool,
-    /// Whether NDI device provider is available.
-    pub ndi_available: bool,
-    /// Total number of discovered devices.
-    pub device_count: usize,
-    /// Number of devices by category.
-    pub by_category: DeviceCountByCategory,
-}
-
-/// Device counts by category.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct DeviceCountByCategory {
-    pub audio_source: usize,
-    pub audio_sink: usize,
-    pub video_source: usize,
-    pub network_source: usize,
-    pub other: usize,
-}
 
 /// Get device discovery status.
 #[utoipa::path(
@@ -257,15 +225,6 @@ pub async fn refresh_devices(State(state): State<AppState>) -> impl IntoResponse
 }
 
 // --- NDI Discovery Endpoints (backward compatibility) ---
-
-/// NDI discovery status response.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub struct NdiDiscoveryStatus {
-    /// Whether NDI discovery is available (plugin installed).
-    pub available: bool,
-    /// Number of discovered NDI sources.
-    pub source_count: usize,
-}
 
 /// Get NDI discovery status.
 #[utoipa::path(
