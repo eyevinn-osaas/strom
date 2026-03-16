@@ -131,23 +131,23 @@ jobs:
           fetch-depth: 0
 
       - name: Get base branch spec
-        run: git show origin/${{ github.base_ref }}:backend/tests/openapi_snapshot.json > /tmp/openapi-base.json 2>/dev/null || echo '{}' > /tmp/openapi-base.json
+        run: git show origin/${{ github.base_ref }}:backend/tests/openapi_snapshot.json > openapi-base.json 2>/dev/null || echo '{}' > openapi-base.json
 
       - name: Get current spec
-        run: cp backend/tests/openapi_snapshot.json /tmp/openapi-current.json
+        run: cp backend/tests/openapi_snapshot.json openapi-current.json
 
       - name: Check for breaking changes
         uses: oasdiff/oasdiff-action/breaking@main
         with:
-          base: /tmp/openapi-base.json
-          revision: /tmp/openapi-current.json
+          base: openapi-base.json
+          revision: openapi-current.json
 
       - name: API changelog
         if: always()
         uses: oasdiff/oasdiff-action/changelog@main
         with:
-          base: /tmp/openapi-base.json
-          revision: /tmp/openapi-current.json
+          base: openapi-base.json
+          revision: openapi-current.json
 
   # Linux x86_64 build
   build-linux-x86_64:
