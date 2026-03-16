@@ -4384,17 +4384,10 @@
           },
           "position": {
             "type": "array",
-            "items": false,
-            "prefixItems": [
-              {
-                "type": "number",
-                "format": "float"
-              },
-              {
-                "type": "number",
-                "format": "float"
-              }
-            ],
+            "items": {
+              "type": "number",
+              "format": "float"
+            },
             "description": "Display position in the visual editor (x, y)"
           },
           "properties": {
