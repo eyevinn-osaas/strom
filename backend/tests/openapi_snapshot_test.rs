@@ -3,12 +3,11 @@
 //! This test ensures that changes to the OpenAPI spec are intentional and reviewed.
 //! If the spec changes, the test fails with instructions on how to update the snapshot.
 
-use strom::openapi::ApiDoc;
-use utoipa::OpenApi;
+use strom::openapi::openapi_spec;
 
 #[test]
 fn openapi_spec_snapshot() {
-    let spec = ApiDoc::openapi();
+    let spec = openapi_spec();
     let json = spec
         .to_pretty_json()
         .expect("Failed to serialize OpenAPI spec");

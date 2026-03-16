@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Strom GStreamer Flow Engine API",
-    "description": "REST API for managing GStreamer pipelines through a visual flow interface",
+    "title": "Strom API",
+    "description": "REST and WebSocket API for the Strom pipeline engine",
     "contact": {
       "name": "Per Enstedt",
       "email": "per.enstedt@eyevinn.se"
@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.1.0"
+    "version": "0.3.26"
   },
   "paths": {
     "/api/auth/status": {

@@ -13,7 +13,6 @@ use axum::{
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
-use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub mod affinity_manager;
@@ -390,9 +389,7 @@ pub async fn create_app_with_config(
 
     // Build Swagger UI router behind authentication
     let swagger_router = Router::new()
-        .merge(
-            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::ApiDoc::openapi()),
-        )
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::openapi_spec()))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(auth_config));
 

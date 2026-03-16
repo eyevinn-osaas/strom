@@ -241,12 +241,18 @@ use utoipa::OpenApi;
         (name = "websocket", description = "WebSocket real-time communication")
     ),
     info(
-        title = "Strom GStreamer Flow Engine API",
-        version = "0.1.0",
-        description = "REST API for managing GStreamer pipelines through a visual flow interface",
+        title = "Strom API",
+        description = "REST and WebSocket API for the Strom pipeline engine",
         license(
             name = "MIT OR Apache-2.0"
         )
     )
 )]
 pub struct ApiDoc;
+
+/// Build the OpenAPI spec with the version from Cargo.toml.
+pub fn openapi_spec() -> utoipa::openapi::OpenApi {
+    let mut spec = ApiDoc::openapi();
+    spec.info.version = env!("CARGO_PKG_VERSION").to_string();
+    spec
+}
