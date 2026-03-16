@@ -35,3 +35,6 @@ Thumbs.db
 strom-data
 
 whip-iterate-instructions.md
+
+# OpenAPI snapshot test diff artifact
+backend/tests/openapi_snapshot.json.new

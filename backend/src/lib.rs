@@ -27,6 +27,7 @@ pub mod events;
 pub mod gpu;
 pub mod gst;
 pub mod gui;
+pub mod json_rejection;
 pub mod layout;
 pub mod mcp;
 pub mod network;
