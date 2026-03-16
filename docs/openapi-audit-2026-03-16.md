@@ -39,18 +39,19 @@
 | Aspekt | Before | After |
 |--------|--------|-------|
 | Validerings-crate | None | **`garde` added** – derives on 10 request types with constraints (non-empty, length limits, duration ranges) |
-| Custom Axum-extractors | None | **`JsonBody<T>` added** – returns structured JSON errors on deserialization failures |
-| Global rejection handler | Missing | **Available** – `JsonBody<T>` can be adopted incrementally per handler |
-| Strukturerade felsvar i handlers | Yes | Yes |
+| Custom Axum-extractors | None | **`JsonBody<T>` + `ValidatedJson<T>` added** |
+| Handler migration | All used `Json<T>` | **All migrated** – no bare `Json<T>` input extractors remain |
+| Runtime validation | None | **Enforced** – `ValidatedJson<T>` calls `garde::Validate` on deserialization, returns 422 on failure |
+| Structured error responses | Only in handler logic | **All endpoints** – deserialization failures now return `ErrorResponse` JSON |
 | Path traversal-skydd | Yes | Yes |
 | Query param-validering | Partial | Partial |
 | Body size limit | Upload only | Upload only |
 | Auth-validering | Yes | Yes |
 
-### Remaining work
-- `JsonBody<T>` is available but not yet wired into existing handlers (requires changing `Json<T>` to `JsonBody<T>` per handler)
-- `garde::Validate` derives are in place but `validate()` is not yet called in handlers – needs a middleware or per-handler call
-- External consumers sending malformed JSON still get Axum's default plaintext on handlers using `Json<T>`
+### How it works now
+- `ValidatedJson<T>` – deserializes JSON, runs `garde::Validate`, returns structured `ErrorResponse` on either failure (400/415/422)
+- `JsonBody<T>` – deserializes JSON, returns structured `ErrorResponse` on failure (for types without garde validation)
+- All handlers migrated: validated types use `ValidatedJson<T>`, others use `JsonBody<T>`
 
 ## 3. WebSocket-kontraktsstatus
 
@@ -85,9 +86,17 @@
 | `#[serde(untagged)]` | `PropertyValue` (`element.rs:136`) | Schema genererar `oneOf` utan discriminator |
 | Custom `Deserialize` impl | `CpuAffinity` (`flow.rs:31`) | Schemat reflekterar inte custom parsing-logik |
 
-### Backend-typer utanför `strom-types` (unchanged)
+### Backend-typer utanför `strom-types` (fixed)
 
-Discovery-typer (`DiscoveredStreamResponse`, `DeviceDiscoveryStatus`, etc.) och mediaplayer-typer (`PlayerControlRequest`, `SeekRequest`, etc.) ligger i backend men exponeras via REST.
+21 API-visible types moved to `strom-types` in dedicated modules:
+- `types/src/discovery.rs` – `DiscoveredStreamResponse`, `DeviceResponse`, `DeviceCategory`, `AnnouncedStreamResponse`, `DeviceDiscoveryStatus`, `DeviceCountByCategory`, `NdiDiscoveryStatus`
+- `types/src/mediaplayer.rs` – `PlayerAction`, `PlayerControlRequest`, `SetPlaylistRequest`, `SeekRequest`, `GotoRequest`, `PlayerStateResponse`
+- `types/src/auth.rs` – `LoginRequest`, `LoginResponse`
+- `types/src/whep.rs` – `WhepStreamInfo`, `WhepStreamsResponse`, `IceServersResponse`, `IceServer`
+- `types/src/whip.rs` – `ClientLogEntry`
+- `DynamicPadsResponse` added to `types/src/api.rs`
+
+Backend modules re-export via `pub use` for internal backward compatibility.
 
 ## 5. CI-skydd
 
@@ -126,12 +135,17 @@ Discovery-typer (`DiscoveredStreamResponse`, `DeviceDiscoveryStatus`, etc.) och 
 | 8 | OpenAPI version från `CARGO_PKG_VERSION` | Done |
 | 9 | Contract rules i `CLAUDE.md` | Done |
 
-### Fas 3 – Robust kontrakt (TODO)
+### Fas 3 – Robust kontrakt (DONE)
+
+| # | Åtgärd | Status |
+|---|--------|--------|
+| 10 | `ValidatedJson<T>` extractor with garde validation | Done |
+| 11 | Migrate all handlers from `Json<T>` to `JsonBody<T>`/`ValidatedJson<T>` | Done |
+| 12 | Move 21 backend API types to `strom-types` | Done |
+
+### Remaining (future work)
 
 | # | Åtgärd | Impact | Insats |
 |---|--------|--------|--------|
-| 10 | Wire `garde::Validate` into request pipeline | Validation actually enforced at runtime | Medel |
-| 11 | Migrate handlers from `Json<T>` to `JsonBody<T>` | Consistent JSON error responses for all endpoints | Medel |
-| 12 | Flytta discovery/mediaplayer-typer till `strom-types` | Klientgenerering fungerar utan backend-access | Medel |
-| 13 | Versionering av WebSocket-event | Bakåtkompatibilitet vid event-ändringar | Stor |
-| 14 | Integrationstester som validerar response mot schemat | Schemat bevisas korrekt, inte bara deklarativt | Stor |
+| 13 | WebSocket event versioning | Backward compatibility on event changes | Stor |
+| 14 | Integration tests validating responses against schema | Proves schema is correct, not just declarative | Stor |
