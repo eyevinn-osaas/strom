@@ -1,5 +1,6 @@
 //! Flow API handlers.
 
+use crate::json_rejection::{JsonBody, ValidatedJson};
 use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
@@ -7,14 +8,14 @@ use axum::{
     Json,
 };
 use chrono::Local;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::process::{Command, Stdio};
 use strom_types::{
     api::{
         AnimateInputRequest, AvailableOutput, AvailableSourcesResponse, CreateFlowRequest,
-        ElementPropertiesResponse, ErrorResponse, FlowDebugInfo, FlowListResponse, FlowResponse,
-        FlowStatsResponse, LatencyResponse, PadPropertiesResponse, SourceFlowInfo,
-        TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
+        DynamicPadsResponse, ElementPropertiesResponse, ErrorResponse, FlowDebugInfo,
+        FlowListResponse, FlowResponse, FlowStatsResponse, LatencyResponse, PadPropertiesResponse,
+        SourceFlowInfo, TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
         UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcStatsResponse,
     },
     Flow, FlowId,
@@ -197,7 +198,7 @@ pub async fn get_flow(
 )]
 pub async fn create_flow(
     State(state): State<AppState>,
-    Json(req): Json<CreateFlowRequest>,
+    ValidatedJson(req): ValidatedJson<CreateFlowRequest>,
 ) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
     info!("Received create flow request: name='{}'", req.name);
 
@@ -247,7 +248,7 @@ pub async fn create_flow(
 pub async fn update_flow(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
-    Json(mut flow): Json<Flow>,
+    JsonBody(mut flow): JsonBody<Flow>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Ensure the ID in the path matches the flow
     if id != flow.id {
@@ -428,7 +429,7 @@ pub async fn update_flow(
 pub async fn update_flow_put(
     state: State<AppState>,
     id: Path<FlowId>,
-    flow: Json<Flow>,
+    flow: JsonBody<Flow>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     update_flow(state, id, flow).await
 }
@@ -685,14 +686,6 @@ pub async fn get_dynamic_pads(
     Ok(Json(DynamicPadsResponse { pads }))
 }
 
-/// Response containing runtime dynamic pads information.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct DynamicPadsResponse {
-    /// Map of element_id -> {pad_name -> tee_element_name}
-    /// These are pads that appeared at runtime without defined links.
-    pub pads: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
-}
-
 /// Generate SDP for a specific block in a flow.
 ///
 /// Returns the SDP (Session Description Protocol) data for AES67 output blocks.
@@ -905,7 +898,7 @@ pub async fn get_element_properties(
 pub async fn update_element_property(
     State(state): State<AppState>,
     Path((flow_id, element_id)): Path<(FlowId, String)>,
-    Json(req): Json<UpdatePropertyRequest>,
+    ValidatedJson(req): ValidatedJson<UpdatePropertyRequest>,
 ) -> Result<Json<ElementPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
         .update_element_property(&flow_id, &element_id, &req.property_name, req.value)
@@ -1022,7 +1015,7 @@ pub async fn get_pad_properties(
 pub async fn update_pad_property(
     State(state): State<AppState>,
     Path((flow_id, element_id, pad_name)): Path<(FlowId, String, String)>,
-    Json(req): Json<UpdatePadPropertyRequest>,
+    ValidatedJson(req): ValidatedJson<UpdatePadPropertyRequest>,
 ) -> Result<Json<PadPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Updating pad property {}:{}:{} in flow {}",
@@ -1092,7 +1085,7 @@ pub async fn update_pad_property(
 pub async fn update_flow_properties(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
-    Json(req): Json<UpdateFlowPropertiesRequest>,
+    JsonBody(req): JsonBody<UpdateFlowPropertiesRequest>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating properties for flow {}", id);
 
@@ -1324,7 +1317,7 @@ pub async fn get_flow_debug_info(
 pub async fn trigger_transition(
     State(state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<TriggerTransitionRequest>,
+    ValidatedJson(req): ValidatedJson<TriggerTransitionRequest>,
 ) -> Result<Json<TransitionResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Triggering {} transition on block {} in flow {} ({} -> {}, {}ms)",
@@ -1456,7 +1449,7 @@ pub async fn recorder_split_now(
 pub async fn animate_input(
     State(state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<AnimateInputRequest>,
+    ValidatedJson(req): ValidatedJson<AnimateInputRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Animating input {} on block {} in flow {} to ({:?}, {:?}, {:?}, {:?}) over {}ms",

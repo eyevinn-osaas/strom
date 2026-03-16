@@ -1,5 +1,6 @@
 //! Media file management API handlers.
 
+use crate::json_rejection::ValidatedJson;
 use axum::{
     body::Body,
     extract::{Multipart, Path, Query, State},
@@ -436,7 +437,7 @@ pub async fn upload_files(
 )]
 pub async fn rename_media(
     State(state): State<AppState>,
-    Json(request): Json<RenameMediaRequest>,
+    ValidatedJson(request): ValidatedJson<RenameMediaRequest>,
 ) -> Result<Json<MediaOperationResponse>, (StatusCode, Json<ErrorResponse>)> {
     let media_root = state.media_path();
     let old_path = validate_path(media_root, &request.old_path)?;
@@ -555,7 +556,7 @@ pub async fn delete_file(
 )]
 pub async fn create_directory(
     State(state): State<AppState>,
-    Json(request): Json<CreateDirectoryRequest>,
+    ValidatedJson(request): ValidatedJson<CreateDirectoryRequest>,
 ) -> Result<Json<MediaOperationResponse>, (StatusCode, Json<ErrorResponse>)> {
     let media_root = state.media_path();
     let dir_path = validate_path(media_root, &request.path)?;
