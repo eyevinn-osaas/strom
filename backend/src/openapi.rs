@@ -13,13 +13,13 @@ use crate::auth::{LoginRequest, LoginResponse};
 use crate::discovery::{DeviceCategory, DeviceResponse, DiscoveredStreamResponse};
 use crate::mcp::handler::JsonRpcRequest;
 use strom_types::api::{
-    AnimateInputRequest, AuthStatusResponse, AvailableOutput, AvailableSourcesResponse, CodecStats,
-    CreateDirectoryRequest, CreateFlowRequest, ElementInfoResponse, ElementListResponse,
-    ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse,
-    FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse, IceCandidateStats,
-    LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
+    AnimateInputRequest, AuthStatusResponse, AvailableOutput, AvailableSourcesResponse,
+    ClientMessage, CodecStats, CreateDirectoryRequest, CreateFlowRequest, ElementInfoResponse,
+    ElementListResponse, ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest,
+    ExportGstLaunchResponse, FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse,
+    IceCandidateStats, LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
     PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, RenameMediaRequest,
-    RtpStreamStats, SourceFlowInfo, SystemInfo, TransitionResponse, TransportStats,
+    RtpStreamStats, ServerMessage, SourceFlowInfo, SystemInfo, TransitionResponse, TransportStats,
     TriggerTransitionRequest, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
     UpdatePropertyRequest, WebRtcConnectionStats, WebRtcStats, WebRtcStatsResponse,
 };
@@ -27,6 +27,7 @@ use strom_types::block::{
     BlockCategoriesResponse, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
     CreateBlockRequest, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
 };
+use strom_types::events::StromEvent;
 use strom_types::flow::{FlowProperties, GStreamerClockType};
 use strom_types::network::{
     Ipv4AddressInfo, Ipv6AddressInfo, NetworkInterfaceInfo, NetworkInterfacesResponse,
@@ -90,6 +91,19 @@ use utoipa::OpenApi;
         // WHEP endpoints
         crate::api::whep_player::list_whep_streams,
         crate::api::whep_player::get_ice_servers,
+        crate::api::whep_player::whep_endpoint_proxy,
+        crate::api::whep_player::whep_endpoint_proxy_options,
+        crate::api::whep_player::whep_resource_proxy_patch,
+        crate::api::whep_player::whep_resource_proxy_delete,
+        crate::api::whep_player::whep_resource_proxy_options,
+        // WHIP endpoints
+        crate::api::whip_ingest::list_whip_endpoints,
+        crate::api::whip_ingest::client_log,
+        crate::api::whip_ingest::whip_post,
+        crate::api::whip_ingest::whip_options,
+        crate::api::whip_ingest::whip_resource_patch,
+        crate::api::whip_ingest::whip_resource_delete,
+        crate::api::whip_ingest::whip_resource_options,
         // MCP endpoints
         crate::api::mcp::mcp_post,
         crate::api::mcp::mcp_get,
@@ -204,6 +218,10 @@ use utoipa::OpenApi;
             IceServer,
             // MCP types
             JsonRpcRequest,
+            // WebSocket event types
+            StromEvent,
+            ServerMessage,
+            ClientMessage,
         )
     ),
     tags(
@@ -216,6 +234,7 @@ use utoipa::OpenApi;
         (name = "Media", description = "Media file management endpoints"),
         (name = "auth", description = "Authentication endpoints"),
         (name = "whep", description = "WHEP WebRTC playback endpoints"),
+        (name = "whip", description = "WHIP WebRTC ingest endpoints"),
         (name = "mcp", description = "Model Context Protocol (MCP) endpoints"),
         (name = "discovery", description = "AES67 stream and device discovery endpoints"),
         (name = "media_player", description = "Media player control endpoints"),

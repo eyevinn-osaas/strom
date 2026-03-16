@@ -14,7 +14,8 @@ efp = ["dep:gst-plugin-efp"]
 
 [dependencies]
 # Internal
-strom-types = { path = "../types", features = ["openapi"] }
+strom-types = { path = "../types", features = ["openapi", "validation"] }
+garde.workspace = true
 
 # Web framework
 axum.workspace = true

@@ -16,10 +16,13 @@ use utoipa::ToSchema;
 /// Request to create a new flow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct CreateFlowRequest {
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub name: String,
     /// Optional description for the flow
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub description: Option<String>,
 }
 
@@ -85,26 +88,34 @@ pub struct ElementInfoResponse {
 /// Request to update a property on a running pipeline element.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct UpdatePropertyRequest {
     /// The name of the property to update
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub property_name: String,
     /// The new value for the property
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub value: PropertyValue,
 }
 
 /// Request to trigger a transition on a compositor block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct TriggerTransitionRequest {
     /// Index of the currently active input (0-based)
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub from_input: usize,
     /// Index of the input to transition to (0-based)
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub to_input: usize,
     /// Type of transition: "cut", "fade", "slide_left", "slide_right", "slide_up", "slide_down"
     #[serde(default = "default_transition_type")]
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 50)))]
     pub transition_type: String,
     /// Duration of the transition in milliseconds (ignored for "cut")
     #[serde(default = "default_transition_duration")]
+    #[cfg_attr(feature = "validation", garde(range(max = 60000)))]
     pub duration_ms: u64,
 }
 
@@ -131,23 +142,30 @@ pub struct TransitionResponse {
 /// Request to animate a single input's position/size.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct AnimateInputRequest {
     /// Input index (0-based)
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub input: usize,
     /// Target X position (optional, keeps current if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub xpos: Option<i32>,
     /// Target Y position (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub ypos: Option<i32>,
     /// Target width (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub width: Option<i32>,
     /// Target height (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub height: Option<i32>,
     /// Animation duration in milliseconds
     #[serde(default = "default_transition_duration")]
+    #[cfg_attr(feature = "validation", garde(range(max = 60000)))]
     pub duration_ms: u64,
 }
 
@@ -164,10 +182,13 @@ pub struct ElementPropertiesResponse {
 /// Request to update a property on a pad in a running pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct UpdatePadPropertyRequest {
     /// The name of the property to update
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub property_name: String,
     /// The new value for the property
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub value: PropertyValue,
 }
 
@@ -237,20 +258,24 @@ impl LatencyResponse {
 
 /// Messages sent from server to client via WebSocket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// Pipeline state has changed
     StateChange {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         state: PipelineState,
     },
     /// An error occurred
     Error {
+        #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
         flow_id: Option<FlowId>,
         message: String,
     },
     /// A warning message
     Warning {
+        #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
         flow_id: Option<FlowId>,
         message: String,
     },
@@ -260,12 +285,19 @@ pub enum ServerMessage {
 
 /// Messages sent from client to server via WebSocket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// Subscribe to updates for a specific flow
-    Subscribe { flow_id: FlowId },
+    Subscribe {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// Unsubscribe from updates for a specific flow
-    Unsubscribe { flow_id: FlowId },
+    Unsubscribe {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// Ping to keep connection alive
     Ping,
 }
@@ -461,9 +493,11 @@ pub struct FlowDebugInfo {
 /// Request to parse a gst-launch-1.0 pipeline string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct ParseGstLaunchRequest {
     /// The gst-launch-1.0 pipeline string to parse
     /// Example: "videotestsrc pattern=ball ! videoconvert ! autovideosink"
+    #[cfg_attr(feature = "validation", garde(length(min = 1)))]
     pub pipeline: String,
 }
 
@@ -694,18 +728,23 @@ pub struct ListMediaResponse {
 /// Request to rename a file or directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct RenameMediaRequest {
     /// Current path (relative to media root)
+    #[cfg_attr(feature = "validation", garde(length(min = 1)))]
     pub old_path: String,
     /// New name (just the filename, not full path)
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub new_name: String,
 }
 
 /// Request to create a directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct CreateDirectoryRequest {
     /// Path for new directory (relative to media root)
+    #[cfg_attr(feature = "validation", garde(length(min = 1)))]
     pub path: String,
 }
 

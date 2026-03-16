@@ -290,6 +290,34 @@
         }
       }
     },
+    "/api/client-log": {
+      "post": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "Receive client-side log messages from the WHIP ingest page.",
+        "description": "Accepts a JSON array of log entries and writes them to the server log\nprefixed with `[WHIP-CLIENT]` so they can be correlated with server-side events.",
+        "operationId": "client_log",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ClientLogEntry"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Log entries accepted"
+          }
+        }
+      }
+    },
     "/api/discovery/announced": {
       "get": {
         "tags": [
@@ -3101,6 +3129,20 @@
         }
       }
     },
+    "/api/whip-endpoints": {
+      "get": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "List active WHIP endpoints (public API, no auth required).",
+        "operationId": "list_whip_endpoints",
+        "responses": {
+          "200": {
+            "description": "List of active WHIP endpoints"
+          }
+        }
+      }
+    },
     "/api/ws": {
       "get": {
         "tags": [
@@ -3115,6 +3157,345 @@
           },
           "401": {
             "description": "Authentication required (use auth_token query param)"
+          }
+        }
+      }
+    },
+    "/whep/{endpoint_id}": {
+      "post": {
+        "tags": [
+          "whep"
+        ],
+        "summary": "Proxy POST requests to /whep/{endpoint_id}\nLooks up the internal port from WhepRegistry and forwards to localhost:{port}/whep/endpoint",
+        "operationId": "whep_endpoint_proxy",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHEP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "WHEP session created, SDP answer returned",
+            "content": {
+              "application/sdp": {}
+            }
+          },
+          "404": {
+            "description": "WHEP endpoint not found"
+          },
+          "502": {
+            "description": "Proxy error forwarding to internal WHEP server"
+          }
+        }
+      },
+      "options": {
+        "tags": [
+          "whep"
+        ],
+        "summary": "Handle OPTIONS preflight for /whep/{endpoint_id}",
+        "operationId": "whep_endpoint_proxy_options",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHEP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "CORS preflight response"
+          }
+        }
+      }
+    },
+    "/whep/{endpoint_id}/resource/{resource_id}": {
+      "delete": {
+        "tags": [
+          "whep"
+        ],
+        "summary": "Proxy DELETE requests to /whep/{endpoint_id}/resource/{resource_id}",
+        "operationId": "whep_resource_proxy_delete",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHEP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "WHEP resource/session identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WHEP session deleted"
+          },
+          "404": {
+            "description": "WHEP endpoint not found"
+          },
+          "502": {
+            "description": "Proxy error forwarding to internal WHEP server"
+          }
+        }
+      },
+      "options": {
+        "tags": [
+          "whep"
+        ],
+        "summary": "Handle OPTIONS preflight for /whep/{endpoint_id}/resource/{resource_id}",
+        "operationId": "whep_resource_proxy_options",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHEP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "WHEP resource/session identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "CORS preflight response"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "whep"
+        ],
+        "summary": "Proxy PATCH requests to /whep/{endpoint_id}/resource/{resource_id} for ICE candidates",
+        "operationId": "whep_resource_proxy_patch",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHEP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "WHEP resource/session identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "ICE candidates accepted"
+          },
+          "404": {
+            "description": "WHEP endpoint not found"
+          },
+          "502": {
+            "description": "Proxy error forwarding to internal WHEP server"
+          }
+        }
+      }
+    },
+    "/whip/{endpoint_id}": {
+      "post": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "Handle WHIP POST request (SDP offer from client).",
+        "description": "Proxies the SDP offer to the internal whipserversrc HTTP server and returns\nthe SDP answer, rewriting the Location header to use the proxy path.\n\nIf the internal server returns 500 or times out (stale session), we recreate\nthe whipserversrc element in the background and return the error immediately.\nThe client's own retry logic will resend the offer to the fresh element.",
+        "operationId": "whip_post",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHIP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "WHIP session created, SDP answer returned",
+            "content": {
+              "application/sdp": {}
+            }
+          },
+          "404": {
+            "description": "WHIP endpoint not found"
+          },
+          "502": {
+            "description": "Proxy error forwarding to internal WHIP server"
+          },
+          "503": {
+            "description": "WHIP element busy, retry in a moment"
+          }
+        }
+      },
+      "options": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "Handle CORS preflight for WHIP endpoints.",
+        "operationId": "whip_options",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHIP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "CORS preflight response"
+          }
+        }
+      }
+    },
+    "/whip/{endpoint_id}/resource/{resource_id}": {
+      "delete": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "Handle WHIP DELETE request (client disconnect).",
+        "description": "After forwarding DELETE to whipserversrc, we trigger async element\nrecreation. The whipserversrc element is treated as single-use: it handles\none session, then gets destroyed and replaced with a fresh element.\nThe pad-removed callback also triggers recreation, but the AtomicBool\nidempotency flag in WhipServerContext prevents double-recreation.",
+        "operationId": "whip_resource_delete",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHIP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "WHIP resource/session identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WHIP session deleted and element recreated"
+          },
+          "404": {
+            "description": "WHIP endpoint not found"
+          },
+          "502": {
+            "description": "Proxy error forwarding to internal WHIP server"
+          }
+        }
+      },
+      "options": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "Handle CORS preflight for WHIP resource endpoints.",
+        "operationId": "whip_resource_options",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHIP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "WHIP resource/session identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "CORS preflight response"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "whip"
+        ],
+        "summary": "Handle WHIP PATCH request (ICE trickle from client).",
+        "operationId": "whip_resource_patch",
+        "parameters": [
+          {
+            "name": "endpoint_id",
+            "in": "path",
+            "description": "WHIP endpoint identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource_id",
+            "in": "path",
+            "description": "WHIP resource/session identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "ICE candidates accepted"
+          },
+          "404": {
+            "description": "WHIP endpoint not found"
+          },
+          "502": {
+            "description": "Proxy error forwarding to internal WHIP server"
           }
         }
       }
@@ -3559,6 +3940,83 @@
             "description": "Width in the editor (in grid units)"
           }
         }
+      },
+      "ClientLogEntry": {
+        "type": "object",
+        "required": [
+          "msg"
+        ],
+        "properties": {
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "msg": {
+            "type": "string"
+          }
+        }
+      },
+      "ClientMessage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Subscribe to updates for a specific flow",
+            "required": [
+              "flow_id",
+              "type"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "subscribe"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Unsubscribe from updates for a specific flow",
+            "required": [
+              "flow_id",
+              "type"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "unsubscribe"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Ping to keep connection alive",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ping"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Messages sent from client to server via WebSocket."
       },
       "ClockSyncStatus": {
         "type": "string",
@@ -4606,6 +5064,68 @@
             "type": "integer",
             "description": "File index (0-based)",
             "minimum": 0
+          }
+        }
+      },
+      "GpuStats": {
+        "type": "object",
+        "description": "GPU statistics for a single GPU device.",
+        "required": [
+          "index",
+          "name",
+          "utilization",
+          "memory_utilization",
+          "total_memory",
+          "used_memory"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "GPU device index",
+            "minimum": 0
+          },
+          "memory_utilization": {
+            "type": "number",
+            "format": "float",
+            "description": "Memory utilization percentage (0-100)"
+          },
+          "name": {
+            "type": "string",
+            "description": "GPU device name"
+          },
+          "power_usage": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Power usage in watts (if available)"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Temperature in Celsius (if available)"
+          },
+          "total_memory": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total memory in bytes",
+            "minimum": 0
+          },
+          "used_memory": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Used memory in bytes",
+            "minimum": 0
+          },
+          "utilization": {
+            "type": "number",
+            "format": "float",
+            "description": "GPU utilization percentage (0-100)"
           }
         }
       },
@@ -5692,6 +6212,104 @@
           }
         }
       },
+      "ServerMessage": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Pipeline state has changed",
+            "required": [
+              "flow_id",
+              "state",
+              "type"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "state": {
+                "$ref": "#/components/schemas/PipelineState"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "state_change"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An error occurred",
+            "required": [
+              "message",
+              "type"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A warning message",
+            "required": [
+              "message",
+              "type"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "warning"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Informational message",
+            "required": [
+              "message",
+              "type"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "info"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Messages sent from server to client via WebSocket."
+      },
       "SetPlaylistRequest": {
         "type": "object",
         "description": "Request to set the playlist.",
@@ -5946,6 +6564,1382 @@
       "String": {
         "type": "string"
       },
+      "StromEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A flow was created",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow was created",
+                "required": [
+                  "flow_id"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "FlowCreated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow was updated",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow was updated",
+                "required": [
+                  "flow_id"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "FlowUpdated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow was deleted",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow was deleted",
+                "required": [
+                  "flow_id"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "FlowDeleted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow was started",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow was started",
+                "required": [
+                  "flow_id"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "FlowStarted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow was stopped",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow was stopped",
+                "required": [
+                  "flow_id"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "FlowStopped"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow's state changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow's state changed",
+                "required": [
+                  "flow_id",
+                  "state"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "state": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "FlowStateChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pipeline error occurred",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Pipeline error occurred",
+                "required": [
+                  "flow_id",
+                  "error"
+                ],
+                "properties": {
+                  "error": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "source": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PipelineError"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pipeline warning message",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Pipeline warning message",
+                "required": [
+                  "flow_id",
+                  "warning"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "source": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "warning": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PipelineWarning"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pipeline info message",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Pipeline info message",
+                "required": [
+                  "flow_id",
+                  "message"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PipelineInfo"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pipeline reached end of stream",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Pipeline reached end of stream",
+                "required": [
+                  "flow_id"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PipelineEos"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Element property was changed on a running pipeline",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Element property was changed on a running pipeline",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "property_name",
+                  "value"
+                ],
+                "properties": {
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "property_name": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/PropertyValue"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PropertyChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Pad property was changed on a running pipeline",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Pad property was changed on a running pipeline",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "pad_name",
+                  "property_name",
+                  "value"
+                ],
+                "properties": {
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "pad_name": {
+                    "type": "string"
+                  },
+                  "property_name": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/PropertyValue"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PadPropertyChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Ping event to keep connection alive",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "Ping"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Audio level meter data from GStreamer level element",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Audio level meter data from GStreamer level element",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "rms",
+                  "peak",
+                  "decay"
+                ],
+                "properties": {
+                  "decay": {
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "description": "Decay values in dB for each channel"
+                  },
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "peak": {
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "description": "Peak values in dB for each channel"
+                  },
+                  "rms": {
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "description": "RMS values in dB for each channel"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "MeterData"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Audio spectrum analyzer data from GStreamer spectrum element",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Audio spectrum analyzer data from GStreamer spectrum element",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "magnitudes"
+                ],
+                "properties": {
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "magnitudes": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "number",
+                        "format": "float"
+                      }
+                    },
+                    "description": "Magnitude values in dB per channel, each inner Vec is one channel's frequency bands"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SpectrumData"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "EBU R128 loudness measurement data from GStreamer ebur128level element",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "EBU R128 loudness measurement data from GStreamer ebur128level element",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "momentary",
+                  "true_peak"
+                ],
+                "properties": {
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "integrated": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "double",
+                    "description": "Integrated (global) loudness in LUFS (from start)"
+                  },
+                  "loudness_range": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "double",
+                    "description": "Loudness range in LU"
+                  },
+                  "momentary": {
+                    "type": "number",
+                    "format": "double",
+                    "description": "Momentary loudness in LUFS (400ms window)"
+                  },
+                  "shortterm": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "double",
+                    "description": "Short-term loudness in LUFS (3s window)"
+                  },
+                  "true_peak": {
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "description": "True peak per channel in dBTP"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "LoudnessData"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Audio latency measurement data from GStreamer audiolatency element",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Audio latency measurement data from GStreamer audiolatency element",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "last_latency_us",
+                  "average_latency_us"
+                ],
+                "properties": {
+                  "average_latency_us": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Running average latency in microseconds (last 5 measurements)"
+                  },
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "last_latency_us": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Last measured latency in microseconds"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "LatencyData"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "System monitoring statistics (CPU and GPU)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/SystemStats",
+                "description": "System monitoring statistics (CPU and GPU)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SystemStats"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Thread CPU statistics for GStreamer streaming threads",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/ThreadStats",
+                "description": "Thread CPU statistics for GStreamer streaming threads"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "ThreadStats"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "PTP clock statistics for a flow",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "PTP clock statistics for a flow",
+                "required": [
+                  "flow_id",
+                  "domain",
+                  "synced"
+                ],
+                "properties": {
+                  "clock_offset_ns": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int64",
+                    "description": "Clock offset/correction in nanoseconds"
+                  },
+                  "clock_rate": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "double",
+                    "description": "Clock rate ratio (local vs master)"
+                  },
+                  "domain": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "PTP domain",
+                    "minimum": 0
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "grandmaster_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int64",
+                    "description": "Grandmaster clock ID (EUI-64 identifier)",
+                    "minimum": 0
+                  },
+                  "master_id": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int64",
+                    "description": "Master clock ID (EUI-64 identifier)",
+                    "minimum": 0
+                  },
+                  "mean_path_delay_ns": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "int64",
+                    "description": "Mean path delay to master in nanoseconds",
+                    "minimum": 0
+                  },
+                  "r_squared": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "format": "double",
+                    "description": "R-squared (clock estimation quality, 0.0-1.0)"
+                  },
+                  "synced": {
+                    "type": "boolean",
+                    "description": "Whether clock is synchronized"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "PtpStats"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow's published output became available (flow started)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow's published output became available (flow started)",
+                "required": [
+                  "source_flow_id",
+                  "output_name",
+                  "channel_name"
+                ],
+                "properties": {
+                  "channel_name": {
+                    "type": "string"
+                  },
+                  "output_name": {
+                    "type": "string"
+                  },
+                  "source_flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SourceOutputAvailable"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A flow's published output became unavailable (flow stopped)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A flow's published output became unavailable (flow stopped)",
+                "required": [
+                  "source_flow_id",
+                  "output_name"
+                ],
+                "properties": {
+                  "output_name": {
+                    "type": "string"
+                  },
+                  "source_flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SourceOutputUnavailable"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Subscription connection status changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Subscription connection status changed",
+                "required": [
+                  "consumer_flow_id",
+                  "source_flow_id",
+                  "output_name",
+                  "connected"
+                ],
+                "properties": {
+                  "connected": {
+                    "type": "boolean"
+                  },
+                  "consumer_flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "output_name": {
+                    "type": "string"
+                  },
+                  "source_flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SubscriptionStatusChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Quality of Service statistics (aggregated buffer drop info)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Quality of Service statistics (aggregated buffer drop info)",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "element_name",
+                  "event_count",
+                  "avg_proportion",
+                  "min_proportion",
+                  "max_proportion",
+                  "avg_jitter",
+                  "total_processed",
+                  "is_falling_behind"
+                ],
+                "properties": {
+                  "avg_jitter": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Average jitter in nanoseconds"
+                  },
+                  "avg_proportion": {
+                    "type": "number",
+                    "format": "double",
+                    "description": "Average proportion (< 1.0 = falling behind)"
+                  },
+                  "block_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Block ID if element is inside a block, None if standalone element"
+                  },
+                  "element_id": {
+                    "type": "string",
+                    "description": "Element ID (standalone element ID or block ID if element is in block)"
+                  },
+                  "element_name": {
+                    "type": "string",
+                    "description": "Full GStreamer element name (e.g., \"block_id:element_type\" or \"element_id\")"
+                  },
+                  "event_count": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Number of QoS events in aggregation period",
+                    "minimum": 0
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "internal_element_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Internal element type if part of a block (e.g., \"videoconvert\")"
+                  },
+                  "is_falling_behind": {
+                    "type": "boolean",
+                    "description": "Whether pipeline is falling behind (avg_proportion < 1.0)"
+                  },
+                  "max_proportion": {
+                    "type": "number",
+                    "format": "double",
+                    "description": "Maximum proportion seen"
+                  },
+                  "min_proportion": {
+                    "type": "number",
+                    "format": "double",
+                    "description": "Minimum proportion seen"
+                  },
+                  "total_processed": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Total buffers processed",
+                    "minimum": 0
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "QoSStats"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A new AES67 stream was discovered via SAP or mDNS",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A new AES67 stream was discovered via SAP or mDNS",
+                "required": [
+                  "stream_id",
+                  "name",
+                  "source"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "source": {
+                    "type": "string",
+                    "description": "Discovery source: \"sap\" or \"mdns\""
+                  },
+                  "stream_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "StreamDiscovered"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A discovered stream was updated (re-announced)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A discovered stream was updated (re-announced)",
+                "required": [
+                  "stream_id"
+                ],
+                "properties": {
+                  "stream_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "StreamUpdated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A discovered stream expired or was deleted",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A discovered stream expired or was deleted",
+                "required": [
+                  "stream_id"
+                ],
+                "properties": {
+                  "stream_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "StreamRemoved"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Media player position update (periodic)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Media player position update (periodic)",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "position_ns",
+                  "duration_ns",
+                  "current_file_index",
+                  "total_files"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "current_file_index": {
+                    "type": "integer",
+                    "description": "Current file index (0-based)",
+                    "minimum": 0
+                  },
+                  "duration_ns": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Total duration in nanoseconds",
+                    "minimum": 0
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "position_ns": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Current position in nanoseconds",
+                    "minimum": 0
+                  },
+                  "total_files": {
+                    "type": "integer",
+                    "description": "Total number of files in playlist",
+                    "minimum": 0
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "MediaPlayerPosition"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Media player state changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Media player state changed",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "state"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "current_file": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Current file path (if any)"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "state": {
+                    "type": "string",
+                    "description": "Playback state: \"playing\", \"paused\", \"stopped\", \"buffering\""
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "MediaPlayerStateChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A transition was triggered on a compositor block",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A transition was triggered on a compositor block",
+                "required": [
+                  "flow_id",
+                  "block_instance_id",
+                  "from_input",
+                  "to_input",
+                  "transition_type",
+                  "duration_ms"
+                ],
+                "properties": {
+                  "block_instance_id": {
+                    "type": "string"
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "format": "int64",
+                    "minimum": 0
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "from_input": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "to_input": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "transition_type": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "TransitionTriggered"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Audio analyzer waveform and vectorscope data from appsink",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Audio analyzer waveform and vectorscope data from appsink",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "waveform_l_min",
+                  "waveform_l_max",
+                  "waveform_r_min",
+                  "waveform_r_max",
+                  "vectorscope_l",
+                  "vectorscope_r"
+                ],
+                "properties": {
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "vectorscope_l": {
+                    "type": "string",
+                    "description": "Vectorscope L channel samples (base64-encoded i8 samples)"
+                  },
+                  "vectorscope_r": {
+                    "type": "string",
+                    "description": "Vectorscope R channel samples (base64-encoded i8 samples)"
+                  },
+                  "waveform_l_max": {
+                    "type": "string",
+                    "description": "Waveform max values per column for L channel (base64-encoded i8 samples)"
+                  },
+                  "waveform_l_min": {
+                    "type": "string",
+                    "description": "Waveform min values per column for L channel (base64-encoded i8 samples)"
+                  },
+                  "waveform_r_max": {
+                    "type": "string",
+                    "description": "Waveform max values per column for R channel (base64-encoded i8 samples)"
+                  },
+                  "waveform_r_min": {
+                    "type": "string",
+                    "description": "Waveform min values per column for R channel (base64-encoded i8 samples)"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "AudioAnalyzerData"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Recorder block started writing a new file",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Recorder block started writing a new file",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "filename"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "filename": {
+                    "type": "string",
+                    "description": "Full path to the file currently being written"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "RecorderFileChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Recorder block reached its configured max duration and requests the flow to stop",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Recorder block reached its configured max duration and requests the flow to stop",
+                "required": [
+                  "flow_id",
+                  "block_id"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "RecorderAutoStop"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Event types that can be broadcast to all connected clients."
+      },
       "SystemInfo": {
         "type": "object",
         "description": "Server system information: version, build, runtime environment, and host details.",
@@ -6012,6 +8006,101 @@
           }
         }
       },
+      "SystemStats": {
+        "type": "object",
+        "description": "System monitoring statistics.",
+        "required": [
+          "cpu_usage",
+          "num_cores",
+          "total_memory",
+          "used_memory",
+          "gpu_stats",
+          "timestamp"
+        ],
+        "properties": {
+          "cpu_usage": {
+            "type": "number",
+            "format": "float",
+            "description": "CPU usage percentage (0-100)"
+          },
+          "gpu_stats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GpuStats"
+            },
+            "description": "GPU statistics (if available)"
+          },
+          "num_cores": {
+            "type": "integer",
+            "description": "Number of CPU cores available to this process (cgroup-aware)",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Timestamp of the measurement"
+          },
+          "total_memory": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total system memory in bytes",
+            "minimum": 0
+          },
+          "used_memory": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Used system memory in bytes",
+            "minimum": 0
+          }
+        }
+      },
+      "ThreadCpuStats": {
+        "type": "object",
+        "description": "CPU statistics for a single GStreamer streaming thread.",
+        "required": [
+          "thread_id",
+          "cpu_usage",
+          "element_name",
+          "flow_id"
+        ],
+        "properties": {
+          "block_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Block ID if the element is inside a block"
+          },
+          "cpu_usage": {
+            "type": "number",
+            "format": "float",
+            "description": "CPU usage percentage (0-100%)"
+          },
+          "element_name": {
+            "type": "string",
+            "description": "Name of the GStreamer element that owns this thread"
+          },
+          "flow_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Flow ID this thread belongs to"
+          },
+          "pinned_core": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "CPU core this thread is pinned to (None if Auto affinity)",
+            "minimum": 0
+          },
+          "thread_id": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Native thread ID (OS-specific)",
+            "minimum": 0
+          }
+        }
+      },
       "ThreadPriority": {
         "type": "string",
         "description": "Thread priority level for GStreamer streaming threads.\n\nControls the scheduling priority of GStreamer's internal streaming threads.\nHigher priorities help ensure smooth media processing under system load.",
@@ -6050,6 +8139,28 @@
             "format": "int32",
             "description": "Number of threads that had priority set",
             "minimum": 0
+          }
+        }
+      },
+      "ThreadStats": {
+        "type": "object",
+        "description": "Aggregated thread statistics for all GStreamer streaming threads.",
+        "required": [
+          "threads",
+          "timestamp"
+        ],
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ThreadCpuStats"
+            },
+            "description": "Statistics for all active streaming threads"
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Timestamp when this snapshot was taken (Unix timestamp in milliseconds)"
           }
         }
       },
@@ -6381,6 +8492,10 @@
     {
       "name": "whep",
       "description": "WHEP WebRTC playback endpoints"
+    },
+    {
+      "name": "whip",
+      "description": "WHIP WebRTC ingest endpoints"
     },
     {
       "name": "mcp",

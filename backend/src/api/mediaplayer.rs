@@ -31,9 +31,10 @@ pub struct PlayerControlRequest {
 }
 
 /// Request to set the playlist.
-#[derive(Debug, Clone, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Deserialize, ToSchema, garde::Validate)]
 pub struct SetPlaylistRequest {
     /// List of file URIs (e.g., "file:///path/to/video.mp4")
+    #[garde(length(min = 1))]
     pub files: Vec<String>,
 }
 

@@ -6,44 +6,74 @@ use crate::thread_stats::ThreadStats;
 use crate::FlowId;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "openapi")]
+use utoipa::ToSchema;
+
 /// Event types that can be broadcast to all connected clients.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(tag = "type", content = "data")]
 pub enum StromEvent {
     /// A flow was created
-    FlowCreated { flow_id: FlowId },
+    FlowCreated {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// A flow was updated
-    FlowUpdated { flow_id: FlowId },
+    FlowUpdated {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// A flow was deleted
-    FlowDeleted { flow_id: FlowId },
+    FlowDeleted {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// A flow was started
-    FlowStarted { flow_id: FlowId },
+    FlowStarted {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// A flow was stopped
-    FlowStopped { flow_id: FlowId },
+    FlowStopped {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// A flow's state changed
-    FlowStateChanged { flow_id: FlowId, state: String },
+    FlowStateChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        state: String,
+    },
     /// Pipeline error occurred
     PipelineError {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         error: String,
         source: Option<String>,
     },
     /// Pipeline warning message
     PipelineWarning {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         warning: String,
         source: Option<String>,
     },
     /// Pipeline info message
     PipelineInfo {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         message: String,
         source: Option<String>,
     },
     /// Pipeline reached end of stream
-    PipelineEos { flow_id: FlowId },
+    PipelineEos {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// Element property was changed on a running pipeline
     PropertyChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         property_name: String,
@@ -51,6 +81,7 @@ pub enum StromEvent {
     },
     /// Pad property was changed on a running pipeline
     PadPropertyChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         pad_name: String,
@@ -61,6 +92,7 @@ pub enum StromEvent {
     Ping,
     /// Audio level meter data from GStreamer level element
     MeterData {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         /// RMS values in dB for each channel
@@ -72,6 +104,7 @@ pub enum StromEvent {
     },
     /// Audio spectrum analyzer data from GStreamer spectrum element
     SpectrumData {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         /// Magnitude values in dB per channel, each inner Vec is one channel's frequency bands
@@ -79,6 +112,7 @@ pub enum StromEvent {
     },
     /// EBU R128 loudness measurement data from GStreamer ebur128level element
     LoudnessData {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         /// Momentary loudness in LUFS (400ms window)
@@ -94,6 +128,7 @@ pub enum StromEvent {
     },
     /// Audio latency measurement data from GStreamer audiolatency element
     LatencyData {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         /// Last measured latency in microseconds
@@ -107,6 +142,7 @@ pub enum StromEvent {
     ThreadStats(ThreadStats),
     /// PTP clock statistics for a flow
     PtpStats {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         /// PTP domain
         domain: u8,
@@ -127,24 +163,29 @@ pub enum StromEvent {
     },
     /// A flow's published output became available (flow started)
     SourceOutputAvailable {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         source_flow_id: FlowId,
         output_name: String,
         channel_name: String,
     },
     /// A flow's published output became unavailable (flow stopped)
     SourceOutputUnavailable {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         source_flow_id: FlowId,
         output_name: String,
     },
     /// Subscription connection status changed
     SubscriptionStatusChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         consumer_flow_id: FlowId,
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         source_flow_id: FlowId,
         output_name: String,
         connected: bool,
     },
     /// Quality of Service statistics (aggregated buffer drop info)
     QoSStats {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         /// Block ID if element is inside a block, None if standalone element
         block_id: Option<String>,
@@ -182,6 +223,7 @@ pub enum StromEvent {
     StreamRemoved { stream_id: String },
     /// Media player position update (periodic)
     MediaPlayerPosition {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         block_id: String,
         /// Current position in nanoseconds
@@ -195,6 +237,7 @@ pub enum StromEvent {
     },
     /// Media player state changed
     MediaPlayerStateChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         block_id: String,
         /// Playback state: "playing", "paused", "stopped", "buffering"
@@ -204,6 +247,7 @@ pub enum StromEvent {
     },
     /// A transition was triggered on a compositor block
     TransitionTriggered {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         block_instance_id: String,
         from_input: usize,
@@ -213,6 +257,7 @@ pub enum StromEvent {
     },
     /// Audio analyzer waveform and vectorscope data from appsink
     AudioAnalyzerData {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         element_id: String,
         /// Waveform min values per column for L channel (base64-encoded i8 samples)
@@ -230,13 +275,18 @@ pub enum StromEvent {
     },
     /// Recorder block started writing a new file
     RecorderFileChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         block_id: String,
         /// Full path to the file currently being written
         filename: String,
     },
     /// Recorder block reached its configured max duration and requests the flow to stop
-    RecorderAutoStop { flow_id: FlowId, block_id: String },
+    RecorderAutoStop {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+    },
 }
 
 impl StromEvent {
@@ -426,10 +476,10 @@ impl StromEvent {
             } => {
                 let status = if *synced { "synced" } else { "not synced" };
                 let delay = mean_path_delay_ns
-                    .map(|ns| format!("{:.1}µs delay", ns as f64 / 1000.0))
+                    .map(|ns| format!("{:.1}us delay", ns as f64 / 1000.0))
                     .unwrap_or_default();
                 let offset = clock_offset_ns
-                    .map(|ns| format!("{:.1}µs offset", ns as f64 / 1000.0))
+                    .map(|ns| format!("{:.1}us offset", ns as f64 / 1000.0))
                     .unwrap_or_default();
                 format!(
                     "PTP stats for flow {}: {} {} {}",

@@ -33,6 +33,14 @@ pub async fn whip_ingest_page(State(state): State<AppState>) -> impl IntoRespons
 }
 
 /// List active WHIP endpoints (public API, no auth required).
+#[utoipa::path(
+    get,
+    path = "/api/whip-endpoints",
+    tag = "whip",
+    responses(
+        (status = 200, description = "List of active WHIP endpoints")
+    )
+)]
 pub async fn list_whip_endpoints(State(state): State<AppState>) -> impl IntoResponse {
     let endpoints = state.whip_registry().list_all().await;
     let list: Vec<serde_json::Value> = endpoints
@@ -51,6 +59,14 @@ pub async fn list_whip_endpoints(State(state): State<AppState>) -> impl IntoResp
 ///
 /// Accepts a JSON array of log entries and writes them to the server log
 /// prefixed with `[WHIP-CLIENT]` so they can be correlated with server-side events.
+#[utoipa::path(
+    post,
+    path = "/api/client-log",
+    tag = "whip",
+    responses(
+        (status = 204, description = "Log entries accepted")
+    )
+)]
 pub async fn client_log(Json(entries): Json<Vec<ClientLogEntry>>) -> impl IntoResponse {
     for entry in &entries {
         match entry.level.as_deref().unwrap_or("info") {
@@ -63,7 +79,7 @@ pub async fn client_log(Json(entries): Json<Vec<ClientLogEntry>>) -> impl IntoRe
     StatusCode::NO_CONTENT
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct ClientLogEntry {
     pub msg: String,
     pub level: Option<String>,
@@ -77,6 +93,20 @@ pub struct ClientLogEntry {
 /// If the internal server returns 500 or times out (stale session), we recreate
 /// the whipserversrc element in the background and return the error immediately.
 /// The client's own retry logic will resend the offer to the fresh element.
+#[utoipa::path(
+    post,
+    path = "/whip/{endpoint_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier")
+    ),
+    responses(
+        (status = 201, description = "WHIP session created, SDP answer returned", content_type = "application/sdp"),
+        (status = 404, description = "WHIP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHIP server"),
+        (status = 503, description = "WHIP element busy, retry in a moment")
+    )
+)]
 pub async fn whip_post(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
@@ -348,6 +378,20 @@ fn build_whip_post_response(
 }
 
 /// Handle WHIP PATCH request (ICE trickle from client).
+#[utoipa::path(
+    patch,
+    path = "/whip/{endpoint_id}/resource/{resource_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHIP resource/session identifier")
+    ),
+    responses(
+        (status = 204, description = "ICE candidates accepted"),
+        (status = 404, description = "WHIP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHIP server")
+    )
+)]
 pub async fn whip_resource_patch(
     State(state): State<AppState>,
     Path((endpoint_id, resource_id)): Path<(String, String)>,
@@ -432,6 +476,20 @@ pub async fn whip_resource_patch(
 /// one session, then gets destroyed and replaced with a fresh element.
 /// The pad-removed callback also triggers recreation, but the AtomicBool
 /// idempotency flag in WhipServerContext prevents double-recreation.
+#[utoipa::path(
+    delete,
+    path = "/whip/{endpoint_id}/resource/{resource_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHIP resource/session identifier")
+    ),
+    responses(
+        (status = 200, description = "WHIP session deleted and element recreated"),
+        (status = 404, description = "WHIP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHIP server")
+    )
+)]
 pub async fn whip_resource_delete(
     State(state): State<AppState>,
     Path((endpoint_id, resource_id)): Path<(String, String)>,
@@ -507,6 +565,17 @@ pub async fn whip_resource_delete(
 }
 
 /// Handle CORS preflight for WHIP endpoints.
+#[utoipa::path(
+    options,
+    path = "/whip/{endpoint_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier")
+    ),
+    responses(
+        (status = 204, description = "CORS preflight response")
+    )
+)]
 pub async fn whip_options() -> impl IntoResponse {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -528,6 +597,18 @@ pub async fn whip_options() -> impl IntoResponse {
 }
 
 /// Handle CORS preflight for WHIP resource endpoints.
+#[utoipa::path(
+    options,
+    path = "/whip/{endpoint_id}/resource/{resource_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHIP resource/session identifier")
+    ),
+    responses(
+        (status = 204, description = "CORS preflight response")
+    )
+)]
 pub async fn whip_resource_options() -> impl IntoResponse {
     whip_options().await
 }

@@ -120,6 +120,35 @@ jobs:
           path: backend/dist
           retention-days: 1
 
+  # OpenAPI breaking change detection (PRs only)
+  api-contract:
+    name: API Contract Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get base branch spec
+        run: git show origin/${{ github.base_ref }}:backend/tests/openapi_snapshot.json > /tmp/openapi-base.json 2>/dev/null || echo '{}' > /tmp/openapi-base.json
+
+      - name: Get current spec
+        run: cp backend/tests/openapi_snapshot.json /tmp/openapi-current.json
+
+      - name: Check for breaking changes
+        uses: oasdiff/oasdiff-action/breaking@main
+        with:
+          base: /tmp/openapi-base.json
+          revision: /tmp/openapi-current.json
+
+      - name: API changelog
+        if: always()
+        uses: oasdiff/oasdiff-action/changelog@main
+        with:
+          base: /tmp/openapi-base.json
+          revision: /tmp/openapi-current.json
+
   # Linux x86_64 build
   build-linux-x86_64:
     name: Build (Linux x86_64)
