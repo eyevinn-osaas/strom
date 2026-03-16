@@ -247,10 +247,10 @@ pub struct BlockStatsResponse {
     pub error: Option<String>,
 }
 
-/// API response for flow statistics.
+/// API response wrapping flow statistics with availability info.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct FlowStatsResponse {
+pub struct FlowStatsAvailability {
     /// Whether the flow is running (stats only available for running flows)
     pub running: bool,
     /// Statistics if available

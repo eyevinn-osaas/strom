@@ -5,6 +5,8 @@
 
 ## 1. Täckningsgrad
 
+**Before (audit):**
+
 | Kategori | Antal | Andel |
 |----------|-------|-------|
 | Endpoints med `#[utoipa::path]` | 68 | 72 % av 94 routes |
@@ -12,101 +14,124 @@
 | Annoterade men **saknas i openapi.rs** | 24 | 26 % |
 | Helt utan annotation | 26 | 28 % |
 
-### Största luckorna
+**After (fixed):**
 
-- **Discovery API** (13 endpoints) – alla annoterade, **ingen registrerad** i `openapi.rs`
-- **Media Player API** (5 endpoints) – alla annoterade, **ingen registrerad** i `openapi.rs`
-- **Flow-endpoints** (8 st) – annoterade men saknas i `openapi.rs`: `get_available_sources`, `get_block_sdp`, `get_flow_latency`, `get_webrtc_stats`, `get_pad_properties`, `update_pad_property`, `reset_loudness`, `recorder_split_now`
-- **WHIP proxy** (5 endpoints) + **WHEP proxy** (5 endpoints) – helt utan annotation
-- **`list_whip_endpoints`**, **`client_log`**, **`health`** – utan annotation
+| Kategori | Antal | Andel |
+|----------|-------|-------|
+| Endpoints med `#[utoipa::path]` | 83 | 88 % av 94 routes |
+| Endpoints registrerade i `openapi.rs` | 83 | 88 % av 94 routes |
+| Annoterade men saknas i `openapi.rs` | 0 | 0 % |
+| Helt utan annotation | 11 | 12 % |
 
-Request/response-typer är väl beskrivna för de endpoints som är registrerade. ~10 discovery-endpoints returnerar `impl IntoResponse` (utoipa-makron anger explicit typ, men signaturen ger ingen compile-time-garanti).
+### Fixed
+- 24 previously annotated but unregistered endpoints now registered in `openapi.rs` (discovery, media player, flow endpoints)
+- 12 WHIP/WHEP proxy endpoints annotated and registered
+- 30 schema types added to `components(schemas(...))`
+
+### Remaining gaps
+- `health` endpoint – intentionally undocumented
+- 3 HTML page routes (`whep_player`, `whep_streams_page`, `whip_ingest_page`) – serve HTML, not JSON
+- 6 static asset routes – CSS/JS files, not API endpoints
+- ~10 discovery endpoints still use `impl IntoResponse` (annotations specify types explicitly, but signatures are not compile-time checked)
 
 ## 2. Valideringsstatus
 
-| Aspekt | Status |
-|--------|--------|
-| Validerings-crate (`validator`, `garde`) | **Ingen** – serde-deserialisering är enda gaten |
-| Custom Axum-extractors | **Inga** – standard `Json<T>`, `Path<T>`, `Query<T>` |
-| Global rejection handler | **Saknas** – felaktig JSON ger Axums default plaintext-svar, inte strukturerad JSON |
-| Strukturerade felsvar i handlers | **Ja** – `ErrorResponse { error, details? }` med korrekta statuskoder |
-| Path traversal-skydd | **Ja** – `validate_path()` med canonicalization i media-API |
-| Query param-validering | **Delvis** – `clamp()` för thumbnail-dimensioner |
-| Body size limit | **Bara upload** – 500 MB för `/api/media/upload`, resten Axum default |
-| Auth-validering | **Ja** – session, Bearer token, API-key, origin-kontroll (MCP) |
+| Aspekt | Before | After |
+|--------|--------|-------|
+| Validerings-crate | None | **`garde` added** – derives on 10 request types with constraints (non-empty, length limits, duration ranges) |
+| Custom Axum-extractors | None | **`JsonBody<T>` added** – returns structured JSON errors on deserialization failures |
+| Global rejection handler | Missing | **Available** – `JsonBody<T>` can be adopted incrementally per handler |
+| Strukturerade felsvar i handlers | Yes | Yes |
+| Path traversal-skydd | Yes | Yes |
+| Query param-validering | Partial | Partial |
+| Body size limit | Upload only | Upload only |
+| Auth-validering | Yes | Yes |
 
-En extern konsument som skickar felformaterad JSON får Axums default plaintext-rejection – inte den `ErrorResponse`-JSON som dokumenteras i OpenAPI-schemat.
+### Remaining work
+- `JsonBody<T>` is available but not yet wired into existing handlers (requires changing `Json<T>` to `JsonBody<T>` per handler)
+- `garde::Validate` derives are in place but `validate()` is not yet called in handlers – needs a middleware or per-handler call
+- External consumers sending malformed JSON still get Axum's default plaintext on handlers using `Json<T>`
 
 ## 3. WebSocket-kontraktsstatus
 
-| Aspekt | Status |
-|--------|--------|
-| Endpoint | `GET /api/ws` – registrerad i OpenAPI |
-| Event-typ | `StromEvent` enum, 33 varianter, definierad i `strom-types` |
-| Serialisering | JSON med `#[serde(tag = "type", content = "data")]` |
-| ToSchema-annotation | **Saknas** på `StromEvent`, `ServerMessage`, `ClientMessage` |
-| Formell schemadefinition | **Ingen** – inga event-typer i OpenAPI-komponenter |
-| Versionshantering | **Ingen** – inget versionsfält, ingen negotiation |
-| Riktning | Primärt server → klient (broadcast), klient skickar bara `"ping"` |
+| Aspekt | Before | After |
+|--------|--------|-------|
+| Endpoint | Registered | Registered |
+| Event-typ | `StromEvent`, 33 variants | No change |
+| Serialisering | JSON tagged enum | No change |
+| ToSchema-annotation | **Missing** | **Added** on `StromEvent`, `ServerMessage`, `ClientMessage` |
+| Formell schemadefinition | None | **Event types now in OpenAPI components** |
+| Versionshantering | None | None |
+| Riktning | Server → client | No change |
 
-WebSocket-kontraktet lever helt utanför OpenAPI. En extern konsument måste reverse-engineera event-formatet från källkoden.
+### Remaining work
+- No versioning mechanism for WebSocket events
+- Breaking change rules documented in `CLAUDE.md` but not enforced at CI level
 
 ## 4. ToSchema-gaps
 
-### Typer som saknar `ToSchema` men är API-synliga
+### Previously missing – now fixed
 
-| Typ | Fil | Användning |
-|-----|-----|-----------|
-| `StromEvent` | `types/src/events.rs:12` | WebSocket-broadcast |
-| `ServerMessage` | `types/src/api.rs:241` | WebSocket-svar |
-| `ClientMessage` | `types/src/api.rs:264` | WebSocket-meddelanden |
+| Typ | Status |
+|-----|--------|
+| `StromEvent` | **Fixed** – `ToSchema` added |
+| `ServerMessage` | **Fixed** – `ToSchema` added |
+| `ClientMessage` | **Fixed** – `ToSchema` added |
 
-### Serde-attribut med schemarisk
+### Serde-attribut med schemarisk (unchanged)
 
 | Attribut | Typ | Risk |
 |----------|-----|------|
 | `#[serde(untagged)]` | `PropertyValue` (`element.rs:136`) | Schema genererar `oneOf` utan discriminator |
 | Custom `Deserialize` impl | `CpuAffinity` (`flow.rs:31`) | Schemat reflekterar inte custom parsing-logik |
 
-### Backend-typer utanför `strom-types`
+### Backend-typer utanför `strom-types` (unchanged)
 
 Discovery-typer (`DiscoveredStreamResponse`, `DeviceDiscoveryStatus`, etc.) och mediaplayer-typer (`PlayerControlRequest`, `SeekRequest`, etc.) ligger i backend men exponeras via REST.
 
 ## 5. CI-skydd
 
-| Skyddsmekanism | Status |
-|----------------|--------|
-| OpenAPI snapshot-test | **Saknas** |
-| Schema-diff i CI | **Saknas** |
-| Integrationstester mot schema | **Saknas** |
-| OpenAPI-spec i repo | **Saknas** – genereras runtime |
-| Pre-commit hook | **Ingen schema-kontroll** |
+| Skyddsmekanism | Before | After |
+|----------------|--------|-------|
+| OpenAPI snapshot-test | Missing | **Added** – `openapi_snapshot_test.rs` |
+| OpenAPI-spec i repo | Missing | **Added** – `openapi_snapshot.json` |
+| Schema-diff i CI | Missing | **Added** – `oasdiff` job in CI (PRs only) |
+| Breaking-change detection | Missing | **Added** – `oasdiff breaking` fails CI on breaking changes |
+| Integrationstester mot schema | Missing | Missing |
+| Pre-commit hook | No schema check | No schema check |
 
-En utvecklare kan ändra en response-typ eller lägga till en endpoint utan att det syns i schemat eller bryter builden.
+### How it works now
+- `cargo test --test openapi_snapshot_test` catches any spec drift
+- CI runs `oasdiff` on PRs to detect breaking changes and generate a changelog
+- Contract rules documented in `CLAUDE.md`
 
 ## 6. Prioriterad åtgärdslista
 
-### Fas 1 – Minimalt skydd
+### Fas 1 – Minimalt skydd (DONE)
+
+| # | Åtgärd | Status |
+|---|--------|--------|
+| 1 | Registrera 24 saknade endpoints i `openapi.rs` | Done |
+| 2 | Global rejection handler (`JsonBody<T>`) | Done |
+| 3 | Snapshot-test + incheckad `openapi_snapshot.json` | Done |
+
+### Fas 2 – Externt konsumerbart kontrakt (DONE)
+
+| # | Åtgärd | Status |
+|---|--------|--------|
+| 4 | `ToSchema` på `StromEvent`, `ServerMessage`, `ClientMessage` | Done |
+| 5 | Annotera WHIP/WHEP-proxy-endpoints | Done |
+| 6 | `garde` validation derives på request-typer | Done |
+| 7 | `oasdiff` breaking-change detection i CI | Done |
+| 8 | OpenAPI version från `CARGO_PKG_VERSION` | Done |
+| 9 | Contract rules i `CLAUDE.md` | Done |
+
+### Fas 3 – Robust kontrakt (TODO)
 
 | # | Åtgärd | Impact | Insats |
 |---|--------|--------|--------|
-| 1 | Registrera 24 saknade endpoints i `openapi.rs` | Specen beskriver hela REST-API:et | Liten |
-| 2 | Global rejection handler för konsistent JSON-felsvar | Alla felsvar matchar `ErrorResponse`-schemat | Liten |
-| 3 | Generera och checka in `openapi.json` + snapshot-test i CI | Vaktar kontraktet | Liten |
-
-### Fas 2 – Externt konsumerbart kontrakt
-
-| # | Åtgärd | Impact | Insats |
-|---|--------|--------|--------|
-| 4 | `ToSchema` på `StromEvent`, `ServerMessage`, `ClientMessage` | Event-typerna schema-definierade | Medel |
-| 5 | Dokumentera WebSocket-kontraktet | Extern konsument kan generera klientkod | Medel |
-| 6 | Annotera WHIP/WHEP-proxy-endpoints | Schemat har inga "hemliga" endpoints | Liten–Medel |
-
-### Fas 3 – Robust kontrakt
-
-| # | Åtgärd | Impact | Insats |
-|---|--------|--------|--------|
-| 7 | `garde`/`validator` på request-typer | Runtime-validering matchar schemat | Medel |
-| 8 | Flytta discovery/mediaplayer-typer till `strom-types` | Klientgenerering fungerar utan backend-access | Medel |
-| 9 | Versionering av WebSocket-event | Bakåtkompatibilitet vid event-ändringar | Stor |
-| 10 | Breaking-change-detection i CI (`oasdiff`) | PR-review ser API-påverkan | Medel |
+| 10 | Wire `garde::Validate` into request pipeline | Validation actually enforced at runtime | Medel |
+| 11 | Migrate handlers from `Json<T>` to `JsonBody<T>` | Consistent JSON error responses for all endpoints | Medel |
+| 12 | Flytta discovery/mediaplayer-typer till `strom-types` | Klientgenerering fungerar utan backend-access | Medel |
+| 13 | Versionering av WebSocket-event | Bakåtkompatibilitet vid event-ändringar | Stor |
+| 14 | Integrationstester som validerar response mot schemat | Schemat bevisas korrekt, inte bara deklarativt | Stor |

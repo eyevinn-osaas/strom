@@ -766,13 +766,4 @@ impl MediaOperationResponse {
             message: message.into(),
         }
     }
-
-    /// Create an error response.
-    #[allow(dead_code)]
-    pub fn error(message: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            message: message.into(),
-        }
-    }
 }

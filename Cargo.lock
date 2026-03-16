@@ -6570,7 +6570,6 @@ version = "0.3.26"
 dependencies = [
  "garde",
  "serde",
- "serde_json",
  "utoipa",
  "uuid",
 ]

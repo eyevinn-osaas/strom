@@ -35,7 +35,7 @@ pub use network::{
 };
 pub use state::PipelineState;
 pub use stats::{
-    BlockStats, BlockStatsResponse, FlowStats, FlowStatsResponse, RtpJitterbufferStats,
+    BlockStats, BlockStatsResponse, FlowStats, FlowStatsAvailability, RtpJitterbufferStats,
     RtpSessionStats, StatMetadata, StatValue, Statistic,
 };
 pub use system_monitor::{GpuStats, SystemStats};
