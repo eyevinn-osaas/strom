@@ -13,7 +13,7 @@ use parking_lot::RwLock;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 use crate::thread_registry::ThreadRegistry;
-use strom_types::{GpuStats, SystemStats, ThreadCpuStats, ThreadStats};
+use strom_types::{GlRendererInfo, GpuStats, SystemStats, ThreadCpuStats, ThreadStats};
 
 #[cfg(feature = "nvidia")]
 use std::process::Command;
@@ -41,6 +41,7 @@ impl SystemMonitor {
             total_memory: 0,
             used_memory: 0,
             gpu_stats: Vec::new(),
+            gl_renderer: None,
             timestamp: 0,
         }));
 
@@ -102,6 +103,9 @@ impl SystemMonitor {
         #[cfg(not(feature = "nvidia"))]
         let (nvml, use_nvidia_smi_fallback): (Option<()>, bool) = (None, false);
 
+        // Fetch GL renderer info once (already probed at startup)
+        let gl_renderer: Option<GlRendererInfo> = crate::gpu::gl_renderer_info();
+
         while !shutdown.load(Ordering::Relaxed) {
             // Refresh system information
             system.refresh_cpu_all();
@@ -140,6 +144,7 @@ impl SystemMonitor {
                     total_memory,
                     used_memory,
                     gpu_stats,
+                    gl_renderer: gl_renderer.clone(),
                     timestamp,
                 };
             }

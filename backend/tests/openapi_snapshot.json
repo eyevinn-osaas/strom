@@ -5181,6 +5181,34 @@
           "ntp"
         ]
       },
+      "GlRendererInfo": {
+        "type": "object",
+        "description": "OpenGL renderer information detected from GStreamer's GL context.",
+        "required": [
+          "renderer",
+          "version",
+          "vendor",
+          "glsl_version"
+        ],
+        "properties": {
+          "glsl_version": {
+            "type": "string",
+            "description": "GLSL version string (e.g. \"4.60 NVIDIA\")"
+          },
+          "renderer": {
+            "type": "string",
+            "description": "GL renderer string (e.g. \"NVIDIA GeForce RTX 3080/PCIe/SSE2\")"
+          },
+          "vendor": {
+            "type": "string",
+            "description": "GL vendor string (e.g. \"NVIDIA Corporation\")"
+          },
+          "version": {
+            "type": "string",
+            "description": "GL version string (e.g. \"4.6.0 NVIDIA 535.183.01\")"
+          }
+        }
+      },
       "GotoRequest": {
         "type": "object",
         "description": "Request to go to a specific file.",
@@ -8378,6 +8406,17 @@
             "type": "number",
             "format": "float",
             "description": "CPU usage percentage (0-100)"
+          },
+          "gl_renderer": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GlRendererInfo",
+                "description": "OpenGL renderer info from GStreamer (if available)"
+              }
+            ]
           },
           "gpu_stats": {
             "type": "array",

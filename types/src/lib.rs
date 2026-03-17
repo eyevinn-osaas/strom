@@ -43,5 +43,5 @@ pub use stats::{
     BlockStats, BlockStatsResponse, FlowStats, FlowStatsAvailability, RtpJitterbufferStats,
     RtpSessionStats, StatMetadata, StatValue, Statistic,
 };
-pub use system_monitor::{GpuStats, SystemStats};
+pub use system_monitor::{GlRendererInfo, GpuStats, SystemStats};
 pub use thread_stats::{ThreadCpuStats, ThreadStats};
