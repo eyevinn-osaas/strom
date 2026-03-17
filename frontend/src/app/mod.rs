@@ -8,6 +8,7 @@ mod flow_selection;
 mod import_export;
 mod keyboard;
 mod live_mode;
+mod probe_ui;
 mod rendering;
 mod update;
 
@@ -17,6 +18,7 @@ use strom_types::Flow;
 use crate::api::{ApiClient, AuthStatusResponse};
 use crate::audioanalyzer::AudioAnalyzerDataStore;
 use crate::audiorouter::RoutingMatrixEditor;
+use crate::buffer_age::BufferAgeStore;
 use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
@@ -499,15 +501,6 @@ impl LogEntry {
             LogLevel::Error => Color32::from_rgb(255, 80, 80),
         }
     }
-
-    /// Get the icon/prefix for this log level
-    pub fn prefix(&self) -> &'static str {
-        match self.level {
-            LogLevel::Info => "ℹ",
-            LogLevel::Warning => "⚠",
-            LogLevel::Error => "✖",
-        }
-    }
 }
 
 // Cross-platform task spawning
@@ -627,6 +620,8 @@ pub struct StromApp {
     ptp_stats: crate::ptp_monitor::PtpStatsStore,
     /// QoS (buffer drop) statistics per flow/element
     qos_stats: crate::qos_monitor::QoSStore,
+    /// Buffer age warnings and probe data
+    buffer_age_data: BufferAgeStore,
     /// Track when flows started (for QoS grace period)
     flow_start_times: std::collections::HashMap<strom_types::FlowId, instant::Instant>,
     /// Whether to show the detailed system monitor window

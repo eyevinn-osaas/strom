@@ -102,6 +102,7 @@ impl PipelineManager {
             );
             // Update cached state - the bus watch will update it when the actual transition happens
             *self.cached_state.write().unwrap() = PipelineState::Playing;
+            self.attach_automatic_probes();
             return Ok(PipelineState::Playing);
         }
 
@@ -150,7 +151,23 @@ impl PipelineManager {
         // Update cached state
         *self.cached_state.write().unwrap() = actual_state;
 
+        // Attach automatic buffer age monitoring probes
+        if actual_state == PipelineState::Playing {
+            self.attach_automatic_probes();
+        }
+
         Ok(actual_state)
+    }
+
+    /// Attach automatic buffer age monitoring probes to key measurement points.
+    fn attach_automatic_probes(&mut self) {
+        let blocks = self.blocks.clone();
+        let block_definitions = self.block_definitions.clone();
+        let pipeline = self.pipeline.clone();
+        // Ensure probe manager exists before borrowing elements
+        let _ = self.probe_manager_mut();
+        let pm = self.probe_manager.as_ref().unwrap();
+        pm.attach_automatic(&pipeline, &self.elements, &blocks, &block_definitions);
     }
 
     /// Stop the pipeline (set to NULL state).
@@ -173,6 +190,11 @@ impl PipelineManager {
 
         // Stop QoS broadcast task
         self.stop_qos_broadcast_task();
+
+        // Deactivate all buffer age probes
+        if let Some(ref pm) = self.probe_manager {
+            pm.deactivate_all();
+        }
 
         // Remove thread priority handler
         thread_priority::remove_thread_priority_handler(&self.pipeline);

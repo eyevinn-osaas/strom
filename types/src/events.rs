@@ -287,6 +287,45 @@ pub enum StromEvent {
         flow_id: FlowId,
         block_id: String,
     },
+    /// Buffer age warning (buffer is older than threshold)
+    BufferAgeWarning {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        element_id: String,
+        pad_name: String,
+        /// Buffer age in milliseconds
+        age_ms: u64,
+        /// Threshold that was exceeded, in milliseconds
+        threshold_ms: u64,
+    },
+    /// Manual buffer age probe measurement
+    BufferAgeProbe {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        probe_id: String,
+        element_id: String,
+        pad_name: String,
+        /// Buffer age in milliseconds
+        age_ms: u64,
+        /// Sequential sample number
+        sample_number: u64,
+    },
+    /// A manual buffer age probe was activated
+    BufferAgeProbeActivated {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        probe_id: String,
+        element_id: String,
+        pad_name: String,
+    },
+    /// A manual buffer age probe was deactivated
+    BufferAgeProbeDeactivated {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        probe_id: String,
+        /// Reason: "manual", "timeout", "flow_stopped"
+        reason: String,
+    },
 }
 
 impl StromEvent {
@@ -617,6 +656,52 @@ impl StromEvent {
                 format!(
                     "Recorder {} in flow {} reached max duration, stopping flow",
                     block_id, flow_id
+                )
+            }
+            StromEvent::BufferAgeWarning {
+                flow_id,
+                element_id,
+                pad_name,
+                age_ms,
+                threshold_ms,
+            } => {
+                format!(
+                    "Buffer age warning on {}:{} in flow {}: {}ms (threshold {}ms)",
+                    element_id, pad_name, flow_id, age_ms, threshold_ms
+                )
+            }
+            StromEvent::BufferAgeProbe {
+                flow_id,
+                probe_id,
+                element_id,
+                pad_name,
+                age_ms,
+                sample_number,
+            } => {
+                format!(
+                    "Buffer age probe {} on {}:{} in flow {}: {}ms (sample #{})",
+                    probe_id, element_id, pad_name, flow_id, age_ms, sample_number
+                )
+            }
+            StromEvent::BufferAgeProbeActivated {
+                flow_id,
+                probe_id,
+                element_id,
+                pad_name,
+            } => {
+                format!(
+                    "Buffer age probe {} activated on {}:{} in flow {}",
+                    probe_id, element_id, pad_name, flow_id
+                )
+            }
+            StromEvent::BufferAgeProbeDeactivated {
+                flow_id,
+                probe_id,
+                reason,
+            } => {
+                format!(
+                    "Buffer age probe {} deactivated in flow {}: {}",
+                    probe_id, flow_id, reason
                 )
             }
         }

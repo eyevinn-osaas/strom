@@ -11,6 +11,7 @@ mod api;
 mod app;
 mod audioanalyzer;
 mod audiorouter;
+pub(crate) mod buffer_age;
 mod clipboard;
 mod clocks;
 mod compositor_editor;

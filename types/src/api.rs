@@ -771,6 +771,64 @@ pub struct MediaOperationResponse {
     pub message: String,
 }
 
+// ============================================================================
+// Buffer Age Probe API Types
+// ============================================================================
+
+/// Request to activate a buffer age probe on a pad.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActivateProbeRequest {
+    /// Element ID to probe
+    pub element_id: String,
+    /// Pad name to probe
+    pub pad_name: String,
+    /// Measure every Nth buffer (default 1)
+    #[serde(default = "default_sample_interval")]
+    pub sample_interval: Option<u32>,
+    /// Auto-remove after this many seconds (default 60)
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: Option<u32>,
+}
+
+fn default_sample_interval() -> Option<u32> {
+    Some(1)
+}
+
+fn default_timeout_secs() -> Option<u32> {
+    Some(60)
+}
+
+/// Response after activating a probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ProbeResponse {
+    /// Unique probe ID
+    pub probe_id: String,
+}
+
+/// Information about an active probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ProbeInfo {
+    /// Unique probe ID
+    pub probe_id: String,
+    /// Element ID being probed
+    pub element_id: String,
+    /// Pad name being probed
+    pub pad_name: String,
+    /// Number of samples collected so far
+    pub sample_count: u64,
+}
+
+/// Response listing active probes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActiveProbesResponse {
+    /// List of active probes
+    pub probes: Vec<ProbeInfo>,
+}
+
 impl MediaOperationResponse {
     /// Create a success response.
     pub fn success(message: impl Into<String>) -> Self {

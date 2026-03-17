@@ -291,6 +291,20 @@ impl AppState {
         trace!("Marked flow {} as dirty for save", flow_id);
     }
 
+    /// Read-only access to active pipelines (for monitoring).
+    pub async fn pipelines_read(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, HashMap<FlowId, PipelineManager>> {
+        self.inner.pipelines.read().await
+    }
+
+    /// Write access to active pipelines (for probe management).
+    pub async fn pipelines_write(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<FlowId, PipelineManager>> {
+        self.inner.pipelines.write().await
+    }
+
     /// Start the background task that periodically saves dirty flows.
     /// Should be called once at startup.
     pub fn start_debounced_save_task(&self) {

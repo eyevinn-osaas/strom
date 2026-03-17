@@ -430,6 +430,9 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         // Start debounced flow save task (batches rapid changes to avoid disk thrashing)
         state.start_debounced_save_task();
 
+        // Start pipeline monitor (queue levels, buffer age warnings)
+        strom::gst::pipeline_monitor::start(state.clone());
+
         // GStreamer elements are discovered lazily on first /api/elements request
 
         // Create the HTTP app BEFORE auto-restart
@@ -562,6 +565,9 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
 
     // Start debounced flow save task (batches rapid changes to avoid disk thrashing)
     state.start_debounced_save_task();
+
+    // Start pipeline monitor (queue levels, buffer age warnings)
+    strom::gst::pipeline_monitor::start(state.clone());
 
     // GStreamer elements are discovered lazily on first /api/elements request
 
