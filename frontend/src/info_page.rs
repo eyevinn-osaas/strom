@@ -432,9 +432,9 @@ impl InfoPage {
                     ui.end_row();
                 });
 
-            // egui renderer as collapsible with details inside
+            // GUI renderer as collapsible with details inside
             ui.add_space(4.0);
-            let header_text = format!("egui Renderer: {}", renderer_info.display);
+            let header_text = format!("GUI Renderer (egui): {}", renderer_info.display);
             egui::CollapsingHeader::new(egui::RichText::new(header_text).monospace())
                 .default_open(false)
                 .show(ui, |ui| {
@@ -525,19 +525,70 @@ impl InfoPage {
 
     fn render_gpu_content(&self, ui: &mut Ui, system_monitor: &SystemMonitorStore, box_width: f32) {
         if let Some(stats) = system_monitor.latest() {
-            if stats.gpu_stats.is_empty() {
+            // GStreamer OpenGL context — collapsible
+            if let Some(gl) = &stats.gl_renderer {
+                let is_software = {
+                    let r = gl.renderer.to_lowercase();
+                    r.contains("llvmpipe") || r.contains("softpipe") || r.contains("swrast")
+                };
+
+                let header_text = if is_software {
+                    format!("GStreamer OpenGL: {} (software)", gl.renderer)
+                } else {
+                    format!("GStreamer OpenGL: {}", gl.renderer)
+                };
+
+                // Show warning outside collapsible if software rendering
+                if is_software {
+                    ui.colored_label(
+                        Color32::from_rgb(255, 180, 50),
+                        "Software rendering — no GPU acceleration for GStreamer GL",
+                    );
+                    ui.add_space(2.0);
+                }
+
+                egui::CollapsingHeader::new(egui::RichText::new(header_text).monospace())
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        egui::Grid::new("gl_renderer_grid")
+                            .num_columns(2)
+                            .spacing([8.0, 2.0])
+                            .show(ui, |ui| {
+                                ui.label("Renderer:");
+                                ui.label(egui::RichText::new(&gl.renderer).monospace());
+                                ui.end_row();
+
+                                ui.label("Version:");
+                                ui.label(egui::RichText::new(&gl.version).monospace());
+                                ui.end_row();
+
+                                ui.label("Vendor:");
+                                ui.label(egui::RichText::new(&gl.vendor).monospace());
+                                ui.end_row();
+
+                                ui.label("GLSL:");
+                                ui.label(egui::RichText::new(&gl.glsl_version).monospace());
+                                ui.end_row();
+                            });
+                    });
+
+                ui.add_space(4.0);
+            }
+
+            if stats.gpu_stats.is_empty() && stats.gl_renderer.is_none() {
                 ui.label("No GPU detected");
                 return;
             }
 
+            // Per-GPU hardware stats (NVIDIA, future: Intel)
             for (i, gpu) in stats.gpu_stats.iter().enumerate() {
-                if i > 0 {
+                if i > 0 || stats.gl_renderer.is_some() {
                     ui.separator();
                     ui.add_space(4.0);
                 }
 
-                // GPU name
-                ui.label(egui::RichText::new(&gpu.name).strong());
+                // Numbered GPU name
+                ui.label(egui::RichText::new(format!("GPU {}: {}", i, gpu.name)).strong());
                 ui.add_space(4.0);
 
                 // GPU stats in a grid
