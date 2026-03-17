@@ -2158,6 +2158,124 @@
         }
       }
     },
+    "/api/flows/{id}/probes": {
+      "get": {
+        "tags": [
+          "probes"
+        ],
+        "summary": "List active probes on a flow.",
+        "operationId": "list_probes",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active probes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveProbesResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Flow not found or not running"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "probes"
+        ],
+        "summary": "Activate a buffer age probe on a pad.",
+        "operationId": "activate_probe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivateProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Probe activated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProbeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Flow not found or not running"
+          }
+        }
+      }
+    },
+    "/api/flows/{id}/probes/{probe_id}": {
+      "delete": {
+        "tags": [
+          "probes"
+        ],
+        "summary": "Deactivate a probe.",
+        "operationId": "deactivate_probe",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "probe_id",
+            "in": "path",
+            "description": "Probe ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Probe deactivated"
+          },
+          "404": {
+            "description": "Flow or probe not found"
+          }
+        }
+      }
+    },
     "/api/flows/{id}/properties": {
       "patch": {
         "tags": [
@@ -3490,6 +3608,53 @@
   },
   "components": {
     "schemas": {
+      "ActivateProbeRequest": {
+        "type": "object",
+        "description": "Request to activate a buffer age probe on a pad.",
+        "required": [
+          "element_id"
+        ],
+        "properties": {
+          "element_id": {
+            "type": "string",
+            "description": "Element ID to probe (standalone element or block ID)"
+          },
+          "sample_interval": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Measure every Nth buffer (default 1)",
+            "minimum": 0
+          },
+          "timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Auto-remove after this many seconds (default 60)",
+            "minimum": 0
+          }
+        }
+      },
+      "ActiveProbesResponse": {
+        "type": "object",
+        "description": "Response listing active probes.",
+        "required": [
+          "probes"
+        ],
+        "properties": {
+          "probes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProbeInfo"
+            },
+            "description": "List of active probes"
+          }
+        }
+      },
       "AnimateInputRequest": {
         "type": "object",
         "description": "Request to animate a single input's position/size.",
@@ -5776,6 +5941,49 @@
           }
         }
       },
+      "ProbeInfo": {
+        "type": "object",
+        "description": "Information about an active probe.",
+        "required": [
+          "probe_id",
+          "element_id",
+          "pad_name",
+          "sample_count"
+        ],
+        "properties": {
+          "element_id": {
+            "type": "string",
+            "description": "Element ID being probed"
+          },
+          "pad_name": {
+            "type": "string",
+            "description": "Pad name being probed"
+          },
+          "probe_id": {
+            "type": "string",
+            "description": "Unique probe ID"
+          },
+          "sample_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of samples collected so far",
+            "minimum": 0
+          }
+        }
+      },
+      "ProbeResponse": {
+        "type": "object",
+        "description": "Response after activating a probe.",
+        "required": [
+          "probe_id"
+        ],
+        "properties": {
+          "probe_id": {
+            "type": "string",
+            "description": "Unique probe ID"
+          }
+        }
+      },
       "PropertyInfo": {
         "type": "object",
         "description": "Information about an element property.",
@@ -7899,6 +8107,191 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Buffer age warning (buffer is older than threshold)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Buffer age warning (buffer is older than threshold)",
+                "required": [
+                  "flow_id",
+                  "element_id",
+                  "pad_name",
+                  "age_ms",
+                  "threshold_ms"
+                ],
+                "properties": {
+                  "age_ms": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Buffer age in milliseconds",
+                    "minimum": 0
+                  },
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "pad_name": {
+                    "type": "string"
+                  },
+                  "threshold_ms": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Threshold that was exceeded, in milliseconds",
+                    "minimum": 0
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BufferAgeWarning"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Manual buffer age probe measurement",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Manual buffer age probe measurement",
+                "required": [
+                  "flow_id",
+                  "probe_id",
+                  "element_id",
+                  "pad_name",
+                  "age_ms",
+                  "sample_number"
+                ],
+                "properties": {
+                  "age_ms": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Buffer age in milliseconds",
+                    "minimum": 0
+                  },
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "pad_name": {
+                    "type": "string"
+                  },
+                  "probe_id": {
+                    "type": "string"
+                  },
+                  "sample_number": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Sequential sample number",
+                    "minimum": 0
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BufferAgeProbe"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A manual buffer age probe was activated",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A manual buffer age probe was activated",
+                "required": [
+                  "flow_id",
+                  "probe_id",
+                  "element_id",
+                  "pad_name"
+                ],
+                "properties": {
+                  "element_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "pad_name": {
+                    "type": "string"
+                  },
+                  "probe_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BufferAgeProbeActivated"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A manual buffer age probe was deactivated",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "A manual buffer age probe was deactivated",
+                "required": [
+                  "flow_id",
+                  "probe_id",
+                  "reason"
+                ],
+                "properties": {
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "probe_id": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Reason: \"manual\", \"timeout\", \"flow_stopped\""
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "BufferAgeProbeDeactivated"
+                ]
+              }
+            }
           }
         ],
         "description": "Event types that can be broadcast to all connected clients."
@@ -8471,6 +8864,10 @@
     {
       "name": "media_player",
       "description": "Media player control endpoints"
+    },
+    {
+      "name": "probes",
+      "description": "Buffer age probe endpoints"
     },
     {
       "name": "websocket",

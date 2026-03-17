@@ -885,6 +885,28 @@ impl GraphEditor {
             }
         }
 
+        // Draw buffer age indicator if there are issues (clock icon, offset from QoS icon)
+        if let Some(ba_health) = self.buffer_age_health_map.get(&element.id.to_string()) {
+            if *ba_health != crate::buffer_age::BufferAgeHealth::Ok {
+                // Position to the left of the QoS indicator
+                let has_qos = self
+                    .qos_health_map
+                    .get(&element.id.to_string())
+                    .map(|h| *h != crate::qos_monitor::QoSHealth::Ok)
+                    .unwrap_or(false);
+                let x_offset = if has_qos { -38.0 } else { -20.0 };
+                let ba_icon_pos = rect.right_top() + vec2(x_offset * self.zoom, 8.0 * self.zoom);
+
+                painter.text(
+                    ba_icon_pos,
+                    egui::Align2::CENTER_TOP,
+                    ba_health.icon(),
+                    FontId::proportional(14.0 * self.zoom),
+                    ba_health.color(),
+                );
+            }
+        }
+
         // Draw ports based on element metadata
         let port_size = 16.0 * self.zoom;
 
@@ -1397,6 +1419,27 @@ impl GraphEditor {
                     qos_health.icon(),
                     FontId::proportional(14.0 * self.zoom),
                     qos_health.color(),
+                );
+            }
+        }
+
+        // Draw buffer age indicator if there are issues (clock icon, offset from QoS icon)
+        if let Some(ba_health) = self.buffer_age_health_map.get(&block.id) {
+            if *ba_health != crate::buffer_age::BufferAgeHealth::Ok {
+                let has_qos = self
+                    .qos_health_map
+                    .get(&block.id)
+                    .map(|h| *h != crate::qos_monitor::QoSHealth::Ok)
+                    .unwrap_or(false);
+                let x_offset = if has_qos { -38.0 } else { -20.0 };
+                let ba_icon_pos = rect.right_top() + vec2(x_offset * self.zoom, 8.0 * self.zoom);
+
+                painter.text(
+                    ba_icon_pos,
+                    egui::Align2::CENTER_TOP,
+                    ba_health.icon(),
+                    FontId::proportional(14.0 * self.zoom),
+                    ba_health.color(),
                 );
             }
         }

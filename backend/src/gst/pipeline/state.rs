@@ -128,6 +128,43 @@ impl PipelineManager {
         &self.pipeline
     }
 
+    /// Get the GStreamer element for a strom element_id (standalone elements only).
+    pub fn find_gst_element(&self, element_id: &str) -> Option<&gst::Element> {
+        self.elements.get(element_id)
+    }
+
+    /// Get all GStreamer elements belonging to a block ID.
+    /// Returns elements whose key starts with "block_id:".
+    pub fn find_block_elements(&self, block_id: &str) -> Vec<(&str, &gst::Element)> {
+        let prefix = format!("{}:", block_id);
+        self.elements
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, v)| (k.as_str(), v))
+            .collect()
+    }
+
+    /// Look up the strom element_id for a GStreamer element name.
+    ///
+    /// GStreamer element names are set by us to match element_ids during
+    /// construction, but some internal elements (auto-inserted tees, block
+    /// sub-elements) may differ. Returns `None` if there is no match.
+    pub fn element_id_for_gst_name<'a>(&'a self, gst_name: &'a str) -> Option<&'a str> {
+        // The elements map is keyed by element_id and the GStreamer element
+        // name is set to the element_id during construction, so a simple
+        // key lookup usually works.
+        if self.elements.contains_key(gst_name) {
+            return Some(gst_name);
+        }
+        // Fallback: linear scan comparing GStreamer element names
+        for (id, el) in &self.elements {
+            if el.name().as_str() == gst_name {
+                return Some(id.as_str());
+            }
+        }
+        None
+    }
+
     /// Set the thread registry for tracking streaming threads.
     ///
     /// This should be called before start() to enable thread CPU monitoring.
@@ -141,6 +178,11 @@ impl PipelineManager {
     /// can pin threads to the correct core.
     pub fn set_assigned_core(&mut self, core: Option<usize>) {
         self.assigned_core = core;
+    }
+
+    /// Get the probe manager (read-only access).
+    pub fn probe_manager(&self) -> &crate::gst::buffer_age_probe::ProbeManager {
+        &self.probe_manager
     }
 
     /// Get WHEP endpoints registered by blocks in this pipeline.

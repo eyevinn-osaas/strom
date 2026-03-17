@@ -92,7 +92,7 @@ impl PropertyInspector {
     ) -> (PropertyTab, bool) {
         let element_id = element.id.clone();
         let mut new_tab = active_tab;
-        let mut delete_requested = false;
+        let delete_requested = false;
 
         ui.push_id(&element_id, |ui| {
             // Outer scroll area for entire inspector
@@ -100,15 +100,6 @@ impl PropertyInspector {
                 .id_salt("property_inspector_outer_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    // Delete button at top
-                    if ui
-                        .button(format!("{} Delete Element", egui_phosphor::regular::TRASH))
-                        .clicked()
-                    {
-                        delete_requested = true;
-                    }
-                    ui.separator();
-
                     // Element info in collapsible section
                     egui::CollapsingHeader::new(&element.element_type)
                         .default_open(false)
@@ -387,12 +378,6 @@ impl PropertyInspector {
                 .id_salt("block_inspector_outer_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-            // Delete button at top, away from action buttons
-            if ui.button(format!("{} Delete Block", egui_phosphor::regular::TRASH)).clicked() {
-                result.delete_requested = true;
-            }
-            ui.separator();
-
             // Block info in collapsible section
             egui::CollapsingHeader::new(&definition.name)
                 .default_open(false)
@@ -682,7 +667,20 @@ impl PropertyInspector {
                                 available_channels,
                             );
                         } else {
+                            // Build skip-set for mixer blocks: skip properties for
+                            // channels/aux/groups beyond the configured count.
+                            let mixer_skip = if definition.id == "builtin.mixer" {
+                                Some(Self::mixer_skip_set(block))
+                            } else {
+                                None
+                            };
+
                             for exposed_prop in &definition.exposed_properties {
+                                if let Some(ref skip) = mixer_skip {
+                                    if skip.contains(exposed_prop.name.as_str()) {
+                                        continue;
+                                    }
+                                }
                                 Self::show_exposed_property(
                                     ui,
                                     block,
@@ -1060,6 +1058,102 @@ impl PropertyInspector {
         });
 
         result
+    }
+
+    /// Build a set of mixer property names to skip based on current config.
+    ///
+    /// Properties for channels beyond `num_channels`, aux buses beyond
+    /// `num_aux_buses`, and groups beyond `num_groups` are excluded.
+    fn mixer_skip_set(block: &BlockInstance) -> std::collections::HashSet<String> {
+        use strom_types::mixer::{MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS};
+
+        let get_uint = |key: &str, default: usize| -> usize {
+            block
+                .properties
+                .get(key)
+                .and_then(|v| match v {
+                    PropertyValue::String(s) => s.parse().ok(),
+                    PropertyValue::UInt(n) => Some(*n as usize),
+                    PropertyValue::Int(n) => Some(*n as usize),
+                    _ => None,
+                })
+                .unwrap_or(default)
+        };
+
+        let num_ch = get_uint("num_channels", 8);
+        let num_aux = get_uint("num_aux_buses", 0);
+        let num_grp = get_uint("num_groups", 0);
+
+        let mut skip = std::collections::HashSet::new();
+
+        for ch in (num_ch + 1)..=MAX_CHANNELS {
+            for name in [
+                format!("ch{}_label", ch),
+                format!("ch{}_gain", ch),
+                format!("ch{}_pan", ch),
+                format!("ch{}_fader", ch),
+                format!("ch{}_mute", ch),
+                format!("ch{}_pfl", ch),
+                format!("ch{}_to_main", ch),
+                format!("ch{}_hpf_enabled", ch),
+                format!("ch{}_hpf_freq", ch),
+                format!("ch{}_gate_enabled", ch),
+                format!("ch{}_gate_threshold", ch),
+                format!("ch{}_gate_attack", ch),
+                format!("ch{}_gate_release", ch),
+                format!("ch{}_comp_enabled", ch),
+                format!("ch{}_comp_threshold", ch),
+                format!("ch{}_comp_ratio", ch),
+                format!("ch{}_comp_attack", ch),
+                format!("ch{}_comp_release", ch),
+                format!("ch{}_comp_makeup", ch),
+                format!("ch{}_comp_knee", ch),
+                format!("ch{}_eq_enabled", ch),
+            ] {
+                skip.insert(name);
+            }
+            for band in 1..=4 {
+                for suffix in ["freq", "gain", "q"] {
+                    skip.insert(format!("ch{}_eq{}_{}", ch, band, suffix));
+                }
+            }
+            for aux in 1..=MAX_AUX_BUSES {
+                skip.insert(format!("ch{}_aux{}_level", ch, aux));
+                skip.insert(format!("ch{}_aux{}_pre", ch, aux));
+            }
+            for grp in 1..=MAX_GROUPS {
+                skip.insert(format!("ch{}_to_grp{}", ch, grp));
+            }
+        }
+
+        // Skip aux bus master properties beyond configured count
+        for aux in (num_aux + 1)..=MAX_AUX_BUSES {
+            skip.insert(format!("aux{}_fader", aux));
+            skip.insert(format!("aux{}_mute", aux));
+        }
+
+        // Skip per-channel aux send properties for unconfigured aux buses
+        for ch in 1..=num_ch {
+            for aux in (num_aux + 1)..=MAX_AUX_BUSES {
+                skip.insert(format!("ch{}_aux{}_level", ch, aux));
+                skip.insert(format!("ch{}_aux{}_pre", ch, aux));
+            }
+        }
+
+        // Skip group properties beyond configured count
+        for grp in (num_grp + 1)..=MAX_GROUPS {
+            skip.insert(format!("group{}_fader", grp));
+            skip.insert(format!("group{}_mute", grp));
+        }
+
+        // Skip per-channel group routing for unconfigured groups
+        for ch in 1..=num_ch {
+            for grp in (num_grp + 1)..=MAX_GROUPS {
+                skip.insert(format!("ch{}_to_grp{}", ch, grp));
+            }
+        }
+
+        skip
     }
 
     /// Show Audio Router properties with filtered view.

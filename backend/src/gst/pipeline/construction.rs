@@ -8,7 +8,7 @@ use gstreamer::prelude::*;
 use gstreamer_net as gst_net;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use strom_types::{Element, Flow, PipelineState};
+use strom_types::{BlockDefinition, Element, Flow, PipelineState};
 use tracing::{debug, error, info, warn};
 
 impl PipelineManager {
@@ -39,6 +39,9 @@ impl PipelineManager {
         let dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore =
             Arc::new(Mutex::new(HashMap::new()));
 
+        let probe_manager =
+            crate::gst::buffer_age_probe::ProbeManager::new(flow.id, events.clone());
+
         let mut manager = Self {
             flow_id: flow.id,
             flow_name: flow.name.clone(),
@@ -64,17 +67,22 @@ impl PipelineManager {
             whep_endpoints: Vec::new(),
             whip_endpoints: Vec::new(),
             dynamic_webrtcbins: Arc::clone(&dynamic_webrtcbins),
+            probe_manager,
+            blocks: flow.blocks.clone(),
+            block_definitions: HashMap::new(),
         };
 
         // Expand blocks into GStreamer elements
         info!("Starting block expansion (block_in_place)...");
         let flow_id = flow.id;
-        let expanded = tokio::task::block_in_place(|| {
+        let blocks_for_defs = flow.blocks.clone();
+        let registry_ref = _block_registry;
+        let (expanded, block_definitions) = tokio::task::block_in_place(|| {
             info!("Inside block_in_place, calling block_on...");
             tokio::runtime::Handle::current().block_on(async {
                 info!("Inside block_on, calling expand_blocks...");
                 let result = super::super::block_expansion::expand_blocks(
-                    &flow.blocks,
+                    &blocks_for_defs,
                     &flow.links,
                     &flow_id,
                     &media_path,
@@ -85,10 +93,23 @@ impl PipelineManager {
                 )
                 .await;
                 info!("expand_blocks completed");
-                result
+
+                // Resolve block definitions for automatic probe attachment
+                let mut defs: HashMap<String, BlockDefinition> = HashMap::new();
+                for block in &blocks_for_defs {
+                    if !defs.contains_key(&block.block_definition_id) {
+                        if let Some(def) = registry_ref.get_by_id(&block.block_definition_id).await
+                        {
+                            defs.insert(block.block_definition_id.clone(), def);
+                        }
+                    }
+                }
+
+                result.map(|expanded| (expanded, defs))
             })
         })?;
         info!("Block expansion completed");
+        manager.block_definitions = block_definitions;
 
         // Add regular elements from flow
         debug!(

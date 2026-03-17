@@ -166,6 +166,13 @@ pub async fn create_app_with_config(
             "/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}",
             get(api::flows::get_compositor_thumbnail),
         )
+        // Buffer age probes
+        .route("/flows/{id}/probes", post(api::probes::activate_probe))
+        .route("/flows/{id}/probes", get(api::probes::list_probes))
+        .route(
+            "/flows/{id}/probes/{probe_id}",
+            delete(api::probes::deactivate_probe),
+        )
         .route("/elements", get(api::elements::list_elements))
         .route("/elements/{name}", get(api::elements::get_element_info))
         .route(

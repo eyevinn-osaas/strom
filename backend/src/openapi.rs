@@ -2,12 +2,13 @@
 
 use crate::mcp::handler::JsonRpcRequest;
 use strom_types::api::{
-    AnimateInputRequest, AuthStatusResponse, AvailableOutput, AvailableSourcesResponse,
-    ClientMessage, CodecStats, CreateDirectoryRequest, CreateFlowRequest, DynamicPadsResponse,
-    ElementInfoResponse, ElementListResponse, ElementPropertiesResponse, ErrorResponse,
-    ExportGstLaunchRequest, ExportGstLaunchResponse, FlowDebugInfo, FlowListResponse, FlowResponse,
-    FlowStatsResponse, IceCandidateStats, LatencyResponse, ListMediaResponse, MediaFileEntry,
-    MediaOperationResponse, PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse,
+    ActivateProbeRequest, ActiveProbesResponse, AnimateInputRequest, AuthStatusResponse,
+    AvailableOutput, AvailableSourcesResponse, ClientMessage, CodecStats, CreateDirectoryRequest,
+    CreateFlowRequest, DynamicPadsResponse, ElementInfoResponse, ElementListResponse,
+    ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse,
+    FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse, IceCandidateStats,
+    LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
+    PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, ProbeInfo, ProbeResponse,
     RenameMediaRequest, RtpStreamStats, ServerMessage, SourceFlowInfo, SystemInfo,
     TransitionResponse, TransportStats, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
     UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcConnectionStats, WebRtcStats,
@@ -126,6 +127,10 @@ use utoipa::OpenApi;
         crate::api::mediaplayer::control_player,
         crate::api::mediaplayer::seek_player,
         crate::api::mediaplayer::goto_file,
+        // Probe endpoints
+        crate::api::probes::activate_probe,
+        crate::api::probes::list_probes,
+        crate::api::probes::deactivate_probe,
         // WebSocket endpoint
         crate::api::websocket::websocket_handler,
     ),
@@ -216,6 +221,11 @@ use utoipa::OpenApi;
             WhepStreamsResponse,
             IceServersResponse,
             IceServer,
+            // Probe types
+            ActivateProbeRequest,
+            ProbeResponse,
+            ProbeInfo,
+            ActiveProbesResponse,
             // MCP types
             JsonRpcRequest,
             // WebSocket event types
@@ -238,6 +248,7 @@ use utoipa::OpenApi;
         (name = "mcp", description = "Model Context Protocol (MCP) endpoints"),
         (name = "discovery", description = "AES67 stream and device discovery endpoints"),
         (name = "media_player", description = "Media player control endpoints"),
+        (name = "probes", description = "Buffer age probe endpoints"),
         (name = "websocket", description = "WebSocket real-time communication")
     ),
     info(

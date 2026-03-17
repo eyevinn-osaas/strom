@@ -16,7 +16,7 @@ use gstreamer::prelude::*;
 use gstreamer_net as gst_net;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use strom_types::{FlowId, Link, PipelineState, PropertyValue};
+use strom_types::{BlockDefinition, BlockInstance, FlowId, Link, PipelineState, PropertyValue};
 use thiserror::Error;
 use tracing::debug;
 
@@ -200,11 +200,19 @@ pub struct PipelineManager {
     /// Dynamically created webrtcbins (from webrtcsink/whepserversink consumer-added callbacks).
     /// Maps block_id to list of (consumer_id, webrtcbin) pairs.
     dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore,
+    /// Buffer age probe manager for on-demand pad probing
+    probe_manager: crate::gst::buffer_age_probe::ProbeManager,
+    /// Block instances from the flow (needed for automatic probe attachment at start)
+    blocks: Vec<BlockInstance>,
+    /// Block definitions for blocks used in this flow (resolved at construction time)
+    block_definitions: HashMap<String, BlockDefinition>,
 }
 
 impl Drop for PipelineManager {
     fn drop(&mut self) {
         debug!("Dropping pipeline for flow: {}", self.flow_name);
+        // Deactivate probes before pipeline goes to Null
+        self.probe_manager.deactivate_all();
         // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
         // from within a runtime" panics when GStreamer elements (e.g. whipserversrc)
         // internally call block_on() during cleanup.

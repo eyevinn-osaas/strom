@@ -1,8 +1,10 @@
 //! GStreamer integration.
 
 mod block_expansion;
+pub mod buffer_age_probe;
 pub mod discovery;
 pub mod pipeline;
+pub mod pipeline_monitor;
 pub mod thread_priority;
 pub mod thumbnail;
 pub mod transitions;

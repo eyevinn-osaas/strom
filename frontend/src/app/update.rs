@@ -262,16 +262,18 @@ impl eframe::App for StromApp {
                         }
                         StromEvent::FlowDeleted { flow_id } => {
                             tracing::info!("Flow deleted, triggering full refresh");
-                            // Clear QoS stats, WebRTC stats and start time for deleted flow
+                            // Clear QoS stats, buffer age, WebRTC stats and start time for deleted flow
                             self.qos_stats.clear_flow(&flow_id);
+                            self.buffer_age_data.clear_flow(&flow_id);
                             self.webrtc_stats.clear_flow(&flow_id);
                             self.flow_start_times.remove(&flow_id);
                             self.needs_refresh = true;
                         }
                         StromEvent::FlowStopped { flow_id } => {
                             tracing::info!("Flow {} stopped, clearing QoS stats", flow_id);
-                            // Clear QoS stats, WebRTC stats, recorder filenames and start time when flow is stopped
+                            // Clear QoS stats, buffer age, WebRTC stats, recorder filenames and start time when flow is stopped
                             self.qos_stats.clear_flow(&flow_id);
+                            self.buffer_age_data.clear_flow(&flow_id);
                             self.webrtc_stats.clear_flow(&flow_id);
                             self.recorder_filenames
                                 .retain(|(fid, _), _| *fid != flow_id);
@@ -741,6 +743,57 @@ impl eframe::App for StromApp {
                                 flow_id
                             );
                             self.stop_flow_by_id(flow_id, ctx);
+                        }
+                        StromEvent::BufferAgeWarning {
+                            flow_id,
+                            element_id,
+                            pad_name,
+                            age_ms,
+                            threshold_ms,
+                        } => {
+                            self.buffer_age_data.update_warning(
+                                flow_id,
+                                element_id.clone(),
+                                age_ms,
+                                threshold_ms,
+                            );
+                            self.log_entries.push(LogEntry::new(
+                                LogLevel::Warning,
+                                format!(
+                                    "Buffer age {}ms on {}:{} (threshold {}ms)",
+                                    age_ms, element_id, pad_name, threshold_ms
+                                ),
+                                Some(element_id),
+                                Some(flow_id),
+                            ));
+                        }
+                        StromEvent::BufferAgeProbe {
+                            probe_id,
+                            element_id,
+                            pad_name,
+                            age_ms,
+                            sample_number,
+                            ..
+                        } => {
+                            self.buffer_age_data.update_probe(
+                                probe_id,
+                                element_id,
+                                pad_name,
+                                age_ms,
+                                sample_number,
+                            );
+                        }
+                        StromEvent::BufferAgeProbeActivated {
+                            probe_id,
+                            element_id,
+                            pad_name,
+                            ..
+                        } => {
+                            self.buffer_age_data
+                                .probe_activated(probe_id, element_id, pad_name);
+                        }
+                        StromEvent::BufferAgeProbeDeactivated { probe_id, .. } => {
+                            self.buffer_age_data.probe_deactivated(&probe_id);
                         }
                         _ => {}
                     }
@@ -1638,8 +1691,8 @@ impl eframe::App for StromApp {
                             self.render_palette(ctx);
                         }
 
-                        self.render_canvas(ctx);
                         self.render_log_panel(ctx);
+                        self.render_canvas(ctx);
                         self.render_new_flow_dialog(ctx);
                         self.render_delete_confirmation_dialog(ctx);
                         self.render_flow_properties_dialog(ctx);

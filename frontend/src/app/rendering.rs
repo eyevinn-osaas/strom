@@ -1185,6 +1185,8 @@ impl StromApp {
                 }
 
                 // Show either the palette or the property inspector, not both
+                // Clone selected ID before any borrows for probe section
+                let selected_id_for_probe = self.graph.selected.clone();
                 // Collect data BEFORE getting mutable reference to avoid borrow checker issues
                 let selected_element_data = self.graph.get_selected_element().map(|element| {
                     let active_tab = self.graph.active_property_tab;
@@ -1192,9 +1194,9 @@ impl StromApp {
                     // Use pad properties if showing pad tabs, otherwise regular properties
                     use crate::graph::PropertyTab;
                     let element_info = if matches!(active_tab, PropertyTab::InputPads | PropertyTab::OutputPads) {
-                        self.palette.get_element_info_with_pads(&element.element_type)
+                        self.palette.get_element_info_with_pads(&element.element_type).cloned()
                     } else {
-                        self.palette.get_element_info(&element.element_type)
+                        self.palette.get_element_info(&element.element_type).cloned()
                     };
 
                     let element_id = element.id.clone();
@@ -1206,26 +1208,49 @@ impl StromApp {
 
                 if let Some((element_info, active_tab, focused_pad, input_pads, output_pads)) = selected_element_data {
                     // Element selected: show ONLY property inspector
-                    ui.heading("Properties");
+                    let mut delete_element = false;
+                    ui.horizontal(|ui| {
+                        ui.heading("Properties");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button(format!(
+                                    "{} Delete",
+                                    egui_phosphor::regular::TRASH
+                                ))
+                                .on_hover_text("Delete element")
+                                .clicked()
+                            {
+                                delete_element = true;
+                            }
+                        });
+                    });
                     ui.separator();
 
-                    // Split borrow: get mutable access to graph fields separately
-                    let graph = &mut self.graph;
-                    if let Some(element) = graph.get_selected_element_mut() {
-                        let (new_tab, delete_requested) = PropertyInspector::show(
-                            ui,
-                            element,
-                            element_info,
-                            active_tab,
-                            focused_pad,
-                            input_pads,
-                            output_pads,
-                        );
-                        graph.active_property_tab = new_tab;
+                    // Probe section
+                    if let Some(ref eid) = selected_id_for_probe {
+                        self.render_probe_button(ui, eid);
+                        // render_probe_details adds its own separator when active
+                        if !self.render_probe_details(ui, eid) {
+                            ui.separator();
+                        }
+                    }
 
-                        // Handle deletion request
-                        if delete_requested {
-                            graph.remove_selected();
+                    if delete_element {
+                        self.graph.remove_selected();
+                    } else {
+                        // Split borrow: get mutable access to graph fields separately
+                        let graph = &mut self.graph;
+                        if let Some(element) = graph.get_selected_element_mut() {
+                            let (new_tab, _) = PropertyInspector::show(
+                                ui,
+                                element,
+                                element_info.as_ref(),
+                                active_tab,
+                                focused_pad,
+                                input_pads,
+                                output_pads,
+                            );
+                            graph.active_property_tab = new_tab;
                         }
                     }
                 } else if let Some(block_def_id) = self
@@ -1234,8 +1259,36 @@ impl StromApp {
                     .map(|b| b.block_definition_id.clone())
                 {
                     // Block selected: show block property inspector
-                    ui.heading("Block Properties");
+                    let mut delete_block = false;
+                    ui.horizontal(|ui| {
+                        ui.heading("Block Properties");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button(format!(
+                                    "{} Delete",
+                                    egui_phosphor::regular::TRASH
+                                ))
+                                .on_hover_text("Delete block")
+                                .clicked()
+                            {
+                                delete_block = true;
+                            }
+                        });
+                    });
                     ui.separator();
+
+                    // Probe section
+                    if let Some(ref eid) = selected_id_for_probe {
+                        self.render_probe_button(ui, eid);
+                        // render_probe_details adds its own separator when active
+                        if !self.render_probe_details(ui, eid) {
+                            ui.separator();
+                        }
+                    }
+
+                    if delete_block {
+                        self.graph.remove_selected();
+                    }
 
                     // Clone definition to avoid borrow checker issues
                     let definition_opt = self
@@ -1461,6 +1514,7 @@ impl StromApp {
                     } else {
                         ui.label("Block definition not found");
                     }
+
                 } else {
                     // No element or block selected: show ONLY the palette
                     self.palette.show(ui);
@@ -1796,10 +1850,12 @@ impl StromApp {
                     }
                 }
 
-                // Update QoS health map for the current flow before rendering
+                // Update QoS and buffer age health maps for the current flow before rendering
                 if let Some(flow_id) = self.selected_flow_id {
                     let qos_health_map = self.qos_stats.get_element_health_map(&flow_id);
                     self.graph.set_qos_health_map(qos_health_map);
+                    let ba_health_map = self.buffer_age_data.get_element_health_map(&flow_id);
+                    self.graph.set_buffer_age_health_map(ba_health_map);
                 }
 
                 // Show graph editor
