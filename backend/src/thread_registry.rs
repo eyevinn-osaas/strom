@@ -19,8 +19,8 @@ pub struct ThreadInfo {
     pub flow_id: FlowId,
     /// Block ID if the element is inside a block
     pub block_id: Option<String>,
-    /// CPU core this thread is pinned to (None if Auto affinity)
-    pub pinned_core: Option<usize>,
+    /// Logical CPUs this thread is pinned to (None if affinity is off)
+    pub pinned_cpus: Option<Vec<usize>>,
 }
 
 /// Registry for tracking active GStreamer streaming threads.
@@ -47,7 +47,7 @@ impl ThreadRegistry {
         element_name: String,
         flow_id: FlowId,
         block_id: Option<String>,
-        pinned_core: Option<usize>,
+        pinned_cpus: Option<Vec<usize>>,
     ) {
         tracing::debug!(
             "Registered thread {} for element '{}' in flow {}",
@@ -63,7 +63,7 @@ impl ThreadRegistry {
                 element_name,
                 flow_id,
                 block_id,
-                pinned_core,
+                pinned_cpus,
             },
         );
     }
