@@ -1,5 +1,6 @@
 //! gst-launch-1.0 parsing and export API handlers.
 
+use crate::json_rejection::{JsonBody, ValidatedJson};
 use axum::{extract::State, http::StatusCode, Json};
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -76,7 +77,7 @@ fn preprocess_pipeline_string(input: &str) -> String {
 )]
 pub async fn parse_gst_launch(
     State(_state): State<AppState>,
-    Json(req): Json<ParseGstLaunchRequest>,
+    ValidatedJson(req): ValidatedJson<ParseGstLaunchRequest>,
 ) -> Result<Json<ParseGstLaunchResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Parsing gst-launch pipeline: {}", req.pipeline);
 
@@ -583,7 +584,7 @@ fn gvalue_to_property_value(value: &gstreamer::glib::Value) -> Option<PropertyVa
 )]
 pub async fn export_gst_launch(
     State(_state): State<AppState>,
-    Json(req): Json<ExportGstLaunchRequest>,
+    JsonBody(req): JsonBody<ExportGstLaunchRequest>,
 ) -> Result<Json<ExportGstLaunchResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Exporting {} elements and {} links to gst-launch syntax",

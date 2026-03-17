@@ -17,10 +17,21 @@
 - When working in or near a file that exceeds 1500 lines, proactively suggest splitting it into focused sub-modules (following the pattern used for `pipeline.rs` and `app.rs`)
 - Each sub-module should have a single clear responsibility (e.g. construction, lifecycle, linking, properties)
 - Check for large files with: `find backend/src frontend/src -name "*.rs" | xargs wc -l | sort -rn | head -20`
-- Shared types (structs, enums), default values, and constants used by both frontend and backend must be defined in `strom-types`. Never duplicate these across crates. If you find a duplicate, move it to `strom-types`.
+
+## Shared Types (`strom-types`)
+- Before defining a new struct, enum, constant, or default value — always check if it already exists in `strom-types`. All new API-visible or shared types must be placed in `strom-types`, never directly in the backend. If you find a duplicate, move it to `strom-types`.
+- `strom-types` must not depend on the backend, GStreamer crates, or other internal crates — only pure utility crates such as `serde` and `uuid`.
+
+## API Contract
+- Every new endpoint must have a `#[utoipa::path(...)]` annotation AND be registered in `openapi.rs`. Both are required — an annotation without registration does not appear in the schema.
+- After changes to API types or endpoints, run the snapshot test (`cargo test --test openapi_snapshot_test`). If it fails, update `openapi_snapshot.json` intentionally — do not silently let the schema drift.
+
+## WebSocket Contract
+- Any type referenced by a new `StromEvent` variant must have a `ToSchema` annotation (`#[cfg_attr(feature = "openapi", derive(ToSchema))]`). If the variant introduces new inner types, those need `ToSchema` too.
+- Never modify an existing `StromEvent` variant (rename, change fields, remove) without treating it as an intentional breaking change.
 
 ## Dead Code
-- Never use blanket `#![allow(dead_code)]`. Each case must be handled individually.
+- Never use blanket `#![allow(dead_code)]`. Each case must be handled individually. Never use `#[allow(dead_code)]` in `strom-types`.
 - For target-specific code (e.g. only used in WASM or only in native), use `#[cfg(target_arch = "wasm32")]` or `#[cfg(not(target_arch = "wasm32"))]` — not `#[allow(dead_code)]`.
 - `#[allow(dead_code)]` is acceptable only for serde deserialization fields or event data fields that mirror the backend but are not yet displayed in the UI.
 

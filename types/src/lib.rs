@@ -7,16 +7,21 @@
 pub const DEFAULT_PORT: u16 = 8080;
 
 pub mod api;
+pub mod auth;
 pub mod block;
+pub mod discovery;
 pub mod element;
 pub mod events;
 pub mod flow;
+pub mod mediaplayer;
 pub mod mixer;
 pub mod network;
 pub mod state;
 pub mod stats;
 pub mod system_monitor;
 pub mod thread_stats;
+pub mod whep;
+pub mod whip;
 
 // Re-export commonly used types
 pub use block::{
@@ -35,7 +40,7 @@ pub use network::{
 };
 pub use state::PipelineState;
 pub use stats::{
-    BlockStats, BlockStatsResponse, FlowStats, FlowStatsResponse, RtpJitterbufferStats,
+    BlockStats, BlockStatsResponse, FlowStats, FlowStatsAvailability, RtpJitterbufferStats,
     RtpSessionStats, StatMetadata, StatValue, Statistic,
 };
 pub use system_monitor::{GpuStats, SystemStats};

@@ -7,10 +7,11 @@ authors.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
 uuid.workspace = true
 utoipa = { workspace = true, optional = true, features = ["uuid"] }
+garde = { workspace = true, optional = true }
 
 [features]
 default = []
 openapi = ["utoipa"]
+validation = ["garde"]

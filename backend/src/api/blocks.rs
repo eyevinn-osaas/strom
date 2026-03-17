@@ -1,5 +1,6 @@
 //! Block API handlers.
 
+use crate::json_rejection::JsonBody;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -67,7 +68,7 @@ pub async fn get_block(
 )]
 pub async fn create_block(
     State(state): State<AppState>,
-    Json(req): Json<CreateBlockRequest>,
+    JsonBody(req): JsonBody<CreateBlockRequest>,
 ) -> Result<(StatusCode, Json<BlockResponse>), (StatusCode, Json<ErrorResponse>)> {
     info!("Creating new block: {}", req.name);
 
@@ -126,7 +127,7 @@ pub async fn create_block(
 pub async fn update_block(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Json(block): Json<BlockDefinition>,
+    JsonBody(block): JsonBody<BlockDefinition>,
 ) -> Result<Json<BlockResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Ensure ID matches
     if id != block.id {

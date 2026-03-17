@@ -63,6 +63,19 @@ pub async fn whep_streams_page() -> impl IntoResponse {
 
 /// Proxy POST requests to /whep/{endpoint_id}
 /// Looks up the internal port from WhepRegistry and forwards to localhost:{port}/whep/endpoint
+#[utoipa::path(
+    post,
+    path = "/whep/{endpoint_id}",
+    tag = "whep",
+    params(
+        ("endpoint_id" = String, Path, description = "WHEP endpoint identifier")
+    ),
+    responses(
+        (status = 201, description = "WHEP session created, SDP answer returned", content_type = "application/sdp"),
+        (status = 404, description = "WHEP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHEP server")
+    )
+)]
 pub async fn whep_endpoint_proxy(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
@@ -158,6 +171,20 @@ pub async fn whep_endpoint_proxy(
 }
 
 /// Proxy DELETE requests to /whep/{endpoint_id}/resource/{resource_id}
+#[utoipa::path(
+    delete,
+    path = "/whep/{endpoint_id}/resource/{resource_id}",
+    tag = "whep",
+    params(
+        ("endpoint_id" = String, Path, description = "WHEP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHEP resource/session identifier")
+    ),
+    responses(
+        (status = 200, description = "WHEP session deleted"),
+        (status = 404, description = "WHEP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHEP server")
+    )
+)]
 pub async fn whep_resource_proxy_delete(
     State(state): State<AppState>,
     Path((endpoint_id, resource_id)): Path<(String, String)>,
@@ -197,6 +224,17 @@ pub async fn whep_resource_proxy_delete(
 }
 
 /// Handle OPTIONS preflight for /whep/{endpoint_id}
+#[utoipa::path(
+    options,
+    path = "/whep/{endpoint_id}",
+    tag = "whep",
+    params(
+        ("endpoint_id" = String, Path, description = "WHEP endpoint identifier")
+    ),
+    responses(
+        (status = 204, description = "CORS preflight response")
+    )
+)]
 pub async fn whep_endpoint_proxy_options() -> Response {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -209,6 +247,20 @@ pub async fn whep_endpoint_proxy_options() -> Response {
 }
 
 /// Proxy PATCH requests to /whep/{endpoint_id}/resource/{resource_id} for ICE candidates
+#[utoipa::path(
+    patch,
+    path = "/whep/{endpoint_id}/resource/{resource_id}",
+    tag = "whep",
+    params(
+        ("endpoint_id" = String, Path, description = "WHEP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHEP resource/session identifier")
+    ),
+    responses(
+        (status = 204, description = "ICE candidates accepted"),
+        (status = 404, description = "WHEP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHEP server")
+    )
+)]
 pub async fn whep_resource_proxy_patch(
     State(state): State<AppState>,
     Path((endpoint_id, resource_id)): Path<(String, String)>,
@@ -261,6 +313,18 @@ pub async fn whep_resource_proxy_patch(
 }
 
 /// Handle OPTIONS preflight for /whep/{endpoint_id}/resource/{resource_id}
+#[utoipa::path(
+    options,
+    path = "/whep/{endpoint_id}/resource/{resource_id}",
+    tag = "whep",
+    params(
+        ("endpoint_id" = String, Path, description = "WHEP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHEP resource/session identifier")
+    ),
+    responses(
+        (status = 204, description = "CORS preflight response")
+    )
+)]
 pub async fn whep_resource_proxy_options() -> Response {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -279,25 +343,7 @@ pub async fn whep_resource_proxy_options() -> Response {
 // WHEP Streams API (JSON)
 // ============================================================================
 
-/// Response structure for a WHEP stream.
-#[derive(serde::Serialize, utoipa::ToSchema)]
-pub struct WhepStreamInfo {
-    /// Unique identifier for the WHEP endpoint
-    pub endpoint_id: String,
-    /// Stream mode (e.g., "video", "audio", "video+audio")
-    pub mode: String,
-    /// Whether the stream includes audio
-    pub has_audio: bool,
-    /// Whether the stream includes video
-    pub has_video: bool,
-}
-
-/// Response structure for the streams list endpoint.
-#[derive(serde::Serialize, utoipa::ToSchema)]
-pub struct WhepStreamsResponse {
-    /// List of active WHEP streams
-    pub streams: Vec<WhepStreamInfo>,
-}
+pub use strom_types::whep::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
 
 /// GET /api/whep-streams - List all active WHEP streams (JSON API).
 #[utoipa::path(
@@ -327,29 +373,6 @@ pub async fn list_whep_streams(State(state): State<AppState>) -> axum::Json<Whep
 // ============================================================================
 // ICE Servers API
 // ============================================================================
-
-/// Response structure for ICE servers endpoint.
-#[derive(serde::Serialize, utoipa::ToSchema)]
-pub struct IceServersResponse {
-    /// List of ICE server configurations (STUN/TURN)
-    pub ice_servers: Vec<IceServer>,
-    /// ICE transport policy ("all" or "relay")
-    pub ice_transport_policy: String,
-}
-
-/// ICE server configuration for WebRTC.
-/// For TURN servers, username and credential are extracted from the URL.
-#[derive(serde::Serialize, utoipa::ToSchema)]
-pub struct IceServer {
-    /// ICE server URL (e.g., "stun:stun.l.google.com:19302")
-    pub urls: String,
-    /// Username for TURN server authentication
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    /// Credential for TURN server authentication
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub credential: Option<String>,
-}
 
 /// Parse an ICE server URL into the browser-compatible format.
 /// TURN URLs with embedded credentials (turn:user:pass@host:port) are parsed
