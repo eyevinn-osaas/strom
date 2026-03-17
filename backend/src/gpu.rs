@@ -117,8 +117,9 @@ fn detect_gl_renderer() -> Option<GlRendererInfo> {
         .map_err(|e| warn!("GL probe: failed to start pipeline: {}", e))
         .ok()?;
 
-    // Pull one buffer to ensure the GL context has been created
-    let sample = sink.pull_sample().ok();
+    // Pull one buffer to ensure the GL context has been created (timeout avoids
+    // hanging on headless systems without a display server)
+    let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(5));
     let gl_context = sample.as_ref().and_then(|s| {
         let buffer = s.buffer()?;
         let mem = (buffer.n_memory() > 0).then(|| buffer.peek_memory(0))?;
