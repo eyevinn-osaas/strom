@@ -779,10 +779,8 @@ pub struct MediaOperationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct ActivateProbeRequest {
-    /// Element ID to probe
+    /// Element ID to probe (standalone element or block ID)
     pub element_id: String,
-    /// Pad name to probe
-    pub pad_name: String,
     /// Measure every Nth buffer (default 1)
     #[serde(default = "default_sample_interval")]
     pub sample_interval: Option<u32>,

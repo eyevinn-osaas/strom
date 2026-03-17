@@ -44,7 +44,7 @@ pub async fn activate_probe(
     let timeout_secs = req.timeout_secs.unwrap_or(60);
 
     // Resolve block input pads BEFORE taking the pipeline lock.
-    // For blocks: look up external input pads → internal element IDs to probe.
+    // For blocks: look up external input pads -> internal element IDs to probe.
     // For standalone elements: empty list (handled below with find_gst_element).
     let block_input_element_ids: Vec<String> = {
         let flows = state.get_flows().await;
@@ -83,8 +83,8 @@ pub async fn activate_probe(
         }
     };
 
-    let mut pipelines = state.pipelines_write().await;
-    let manager = match pipelines.get_mut(&flow_id) {
+    let pipelines = state.pipelines_read().await;
+    let manager = match pipelines.get(&flow_id) {
         Some(m) => m,
         None => {
             return (
@@ -123,7 +123,7 @@ pub async fn activate_probe(
             .collect()
     };
 
-    let probe_manager = manager.probe_manager_mut();
+    let probe_manager = manager.probe_manager();
     let mut all_probe_ids = Vec::new();
     let mut last_error = None;
 
@@ -185,8 +185,8 @@ pub async fn list_probes(
         }
     };
 
-    let mut pipelines = state.pipelines_write().await;
-    let manager = match pipelines.get_mut(&flow_id) {
+    let pipelines = state.pipelines_read().await;
+    let manager = match pipelines.get(&flow_id) {
         Some(m) => m,
         None => {
             return (
@@ -199,8 +199,7 @@ pub async fn list_probes(
         }
     };
 
-    let probe_manager = manager.probe_manager();
-    let probes = probe_manager.list();
+    let probes = manager.probe_manager().list();
 
     Json(serde_json::json!(ActiveProbesResponse { probes })).into_response()
 }
@@ -234,8 +233,8 @@ pub async fn deactivate_probe(
         }
     };
 
-    let mut pipelines = state.pipelines_write().await;
-    let manager = match pipelines.get_mut(&flow_id) {
+    let pipelines = state.pipelines_read().await;
+    let manager = match pipelines.get(&flow_id) {
         Some(m) => m,
         None => {
             return (
@@ -248,8 +247,7 @@ pub async fn deactivate_probe(
         }
     };
 
-    let probe_manager = manager.probe_manager_mut();
-    match probe_manager.deactivate(&probe_id) {
+    match manager.probe_manager().deactivate(&probe_id) {
         Ok(()) => {
             info!(flow_id = %flow_id, probe_id = %probe_id, "Buffer age probe deactivated");
             Json(serde_json::json!({"message": "Probe deactivated"})).into_response()

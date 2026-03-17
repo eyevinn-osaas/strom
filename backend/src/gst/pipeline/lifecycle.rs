@@ -160,14 +160,14 @@ impl PipelineManager {
     }
 
     /// Attach automatic buffer age monitoring probes to key measurement points.
-    fn attach_automatic_probes(&mut self) {
-        let blocks = self.blocks.clone();
-        let block_definitions = self.block_definitions.clone();
+    fn attach_automatic_probes(&self) {
         let pipeline = self.pipeline.clone();
-        // Ensure probe manager exists before borrowing elements
-        let _ = self.probe_manager_mut();
-        let pm = self.probe_manager.as_ref().unwrap();
-        pm.attach_automatic(&pipeline, &self.elements, &blocks, &block_definitions);
+        self.probe_manager.attach_automatic(
+            &pipeline,
+            &self.elements,
+            &self.blocks,
+            &self.block_definitions,
+        );
     }
 
     /// Stop the pipeline (set to NULL state).
@@ -192,9 +192,7 @@ impl PipelineManager {
         self.stop_qos_broadcast_task();
 
         // Deactivate all buffer age probes
-        if let Some(ref pm) = self.probe_manager {
-            pm.deactivate_all();
-        }
+        self.probe_manager.deactivate_all();
 
         // Remove thread priority handler
         thread_priority::remove_thread_priority_handler(&self.pipeline);

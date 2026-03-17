@@ -26,10 +26,7 @@ impl StromApp {
                 let eid = element_id.to_string();
                 let ctx = ui.ctx().clone();
                 crate::app::spawn_task(async move {
-                    match api
-                        .activate_probe(&flow_id, &eid, "sink", Some(1), Some(300))
-                        .await
-                    {
+                    match api.activate_probe(&flow_id, &eid, Some(1), Some(300)).await {
                         Ok(resp) => {
                             tracing::info!("Probe {} activated on {}", resp.probe_id, eid);
                         }

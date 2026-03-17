@@ -24,6 +24,59 @@ const AUTO_SAMPLE_INTERVAL: u32 = 30;
 /// Buffer age threshold for automatic warnings (milliseconds).
 const AUTO_WARNING_THRESHOLD_MS: u64 = 500;
 
+/// Measure the age of a buffer on a pad (pipeline_running_time - buffer_running_time).
+///
+/// Returns `Some(age_ms)` if the measurement succeeded, `None` otherwise.
+/// This runs on the GStreamer streaming thread inside a pad probe callback.
+fn measure_buffer_age(
+    pad: &gst::Pad,
+    info: &gst::PadProbeInfo,
+    pipeline: &gst::Pipeline,
+) -> Option<u64> {
+    let buffer = info.buffer()?;
+    let pts = buffer.pts()?;
+
+    let segment = pad.sticky_event::<gst::event::Segment>(0)?;
+    let time_segment = segment.segment().downcast_ref::<gst::format::Time>()?;
+    let buffer_rt = time_segment.to_running_time(pts)?;
+
+    let clock = pipeline.clock()?;
+    let base_time = pipeline.base_time()?;
+    let clock_time = clock.time();
+    if clock_time < base_time {
+        return None;
+    }
+    let pipeline_rt = clock_time - base_time;
+
+    if pipeline_rt >= buffer_rt {
+        let age_ns = (pipeline_rt - buffer_rt).nseconds();
+        Some(age_ns / 1_000_000)
+    } else {
+        None
+    }
+}
+
+/// Resolve a pad on an element by name, with fallback to first sink pad.
+fn resolve_pad(element: &gst::Element, pad_name: &str) -> Result<gst::Pad, String> {
+    element
+        .static_pad(pad_name)
+        .or_else(|| {
+            element
+                .pads()
+                .into_iter()
+                .find(|p| p.name().as_str() == pad_name)
+        })
+        .or_else(|| element.sink_pads().into_iter().next())
+        .ok_or_else(|| {
+            let available: Vec<String> = element
+                .pads()
+                .into_iter()
+                .map(|p| p.name().to_string())
+                .collect();
+            format!("No pad '{}' found (available: {:?})", pad_name, available)
+        })
+}
+
 /// State for a single active probe.
 struct ProbeState {
     probe_id: String,
@@ -76,30 +129,7 @@ impl ProbeManager {
         sample_interval: u32,
         timeout_secs: u32,
     ) -> Result<String, String> {
-        let pad = element
-            .static_pad(&pad_name)
-            .or_else(|| {
-                // Try iterating all pads for request/dynamic pads
-                element
-                    .pads()
-                    .into_iter()
-                    .find(|p| p.name().as_str() == pad_name)
-            })
-            .or_else(|| {
-                // Fallback: first sink pad regardless of name
-                element.sink_pads().into_iter().next()
-            })
-            .ok_or_else(|| {
-                let available: Vec<String> = element
-                    .pads()
-                    .into_iter()
-                    .map(|p| p.name().to_string())
-                    .collect();
-                format!(
-                    "No sink pad found on element (available pads: {:?})",
-                    available
-                )
-            })?;
+        let pad = resolve_pad(element, &pad_name)?;
 
         // Use the actual pad name (may differ from requested name)
         let pad_name = pad.name().to_string();
@@ -117,10 +147,9 @@ impl ProbeManager {
         let sample_count_cb = sample_count.clone();
         let pipeline_weak = pipeline.downgrade();
 
-        let gst_probe_id = pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        let gst_probe_id = pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
             let count = sample_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
 
-            // Only measure every Nth buffer
             if !count.is_multiple_of(sample_interval as u64) {
                 return gst::PadProbeReturn::Ok;
             }
@@ -129,48 +158,7 @@ impl ProbeManager {
                 return gst::PadProbeReturn::Remove;
             };
 
-            // Get buffer PTS
-            let buffer = match info.buffer() {
-                Some(b) => b,
-                None => return gst::PadProbeReturn::Ok,
-            };
-            let pts = match buffer.pts() {
-                Some(p) => p,
-                None => return gst::PadProbeReturn::Ok,
-            };
-
-            // Get segment to convert PTS -> running_time
-            let segment = match _pad.sticky_event::<gst::event::Segment>(0) {
-                Some(s) => s,
-                None => return gst::PadProbeReturn::Ok,
-            };
-            let segment = segment.segment();
-            let Some(time_segment) = segment.downcast_ref::<gst::format::Time>() else {
-                return gst::PadProbeReturn::Ok;
-            };
-
-            let buffer_rt = match time_segment.to_running_time(pts) {
-                Some(rt) => rt,
-                None => return gst::PadProbeReturn::Ok,
-            };
-
-            // Get pipeline running time
-            let Some(clock) = pipeline.clock() else {
-                return gst::PadProbeReturn::Ok;
-            };
-            let Some(base_time) = pipeline.base_time() else {
-                return gst::PadProbeReturn::Ok;
-            };
-            let clock_time = clock.time();
-            if clock_time < base_time {
-                return gst::PadProbeReturn::Ok;
-            }
-            let pipeline_rt = clock_time - base_time;
-
-            if pipeline_rt >= buffer_rt {
-                let age_ns = (pipeline_rt - buffer_rt).nseconds();
-                let age_ms = age_ns / 1_000_000;
-
+            if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline) {
                 events.broadcast(StromEvent::BufferAgeProbe {
                     flow_id,
                     probe_id: probe_id_cb.clone(),
@@ -400,23 +388,7 @@ impl ProbeManager {
         element_id: String,
         pad_name: String,
     ) -> Result<String, String> {
-        let pad = element
-            .static_pad(&pad_name)
-            .or_else(|| {
-                element
-                    .pads()
-                    .into_iter()
-                    .find(|p| p.name().as_str() == pad_name)
-            })
-            .or_else(|| element.sink_pads().into_iter().next())
-            .ok_or_else(|| {
-                let available: Vec<String> = element
-                    .pads()
-                    .into_iter()
-                    .map(|p| p.name().to_string())
-                    .collect();
-                format!("No pad '{}' found (available: {:?})", pad_name, available)
-            })?;
+        let pad = resolve_pad(element, &pad_name)?;
 
         let pad_name = pad.name().to_string();
         let probe_id = format!("auto-{}", Uuid::new_v4());
@@ -429,7 +401,7 @@ impl ProbeManager {
         let sample_count_cb = sample_count.clone();
         let pipeline_weak = pipeline.downgrade();
 
-        let gst_probe_id = pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        let gst_probe_id = pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
             let count = sample_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
 
             if !count.is_multiple_of(AUTO_SAMPLE_INTERVAL as u64) {
@@ -440,45 +412,7 @@ impl ProbeManager {
                 return gst::PadProbeReturn::Remove;
             };
 
-            let buffer = match info.buffer() {
-                Some(b) => b,
-                None => return gst::PadProbeReturn::Ok,
-            };
-            let pts = match buffer.pts() {
-                Some(p) => p,
-                None => return gst::PadProbeReturn::Ok,
-            };
-
-            let segment = match _pad.sticky_event::<gst::event::Segment>(0) {
-                Some(s) => s,
-                None => return gst::PadProbeReturn::Ok,
-            };
-            let segment = segment.segment();
-            let Some(time_segment) = segment.downcast_ref::<gst::format::Time>() else {
-                return gst::PadProbeReturn::Ok;
-            };
-
-            let buffer_rt = match time_segment.to_running_time(pts) {
-                Some(rt) => rt,
-                None => return gst::PadProbeReturn::Ok,
-            };
-
-            let Some(clock) = pipeline.clock() else {
-                return gst::PadProbeReturn::Ok;
-            };
-            let Some(base_time) = pipeline.base_time() else {
-                return gst::PadProbeReturn::Ok;
-            };
-            let clock_time = clock.time();
-            if clock_time < base_time {
-                return gst::PadProbeReturn::Ok;
-            }
-            let pipeline_rt = clock_time - base_time;
-
-            if pipeline_rt >= buffer_rt {
-                let age_ns = (pipeline_rt - buffer_rt).nseconds();
-                let age_ms = age_ns / 1_000_000;
-
+            if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline) {
                 if age_ms > AUTO_WARNING_THRESHOLD_MS {
                     events.broadcast(StromEvent::BufferAgeWarning {
                         flow_id,
@@ -598,5 +532,194 @@ impl ProbeManager {
 impl Drop for ProbeManager {
     fn drop(&mut self) {
         self.deactivate_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::EventBroadcaster;
+
+    fn init_gst() {
+        gst::init().unwrap();
+    }
+
+    fn create_test_pipeline() -> (gst::Pipeline, gst::Element) {
+        let pipeline = gst::Pipeline::builder().name("test-pipeline").build();
+        let src = gst::ElementFactory::make("videotestsrc")
+            .name("src")
+            .property("is-live", true)
+            .build()
+            .unwrap();
+        let sink = gst::ElementFactory::make("fakesink")
+            .name("sink")
+            .build()
+            .unwrap();
+        pipeline.add_many([&src, &sink]).unwrap();
+        src.link(&sink).unwrap();
+        (pipeline, sink)
+    }
+
+    #[test]
+    fn test_resolve_pad_static() {
+        init_gst();
+        let sink = gst::ElementFactory::make("fakesink")
+            .name("test-sink")
+            .build()
+            .unwrap();
+        let pad = resolve_pad(&sink, "sink");
+        assert!(pad.is_ok());
+        assert_eq!(pad.unwrap().name().as_str(), "sink");
+    }
+
+    #[test]
+    fn test_resolve_pad_fallback() {
+        init_gst();
+        let sink = gst::ElementFactory::make("fakesink")
+            .name("test-sink")
+            .build()
+            .unwrap();
+        // Request a non-existent pad name; should fall back to "sink"
+        let pad = resolve_pad(&sink, "nonexistent");
+        assert!(pad.is_ok());
+        assert_eq!(pad.unwrap().name().as_str(), "sink");
+    }
+
+    #[test]
+    fn test_resolve_pad_no_sink() {
+        init_gst();
+        // videotestsrc has only a src pad, no sink pad
+        let src = gst::ElementFactory::make("videotestsrc")
+            .name("test-src")
+            .build()
+            .unwrap();
+        let pad = resolve_pad(&src, "sink");
+        assert!(pad.is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_probe_manager_lifecycle() {
+        init_gst();
+        let (pipeline, sink) = create_test_pipeline();
+        pipeline.set_state(gst::State::Playing).unwrap();
+
+        // Wait for pipeline to start producing buffers
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let flow_id = FlowId::from(uuid::Uuid::new_v4());
+        let events = EventBroadcaster::default();
+        let pm = ProbeManager::new(flow_id, events);
+
+        // Activate a probe
+        let result = pm.activate(
+            &pipeline,
+            &sink,
+            "sink".to_string(),
+            "sink".to_string(),
+            1,
+            60,
+        );
+        assert!(result.is_ok());
+        let probe_id = result.unwrap();
+
+        // List should show one probe
+        let list = pm.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].probe_id, probe_id);
+
+        // Deactivate
+        assert!(pm.deactivate(&probe_id).is_ok());
+
+        // List should be empty
+        assert!(pm.list().is_empty());
+
+        pipeline.set_state(gst::State::Null).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_probe_manager_deactivate_all() {
+        init_gst();
+        let (pipeline, sink) = create_test_pipeline();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let flow_id = FlowId::from(uuid::Uuid::new_v4());
+        let events = EventBroadcaster::default();
+        let pm = ProbeManager::new(flow_id, events);
+
+        // Activate two probes
+        pm.activate(
+            &pipeline,
+            &sink,
+            "s1".to_string(),
+            "sink".to_string(),
+            1,
+            60,
+        )
+        .unwrap();
+        pm.activate(
+            &pipeline,
+            &sink,
+            "s2".to_string(),
+            "sink".to_string(),
+            1,
+            60,
+        )
+        .unwrap();
+        assert_eq!(pm.list().len(), 2);
+
+        pm.deactivate_all();
+        assert!(pm.list().is_empty());
+
+        pipeline.set_state(gst::State::Null).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_list_excludes_automatic() {
+        init_gst();
+        let (pipeline, sink) = create_test_pipeline();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let flow_id = FlowId::from(uuid::Uuid::new_v4());
+        let events = EventBroadcaster::default();
+        let pm = ProbeManager::new(flow_id, events);
+
+        // Activate a manual probe
+        pm.activate(
+            &pipeline,
+            &sink,
+            "manual".to_string(),
+            "sink".to_string(),
+            1,
+            60,
+        )
+        .unwrap();
+
+        // Attach automatic probes (on the sink element)
+        let mut elements = HashMap::new();
+        elements.insert("sink".to_string(), sink.clone());
+        pm.attach_automatic(&pipeline, &elements, &[], &HashMap::new());
+
+        // list() should only return the manual probe
+        let list = pm.list();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].element_id, "manual");
+
+        // But deactivate_all clears everything
+        pm.deactivate_all();
+        assert!(pm.list().is_empty());
+
+        pipeline.set_state(gst::State::Null).unwrap();
+    }
+
+    #[test]
+    fn test_deactivate_nonexistent() {
+        init_gst();
+        let flow_id = FlowId::from(uuid::Uuid::new_v4());
+        let events = EventBroadcaster::default();
+        let pm = ProbeManager::new(flow_id, events);
+
+        assert!(pm.deactivate("nonexistent").is_err());
     }
 }

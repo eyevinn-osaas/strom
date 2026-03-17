@@ -180,26 +180,9 @@ impl PipelineManager {
         self.assigned_core = core;
     }
 
-    /// Get the probe manager, creating it lazily if needed.
-    pub fn probe_manager(&mut self) -> &crate::gst::buffer_age_probe::ProbeManager {
-        if self.probe_manager.is_none() {
-            self.probe_manager = Some(crate::gst::buffer_age_probe::ProbeManager::new(
-                self.flow_id,
-                self.events.clone(),
-            ));
-        }
-        self.probe_manager.as_ref().unwrap()
-    }
-
-    /// Get the probe manager mutably, creating it lazily if needed.
-    pub fn probe_manager_mut(&mut self) -> &mut crate::gst::buffer_age_probe::ProbeManager {
-        if self.probe_manager.is_none() {
-            self.probe_manager = Some(crate::gst::buffer_age_probe::ProbeManager::new(
-                self.flow_id,
-                self.events.clone(),
-            ));
-        }
-        self.probe_manager.as_mut().unwrap()
+    /// Get the probe manager (read-only access).
+    pub fn probe_manager(&self) -> &crate::gst::buffer_age_probe::ProbeManager {
+        &self.probe_manager
     }
 
     /// Get WHEP endpoints registered by blocks in this pipeline.

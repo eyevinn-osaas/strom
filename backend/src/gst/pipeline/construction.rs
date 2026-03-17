@@ -39,6 +39,9 @@ impl PipelineManager {
         let dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore =
             Arc::new(Mutex::new(HashMap::new()));
 
+        let probe_manager =
+            crate::gst::buffer_age_probe::ProbeManager::new(flow.id, events.clone());
+
         let mut manager = Self {
             flow_id: flow.id,
             flow_name: flow.name.clone(),
@@ -64,7 +67,7 @@ impl PipelineManager {
             whep_endpoints: Vec::new(),
             whip_endpoints: Vec::new(),
             dynamic_webrtcbins: Arc::clone(&dynamic_webrtcbins),
-            probe_manager: None,
+            probe_manager,
             blocks: flow.blocks.clone(),
             block_definitions: HashMap::new(),
         };

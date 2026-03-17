@@ -3612,17 +3612,12 @@
         "type": "object",
         "description": "Request to activate a buffer age probe on a pad.",
         "required": [
-          "element_id",
-          "pad_name"
+          "element_id"
         ],
         "properties": {
           "element_id": {
             "type": "string",
-            "description": "Element ID to probe"
-          },
-          "pad_name": {
-            "type": "string",
-            "description": "Pad name to probe"
+            "description": "Element ID to probe (standalone element or block ID)"
           },
           "sample_interval": {
             "type": [

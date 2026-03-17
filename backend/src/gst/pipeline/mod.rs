@@ -201,7 +201,7 @@ pub struct PipelineManager {
     /// Maps block_id to list of (consumer_id, webrtcbin) pairs.
     dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore,
     /// Buffer age probe manager for on-demand pad probing
-    probe_manager: Option<crate::gst::buffer_age_probe::ProbeManager>,
+    probe_manager: crate::gst::buffer_age_probe::ProbeManager,
     /// Block instances from the flow (needed for automatic probe attachment at start)
     blocks: Vec<BlockInstance>,
     /// Block definitions for blocks used in this flow (resolved at construction time)
@@ -212,9 +212,7 @@ impl Drop for PipelineManager {
     fn drop(&mut self) {
         debug!("Dropping pipeline for flow: {}", self.flow_name);
         // Deactivate probes before pipeline goes to Null
-        if let Some(ref pm) = self.probe_manager {
-            pm.deactivate_all();
-        }
+        self.probe_manager.deactivate_all();
         // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
         // from within a runtime" panics when GStreamer elements (e.g. whipserversrc)
         // internally call block_on() during cleanup.

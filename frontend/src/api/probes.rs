@@ -5,19 +5,17 @@ use strom_types::api::{ActivateProbeRequest, ProbeResponse};
 use strom_types::FlowId;
 
 impl ApiClient {
-    /// Activate a buffer age probe on a pad.
+    /// Activate a buffer age probe on all sink pads of an element.
     pub async fn activate_probe(
         &self,
         flow_id: &FlowId,
         element_id: &str,
-        pad_name: &str,
         sample_interval: Option<u32>,
         timeout_secs: Option<u32>,
     ) -> ApiResult<ProbeResponse> {
         let url = format!("{}/flows/{}/probes", self.base_url, flow_id);
         let req = ActivateProbeRequest {
             element_id: element_id.to_string(),
-            pad_name: pad_name.to_string(),
             sample_interval,
             timeout_secs,
         };
