@@ -56,7 +56,7 @@ impl PipelineManager {
             element_setup_fns: Vec::new(),
             thread_priority_state: None,
             thread_registry: None,
-            assigned_core: None,
+            assigned_cpus: None,
             cached_state: std::sync::Arc::new(std::sync::RwLock::new(PipelineState::Null)),
             qos_aggregator: QoSAggregator::new(),
             qos_broadcast_task: None,

@@ -174,8 +174,9 @@ pub struct PipelineManager {
     thread_priority_state: Option<ThreadPriorityState>,
     /// Thread registry for tracking streaming threads (optional, for CPU monitoring)
     thread_registry: Option<crate::thread_registry::ThreadRegistry>,
-    /// CPU core assigned by AffinityManager for SingleCore affinity (None for Off)
-    assigned_core: Option<usize>,
+    /// CPU set assigned by AffinityManager for SingleCore affinity (None for Off).
+    /// Contains all logical CPUs (hyperthreads) of the allocated physical core.
+    assigned_cpus: Option<Vec<usize>>,
     /// Cached pipeline state to avoid querying async sinks during initialization
     cached_state: std::sync::Arc<std::sync::RwLock<PipelineState>>,
     /// QoS statistics aggregator (collects and periodically broadcasts QoS events)

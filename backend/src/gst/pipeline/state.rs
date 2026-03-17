@@ -172,12 +172,13 @@ impl PipelineManager {
         self.thread_registry = Some(registry);
     }
 
-    /// Set the assigned CPU core for SingleCore affinity.
+    /// Set the assigned CPU set for SingleCore affinity.
     ///
     /// This should be called before start() so the thread priority handler
-    /// can pin threads to the correct core.
-    pub fn set_assigned_core(&mut self, core: Option<usize>) {
-        self.assigned_core = core;
+    /// can pin threads to the correct physical core. The vec contains all
+    /// logical CPUs (hyperthreads) of the physical core.
+    pub fn set_assigned_cpus(&mut self, cpus: Option<Vec<usize>>) {
+        self.assigned_cpus = cpus;
     }
 
     /// Get the probe manager (read-only access).
