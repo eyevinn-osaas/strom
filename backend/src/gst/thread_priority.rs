@@ -246,7 +246,7 @@ fn set_nice_value(nice: i32) -> Result<(), String> {
 pub fn setup_thread_priority_handler(
     pipeline: &gst::Pipeline,
     priority: ThreadPriority,
-    assigned_core: Option<usize>,
+    assigned_cpus: Option<Vec<usize>>,
     flow_id: FlowId,
     thread_registry: Option<ThreadRegistry>,
 ) -> ThreadPriorityState {
@@ -258,7 +258,7 @@ pub fn setup_thread_priority_handler(
     // Always set up handler if we have a thread registry (for CPU monitoring),
     // even if priority is Normal
     let need_handler =
-        !matches!(priority, ThreadPriority::Normal) || assigned_core.is_some() || has_registry;
+        !matches!(priority, ThreadPriority::Normal) || assigned_cpus.is_some() || has_registry;
 
     if !need_handler {
         info!("Thread priority set to Normal, no affinity, no registry - no sync handler needed");
@@ -267,15 +267,14 @@ pub fn setup_thread_priority_handler(
     }
 
     // Pre-compute the CPU affinity mask
-    let affinity_cpus = if let Some(core) = assigned_core {
+    if let Some(ref cpus) = assigned_cpus {
         info!(
-            "SingleCore CPU affinity: flow {} pinned to core {}",
-            flow_id, core
+            "CPU affinity: flow {} pinned to physical core (CPUs {:?})",
+            flow_id, cpus
         );
-        Some(vec![core])
-    } else {
-        None
-    };
+    }
+    let affinity_cpus = assigned_cpus;
+    let affinity_cpus_debug = affinity_cpus.clone();
 
     let Some(bus) = pipeline.bus() else {
         error!("Pipeline has no bus - cannot set up thread priority handler");
@@ -327,14 +326,14 @@ pub fn setup_thread_priority_handler(
                     }
 
                     // Set CPU affinity (if configured) — track actual result
-                    let actual_pinned_core = if let Some(ref cpus) = affinity_cpus {
+                    let actual_pinned_cpus = if let Some(ref cpus) = affinity_cpus {
                         match set_thread_cpu_affinity(thread_id, cpus) {
                             Ok(()) => {
                                 info!(
                                     "Set CPU affinity {:?} for thread {} (element: {}, pipeline: {})",
                                     cpus, thread_id, owner, flow_name
                                 );
-                                assigned_core
+                                Some(cpus.clone())
                             }
                             Err(e) => {
                                 warn!(
@@ -348,7 +347,7 @@ pub fn setup_thread_priority_handler(
                         None
                     };
 
-                    // Register thread with the registry (using actual pinned core, not intended)
+                    // Register thread with the registry (using actual pinned CPUs, not intended)
                     if let Some(ref registry) = thread_registry {
                         // Try to extract block ID from element name (format: "block_id:element_type")
                         let block_id = if owner.contains(':') {
@@ -356,7 +355,7 @@ pub fn setup_thread_priority_handler(
                         } else {
                             None
                         };
-                        registry.register(thread_id, owner.clone(), flow_id, block_id, actual_pinned_core);
+                        registry.register(thread_id, owner.clone(), flow_id, block_id, actual_pinned_cpus);
                     }
                 }
                 gst::StreamStatusType::Leave => {
@@ -381,10 +380,10 @@ pub fn setup_thread_priority_handler(
     });
 
     info!(
-        "Thread priority sync handler installed for pipeline '{}' (priority: {:?}, assigned_core: {:?}, registry: {})",
+        "Thread priority sync handler installed for pipeline '{}' (priority: {:?}, assigned_cpus: {:?}, registry: {})",
         pipeline.name(),
         priority,
-        assigned_core,
+        affinity_cpus_debug,
         has_registry
     );
 

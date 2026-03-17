@@ -668,8 +668,8 @@ impl AppState {
             flow.properties.cpu_affinity,
             strom_types::flow::CpuAffinity::SingleCore
         ) {
-            let assigned_core = self.inner.affinity_manager.allocate(*id);
-            manager.set_assigned_core(assigned_core);
+            let assigned_cpus = self.inner.affinity_manager.allocate(*id);
+            manager.set_assigned_cpus(assigned_cpus);
         }
 
         // Start pipeline

@@ -8480,13 +8480,16 @@
             "format": "uuid",
             "description": "Flow ID this thread belongs to"
           },
-          "pinned_core": {
+          "pinned_cpus": {
             "type": [
-              "integer",
+              "array",
               "null"
             ],
-            "description": "CPU core this thread is pinned to (None if Auto affinity)",
-            "minimum": 0
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Logical CPUs this thread is pinned to (None if affinity is off).\nContains all sibling hyperthreads of the allocated physical core."
           },
           "thread_id": {
             "type": "integer",
