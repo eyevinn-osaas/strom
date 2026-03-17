@@ -119,7 +119,10 @@ fn detect_gl_renderer() -> Option<GlRendererInfo> {
 
     // Pull one buffer to ensure the GL context has been created (timeout avoids
     // hanging on headless systems without a display server)
-    let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(1));
+    let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(5));
+    if sample.is_none() {
+        debug!("GL probe: no sample received within timeout (GL context may not be available)");
+    }
     let gl_context = sample.as_ref().and_then(|s| {
         let buffer = s.buffer()?;
         let mem = (buffer.n_memory() > 0).then(|| buffer.peek_memory(0))?;
@@ -130,7 +133,13 @@ fn detect_gl_renderer() -> Option<GlRendererInfo> {
     // Tear down pipeline regardless of result
     let _ = pipeline.set_state(gst::State::Null);
 
-    let gl_context = gl_context?;
+    let gl_context = match gl_context {
+        Some(ctx) => ctx,
+        None => {
+            debug!("GL probe: could not extract GL context from buffer");
+            return None;
+        }
+    };
 
     // Query GL strings on the GL thread
     let (renderer, version, vendor, glsl_version) = {
