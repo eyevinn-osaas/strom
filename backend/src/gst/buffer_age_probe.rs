@@ -42,15 +42,6 @@ struct ProbeState {
     automatic: bool,
 }
 
-/// Public info about an active probe (for API responses).
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ProbeInfo {
-    pub probe_id: String,
-    pub element_id: String,
-    pub pad_name: String,
-    pub sample_count: u64,
-}
-
 /// Manages all active buffer age probes for a pipeline.
 pub struct ProbeManager {
     probes: Arc<Mutex<HashMap<String, ProbeState>>>,
@@ -551,12 +542,12 @@ impl ProbeManager {
     }
 
     /// List all active manual probes (excludes automatic probes).
-    pub fn list(&self) -> Vec<ProbeInfo> {
+    pub fn list(&self) -> Vec<strom_types::api::ProbeInfo> {
         let probes = self.probes.lock().unwrap();
         probes
             .values()
             .filter(|s| !s.automatic)
-            .map(|s| ProbeInfo {
+            .map(|s| strom_types::api::ProbeInfo {
                 probe_id: s.probe_id.clone(),
                 element_id: s.element_id.clone(),
                 pad_name: s.pad_name.clone(),

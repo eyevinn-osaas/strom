@@ -200,16 +200,7 @@ pub async fn list_probes(
     };
 
     let probe_manager = manager.probe_manager();
-    let probes: Vec<strom_types::api::ProbeInfo> = probe_manager
-        .list()
-        .into_iter()
-        .map(|p| strom_types::api::ProbeInfo {
-            probe_id: p.probe_id,
-            element_id: p.element_id,
-            pad_name: p.pad_name,
-            sample_count: p.sample_count,
-        })
-        .collect();
+    let probes = probe_manager.list();
 
     Json(serde_json::json!(ActiveProbesResponse { probes })).into_response()
 }
