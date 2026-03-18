@@ -96,7 +96,13 @@ impl GraphEditor {
             .get(&block.id)
             .map(|info| info.additional_height)
             .unwrap_or(0.0);
-        (base_height + content_height).min(400.0)
+        // Custom name label takes an extra 20px, pushing content down
+        let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+            20.0
+        } else {
+            0.0
+        };
+        (base_height + content_height + name_extra).min(400.0)
     }
 
     /// Calculate the bounding box of all elements and blocks in world coordinates.
@@ -387,7 +393,14 @@ impl GraphEditor {
                     .map(|info| info.additional_height)
                     .unwrap_or(0.0);
 
-                let node_height = (base_height + content_height).min(400.0);
+                // Custom name label takes an extra 20px, pushing content down
+                let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+                    20.0
+                } else {
+                    0.0
+                };
+
+                let node_height = (base_height + content_height + name_extra).min(400.0);
 
                 let node_rect = Rect::from_min_size(
                     screen_pos,
@@ -1491,7 +1504,12 @@ impl GraphEditor {
                 .get(&block.id)
                 .map(|info| info.additional_height)
                 .unwrap_or(0.0);
-            let node_height = (base_height + content_height).min(400.0);
+            let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+                20.0
+            } else {
+                0.0
+            };
+            let node_height = (base_height + content_height + name_extra).min(400.0);
 
             // Draw input pads on the left
             let input_count = external_pads.inputs.len();
