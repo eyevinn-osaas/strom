@@ -178,23 +178,34 @@ impl PipelineManager {
         use strom_types::api::{WebRtcConnectionStats, WebRtcStats};
 
         let mut stats = WebRtcStats::default();
+        let total_start = std::time::Instant::now();
 
         // Find all webrtcbin elements in the pipeline
+        let find_start = std::time::Instant::now();
         let webrtcbins = self.find_webrtcbin_elements();
-        trace!(
-            "get_webrtc_stats: Found {} webrtcbin element(s)",
-            webrtcbins.len()
+        let find_elapsed = find_start.elapsed();
+        debug!(
+            "get_webrtc_stats: Found {} webrtcbin element(s) in {:?}",
+            webrtcbins.len(),
+            find_elapsed
         );
 
         for (name, webrtcbin) in webrtcbins {
+            let element_start = std::time::Instant::now();
             trace!("get_webrtc_stats: Getting stats from webrtcbin: {}", name);
 
             let mut conn_stats = WebRtcConnectionStats::default();
 
             // First check if ICE connection is established - skip if not ready
             // This avoids blocking on promise.wait() for webrtcbins that aren't connected
+            let ice_start = std::time::Instant::now();
             let ice_state = self.get_ice_connection_state(&webrtcbin);
-            trace!("get_webrtc_stats: ICE state for {}: {:?}", name, ice_state);
+            debug!(
+                "get_webrtc_stats: ICE state for {}: {:?} (took {:?})",
+                name,
+                ice_state,
+                ice_start.elapsed()
+            );
 
             // Only get detailed stats if we have a reasonable ICE state
             let should_get_stats = match ice_state.as_deref() {
@@ -225,23 +236,25 @@ impl PipelineManager {
                 // Returns void, stats come via the promise
                 let pad_none: Option<&gst::Pad> = None;
                 let promise = gst::Promise::new();
-                trace!("get_webrtc_stats: Emitting get-stats signal...");
+                let signal_start = std::time::Instant::now();
                 webrtcbin.emit_by_name::<()>("get-stats", &[&pad_none, &promise]);
 
-                // Wait for the promise with a timeout using interrupt from another thread
+                // Wait for the promise with a timeout using interrupt from another thread.
+                // The timeout thread is detached — calling interrupt() on an already-resolved
+                // promise is a no-op, so there is no need to join.
                 let promise_clone = promise.clone();
-                let timeout_thread = std::thread::spawn(move || {
+                std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(500));
                     promise_clone.interrupt();
                 });
 
-                trace!("get_webrtc_stats: Waiting for promise (500ms timeout)...");
                 let promise_result = promise.wait();
 
-                // Clean up timeout thread (it will either have interrupted or not)
-                let _ = timeout_thread.join();
-
-                trace!("get_webrtc_stats: Promise result: {:?}", promise_result);
+                let promise_elapsed = signal_start.elapsed();
+                debug!(
+                    "get_webrtc_stats: Promise for {} resolved in {:?} (result: {:?})",
+                    name, promise_elapsed, promise_result
+                );
 
                 match promise_result {
                     gst::PromiseResult::Replied => {
@@ -259,9 +272,12 @@ impl PipelineManager {
                                 }
                             }
                             // Convert StructureRef to owned Structure for parsing
+                            let parse_start = std::time::Instant::now();
                             conn_stats = self.parse_webrtc_stats_structure(&reply.to_owned());
-                            trace!(
-                                "get_webrtc_stats: Parsed stats - ICE: {:?}, inbound_rtp: {}, outbound_rtp: {}",
+                            debug!(
+                                "get_webrtc_stats: Parsed stats for {} in {:?} - ICE: {:?}, inbound_rtp: {}, outbound_rtp: {}",
+                                name,
+                                parse_start.elapsed(),
                                 conn_stats.ice_candidates.is_some(),
                                 conn_stats.inbound_rtp.len(),
                                 conn_stats.outbound_rtp.len()
@@ -307,12 +323,18 @@ impl PipelineManager {
                 }
             }
 
+            debug!(
+                "get_webrtc_stats: Element {} total: {:?}",
+                name,
+                element_start.elapsed()
+            );
             stats.connections.insert(name, conn_stats);
         }
 
-        trace!(
-            "get_webrtc_stats: Returning stats with {} connection(s)",
-            stats.connections.len()
+        debug!(
+            "get_webrtc_stats: Returning {} connection(s), total time: {:?}",
+            stats.connections.len(),
+            total_start.elapsed()
         );
         stats
     }
