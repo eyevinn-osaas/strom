@@ -67,6 +67,8 @@ impl PipelineManager {
             whep_endpoints: Vec::new(),
             whip_endpoints: Vec::new(),
             dynamic_webrtcbins: Arc::clone(&dynamic_webrtcbins),
+            thumbnail_taps: crate::gst::new_tap_store(),
+            thumbnail_deactivation_task: None,
             probe_manager,
             blocks: flow.blocks.clone(),
             block_definitions: HashMap::new(),

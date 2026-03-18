@@ -368,6 +368,7 @@ impl PropertyInspector {
         qr_cache: &mut crate::qr::QrCache,
         recorder_filename: Option<&str>,
         recorder_start_time: Option<instant::Instant>,
+        block_thumbnail: Option<&egui::TextureHandle>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -427,6 +428,7 @@ impl PropertyInspector {
                     | "builtin.mpegtssrt_output"
                     | "builtin.whep_output"
                     | "builtin.whip_input"
+                    | "builtin.thumbnail"
             );
 
             // Only show separator before action buttons if there are any
@@ -643,6 +645,17 @@ impl PropertyInspector {
                             .on_hover_text("Start the flow to enable ingest page")
                             .on_disabled_hover_text("Start the flow to enable ingest page");
                     });
+                }
+            }
+
+            // Thumbnail preview for thumbnail blocks
+            if definition.id == "builtin.thumbnail" {
+                if let Some(texture) = block_thumbnail {
+                    ui.separator();
+                    let available_width = ui.available_width().min(320.0);
+                    let aspect = texture.size()[1] as f32 / texture.size()[0] as f32;
+                    let size = egui::vec2(available_width, available_width * aspect);
+                    ui.image(egui::load::SizedTexture::new(texture.id(), size));
                 }
             }
 

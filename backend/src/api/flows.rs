@@ -1600,6 +1600,91 @@ pub async fn get_compositor_thumbnail(
         .into_response())
 }
 
+/// Path parameters for block thumbnail endpoint.
+#[derive(Debug, Deserialize)]
+pub struct BlockThumbnailPath {
+    /// Flow ID (UUID)
+    pub id: FlowId,
+    /// Block instance ID (e.g., "b0")
+    pub block_id: String,
+}
+
+/// Get a thumbnail image from a block's video tap.
+///
+/// Works with the `builtin.thumbnail` block and any other block that
+/// exposes a thumbnail tee element. The first request activates the
+/// thumbnail branch; subsequent requests are served from cache.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/blocks/{block_id}/thumbnail",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID (e.g., 'b0')")
+    ),
+    responses(
+        (status = 200, description = "JPEG thumbnail image", content_type = "image/jpeg"),
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse),
+        (status = 504, description = "Frame capture timed out (retry shortly)", body = ErrorResponse)
+    )
+)]
+pub async fn get_block_thumbnail(
+    State(state): State<AppState>,
+    Path(path): Path<BlockThumbnailPath>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    trace!(
+        "Getting block thumbnail for flow {} block {}",
+        path.id,
+        path.block_id
+    );
+
+    let jpeg_bytes = state
+        .capture_block_thumbnail(&path.id, &path.block_id)
+        .await
+        .map_err(|e| {
+            let error_msg = e.to_string();
+            if error_msg.contains("timed out") || error_msg.contains("Timeout") {
+                (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    Json(ErrorResponse::with_details(
+                        "Frame capture timed out",
+                        error_msg,
+                    )),
+                )
+            } else if error_msg.contains("not running") || error_msg.contains("not found") {
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse::with_details(
+                        "Flow not running or block not found",
+                        error_msg,
+                    )),
+                )
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse::with_details(
+                        "Thumbnail capture failed",
+                        error_msg,
+                    )),
+                )
+            }
+        })?;
+
+    trace!(
+        "Block thumbnail captured: {} bytes for flow {} block {}",
+        jpeg_bytes.len(),
+        path.id,
+        path.block_id
+    );
+
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/jpeg")],
+        jpeg_bytes,
+    )
+        .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

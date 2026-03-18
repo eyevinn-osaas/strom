@@ -1586,6 +1586,24 @@ impl AppState {
 
         manager.capture_compositor_input_thumbnail(block_id, input_idx, width, height)
     }
+
+    /// Capture a thumbnail from a block's tee element.
+    ///
+    /// Works with the `builtin.thumbnail` block and any block that exposes
+    /// a thumbnail tee element.
+    pub async fn capture_block_thumbnail(
+        &self,
+        flow_id: &FlowId,
+        block_id: &str,
+    ) -> Result<Vec<u8>, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.get_block_thumbnail(block_id)
+    }
 }
 
 impl Default for AppState {

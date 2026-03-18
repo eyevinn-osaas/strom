@@ -1344,6 +1344,8 @@ impl StromApp {
                         let recorder_start_time = flow_id
                             .and_then(|fid| self.recorder_start_times.get(&(fid, block_id.clone())))
                             .copied();
+                        let block_thumbnail = flow_id
+                            .and_then(|fid| self.block_thumbnails.get(&(fid, block.id.clone())));
                         let result = PropertyInspector::show_block(
                             ui,
                             block,
@@ -1362,6 +1364,7 @@ impl StromApp {
                             &mut self.qr_cache,
                             recorder_filename,
                             recorder_start_time,
+                            block_thumbnail,
                         );
 
                         // Handle deletion request
@@ -1852,6 +1855,41 @@ impl StromApp {
                                 })),
                             },
                         );
+                    }
+
+                    // Setup dynamic content for thumbnail blocks
+                    let thumbnail_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.thumbnail")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in thumbnail_blocks {
+                        if let Some(texture) =
+                            self.block_thumbnails.get(&(flow_id, block_id.clone()))
+                        {
+                            let texture_id = texture.id();
+                            let tex_size = texture.size_vec2();
+                            let aspect = tex_size.y / tex_size.x;
+                            // Inline thumbnail: fit within block width (~120px)
+                            let thumb_h = 120.0 * aspect;
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: thumb_h,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        let w = ui.available_width();
+                                        let h = w * aspect;
+                                        ui.image(egui::load::SizedTexture::new(
+                                            texture_id,
+                                            egui::vec2(w, h),
+                                        ));
+                                    })),
+                                },
+                            );
+                        }
                     }
                 }
 

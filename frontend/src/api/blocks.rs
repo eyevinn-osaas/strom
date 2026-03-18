@@ -1,6 +1,34 @@
 use super::*;
 
 impl ApiClient {
+    /// Get a thumbnail from a block's video tap.
+    ///
+    /// Returns JPEG-encoded image bytes for the specified block.
+    pub async fn get_block_thumbnail(&self, flow_id: &str, block_id: &str) -> ApiResult<Vec<u8>> {
+        let url = format!(
+            "{}/flows/{}/blocks/{}/thumbnail",
+            self.base_url, flow_id, block_id
+        );
+
+        let response = self
+            .with_auth(self.client.get(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status_code = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status_code, text));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+        Ok(bytes.to_vec())
+    }
+
     /// List all block definitions (built-in + user-defined).
     pub async fn list_blocks(&self) -> ApiResult<Vec<strom_types::BlockDefinition>> {
         use strom_types::block::BlockListResponse;

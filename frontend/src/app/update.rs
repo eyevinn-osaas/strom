@@ -1198,11 +1198,9 @@ impl eframe::App for StromApp {
             });
         }
 
-        // If any recorder is actively recording, request a repaint every second
-        // so the duration counter stays up to date.
-        if !self.recorder_start_times.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
-        }
+        // Ensure at least one repaint per second for periodic polling
+        // (thumbnails, recorder duration, stats, etc.)
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
         // Check authentication - if required and not authenticated, don't render
         // The HTML login form (in index.html) handles authentication
@@ -1262,6 +1260,10 @@ impl eframe::App for StromApp {
                 self.last_rtp_stats_fetch = instant::Instant::now();
                 self.fetch_rtp_stats_for_selected_flow(ctx);
             }
+
+            // Poll thumbnail blocks in running flows
+            self.poll_block_thumbnails(ctx);
+            self.check_block_thumbnails(ctx);
         }
 
         // Handle keyboard shortcuts

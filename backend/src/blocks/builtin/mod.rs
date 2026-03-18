@@ -21,6 +21,7 @@ pub mod mpegtssrt_input;
 pub mod ndi;
 pub mod recorder;
 pub mod spectrum;
+pub mod thumbnail;
 pub mod videoenc;
 pub mod videoformat;
 pub mod whep;
@@ -93,6 +94,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
     // Add Spectrum blocks
     blocks.extend(spectrum::get_blocks());
 
+    // Add Thumbnail blocks
+    blocks.extend(thumbnail::get_blocks());
+
     // Add VideoEncoder blocks
     blocks.extend(videoenc::get_blocks());
 
@@ -142,6 +146,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.ndi_output" => Some(Arc::new(ndi::NDIOutputBuilder)),
         "builtin.recorder" => Some(Arc::new(recorder::RecorderBuilder)),
         "builtin.spectrum" => Some(Arc::new(spectrum::SpectrumBuilder)),
+        "builtin.thumbnail" => Some(Arc::new(thumbnail::ThumbnailBuilder)),
         "builtin.videoenc" => Some(Arc::new(videoenc::VideoEncBuilder)),
         "builtin.videoformat" => Some(Arc::new(videoformat::VideoFormatBuilder)),
         "builtin.whip_output" => Some(Arc::new(whip::WHIPOutputBuilder)),
