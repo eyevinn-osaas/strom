@@ -331,6 +331,33 @@ impl eframe::App for StromApp {
                                 }
                             });
                         }
+                        StromEvent::FlowStateChanged { flow_id, state } => {
+                            tracing::info!(
+                                "Flow {} state changed to {}, fetching updated flow",
+                                flow_id,
+                                state
+                            );
+                            let api = self.api.clone();
+                            let tx = self.channels.sender();
+                            let ctx = ctx.clone();
+
+                            spawn_task(async move {
+                                match api.get_flow(flow_id).await {
+                                    Ok(flow) => {
+                                        let _ = tx.send(AppMessage::FlowFetched(Box::new(flow)));
+                                        ctx.request_repaint();
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to fetch flow after state change: {}",
+                                            e
+                                        );
+                                        let _ = tx.send(AppMessage::RefreshNeeded);
+                                        ctx.request_repaint();
+                                    }
+                                }
+                            });
+                        }
                         StromEvent::FlowUpdated { flow_id } => {
                             // For updates, fetch the specific flow to update it in-place
                             tracing::info!("Flow {} updated, fetching updated flow", flow_id);
@@ -1211,27 +1238,30 @@ impl eframe::App for StromApp {
             self.needs_refresh = false;
         }
 
-        // Poll WebRTC stats every second for running flows
-        {
-            let poll_interval = std::time::Duration::from_secs(1);
-            if self.last_webrtc_poll.elapsed() >= poll_interval {
-                self.poll_webrtc_stats(ctx);
-                self.webrtc_stats
-                    .evict_stale(std::time::Duration::from_secs(3));
-                self.last_webrtc_poll = instant::Instant::now();
+        // Only poll flow-specific stats when on the Flows page
+        if self.current_page == AppPage::Flows {
+            // Poll WebRTC stats every second for running flows
+            {
+                let poll_interval = std::time::Duration::from_secs(1);
+                if self.last_webrtc_poll.elapsed() >= poll_interval {
+                    self.poll_webrtc_stats(ctx);
+                    self.webrtc_stats
+                        .evict_stale(std::time::Duration::from_secs(3));
+                    self.last_webrtc_poll = instant::Instant::now();
+                }
             }
-        }
 
-        // Periodically fetch latency for selected flow (every second)
-        if self.last_latency_fetch.elapsed() > std::time::Duration::from_secs(1) {
-            self.last_latency_fetch = instant::Instant::now();
-            self.fetch_latency_for_running_flows(ctx);
-        }
+            // Periodically fetch latency for selected flow (every 3 seconds)
+            if self.last_latency_fetch.elapsed() > std::time::Duration::from_secs(3) {
+                self.last_latency_fetch = instant::Instant::now();
+                self.fetch_latency_for_running_flows(ctx);
+            }
 
-        // Periodically fetch RTP stats for selected flow (every second)
-        if self.last_rtp_stats_fetch.elapsed() > std::time::Duration::from_secs(1) {
-            self.last_rtp_stats_fetch = instant::Instant::now();
-            self.fetch_rtp_stats_for_selected_flow(ctx);
+            // Periodically fetch RTP stats for selected flow (every second)
+            if self.last_rtp_stats_fetch.elapsed() > std::time::Duration::from_secs(1) {
+                self.last_rtp_stats_fetch = instant::Instant::now();
+                self.fetch_rtp_stats_for_selected_flow(ctx);
+            }
         }
 
         // Handle keyboard shortcuts

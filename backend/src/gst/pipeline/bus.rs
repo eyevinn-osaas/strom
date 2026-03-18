@@ -167,6 +167,12 @@ impl PipelineManager {
                                 _ => PipelineState::Null,
                             };
                             *cached_state.write().unwrap() = pipeline_state;
+
+                            // Broadcast state change so the frontend can update immediately
+                            events.broadcast(StromEvent::FlowStateChanged {
+                                flow_id,
+                                state: format!("{:?}", pipeline_state),
+                            });
                         } else {
                             // Log element state changes at debug level to avoid log spam
                             debug!(
