@@ -64,7 +64,6 @@ use utoipa::OpenApi;
         crate::api::flows::update_pad_property,
         crate::api::flows::reset_loudness,
         crate::api::flows::recorder_split_now,
-        crate::api::flows::get_compositor_thumbnail,
         crate::api::flows::get_block_thumbnail,
         crate::api::elements::list_elements,
         crate::api::elements::get_element_info,

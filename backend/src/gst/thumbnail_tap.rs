@@ -6,16 +6,22 @@
 //!
 //! Processing branch (when active):
 //! ```text
+//! GL path:
 //! [tee] ─┬─ (passthrough)
-//!         └─ queue (leaky=downstream, max-size-buffers=1)
-//!            → autovideoconvert (picks videoconvertscale: format + scaling in one pass)
-//!            → capsfilter (target_width × target_height, RGBA)
-//!            → appsink (max-buffers=1, drop=true, sync=false)
+//!         └─ queue ─[pad probe: rate limit]─→ glcolorscale
+//!            → capsfilter(GL,RGBA,WxH) → gldownload
+//!            → capsfilter(RGBA,WxH) → appsink
+//!
+//! Non-GL path:
+//! [tee] ─┬─ (passthrough)
+//!         └─ queue ─[pad probe: rate limit]─→ videoconvertscale
+//!            → capsfilter(RGBA,WxH) → appsink
 //! ```
 //!
-//! Frame rate is limited to ~1fps via interval-based dropping in the appsink
-//! callback (proven pattern from `audioanalyzer.rs`). The appsink callback
-//! does lightweight JPEG encoding on the already-scaled frame.
+//! Frame rate is limited via a pad probe on the queue src pad that drops
+//! buffers arriving sooner than `update_interval`. This is invisible to
+//! caps negotiation (unlike videorate). The appsink callback does
+//! lightweight JPEG encoding on the already-scaled frame.
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -221,7 +227,7 @@ impl ThumbnailTap {
             .build()
             .map_err(|e| ThumbnailError::FrameMapping(format!("queue: {}", e)))?;
 
-        // Check if the tee outputs GL memory — if so, add gldownload first
+        // Check if the tee outputs GL memory — if so, scale on GPU before downloading.
         let is_gl = self
             .tee
             .static_pad("sink")
@@ -232,18 +238,40 @@ impl ThumbnailTap {
         let mut branch_elements: Vec<gst::Element> = Vec::new();
 
         if is_gl {
+            // GL path: scale on GPU, then download the small frame.
+            // glcolorscale requires RGBA — the compositor tee already carries RGBA.
+            let scale = gst::ElementFactory::make("glcolorscale")
+                .name(format!("{}_thumb_glscale", prefix))
+                .build()
+                .map_err(|e| ThumbnailError::FrameMapping(format!("glcolorscale: {}", e)))?;
+            branch_elements.push(scale);
+
+            let gl_caps_str = format!(
+                "video/x-raw(memory:GLMemory),format=RGBA,width={},height={}",
+                self.config.width, self.config.height
+            );
+            let gl_caps = gst::Caps::from_str(&gl_caps_str)
+                .map_err(|e| ThumbnailError::FrameMapping(format!("gl caps: {}", e)))?;
+            let gl_capsfilter = gst::ElementFactory::make("capsfilter")
+                .name(format!("{}_thumb_glcaps", prefix))
+                .property("caps", &gl_caps)
+                .build()
+                .map_err(|e| ThumbnailError::FrameMapping(format!("gl capsfilter: {}", e)))?;
+            branch_elements.push(gl_capsfilter);
+
             let download = gst::ElementFactory::make("gldownload")
                 .name(format!("{}_thumb_gldownload", prefix))
                 .build()
                 .map_err(|e| ThumbnailError::FrameMapping(format!("gldownload: {}", e)))?;
             branch_elements.push(download);
+        } else {
+            // Non-GL path: CPU-based format conversion and scaling.
+            let convert = gst::ElementFactory::make("videoconvertscale")
+                .name(format!("{}_thumb_convert", prefix))
+                .build()
+                .map_err(|e| ThumbnailError::FrameMapping(format!("videoconvertscale: {}", e)))?;
+            branch_elements.push(convert);
         }
-
-        let convert = gst::ElementFactory::make("videoconvertscale")
-            .name(format!("{}_thumb_convert", prefix))
-            .build()
-            .map_err(|e| ThumbnailError::FrameMapping(format!("videoconvertscale: {}", e)))?;
-        branch_elements.push(convert.clone());
 
         let caps_str = format!(
             "video/x-raw,format=RGBA,width={},height={}",
@@ -264,25 +292,33 @@ impl ThumbnailTap {
             .sync(false)
             .build();
 
-        // Set up appsink callback with interval-based frame dropping
+        // Set up appsink callback — videorate already limits fps upstream,
+        // so every frame that arrives here should be encoded.
         let callback_state = Arc::clone(&self.state);
-        let update_interval = self.config.update_interval;
         let jpeg_quality = self.config.jpeg_quality;
         let thumb_width = self.config.width;
         let thumb_height = self.config.height;
         let callback_prefix = self.name_prefix.clone();
-        let last_frame_time = Arc::new(Mutex::new(Instant::now() - update_interval));
+        let frame_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let first_frame_time = Arc::new(Mutex::new(None::<Instant>));
 
         appsink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
-                    // Rate limit: only process every update_interval
-                    {
-                        let mut lft = last_frame_time.lock().unwrap();
-                        if lft.elapsed() < update_interval {
-                            return Ok(gst::FlowSuccess::Ok);
-                        }
-                        *lft = Instant::now();
+                    let count = frame_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    let mut first = first_frame_time.lock().unwrap();
+                    let start = *first.get_or_insert_with(Instant::now);
+                    let elapsed = start.elapsed().as_secs_f64();
+                    if count.is_multiple_of(10) {
+                        let fps = if elapsed > 0.0 {
+                            count as f64 / elapsed
+                        } else {
+                            0.0
+                        };
+                        debug!(
+                            "Thumbnail tap {}: {} frames in {:.1}s ({:.2} fps)",
+                            callback_prefix, count, elapsed, fps
+                        );
                     }
 
                     let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
@@ -316,7 +352,9 @@ impl ThumbnailTap {
                 .build(),
         );
 
-        // Build the full element chain: queue → [gldownload] → videoconvertscale → capsfilter → appsink
+        // Build the full element chain:
+        //   GL:     queue [pad probe] → glcolorscale → glcaps → gldownload → capsfilter → appsink
+        //   non-GL: queue [pad probe] → videoconvertscale → capsfilter → appsink
         let mut elements: Vec<gst::Element> = vec![queue.clone()];
         elements.extend(branch_elements.iter().cloned());
         elements.push(capsfilter.clone());
@@ -362,6 +400,23 @@ impl ThumbnailTap {
             tee_pad.link(&queue_sink).map_err(|e| {
                 ThumbnailError::FrameMapping(format!("Failed to link tee→queue: {}", e))
             })?;
+
+            // Rate-limit via pad probe on queue src: drop buffers that arrive
+            // sooner than update_interval since the last passed buffer.
+            // This is invisible to caps negotiation (unlike videorate).
+            let probe_interval = self.config.update_interval;
+            let probe_last = Arc::new(Mutex::new(Instant::now() - probe_interval));
+            let queue_src = queue
+                .static_pad("src")
+                .ok_or_else(|| ThumbnailError::PadNotFound("queue src".to_string()))?;
+            queue_src.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+                let mut last = probe_last.lock().unwrap();
+                if last.elapsed() < probe_interval {
+                    return gst::PadProbeReturn::Drop;
+                }
+                *last = Instant::now();
+                gst::PadProbeReturn::Ok
+            });
 
             // Sync all elements to parent state
             for elem in &elements {

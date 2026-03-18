@@ -736,7 +736,7 @@ impl PropertyInspector {
                     // Show meter visualization for meter blocks
                     if definition.id == "builtin.meter" {
                         ui.separator();
-                        tracing::debug!("Checking for meter data: flow_id={:?}, block_id={}", flow_id, block.id);
+
                         if let Some(flow_id) = flow_id {
                             if let Some(meter_data) = meter_data_store.get(&flow_id, &block.id) {
                                 tracing::debug!("Found meter data, calling show_full");

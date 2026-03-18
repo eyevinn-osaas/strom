@@ -1485,121 +1485,6 @@ pub async fn animate_input(
     })))
 }
 
-/// Path parameters for compositor thumbnail endpoint.
-#[derive(Debug, Deserialize)]
-pub struct CompositorThumbnailPath {
-    /// Flow ID (UUID)
-    pub id: FlowId,
-    /// Block instance ID (e.g., "b0")
-    pub block_id: String,
-    /// Input index (0-based)
-    pub input_idx: usize,
-}
-
-/// Query parameters for compositor thumbnail endpoint.
-#[derive(Debug, Deserialize)]
-pub struct CompositorThumbnailQuery {
-    /// Target width (default 320, max 640)
-    #[serde(default = "default_thumbnail_width")]
-    pub width: u32,
-    /// Target height (default 180, max 360)
-    #[serde(default = "default_thumbnail_height")]
-    pub height: u32,
-}
-
-fn default_thumbnail_width() -> u32 {
-    320
-}
-
-fn default_thumbnail_height() -> u32 {
-    180
-}
-
-/// Get a thumbnail image from a compositor input.
-///
-/// Captures a single frame from the specified compositor input, scales it
-/// to the requested dimensions, and returns it as a JPEG image.
-#[utoipa::path(
-    get,
-    path = "/api/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}",
-    tag = "flows",
-    params(
-        ("id" = String, Path, description = "Flow ID (UUID)"),
-        ("block_id" = String, Path, description = "Block instance ID (e.g., 'b0')"),
-        ("input_idx" = usize, Path, description = "Input index (0-based)"),
-        ("width" = Option<u32>, Query, description = "Target width (default 320, max 640)"),
-        ("height" = Option<u32>, Query, description = "Target height (default 180, max 360)")
-    ),
-    responses(
-        (status = 200, description = "JPEG thumbnail image", content_type = "image/jpeg"),
-        (status = 404, description = "Flow not running or input not found", body = ErrorResponse),
-        (status = 504, description = "Frame capture timed out", body = ErrorResponse)
-    )
-)]
-pub async fn get_compositor_thumbnail(
-    State(state): State<AppState>,
-    Path(path): Path<CompositorThumbnailPath>,
-    axum::extract::Query(query): axum::extract::Query<CompositorThumbnailQuery>,
-) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    trace!(
-        "Getting compositor thumbnail for flow {} block {} input {}",
-        path.id,
-        path.block_id,
-        path.input_idx
-    );
-
-    // Clamp dimensions to reasonable limits
-    let width = query.width.clamp(32, 640);
-    let height = query.height.clamp(18, 360);
-
-    let jpeg_bytes = state
-        .capture_compositor_thumbnail(&path.id, &path.block_id, path.input_idx, width, height)
-        .await
-        .map_err(|e| {
-            let error_msg = e.to_string();
-            if error_msg.contains("timed out") || error_msg.contains("Timeout") {
-                (
-                    StatusCode::GATEWAY_TIMEOUT,
-                    Json(ErrorResponse::with_details(
-                        "Frame capture timed out",
-                        error_msg,
-                    )),
-                )
-            } else if error_msg.contains("not running") || error_msg.contains("not found") {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(ErrorResponse::with_details(
-                        "Flow not running or input not found",
-                        error_msg,
-                    )),
-                )
-            } else {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse::with_details(
-                        "Thumbnail capture failed",
-                        error_msg,
-                    )),
-                )
-            }
-        })?;
-
-    trace!(
-        "Thumbnail captured: {} bytes for flow {} block {} input {}",
-        jpeg_bytes.len(),
-        path.id,
-        path.block_id,
-        path.input_idx
-    );
-
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/jpeg")],
-        jpeg_bytes,
-    )
-        .into_response())
-}
-
 /// Path parameters for block thumbnail endpoint.
 #[derive(Debug, Deserialize)]
 pub struct BlockThumbnailPath {
@@ -1609,18 +1494,29 @@ pub struct BlockThumbnailPath {
     pub block_id: String,
 }
 
+/// Query parameters for block thumbnail endpoint.
+#[derive(Debug, Deserialize)]
+pub struct BlockThumbnailQuery {
+    /// Tap index (default 0). The meaning depends on the block type —
+    /// e.g. compositor input index, or 0 for a single-tee thumbnail block.
+    #[serde(default)]
+    pub index: usize,
+}
+
 /// Get a thumbnail image from a block's video tap.
 ///
-/// Works with the `builtin.thumbnail` block and any other block that
-/// exposes a thumbnail tee element. The first request activates the
-/// thumbnail branch; subsequent requests are served from cache.
+/// Works with any block that exposes thumbnail tee elements, including
+/// `builtin.thumbnail` (index 0) and compositor blocks (one per input).
+/// The first request activates the thumbnail branch; subsequent requests
+/// are served from cache.
 #[utoipa::path(
     get,
     path = "/api/flows/{id}/blocks/{block_id}/thumbnail",
     tag = "flows",
     params(
         ("id" = String, Path, description = "Flow ID (UUID)"),
-        ("block_id" = String, Path, description = "Block instance ID (e.g., 'b0')")
+        ("block_id" = String, Path, description = "Block instance ID (e.g., 'b0')"),
+        ("index" = Option<usize>, Query, description = "Tap index (default 0, e.g. compositor input index)")
     ),
     responses(
         (status = 200, description = "JPEG thumbnail image", content_type = "image/jpeg"),
@@ -1631,15 +1527,17 @@ pub struct BlockThumbnailPath {
 pub async fn get_block_thumbnail(
     State(state): State<AppState>,
     Path(path): Path<BlockThumbnailPath>,
+    axum::extract::Query(query): axum::extract::Query<BlockThumbnailQuery>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     trace!(
-        "Getting block thumbnail for flow {} block {}",
+        "Getting block thumbnail for flow {} block {} index {}",
         path.id,
-        path.block_id
+        path.block_id,
+        query.index
     );
 
     let jpeg_bytes = state
-        .capture_block_thumbnail(&path.id, &path.block_id)
+        .capture_block_thumbnail(&path.id, &path.block_id, query.index)
         .await
         .map_err(|e| {
             let error_msg = e.to_string();
@@ -1671,10 +1569,11 @@ pub async fn get_block_thumbnail(
         })?;
 
     trace!(
-        "Block thumbnail captured: {} bytes for flow {} block {}",
+        "Block thumbnail captured: {} bytes for flow {} block {} index {}",
         jpeg_bytes.len(),
         path.id,
-        path.block_id
+        path.block_id,
+        query.index
     );
 
     Ok((

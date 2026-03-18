@@ -66,7 +66,7 @@ impl super::StromApp {
             let storage_key = format!("block_thumb_{}_{}", flow.id, block.id);
 
             spawn_task(async move {
-                match api.get_block_thumbnail(&flow_id_str, &block_id).await {
+                match api.get_block_thumbnail(&flow_id_str, &block_id, 0).await {
                     Ok(jpeg_bytes) => {
                         use base64::Engine;
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes);

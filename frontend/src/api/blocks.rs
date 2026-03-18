@@ -3,12 +3,24 @@ use super::*;
 impl ApiClient {
     /// Get a thumbnail from a block's video tap.
     ///
-    /// Returns JPEG-encoded image bytes for the specified block.
-    pub async fn get_block_thumbnail(&self, flow_id: &str, block_id: &str) -> ApiResult<Vec<u8>> {
-        let url = format!(
-            "{}/flows/{}/blocks/{}/thumbnail",
-            self.base_url, flow_id, block_id
-        );
+    /// Returns JPEG-encoded image bytes for the specified block and tap index.
+    pub async fn get_block_thumbnail(
+        &self,
+        flow_id: &str,
+        block_id: &str,
+        index: usize,
+    ) -> ApiResult<Vec<u8>> {
+        let url = if index == 0 {
+            format!(
+                "{}/flows/{}/blocks/{}/thumbnail",
+                self.base_url, flow_id, block_id
+            )
+        } else {
+            format!(
+                "{}/flows/{}/blocks/{}/thumbnail?index={}",
+                self.base_url, flow_id, block_id, index
+            )
+        };
 
         let response = self
             .with_auth(self.client.get(&url))

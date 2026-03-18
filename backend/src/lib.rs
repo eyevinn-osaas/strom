@@ -163,10 +163,6 @@ pub async fn create_app_with_config(
             post(api::flows::animate_input),
         )
         .route(
-            "/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}",
-            get(api::flows::get_compositor_thumbnail),
-        )
-        .route(
             "/flows/{id}/blocks/{block_id}/thumbnail",
             get(api::flows::get_block_thumbnail),
         )

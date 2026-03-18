@@ -123,7 +123,7 @@ impl CompositorEditor {
 
             crate::app::spawn_task(async move {
                 match api
-                    .get_compositor_thumbnail(&flow_id.to_string(), &block_id, idx)
+                    .get_block_thumbnail(&flow_id.to_string(), &block_id, idx)
                     .await
                 {
                     Ok(jpeg_bytes) => {
