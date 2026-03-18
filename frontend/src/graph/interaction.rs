@@ -115,7 +115,13 @@ impl GraphEditor {
                     .map(|info| info.additional_height)
                     .unwrap_or(0.0);
 
-                let node_height = (base_height + content_height).min(400.0);
+                let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+                    20.0
+                } else {
+                    0.0
+                };
+
+                let node_height = (base_height + content_height + name_extra).min(400.0);
 
                 if is_input {
                     // Find the pad in inputs
@@ -402,7 +408,12 @@ impl GraphEditor {
                 .get(&block.id)
                 .map(|info| info.additional_height)
                 .unwrap_or(0.0);
-            let node_height = (base_height + content_height).min(400.0);
+            let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+                20.0
+            } else {
+                0.0
+            };
+            let node_height = (base_height + content_height + name_extra).min(400.0);
 
             // Handle input pad interactions
             let input_count = external_pads.inputs.len();

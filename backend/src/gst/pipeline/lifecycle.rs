@@ -103,6 +103,7 @@ impl PipelineManager {
             // Update cached state - the bus watch will update it when the actual transition happens
             *self.cached_state.write().unwrap() = PipelineState::Playing;
             self.attach_automatic_probes();
+            self.start_thumbnail_deactivation_task();
             return Ok(PipelineState::Playing);
         }
 
@@ -156,7 +157,33 @@ impl PipelineManager {
             self.attach_automatic_probes();
         }
 
+        // Start periodic thumbnail deactivation task
+        self.start_thumbnail_deactivation_task();
+
         Ok(actual_state)
+    }
+
+    /// Start periodic task that deactivates idle thumbnail branches.
+    fn start_thumbnail_deactivation_task(&mut self) {
+        if self.thumbnail_deactivation_task.is_some() {
+            return;
+        }
+
+        let taps = self.thumbnail_taps.clone();
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let store = taps.lock().unwrap();
+                for block_taps in store.values() {
+                    for tap in block_taps {
+                        tap.maybe_deactivate();
+                    }
+                }
+            }
+        });
+
+        self.thumbnail_deactivation_task = Some(task);
     }
 
     /// Attach automatic buffer age monitoring probes to key measurement points.
@@ -190,6 +217,11 @@ impl PipelineManager {
 
         // Stop QoS broadcast task
         self.stop_qos_broadcast_task();
+
+        // Stop thumbnail deactivation task
+        if let Some(task) = self.thumbnail_deactivation_task.take() {
+            task.abort();
+        }
 
         // Deactivate all buffer age probes
         self.probe_manager.deactivate_all();

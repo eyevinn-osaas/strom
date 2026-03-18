@@ -1485,75 +1485,59 @@ pub async fn animate_input(
     })))
 }
 
-/// Path parameters for compositor thumbnail endpoint.
+/// Path parameters for block thumbnail endpoint.
 #[derive(Debug, Deserialize)]
-pub struct CompositorThumbnailPath {
+pub struct BlockThumbnailPath {
     /// Flow ID (UUID)
     pub id: FlowId,
     /// Block instance ID (e.g., "b0")
     pub block_id: String,
-    /// Input index (0-based)
-    pub input_idx: usize,
 }
 
-/// Query parameters for compositor thumbnail endpoint.
+/// Query parameters for block thumbnail endpoint.
 #[derive(Debug, Deserialize)]
-pub struct CompositorThumbnailQuery {
-    /// Target width (default 320, max 640)
-    #[serde(default = "default_thumbnail_width")]
-    pub width: u32,
-    /// Target height (default 180, max 360)
-    #[serde(default = "default_thumbnail_height")]
-    pub height: u32,
+pub struct BlockThumbnailQuery {
+    /// Tap index (default 0). The meaning depends on the block type —
+    /// e.g. compositor input index, or 0 for a single-tee thumbnail block.
+    #[serde(default)]
+    pub index: usize,
 }
 
-fn default_thumbnail_width() -> u32 {
-    320
-}
-
-fn default_thumbnail_height() -> u32 {
-    180
-}
-
-/// Get a thumbnail image from a compositor input.
+/// Get a thumbnail image from a block's video tap.
 ///
-/// Captures a single frame from the specified compositor input, scales it
-/// to the requested dimensions, and returns it as a JPEG image.
+/// Works with any block that exposes thumbnail tee elements, including
+/// `builtin.thumbnail` (index 0) and compositor blocks (one per input).
+/// The first request activates the thumbnail branch; subsequent requests
+/// are served from cache.
 #[utoipa::path(
     get,
-    path = "/api/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}",
+    path = "/api/flows/{id}/blocks/{block_id}/thumbnail",
     tag = "flows",
     params(
         ("id" = String, Path, description = "Flow ID (UUID)"),
         ("block_id" = String, Path, description = "Block instance ID (e.g., 'b0')"),
-        ("input_idx" = usize, Path, description = "Input index (0-based)"),
-        ("width" = Option<u32>, Query, description = "Target width (default 320, max 640)"),
-        ("height" = Option<u32>, Query, description = "Target height (default 180, max 360)")
+        ("index" = Option<usize>, Query, description = "Tap index (default 0, e.g. compositor input index)")
     ),
     responses(
         (status = 200, description = "JPEG thumbnail image", content_type = "image/jpeg"),
-        (status = 404, description = "Flow not running or input not found", body = ErrorResponse),
-        (status = 504, description = "Frame capture timed out", body = ErrorResponse)
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse),
+        (status = 504, description = "Frame capture timed out (retry shortly)", body = ErrorResponse)
     )
 )]
-pub async fn get_compositor_thumbnail(
+pub async fn get_block_thumbnail(
     State(state): State<AppState>,
-    Path(path): Path<CompositorThumbnailPath>,
-    axum::extract::Query(query): axum::extract::Query<CompositorThumbnailQuery>,
+    Path(path): Path<BlockThumbnailPath>,
+    axum::extract::Query(query): axum::extract::Query<BlockThumbnailQuery>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     trace!(
-        "Getting compositor thumbnail for flow {} block {} input {}",
+        "Getting block thumbnail for flow {} block {} index {}",
         path.id,
         path.block_id,
-        path.input_idx
+        query.index
     );
 
-    // Clamp dimensions to reasonable limits
-    let width = query.width.clamp(32, 640);
-    let height = query.height.clamp(18, 360);
-
     let jpeg_bytes = state
-        .capture_compositor_thumbnail(&path.id, &path.block_id, path.input_idx, width, height)
+        .capture_block_thumbnail(&path.id, &path.block_id, query.index)
         .await
         .map_err(|e| {
             let error_msg = e.to_string();
@@ -1569,7 +1553,7 @@ pub async fn get_compositor_thumbnail(
                 (
                     StatusCode::NOT_FOUND,
                     Json(ErrorResponse::with_details(
-                        "Flow not running or input not found",
+                        "Flow not running or block not found",
                         error_msg,
                     )),
                 )
@@ -1585,11 +1569,11 @@ pub async fn get_compositor_thumbnail(
         })?;
 
     trace!(
-        "Thumbnail captured: {} bytes for flow {} block {} input {}",
+        "Block thumbnail captured: {} bytes for flow {} block {} index {}",
         jpeg_bytes.len(),
         path.id,
         path.block_id,
-        path.input_idx
+        query.index
     );
 
     Ok((

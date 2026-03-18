@@ -14,8 +14,8 @@
 //! - Multiple background types (black, white, transparent)
 //! - Automatic fallback from GPU to CPU when OpenGL is unavailable
 //!
-//! GPU backend chain: queue -> glupload -> glcolorconvert -> glvideomixerelement -> gldownload -> capsfilter
-//! CPU backend chain: queue -> videoconvert -> compositor -> capsfilter
+//! GPU backend chain: queue -> glupload -> glcolorconvert -> [thumb_tee] -> glvideomixerelement -> gldownload -> capsfilter
+//! CPU backend chain: queue -> videoconvert -> [thumb_tee] -> compositor -> capsfilter
 
 use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
@@ -358,12 +358,22 @@ fn build_opengl_compositor(
         elements.push((colorconvert_id.clone(), colorconvert));
         let mixer_pad_name = sink_pad.name().to_string();
 
+        // Create thumbnail tee AFTER glcolorconvert — frames are already RGBA
+        // so the thumbnail branch only needs to scale (no format conversion).
+        let thumb_tee_id = format!("{}:thumb_tee_{}", instance_id, i);
+        let thumb_tee = gst::ElementFactory::make("tee")
+            .name(&thumb_tee_id)
+            .property("allow-not-linked", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("thumb_tee_{}: {}", i, e)))?;
+        elements.push((thumb_tee_id.clone(), thumb_tee));
+
         if use_queues {
             let queue_id = format!("{}:queue_{}", instance_id, i);
             let queue = create_input_queue(&queue_id, i)?;
             elements.push((queue_id.clone(), queue));
 
-            // Link: queue -> glupload -> glcolorconvert -> mixer
+            // Link: queue -> glupload -> glcolorconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&queue_id, "src"),
                 ElementPadRef::pad(&upload_id, "sink"),
@@ -374,16 +384,24 @@ fn build_opengl_compositor(
             ));
             internal_links.push((
                 ElementPadRef::pad(&colorconvert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         } else {
-            // Link: glupload -> glcolorconvert -> mixer directly
+            // Link: glupload -> glcolorconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&upload_id, "src"),
                 ElementPadRef::pad(&colorconvert_id, "sink"),
             ));
             internal_links.push((
                 ElementPadRef::pad(&colorconvert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         }
@@ -511,24 +529,42 @@ fn build_software_compositor(
         elements.push((convert_id.clone(), convert));
         let mixer_pad_name = sink_pad.name().to_string();
 
+        // Create thumbnail tee AFTER videoconvert — frames are already in
+        // compositor-compatible format so the thumbnail branch only needs to scale.
+        let thumb_tee_id = format!("{}:thumb_tee_{}", instance_id, i);
+        let thumb_tee = gst::ElementFactory::make("tee")
+            .name(&thumb_tee_id)
+            .property("allow-not-linked", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("thumb_tee_{}: {}", i, e)))?;
+        elements.push((thumb_tee_id.clone(), thumb_tee));
+
         if use_queues {
             let queue_id = format!("{}:queue_{}", instance_id, i);
             let queue = create_input_queue(&queue_id, i)?;
             elements.push((queue_id.clone(), queue));
 
-            // Link: queue -> videoconvert -> mixer
+            // Link: queue -> videoconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&queue_id, "src"),
                 ElementPadRef::pad(&convert_id, "sink"),
             ));
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         } else {
-            // Link: videoconvert -> mixer directly
+            // Link: videoconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         }

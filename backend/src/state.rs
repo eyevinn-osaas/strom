@@ -1567,16 +1567,15 @@ impl AppState {
         self.inner.ptp_monitor.get_stats_events()
     }
 
-    /// Capture a thumbnail from a compositor input.
+    /// Capture a thumbnail from a block's tee element at the given index.
     ///
-    /// Returns JPEG-encoded image bytes for the specified compositor input.
-    pub async fn capture_compositor_thumbnail(
+    /// Works with any block that exposes thumbnail tee elements, including
+    /// `builtin.thumbnail` (index 0) and compositor blocks (one per input).
+    pub async fn capture_block_thumbnail(
         &self,
         flow_id: &FlowId,
         block_id: &str,
-        input_idx: usize,
-        width: u32,
-        height: u32,
+        index: usize,
     ) -> Result<Vec<u8>, PipelineError> {
         let pipelines = self.inner.pipelines.read().await;
 
@@ -1584,7 +1583,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        manager.capture_compositor_input_thumbnail(block_id, input_idx, width, height)
+        manager.capture_block_thumbnail(block_id, index)
     }
 }
 

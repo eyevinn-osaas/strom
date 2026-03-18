@@ -1198,9 +1198,13 @@ impl eframe::App for StromApp {
             });
         }
 
-        // If any recorder is actively recording, request a repaint every second
-        // so the duration counter stays up to date.
-        if !self.recorder_start_times.is_empty() {
+        // Repaint every second while something needs periodic updates
+        // (thumbnails, recorder duration counter, etc.)
+        let has_running_flow = self
+            .flows
+            .iter()
+            .any(|f| f.state == Some(strom_types::PipelineState::Playing));
+        if has_running_flow || !self.recorder_start_times.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
 
@@ -1262,6 +1266,10 @@ impl eframe::App for StromApp {
                 self.last_rtp_stats_fetch = instant::Instant::now();
                 self.fetch_rtp_stats_for_selected_flow(ctx);
             }
+
+            // Poll thumbnail blocks in running flows
+            self.poll_block_thumbnails(ctx);
+            self.check_block_thumbnails(ctx);
         }
 
         // Handle keyboard shortcuts

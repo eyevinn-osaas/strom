@@ -201,6 +201,10 @@ pub struct PipelineManager {
     /// Dynamically created webrtcbins (from webrtcsink/whepserversink consumer-added callbacks).
     /// Maps block_id to list of (consumer_id, webrtcbin) pairs.
     dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore,
+    /// Thumbnail taps for compositor inputs (block_id → per-input taps)
+    thumbnail_taps: crate::gst::ThumbnailTapStore,
+    /// Handle for the periodic thumbnail deactivation task
+    thumbnail_deactivation_task: Option<tokio::task::JoinHandle<()>>,
     /// Buffer age probe manager for on-demand pad probing
     probe_manager: crate::gst::buffer_age_probe::ProbeManager,
     /// Block instances from the flow (needed for automatic probe attachment at start)
@@ -212,6 +216,10 @@ pub struct PipelineManager {
 impl Drop for PipelineManager {
     fn drop(&mut self) {
         debug!("Dropping pipeline for flow: {}", self.flow_name);
+        // Stop thumbnail deactivation task
+        if let Some(task) = self.thumbnail_deactivation_task.take() {
+            task.abort();
+        }
         // Deactivate probes before pipeline goes to Null
         self.probe_manager.deactivate_all();
         // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime

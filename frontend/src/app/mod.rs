@@ -1,5 +1,6 @@
 //! Main application structure.
 
+mod block_thumbnails;
 mod constructors;
 mod data_loading;
 mod dialogs;
@@ -722,6 +723,13 @@ pub struct StromApp {
     key_sequence_buffer: Vec<egui::Key>,
     /// Interactive overlay state (activated by key sequence)
     interactive_overlay: Option<crate::interactive_overlay::OverlayState>,
+    /// Thumbnail textures for thumbnail blocks (flow_id, block_id) -> texture
+    block_thumbnails: std::collections::HashMap<(strom_types::FlowId, String), egui::TextureHandle>,
+    /// Last thumbnail fetch time per block
+    block_thumbnail_fetch_times:
+        std::collections::HashMap<(strom_types::FlowId, String), instant::Instant>,
+    /// Blocks currently loading thumbnails
+    block_thumbnail_loading: std::collections::HashSet<(strom_types::FlowId, String)>,
     /// Block ID and URL to show as inline QR code in the properties panel
     qr_inline: Option<(String, String)>,
     /// QR code texture cache (for properties popup)

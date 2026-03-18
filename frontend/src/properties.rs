@@ -368,6 +368,7 @@ impl PropertyInspector {
         qr_cache: &mut crate::qr::QrCache,
         recorder_filename: Option<&str>,
         recorder_start_time: Option<instant::Instant>,
+        block_thumbnail: Option<&egui::TextureHandle>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -427,6 +428,7 @@ impl PropertyInspector {
                     | "builtin.mpegtssrt_output"
                     | "builtin.whep_output"
                     | "builtin.whip_input"
+                    | "builtin.thumbnail"
             );
 
             // Only show separator before action buttons if there are any
@@ -646,6 +648,17 @@ impl PropertyInspector {
                 }
             }
 
+            // Thumbnail preview for thumbnail blocks
+            if definition.id == "builtin.thumbnail" {
+                if let Some(texture) = block_thumbnail {
+                    ui.separator();
+                    let available_width = ui.available_width();
+                    let aspect = texture.size()[1] as f32 / texture.size()[0] as f32;
+                    let size = egui::vec2(available_width, available_width * aspect);
+                    ui.image(egui::load::SizedTexture::new(texture.id(), size));
+                }
+            }
+
             // Separator before properties section
             // (also serves as separator after action buttons if there were any)
             ui.separator();
@@ -723,7 +736,7 @@ impl PropertyInspector {
                     // Show meter visualization for meter blocks
                     if definition.id == "builtin.meter" {
                         ui.separator();
-                        tracing::debug!("Checking for meter data: flow_id={:?}, block_id={}", flow_id, block.id);
+
                         if let Some(flow_id) = flow_id {
                             if let Some(meter_data) = meter_data_store.get(&flow_id, &block.id) {
                                 tracing::debug!("Found meter data, calling show_full");

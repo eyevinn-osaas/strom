@@ -1890,14 +1890,14 @@
         }
       }
     },
-    "/api/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}": {
+    "/api/flows/{id}/blocks/{block_id}/thumbnail": {
       "get": {
         "tags": [
           "flows"
         ],
-        "summary": "Get a thumbnail image from a compositor input.",
-        "description": "Captures a single frame from the specified compositor input, scales it\nto the requested dimensions, and returns it as a JPEG image.",
-        "operationId": "get_compositor_thumbnail",
+        "summary": "Get a thumbnail image from a block's video tap.",
+        "description": "Works with any block that exposes thumbnail tee elements, including\n`builtin.thumbnail` (index 0) and compositor blocks (one per input).\nThe first request activates the thumbnail branch; subsequent requests\nare served from cache.",
+        "operationId": "get_block_thumbnail",
         "parameters": [
           {
             "name": "id",
@@ -1918,34 +1918,12 @@
             }
           },
           {
-            "name": "input_idx",
-            "in": "path",
-            "description": "Input index (0-based)",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "minimum": 0
-            }
-          },
-          {
-            "name": "width",
+            "name": "index",
             "in": "query",
-            "description": "Target width (default 320, max 640)",
+            "description": "Tap index (default 0, e.g. compositor input index)",
             "required": false,
             "schema": {
               "type": "integer",
-              "format": "int32",
-              "minimum": 0
-            }
-          },
-          {
-            "name": "height",
-            "in": "query",
-            "description": "Target height (default 180, max 360)",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "format": "int32",
               "minimum": 0
             }
           }
@@ -1958,7 +1936,7 @@
             }
           },
           "404": {
-            "description": "Flow not running or input not found",
+            "description": "Flow not running or block not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1968,7 +1946,7 @@
             }
           },
           "504": {
-            "description": "Frame capture timed out",
+            "description": "Frame capture timed out (retry shortly)",
             "content": {
               "application/json": {
                 "schema": {

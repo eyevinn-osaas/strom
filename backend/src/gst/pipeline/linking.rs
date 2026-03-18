@@ -421,8 +421,18 @@ impl PipelineManager {
                 }
 
                 // If no pending link matched this pad, auto-attach a tee with allow-not-linked=true
-                // This prevents unlinked dynamic pads from blocking the pipeline
-                if !found_link && new_pad.peer().is_none() {
+                // This prevents unlinked dynamic pads from blocking the pipeline.
+                // Skip elements that already have allow-not-linked=true (e.g. thumbnail tees) —
+                // they handle unlinked pads themselves and may get pads requested later at runtime.
+                let is_allow_not_linked = {
+                    if let Some(elem) = pipeline.by_name(&element_id) {
+                        elem.has_property("allow-not-linked")
+                            && elem.property::<bool>("allow-not-linked")
+                    } else {
+                        false
+                    }
+                };
+                if !found_link && new_pad.peer().is_none() && !is_allow_not_linked {
                     let tee_name = format!("{}_{}_autotee", element_id, new_pad_name);
                     info!(
                         "Auto-creating tee '{}' for unlinked dynamic pad {}:{}",

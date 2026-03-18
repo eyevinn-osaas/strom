@@ -161,37 +161,60 @@ impl PipelineManager {
         Ok(())
     }
 
-    /// Capture a thumbnail from a compositor input.
+    /// Capture a thumbnail from a block's tee element at the given index.
     ///
-    /// Captures a single frame from the queue element feeding the specified
-    /// compositor input, scales it to the specified dimensions, and encodes
-    /// it as JPEG.
+    /// Lazily attaches a GStreamer-native processing branch to the block's tee
+    /// element. The branch does format conversion and scaling using GStreamer
+    /// elements, with lightweight JPEG encoding in the appsink callback.
     ///
-    /// # Arguments
-    /// * `block_id` - The compositor block instance ID (e.g., "b0")
-    /// * `input_idx` - The input index (0-based)
-    /// * `width` - Target thumbnail width
-    /// * `height` - Target thumbnail height
-    ///
-    /// # Returns
-    /// JPEG-encoded image bytes on success
-    pub fn capture_compositor_input_thumbnail(
+    /// The meaning of `index` depends on the block type:
+    /// - **Compositor**: input index (each input has its own tee named `{block_id}:thumb_tee_{index}`)
+    /// - **Thumbnail block**: always 0 (single tee named `{block_id}:tee`)
+    pub fn capture_block_thumbnail(
         &self,
         block_id: &str,
-        input_idx: usize,
-        width: u32,
-        height: u32,
+        index: usize,
     ) -> Result<Vec<u8>, PipelineError> {
-        // The queue element is named "{block_id}:queue_{input_idx}"
-        let element_name = format!("{}:queue_{}", block_id, input_idx);
+        use crate::gst::thumbnail_tap::{ThumbnailTap, ThumbnailTapConfig};
 
-        let config = crate::gst::ThumbnailConfig {
-            width,
-            height,
-            quality: crate::gst::thumbnail::DEFAULT_JPEG_QUALITY,
-        };
+        let mut taps = self.thumbnail_taps.lock().unwrap();
+        let block_taps = taps.entry(block_id.to_string()).or_default();
 
-        crate::gst::capture_frame_as_jpeg(&self.pipeline, &element_name, "src", &config)
+        // Ensure we have a tap for this index (lazy creation)
+        while block_taps.len() <= index {
+            let idx = block_taps.len();
+            // Try compositor naming first ({block_id}:thumb_tee_{idx}),
+            // fall back to simple naming ({block_id}:tee) for index 0.
+            let tee_name = format!("{}:thumb_tee_{}", block_id, idx);
+            let tee = self
+                .pipeline
+                .by_name(&tee_name)
+                .or_else(|| {
+                    if idx == 0 {
+                        self.pipeline.by_name(&format!("{}:tee", block_id))
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    PipelineError::ElementNotFound(format!(
+                        "Thumbnail tee not found: {} (block {})",
+                        tee_name, block_id
+                    ))
+                })?;
+
+            let name_prefix = format!("{}:thumb_{}", block_id, idx);
+            let tap = ThumbnailTap::new_with_tee(
+                &self.pipeline,
+                &name_prefix,
+                tee,
+                ThumbnailTapConfig::default(),
+            );
+            block_taps.push(tap);
+        }
+
+        block_taps[index]
+            .get_thumbnail()
             .map_err(|e| PipelineError::ThumbnailCapture(e.to_string()))
     }
 }
