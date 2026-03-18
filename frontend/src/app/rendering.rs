@@ -307,11 +307,16 @@ impl StromApp {
 
                     ui.colored_label(state_color, format!("State: {}", state_text));
 
-                    // Show latency for running flows
+                    // Show minimum pipeline latency for running live flows
                     let is_running = matches!(state, PipelineState::Playing);
                     if is_running {
                         if let Some(latency) = self.latency_cache.get(&flow_id.to_string()) {
-                            ui.label(format!("Latency: {}", latency.min_latency_formatted));
+                            if latency.live {
+                                ui.label(format!(
+                                    "Min latency: {}",
+                                    latency.min_latency_formatted
+                                ));
+                            }
                         }
                     }
 

@@ -160,8 +160,8 @@ impl DiscoveryPage {
         ctx: &Context,
         tx: &std::sync::mpsc::Sender<crate::state::AppMessage>,
     ) {
-        // Auto-refresh every 5 seconds
-        if self.last_fetch.elapsed().as_secs() > 5 && !self.loading {
+        // Auto-refresh every 3 seconds
+        if self.last_fetch.elapsed().as_secs() > 3 && !self.loading {
             self.refresh(api, ctx, tx);
         }
 

@@ -984,13 +984,11 @@ impl AppState {
         }
 
         // Broadcast events
+        // Note: FlowStateChanged is now broadcast from the bus watch on actual GStreamer
+        // state transitions, so we don't need to broadcast it here.
         self.inner
             .events
             .broadcast(StromEvent::FlowStarted { flow_id: *id });
-        self.inner.events.broadcast(StromEvent::FlowStateChanged {
-            flow_id: *id,
-            state: format!("{:?}", state),
-        });
         // Broadcast FlowUpdated so frontend sees the new runtime_data with SDP
         self.inner
             .events
@@ -1106,13 +1104,11 @@ impl AppState {
         }
 
         // Broadcast events
+        // Note: FlowStateChanged is now broadcast from the bus watch on actual GStreamer
+        // state transitions, so we don't need to broadcast it here.
         self.inner
             .events
             .broadcast(StromEvent::FlowStopped { flow_id: *id });
-        self.inner.events.broadcast(StromEvent::FlowStateChanged {
-            flow_id: *id,
-            state: format!("{:?}", state),
-        });
         // Broadcast FlowUpdated so frontend sees the cleared runtime_data
         self.inner
             .events

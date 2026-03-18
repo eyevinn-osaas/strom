@@ -96,8 +96,8 @@ impl MediaPage {
             self.refresh(api, ctx, tx);
         }
 
-        // Auto-refresh every 10 seconds (files don't change as often)
-        if self.last_fetch.elapsed().as_secs() > 10 && !self.loading {
+        // Auto-refresh every 3 seconds
+        if self.last_fetch.elapsed().as_secs() > 3 && !self.loading {
             self.refresh(api, ctx, tx);
         }
 
