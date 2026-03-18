@@ -9,7 +9,7 @@
 //! [tee] ─┬─ (passthrough)
 //!         └─ queue (leaky=downstream, max-size-buffers=1)
 //!            → autovideoconvert (picks videoconvertscale: format + scaling in one pass)
-//!            → capsfilter (target_width × target_height, RGB)
+//!            → capsfilter (target_width × target_height, RGBA)
 //!            → appsink (max-buffers=1, drop=true, sync=false)
 //! ```
 //!
@@ -43,7 +43,9 @@ pub struct ThumbnailTapConfig {
     pub idle_timeout: Duration,
     /// Minimum interval between frame captures in the appsink callback.
     pub update_interval: Duration,
-    /// Cached JPEG time-to-live.
+    /// Cached JPEG time-to-live — ignored when stale thumbnails are
+    /// preferred over timeout errors (current behaviour).
+    #[allow(dead_code)]
     pub cache_ttl: Duration,
 }
 
@@ -173,7 +175,7 @@ impl ThumbnailTap {
         let tee_caps = self.tee.static_pad("sink").and_then(|p| p.current_caps());
         let has_caps = tee_caps.is_some();
 
-        warn!(
+        debug!(
             "activate_branch check for {}: pipeline_state={:?}, tee_has_caps={}, tee_name={}",
             self.name_prefix,
             pipeline_state,
@@ -185,7 +187,7 @@ impl ThumbnailTap {
         let ok = pipeline_state == gst::State::Playing
             || (pipeline_state == gst::State::Paused && pending_state == gst::State::Playing);
         if !ok {
-            warn!(
+            debug!(
                 "Skipping activation for {}: pipeline not Playing (state={:?}, pending={:?})",
                 self.name_prefix, pipeline_state, pending_state
             );
@@ -193,7 +195,7 @@ impl ThumbnailTap {
         }
 
         if !has_caps {
-            warn!(
+            debug!(
                 "Skipping activation for {}: no caps on tee sink",
                 self.name_prefix
             );
@@ -207,7 +209,9 @@ impl ThumbnailTap {
 
         let prefix = &self.name_prefix;
 
-        // Create elements
+        // Create elements.
+        // Queue overrides: leaky + single-buffer so the thumbnail branch never
+        // backpressures the main video chain and always processes the latest frame.
         let queue = gst::ElementFactory::make("queue")
             .name(format!("{}_thumb_queue", prefix))
             .property_from_str("leaky", "downstream")
@@ -346,6 +350,8 @@ impl ThumbnailTap {
 
             // Request a high-numbered pad (src_999) to avoid colliding with
             // pipeline-assigned pads (src_0, src_1, ...) regardless of activation order.
+            // This is intentional — auto-assigned pads would work but a fixed name
+            // makes the branch easily identifiable in debug graphs and logs.
             let tee_pad = self
                 .tee
                 .request_pad_simple("src_999")

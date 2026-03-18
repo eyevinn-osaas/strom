@@ -13,12 +13,14 @@ impl super::StromApp {
         let refresh_interval = std::time::Duration::from_millis(1000);
 
         // Evict thumbnails for flows that are no longer running
-        self.block_thumbnails.retain(|(flow_id, _), _| {
-            self.flows
-                .iter()
-                .find(|f| f.id == *flow_id)
-                .is_some_and(|f| f.state == Some(strom_types::PipelineState::Playing))
-        });
+        let running_flows: std::collections::HashSet<_> = self
+            .flows
+            .iter()
+            .filter(|f| f.state == Some(strom_types::PipelineState::Playing))
+            .map(|f| f.id)
+            .collect();
+        self.block_thumbnails
+            .retain(|(flow_id, _), _| running_flows.contains(flow_id));
 
         // Only poll the currently selected flow
         let flow = match self

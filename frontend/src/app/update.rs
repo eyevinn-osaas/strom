@@ -1198,9 +1198,15 @@ impl eframe::App for StromApp {
             });
         }
 
-        // Ensure at least one repaint per second for periodic polling
-        // (thumbnails, recorder duration, stats, etc.)
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        // Repaint every second while something needs periodic updates
+        // (thumbnails, recorder duration counter, etc.)
+        let has_running_flow = self
+            .flows
+            .iter()
+            .any(|f| f.state == Some(strom_types::PipelineState::Playing));
+        if has_running_flow || !self.recorder_start_times.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
 
         // Check authentication - if required and not authenticated, don't render
         // The HTML login form (in index.html) handles authentication
