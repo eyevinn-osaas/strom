@@ -652,7 +652,7 @@ impl PropertyInspector {
             if definition.id == "builtin.thumbnail" {
                 if let Some(texture) = block_thumbnail {
                     ui.separator();
-                    let available_width = ui.available_width().min(320.0);
+                    let available_width = ui.available_width();
                     let aspect = texture.size()[1] as f32 / texture.size()[0] as f32;
                     let size = egui::vec2(available_width, available_width * aspect);
                     ui.image(egui::load::SizedTexture::new(texture.id(), size));
