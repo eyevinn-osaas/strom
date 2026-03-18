@@ -292,7 +292,7 @@ impl ThumbnailTap {
             .sync(false)
             .build();
 
-        // Set up appsink callback — videorate already limits fps upstream,
+        // Set up appsink callback — pad probe on queue src limits fps,
         // so every frame that arrives here should be encoded.
         let callback_state = Arc::clone(&self.state);
         let jpeg_quality = self.config.jpeg_quality;
