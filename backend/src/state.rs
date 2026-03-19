@@ -402,6 +402,7 @@ impl AppState {
                     flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
                 } else {
                     // Clear runtime-only status when no pipeline is running
+                    flow.state = None;
                     flow.properties.thread_priority_status = None;
                     flow.properties.clock_sync_status = None;
                     flow.properties.ptp_info = None;
@@ -433,6 +434,7 @@ impl AppState {
                 flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
             } else {
                 // Clear runtime-only status when no pipeline is running
+                flow.state = None;
                 flow.properties.thread_priority_status = None;
                 flow.properties.clock_sync_status = None;
                 flow.properties.ptp_info = None;
@@ -1009,6 +1011,22 @@ impl AppState {
 
         let Some(mut manager) = manager else {
             warn!("No active pipeline for flow: {}", id);
+            // Clear persisted state so the flow no longer appears as running
+            let mut flows = self.inner.flows.write().await;
+            if let Some(flow) = flows.get_mut(id) {
+                flow.state = Some(PipelineState::Null);
+                flow.properties.auto_restart = false;
+                flow.properties.started_at = None;
+                let flow_clone = flow.clone();
+                drop(flows);
+                if let Err(e) = self.inner.storage.save_flow(&flow_clone).await {
+                    error!("Failed to save flow state: {}", e);
+                }
+                self.inner.events.broadcast(StromEvent::FlowStateChanged {
+                    flow_id: *id,
+                    state: format!("{:?}", PipelineState::Null),
+                });
+            }
             return Ok(PipelineState::Null);
         };
 
