@@ -309,7 +309,7 @@ pub struct Flow {
     /// Raw GStreamer pipeline state, exposed for diagnostics.
     ///
     /// Prefer [`running`](Self::running) for logic and display.
-    #[serde(default, alias = "state")]
+    #[serde(default)]
     pub gst_state: Option<PipelineState>,
     /// Flow configuration properties
     #[serde(default)]
