@@ -21,10 +21,10 @@ pub type FlowId = Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum CpuAffinity {
     /// No pinning, OS scheduler decides thread placement
+    #[default]
     Off,
     /// Pin all pipeline threads to a single core for maximum cache locality.
     /// Core is assigned by the AffinityManager using least-loaded strategy.
-    #[default]
     SingleCore,
 }
 

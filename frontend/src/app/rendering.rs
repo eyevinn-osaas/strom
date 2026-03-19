@@ -1138,6 +1138,32 @@ impl StromApp {
                                                 .on_hover_text(tooltip);
                                             }
                                         }
+
+                                        // Show CPU icon when affinity is not the default (Off)
+                                        if flow.properties.cpu_affinity
+                                            != strom_types::flow::CpuAffinity::default()
+                                        {
+                                            let tooltip = match flow.properties.cpu_affinity {
+                                                strom_types::flow::CpuAffinity::SingleCore => {
+                                                    "CPU affinity: Single Core"
+                                                }
+                                                strom_types::flow::CpuAffinity::Off => {
+                                                    unreachable!()
+                                                }
+                                            };
+                                            ui.add_space(2.0);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(
+                                                        egui_phosphor::regular::CPU,
+                                                    )
+                                                    .size(12.0)
+                                                    .color(Color32::GRAY),
+                                                )
+                                                .sense(egui::Sense::hover()),
+                                            )
+                                            .on_hover_text(tooltip);
+                                        }
                                     },
                                 );
                             }
