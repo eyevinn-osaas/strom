@@ -14,7 +14,9 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use strom_types::{BlockDefinition, BlockInstance, FlowId, StromEvent};
+use strom_types::{
+    BlockDefinition, BlockInstance, FlowId, StromEvent, BUFFER_AGE_WARNING_THRESHOLD_MS,
+};
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -22,7 +24,7 @@ use uuid::Uuid;
 const AUTO_SAMPLE_INTERVAL: u32 = 30;
 
 /// Buffer age threshold for automatic warnings (milliseconds).
-const AUTO_WARNING_THRESHOLD_MS: u64 = 500;
+const AUTO_WARNING_THRESHOLD_MS: u64 = BUFFER_AGE_WARNING_THRESHOLD_MS;
 
 /// Measure the age of a buffer on a pad (pipeline_running_time - buffer_running_time).
 ///

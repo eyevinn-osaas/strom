@@ -89,22 +89,21 @@ impl PipelineManager {
         let state_change_success = state_change_result
             .map_err(|e| PipelineError::StateChange(format!("Failed to start: {}", e)))?;
 
-        // For async state changes (like SRT sink), don't query state immediately
-        // The state will change asynchronously and we'll get state-changed messages on the bus
-        // Also treat NoPreroll (live sources) as async since they transition on their own timeline
+        // For async state changes (like SRT sink or live sources returning NoPreroll),
+        // don't query state — the bus watch will update cached_state as GStreamer
+        // posts StateChanged messages. Querying here risks crashes with async
+        // elements like SRT sink.
         if matches!(
             state_change_success,
             gst::StateChangeSuccess::Async | gst::StateChangeSuccess::NoPreroll
         ) {
             info!(
-                "Pipeline '{}' state change is async/live, skipping immediate state query to avoid race conditions",
+                "Pipeline '{}' state change is async/live, the bus watch will track the actual state",
                 self.flow_name
             );
-            // Update cached state - the bus watch will update it when the actual transition happens
-            *self.cached_state.write().unwrap() = PipelineState::Playing;
             self.attach_automatic_probes();
             self.start_thumbnail_deactivation_task();
-            return Ok(PipelineState::Playing);
+            return Ok(self.get_state());
         }
 
         // For synchronous state changes, verify the state was reached
@@ -140,7 +139,7 @@ impl PipelineManager {
             );
         }
 
-        // Return the actual current state
+        // Update cached state from the query we already performed
         let actual_state = match current_state {
             gst::State::Null => PipelineState::Null,
             gst::State::Ready => PipelineState::Ready,
@@ -148,14 +147,10 @@ impl PipelineManager {
             gst::State::Playing => PipelineState::Playing,
             _ => PipelineState::Null,
         };
-
-        // Update cached state
         *self.cached_state.write().unwrap() = actual_state;
 
         // Attach automatic buffer age monitoring probes
-        if actual_state == PipelineState::Playing {
-            self.attach_automatic_probes();
-        }
+        self.attach_automatic_probes();
 
         // Start periodic thumbnail deactivation task
         self.start_thumbnail_deactivation_task();

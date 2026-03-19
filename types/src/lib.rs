@@ -6,6 +6,10 @@
 /// Default port for the Strom backend server.
 pub const DEFAULT_PORT: u16 = 8080;
 
+/// Buffer age threshold for latency warnings (milliseconds).
+/// Used by automatic buffer age probes and UI color indicators.
+pub const BUFFER_AGE_WARNING_THRESHOLD_MS: u64 = 500;
+
 pub mod api;
 pub mod auth;
 pub mod block;

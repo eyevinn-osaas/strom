@@ -180,7 +180,7 @@ impl StromApp {
         else if ctx.input(|i| !i.modifiers.shift && i.key_pressed(egui::Key::F9)) {
             if let Some(flow) = self.current_flow() {
                 let state = flow.state.unwrap_or(PipelineState::Null);
-                let is_running = matches!(state, PipelineState::Playing);
+                let is_running = state.is_active();
 
                 if is_running {
                     // Restart
