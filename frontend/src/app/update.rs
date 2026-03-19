@@ -1194,10 +1194,7 @@ impl eframe::App for StromApp {
 
         // Repaint every second while something needs periodic updates
         // (thumbnails, recorder duration counter, etc.)
-        let has_running_flow = self
-            .flows
-            .iter()
-            .any(|f| f.state.is_some_and(|s| s.is_active()));
+        let has_running_flow = self.flows.iter().any(|f| f.running);
         if has_running_flow || !self.recorder_start_times.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }

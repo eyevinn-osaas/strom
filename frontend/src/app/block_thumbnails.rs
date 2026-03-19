@@ -16,7 +16,7 @@ impl super::StromApp {
         let running_flows: std::collections::HashSet<_> = self
             .flows
             .iter()
-            .filter(|f| f.state.is_some_and(|s| s.is_active()))
+            .filter(|f| f.running)
             .map(|f| f.id)
             .collect();
         self.block_thumbnails
@@ -32,7 +32,7 @@ impl super::StromApp {
         };
 
         // Only poll if running
-        if !flow.state.is_some_and(|s| s.is_active()) {
+        if !flow.running {
             return;
         }
 

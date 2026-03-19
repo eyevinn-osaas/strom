@@ -47,7 +47,7 @@ impl StromApp {
             .flows
             .iter()
             .find(|f| f.id == flow_id)
-            .map(|f| f.state.is_some_and(|s| s.is_active()))
+            .map(|f| f.running)
             .unwrap_or(false);
 
         if !is_running {
@@ -87,9 +87,7 @@ impl StromApp {
 
         // Check if the selected flow is running
         let flow = self.flows.iter().find(|f| f.id == flow_id);
-        let is_running = flow
-            .map(|f| f.state.is_some_and(|s| s.is_active()))
-            .unwrap_or(false);
+        let is_running = flow.map(|f| f.running).unwrap_or(false);
 
         if !is_running {
             return;

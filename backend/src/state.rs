@@ -236,12 +236,12 @@ impl AppState {
                 // Reset all flow states to None on server restart since pipelines aren't running
                 // This prevents showing stale "Playing" states from before the server stopped
                 for flow in flows.values_mut() {
-                    if flow.state.is_some() {
+                    if flow.gst_state.is_some() {
                         debug!(
                             "Resetting state for flow '{}' from {:?} to None (server restart)",
-                            flow.name, flow.state
+                            flow.name, flow.gst_state
                         );
-                        flow.state = None;
+                        flow.set_gst_state(None);
                     }
                 }
 
@@ -391,7 +391,7 @@ impl AppState {
                 let mut flow = flow.clone();
                 // Update state, clock sync status, PTP info, and thread priority status for running pipelines
                 if let Some(pipeline) = pipelines.get(&flow.id) {
-                    flow.state = Some(pipeline.get_state());
+                    flow.set_gst_state(Some(pipeline.get_state()));
                     flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
                     // Get PTP info and check if restart is needed (configured domain differs from running)
                     if let Some(mut ptp_info) = pipeline.get_ptp_info() {
@@ -402,7 +402,7 @@ impl AppState {
                     flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
                 } else {
                     // Clear runtime-only status when no pipeline is running
-                    flow.state = None;
+                    flow.set_gst_state(None);
                     flow.properties.thread_priority_status = None;
                     flow.properties.clock_sync_status = None;
                     flow.properties.ptp_info = None;
@@ -423,7 +423,7 @@ impl AppState {
             let mut flow = flow.clone();
             // Update state, clock sync status, PTP info, and thread priority status for running pipeline
             if let Some(pipeline) = pipelines.get(id) {
-                flow.state = Some(pipeline.get_state());
+                flow.set_gst_state(Some(pipeline.get_state()));
                 flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
                 // Get PTP info and check if restart is needed (configured domain differs from running)
                 if let Some(mut ptp_info) = pipeline.get_ptp_info() {
@@ -434,7 +434,7 @@ impl AppState {
                 flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
             } else {
                 // Clear runtime-only status when no pipeline is running
-                flow.state = None;
+                flow.set_gst_state(None);
                 flow.properties.thread_priority_status = None;
                 flow.properties.clock_sync_status = None;
                 flow.properties.ptp_info = None;
@@ -974,7 +974,7 @@ impl AppState {
         // Update flow state and persist
         // Note: runtime_data is marked with skip_serializing_if in BlockInstance,
         // so it won't be persisted to storage (which is correct - it's runtime-only data)
-        flow.state = Some(state);
+        flow.set_gst_state(Some(state));
         flow.properties.auto_restart = true; // Enable auto-restart when flow is started
         flow.properties.started_at = Some(Local::now().to_rfc3339()); // Record when flow started
         {
@@ -1014,7 +1014,7 @@ impl AppState {
             // Clear persisted state so the flow no longer appears as running
             let mut flows = self.inner.flows.write().await;
             if let Some(flow) = flows.get_mut(id) {
-                flow.state = Some(PipelineState::Null);
+                flow.set_gst_state(Some(PipelineState::Null));
                 flow.properties.auto_restart = false;
                 flow.properties.started_at = None;
                 let flow_clone = flow.clone();
@@ -1075,7 +1075,7 @@ impl AppState {
                         block.runtime_data = None;
                     }
                 }
-                flow.state = Some(state);
+                flow.set_gst_state(Some(state));
                 flow.properties.auto_restart = false; // Disable auto-restart when manually stopped
                 flow.properties.started_at = None; // Clear started_at when stopped
                 Some(flow.clone())
