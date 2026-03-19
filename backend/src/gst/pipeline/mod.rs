@@ -220,7 +220,8 @@ impl Drop for PipelineManager {
         if let Some(task) = self.thumbnail_deactivation_task.take() {
             task.abort();
         }
-        // Deactivate probes before pipeline goes to Null
+        // Stop broadcast task and deactivate probes before pipeline goes to Null
+        self.probe_manager.stop_broadcast_task();
         self.probe_manager.deactivate_all();
         // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
         // from within a runtime" panics when GStreamer elements (e.g. whipserversrc)
@@ -228,6 +229,30 @@ impl Drop for PipelineManager {
         let pipeline = self.pipeline.clone();
         let _ = std::thread::spawn(move || pipeline.set_state(gst::State::Null)).join();
         self.stop_qos_broadcast_task();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use std::time::{Duration, Instant};
+
+    /// Poll `condition` every `interval` until it returns `true` or `timeout` expires.
+    /// Panics with `msg` on timeout. Tests that pass complete as fast as the
+    /// condition is met instead of sleeping a fixed duration.
+    pub fn poll_until(
+        condition: impl Fn() -> bool,
+        interval: Duration,
+        timeout: Duration,
+        msg: &str,
+    ) {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if condition() {
+                return;
+            }
+            std::thread::sleep(interval);
+        }
+        panic!("timed out after {:?}: {}", timeout, msg);
     }
 }
 
@@ -304,11 +329,13 @@ mod tests {
         // Start pipeline
         let state = manager.start();
         assert!(state.is_ok());
-        assert_eq!(state.unwrap(), PipelineState::Playing);
+        assert!(
+            state.unwrap().is_active(),
+            "expected active state after start()"
+        );
 
-        // Check state
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        assert_eq!(manager.get_state(), PipelineState::Playing);
+        // Verify ongoing state
+        assert!(manager.get_state().is_active());
 
         // Stop pipeline
         let state = manager.stop();

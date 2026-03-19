@@ -89,25 +89,13 @@ impl PipelineManager {
         let state_change_success = state_change_result
             .map_err(|e| PipelineError::StateChange(format!("Failed to start: {}", e)))?;
 
-        // For async state changes (like SRT sink or live sources returning NoPreroll),
-        // don't query state — the bus watch will update cached_state as GStreamer
-        // posts StateChanged messages. Querying here risks crashes with async
-        // elements like SRT sink.
-        if matches!(
-            state_change_success,
-            gst::StateChangeSuccess::Async | gst::StateChangeSuccess::NoPreroll
-        ) {
-            info!(
-                "Pipeline '{}' state change is async/live, the bus watch will track the actual state",
-                self.flow_name
-            );
-            self.attach_automatic_probes();
-            self.start_thumbnail_deactivation_task();
-            return Ok(self.get_state());
+        if state_change_success == gst::StateChangeSuccess::NoPreroll {
+            info!("Pipeline '{}' is live (NoPreroll)", self.flow_name);
         }
 
-        // For synchronous state changes, verify the state was reached
-        info!("Querying pipeline state to verify synchronous state change...");
+        // Query the actual state GStreamer has reached so far.
+        // For Async pipelines this returns the current state (e.g. Paused)
+        // without blocking. For NoPreroll/Success it returns the final state.
         let (result, current_state, pending_state) =
             self.pipeline.state(gst::ClockTime::from_mseconds(500));
         info!(
@@ -115,31 +103,24 @@ impl PipelineManager {
             self.flow_name, result, current_state, pending_state
         );
 
-        // Check if we've reached the target state
-        // If current_state is Playing and pending is VoidPending, that's success!
-        let target_reached =
-            current_state == gst::State::Playing && pending_state == gst::State::VoidPending;
-
-        if !target_reached {
-            // Only fail if we haven't reached the target state
-            if let Err(e) = result {
+        if let Err(e) = result {
+            if pending_state == gst::State::VoidPending {
                 error!(
-                    "Pipeline '{}' failed to reach PLAYING state: {:?} (current: {:?}, pending: {:?})",
-                    self.flow_name, e, current_state, pending_state
+                    "Pipeline '{}' failed to reach PLAYING state: {:?} (current: {:?})",
+                    self.flow_name, e, current_state
                 );
                 return Err(PipelineError::StateChange(format!(
-                    "State change failed: {:?} - current: {:?}, pending: {:?}",
-                    e, current_state, pending_state
+                    "State change failed: {:?} - current: {:?}",
+                    e, current_state
                 )));
             }
-        } else {
+            // Async state change still in progress — not an error
             info!(
-                "Pipeline '{}' successfully reached PLAYING state",
-                self.flow_name
+                "Pipeline '{}' state change still in progress (current: {:?}, pending: {:?})",
+                self.flow_name, current_state, pending_state
             );
         }
 
-        // Update cached state from the query we already performed
         let actual_state = match current_state {
             gst::State::Null => PipelineState::Null,
             gst::State::Ready => PipelineState::Ready,
@@ -149,8 +130,10 @@ impl PipelineManager {
         };
         *self.cached_state.write().unwrap() = actual_state;
 
-        // Attach automatic buffer age monitoring probes
+        // Attach automatic buffer age monitoring probes and start the
+        // periodic broadcast task that reads probe slots off the hot path.
         self.attach_automatic_probes();
+        self.probe_manager.start_broadcast_task();
 
         // Start periodic thumbnail deactivation task
         self.start_thumbnail_deactivation_task();
@@ -218,7 +201,8 @@ impl PipelineManager {
             task.abort();
         }
 
-        // Deactivate all buffer age probes
+        // Stop buffer age broadcast task and deactivate all probes
+        self.probe_manager.stop_broadcast_task();
         self.probe_manager.deactivate_all();
 
         // Remove thread priority handler
