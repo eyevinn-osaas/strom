@@ -179,16 +179,12 @@ impl PipelineManager {
     pub fn stop(&mut self) -> Result<PipelineState, PipelineError> {
         info!("Stopping pipeline: {}", self.flow_name);
 
-        // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
-        // from within a runtime" panics. Some GStreamer elements (e.g. whipserversrc)
-        // internally call block_on() during state transitions, which is incompatible
-        // with being called from within a tokio runtime context.
-        let pipeline = self.pipeline.clone();
-        let result = std::thread::spawn(move || pipeline.set_state(gst::State::Null))
-            .join()
-            .map_err(|_| PipelineError::StateChange("set_state thread panicked".to_string()))?
-            .map_err(|e| PipelineError::StateChange(format!("Failed to stop: {}", e)))?;
-        let _ = result;
+        // Stop buffer age broadcast task and deactivate probes BEFORE
+        // set_state(Null) — same order as Drop. This removes probe closures
+        // (and their weak pipeline refs) before GStreamer tries to deactivate
+        // pads, avoiding contention during state transition.
+        self.probe_manager.stop_broadcast_task();
+        self.probe_manager.deactivate_all();
 
         // Remove bus watch when stopped to free resources
         self.remove_bus_watch();
@@ -201,9 +197,16 @@ impl PipelineManager {
             task.abort();
         }
 
-        // Stop buffer age broadcast task and deactivate all probes
-        self.probe_manager.stop_broadcast_task();
-        self.probe_manager.deactivate_all();
+        // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
+        // from within a runtime" panics. Some GStreamer elements (e.g. whipserversrc)
+        // internally call block_on() during state transitions, which is incompatible
+        // with being called from within a tokio runtime context.
+        let pipeline = self.pipeline.clone();
+        let result = std::thread::spawn(move || pipeline.set_state(gst::State::Null))
+            .join()
+            .map_err(|_| PipelineError::StateChange("set_state thread panicked".to_string()))?
+            .map_err(|e| PipelineError::StateChange(format!("Failed to stop: {}", e)))?;
+        let _ = result;
 
         // Remove thread priority handler
         thread_priority::remove_thread_priority_handler(&self.pipeline);

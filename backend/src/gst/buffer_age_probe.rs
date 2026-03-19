@@ -296,8 +296,8 @@ impl ProbeManager {
         let slot = Arc::new(ProbeSlot::new());
 
         // Capture values for the probe callback (runs on GStreamer streaming thread).
-        // Strong pipeline ref — probe is always removed before pipeline disposal.
-        let pipeline_strong = pipeline.clone();
+        // Weak pipeline ref to avoid ref cycle (Pipeline → Pad → Closure → Pipeline).
+        let pipeline_weak = pipeline.downgrade();
         let slot_cb = slot.clone();
         let count = SyncCell::new(0u64);
 
@@ -309,7 +309,11 @@ impl ProbeManager {
                 return gst::PadProbeReturn::Ok;
             }
 
-            if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline_strong) {
+            let Some(pipeline) = pipeline_weak.upgrade() else {
+                return gst::PadProbeReturn::Remove;
+            };
+
+            if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline) {
                 slot_cb.record(age_ms);
             }
 
@@ -539,8 +543,8 @@ impl ProbeManager {
 
         let slot = Arc::new(ProbeSlot::new());
 
-        // Strong pipeline ref — probe is always removed before pipeline disposal.
-        let pipeline_strong = pipeline.clone();
+        // Weak pipeline ref to avoid ref cycle (Pipeline → Pad → Closure → Pipeline).
+        let pipeline_weak = pipeline.downgrade();
         let slot_cb = slot.clone();
         let count = SyncCell::new(0u64);
 
@@ -552,7 +556,11 @@ impl ProbeManager {
                 return gst::PadProbeReturn::Ok;
             }
 
-            if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline_strong) {
+            let Some(pipeline) = pipeline_weak.upgrade() else {
+                return gst::PadProbeReturn::Remove;
+            };
+
+            if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline) {
                 slot_cb.record(age_ms);
             }
 
