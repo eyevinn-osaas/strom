@@ -196,9 +196,17 @@ pub(crate) fn fix_video_bitrate_hints(sdp: &str, max_bitrate_kbps: Option<u32>) 
     let default_max = max_bitrate_kbps
         .map(|v| v.to_string())
         .unwrap_or_else(|| "6000".to_string());
-    let min_val = min_bitrate.unwrap_or("1000");
-    let start_val = start_bitrate.unwrap_or("2000");
-    let max_val = max_bitrate.unwrap_or(&default_max);
+    let max_val: u32 = max_bitrate.unwrap_or(&default_max).parse().unwrap_or(6000);
+    let min_val: u32 = min_bitrate
+        .unwrap_or("1000")
+        .parse()
+        .unwrap_or(1000)
+        .min(max_val);
+    let start_val: u32 = start_bitrate
+        .unwrap_or("2000")
+        .parse()
+        .unwrap_or(2000)
+        .clamp(min_val, max_val);
 
     let hints = format!(
         ";x-google-min-bitrate={};x-google-start-bitrate={};x-google-max-bitrate={}",
