@@ -311,8 +311,14 @@ pub async fn whip_post(
         tokio::task::spawn_blocking(move || {
             WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
         });
-        return build_whip_post_response(&endpoint_id, status, &resp_headers, resp_body)
-            .into_response();
+        return build_whip_post_response(
+            &endpoint_id,
+            status,
+            &resp_headers,
+            resp_body,
+            Some(config.max_video_bitrate_kbps),
+        )
+        .into_response();
     }
 
     // Extract resource_id from Location header to register the session
@@ -357,7 +363,14 @@ pub async fn whip_post(
         warn!("WHIP: No Location header in successful POST response, session not registered");
     }
 
-    build_whip_post_response(&endpoint_id, status, &resp_headers, resp_body).into_response()
+    build_whip_post_response(
+        &endpoint_id,
+        status,
+        &resp_headers,
+        resp_body,
+        Some(config.max_video_bitrate_kbps),
+    )
+    .into_response()
 }
 
 /// Forward a WHIP POST request to the internal whipserversrc.
@@ -415,6 +428,7 @@ fn build_whip_post_response(
     status: reqwest::StatusCode,
     resp_headers: &reqwest::header::HeaderMap,
     resp_body: axum::body::Bytes,
+    max_video_bitrate_kbps: Option<u32>,
 ) -> Response {
     // Patch the SDP answer for better Chrome bandwidth estimation:
     // 1. Add goog-remb as fallback bandwidth estimation
@@ -427,7 +441,7 @@ fn build_whip_post_response(
     // webrtcbin assigns its own extmap IDs internally.
     let resp_body = if let Ok(answer_str) = std::str::from_utf8(&resp_body) {
         let patched = add_goog_remb(answer_str);
-        let patched = fix_video_bitrate_hints(&patched);
+        let patched = fix_video_bitrate_hints(&patched, max_video_bitrate_kbps);
         let patched = strip_cvo_extension(&patched);
         debug!("WHIP: SDP answer:\n{}", patched);
         axum::body::Bytes::from(patched)

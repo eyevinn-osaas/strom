@@ -33,6 +33,9 @@ pub struct WhipEndpointConfig {
     pub decode: bool,
     /// Shared dynamic webrtcbin store for ICE policy tracking
     pub dynamic_webrtcbin_store: DynamicWebrtcbinStore,
+    /// Maximum video bitrate hint for Chrome (kbps). Injected into the SDP
+    /// answer as x-google-max-bitrate so Chrome's encoder ramps up accordingly.
+    pub max_video_bitrate_kbps: u32,
     /// Maximum number of simultaneous client slots
     pub max_sessions: usize,
     /// Per-slot audio appsrc elements (main pipeline side, created at build time)

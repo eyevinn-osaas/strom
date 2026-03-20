@@ -179,6 +179,14 @@ fn build_whipserversrc(
         })
         .unwrap_or(true);
 
+    let max_video_bitrate_kbps = properties
+        .get("max_video_bitrate")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some((*i).max(500) as u32),
+            _ => None,
+        })
+        .unwrap_or(6000);
+
     // Get endpoint_id (user-configurable, defaults to UUID)
     let endpoint_id = properties
         .get("endpoint_id")
@@ -423,6 +431,7 @@ fn build_whipserversrc(
             pipeline_weak: gst::glib::WeakRef::new(),
             decode,
             dynamic_webrtcbin_store: ctx.dynamic_webrtcbin_store(),
+            max_video_bitrate_kbps,
             max_sessions,
             slot_audio_appsrcs,
             slot_video_appsrcs,
@@ -1390,6 +1399,18 @@ fn whip_input_definition() -> BlockDefinition {
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "decode".to_string(),
+                    transform: None,
+                },
+            },
+            ExposedProperty {
+                name: "max_video_bitrate".to_string(),
+                label: "Max Video Bitrate (kbps)".to_string(),
+                description: "Maximum video bitrate hint sent to the browser via SDP. The browser's encoder will ramp up to this value.".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(6000)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "max_video_bitrate".to_string(),
                     transform: None,
                 },
             },
