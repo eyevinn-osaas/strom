@@ -196,6 +196,20 @@ impl PipelineManager {
         &self.whip_endpoints
     }
 
+    /// Take WHIP endpoint configs for session manager registration.
+    /// This consumes the configs (they are moved to the session manager).
+    pub fn take_whip_endpoint_configs(
+        &mut self,
+    ) -> Vec<(String, crate::whip_session_manager::WhipEndpointConfig)> {
+        std::mem::take(&mut self.whip_endpoint_configs)
+    }
+
+    /// Get a weak reference to this pipeline's GStreamer pipeline.
+    pub fn pipeline_weak(&self) -> gst::glib::WeakRef<gst::Pipeline> {
+        use gstreamer::prelude::*;
+        self.pipeline.downgrade()
+    }
+
     /// Generate a DOT graph of the pipeline for debugging.
     /// Returns the DOT graph content as a string.
     pub fn generate_dot_graph(&self) -> String {

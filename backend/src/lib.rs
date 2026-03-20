@@ -44,6 +44,7 @@ pub mod tls;
 pub mod version;
 pub mod whep_registry;
 pub mod whip_registry;
+pub mod whip_session_manager;
 
 use state::AppState;
 
