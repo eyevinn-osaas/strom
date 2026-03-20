@@ -303,14 +303,16 @@ pub async fn whip_post(
             "WHIP: Internal server returned {} for endpoint '{}': {}",
             status, endpoint_id, body_str
         );
-        // Teardown element on error response
-        if status.is_server_error() {
-            config.release_slot(slot);
-            let session_pipeline_clone = session_pipeline.clone();
-            tokio::task::spawn_blocking(move || {
-                WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
-            });
-        }
+        // Teardown element and release slot on any error response — the session
+        // cannot be used and would otherwise occupy the slot until the inactivity
+        // watchdog fires.
+        config.release_slot(slot);
+        let session_pipeline_clone = session_pipeline.clone();
+        tokio::task::spawn_blocking(move || {
+            WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
+        });
+        return build_whip_post_response(&endpoint_id, status, &resp_headers, resp_body)
+            .into_response();
     }
 
     // Extract resource_id from Location header to register the session

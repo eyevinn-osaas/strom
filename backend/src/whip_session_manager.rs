@@ -74,12 +74,6 @@ impl WhipEndpointConfig {
             );
         }
     }
-
-    /// Find the slot assigned to a given resource_id.
-    pub fn find_slot_for_session(&self, resource_id: &str) -> Option<usize> {
-        let slots = self.slot_assignments.read().unwrap();
-        slots.iter().position(|s| s.as_deref() == Some(resource_id))
-    }
 }
 
 /// Request to clean up a dead WHIP session.

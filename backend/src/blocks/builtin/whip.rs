@@ -679,9 +679,12 @@ pub fn create_whipserversrc_for_session(
         std::thread::Builder::new()
             .name(format!("whip-watchdog-{}", port))
             .spawn(move || {
-                // Wait for the first buffer to arrive before starting the timer
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(INACTIVITY_TIMEOUT_SECS));
+                    // Exit if another path (ICE callback, DELETE) already triggered cleanup
+                    if cleanup_sent_watchdog.load(Ordering::SeqCst) {
+                        break;
+                    }
                     let last = last_buffer_ms_watchdog.load(Ordering::Relaxed);
                     if last == 0 {
                         // No buffer received yet — keep waiting (session might still be negotiating)
@@ -728,27 +731,53 @@ pub fn create_whipserversrc_for_session(
             };
 
             // Session pipeline: pad → tee → fakesink (drain) + appsink (bridge)
-            let tee = gst::ElementFactory::make("tee")
+            let tee = match gst::ElementFactory::make("tee")
                 .property("allow-not-linked", true)
-                .build().unwrap();
-            let fakesink = gst::ElementFactory::make("fakesink")
+                .build()
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    error!("WHIP Input: Failed to create tee in pad-added: {}", e);
+                    return;
+                }
+            };
+            let fakesink = match gst::ElementFactory::make("fakesink")
                 .property("sync", false)
                 .property("async", false)
-                .build().unwrap();
+                .build()
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    error!("WHIP Input: Failed to create fakesink in pad-added: {}", e);
+                    return;
+                }
+            };
             let appsink = gst_app::AppSink::builder()
                 .name(format!("{}:{}_appsink_{}", prefix, pad_name, stream_num))
                 .sync(false)
                 .build();
 
-            session_pipeline.add_many([&tee, &fakesink, appsink.upcast_ref()]).unwrap();
-            pad.link(&tee.static_pad("sink").unwrap()).unwrap();
-            tee.request_pad_simple("src_%u").unwrap()
-                .link(&fakesink.static_pad("sink").unwrap()).unwrap();
-            tee.request_pad_simple("src_%u").unwrap()
-                .link(&appsink.static_pad("sink").unwrap()).unwrap();
-            tee.sync_state_with_parent().unwrap();
-            fakesink.sync_state_with_parent().unwrap();
-            appsink.sync_state_with_parent().unwrap();
+            if let Err(e) = session_pipeline.add_many([&tee, &fakesink, appsink.upcast_ref()]) {
+                error!("WHIP Input: Failed to add elements to session pipeline: {}", e);
+                return;
+            }
+            if let Err(e) = pad.link(&tee.static_pad("sink").expect("tee has no sink pad")) {
+                error!("WHIP Input: Failed to link pad to tee: {:?}", e);
+                return;
+            }
+            if let (Some(tee_src1), Some(tee_src2)) = (
+                tee.request_pad_simple("src_%u"),
+                tee.request_pad_simple("src_%u"),
+            ) {
+                let _ = tee_src1.link(&fakesink.static_pad("sink").expect("fakesink has no sink pad"));
+                let _ = tee_src2.link(&appsink.static_pad("sink").expect("appsink has no sink pad"));
+            } else {
+                error!("WHIP Input: Failed to request tee src pads");
+                return;
+            }
+            let _ = tee.sync_state_with_parent();
+            let _ = fakesink.sync_state_with_parent();
+            let _ = appsink.sync_state_with_parent();
 
             // Determine which slot appsrc to feed based on pad type
             let target_appsrc: Option<gst_app::AppSrc> =
