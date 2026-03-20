@@ -4,6 +4,10 @@
 //! (or skipped) independently. This makes it easy to test which transforms
 //! are actually needed by commenting out individual calls in `whip_ingest.rs`.
 
+use strom_types::whip::{
+    DEFAULT_MAX_VIDEO_BITRATE_KBPS, DEFAULT_MIN_VIDEO_BITRATE_KBPS,
+    DEFAULT_START_VIDEO_BITRATE_KBPS,
+};
 use tracing::info;
 
 /// Strip RED, RTX and ULPFEC payload types from an SDP offer.
@@ -195,17 +199,22 @@ pub(crate) fn fix_video_bitrate_hints(sdp: &str, max_bitrate_kbps: Option<u32>) 
     // max_bitrate_kbps overrides the default max (but not an explicit value from the SDP).
     let default_max = max_bitrate_kbps
         .map(|v| v.to_string())
-        .unwrap_or_else(|| "6000".to_string());
-    let max_val: u32 = max_bitrate.unwrap_or(&default_max).parse().unwrap_or(6000);
-    let min_val: u32 = min_bitrate
-        .unwrap_or("1000")
+        .unwrap_or_else(|| DEFAULT_MAX_VIDEO_BITRATE_KBPS.to_string());
+    let default_min = DEFAULT_MIN_VIDEO_BITRATE_KBPS.to_string();
+    let default_start = DEFAULT_START_VIDEO_BITRATE_KBPS.to_string();
+    let max_val: u32 = max_bitrate
+        .unwrap_or(&default_max)
         .parse()
-        .unwrap_or(1000)
+        .unwrap_or(DEFAULT_MAX_VIDEO_BITRATE_KBPS);
+    let min_val: u32 = min_bitrate
+        .unwrap_or(&default_min)
+        .parse()
+        .unwrap_or(DEFAULT_MIN_VIDEO_BITRATE_KBPS)
         .min(max_val);
     let start_val: u32 = start_bitrate
-        .unwrap_or("2000")
+        .unwrap_or(&default_start)
         .parse()
-        .unwrap_or(2000)
+        .unwrap_or(DEFAULT_START_VIDEO_BITRATE_KBPS)
         .clamp(min_val, max_val);
 
     let hints = format!(
@@ -518,9 +527,18 @@ a=fmtp:96 level-asymmetry-allowed=1\r\n";
 
         let result = fix_video_bitrate_hints(sdp, None);
 
-        assert!(result.contains("x-google-min-bitrate=1000"));
-        assert!(result.contains("x-google-start-bitrate=2000"));
-        assert!(result.contains("x-google-max-bitrate=6000"));
+        assert!(result.contains(&format!(
+            "x-google-min-bitrate={}",
+            DEFAULT_MIN_VIDEO_BITRATE_KBPS
+        )));
+        assert!(result.contains(&format!(
+            "x-google-start-bitrate={}",
+            DEFAULT_START_VIDEO_BITRATE_KBPS
+        )));
+        assert!(result.contains(&format!(
+            "x-google-max-bitrate={}",
+            DEFAULT_MAX_VIDEO_BITRATE_KBPS
+        )));
     }
 
     #[test]

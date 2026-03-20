@@ -185,7 +185,7 @@ fn build_whipserversrc(
             PropertyValue::Int(i) => Some((*i).max(500) as u32),
             _ => None,
         })
-        .unwrap_or(6000);
+        .unwrap_or(strom_types::whip::DEFAULT_MAX_VIDEO_BITRATE_KBPS);
 
     // Get endpoint_id (user-configurable, defaults to UUID)
     let endpoint_id = properties
@@ -1407,7 +1407,9 @@ fn whip_input_definition() -> BlockDefinition {
                 label: "Max Video Bitrate (kbps)".to_string(),
                 description: "Maximum video bitrate hint sent to the browser via SDP. The browser's encoder will ramp up to this value.".to_string(),
                 property_type: PropertyType::Int,
-                default_value: Some(PropertyValue::Int(6000)),
+                default_value: Some(PropertyValue::Int(
+                    strom_types::whip::DEFAULT_MAX_VIDEO_BITRATE_KBPS as i64,
+                )),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "max_video_bitrate".to_string(),
