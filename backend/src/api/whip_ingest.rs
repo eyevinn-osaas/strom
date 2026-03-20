@@ -127,15 +127,36 @@ pub async fn whip_post(
         }
     };
 
+    // Allocate a slot for this session (pre-allocate with a temporary resource_id,
+    // will be updated when we learn the real resource_id from the Location header)
+    let temp_resource_id = uuid::Uuid::new_v4().to_string();
+    let slot = match config.allocate_slot(&temp_resource_id) {
+        Some(s) => s,
+        None => {
+            warn!(
+                "WHIP endpoint '{}': all {} slots occupied, rejecting client",
+                endpoint_id, config.max_sessions
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "All session slots are occupied",
+            )
+                .into_response();
+        }
+    };
+
     // Create a new whipserversrc for this session in an isolated pipeline
+    let config_for_session = config.clone();
+    let cleanup_tx = state.whip_session_manager().cleanup_sender();
     let (element, session_pipeline, port) = match tokio::task::spawn_blocking(move || {
-        create_whipserversrc_for_session(&config)
+        create_whipserversrc_for_session(&config_for_session, slot, cleanup_tx)
     })
     .await
     {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             error!("Failed to create whipserversrc for session: {}", e);
+            config.release_slot(slot);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Failed to create session: {}", e),
@@ -144,13 +165,14 @@ pub async fn whip_post(
         }
         Err(e) => {
             error!("spawn_blocking panicked: {}", e);
+            config.release_slot(slot);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     };
 
     info!(
-        "WHIP POST for endpoint '{}': created whipserversrc on port {}",
-        endpoint_id, port
+        "WHIP POST for endpoint '{}': created whipserversrc on port {} (slot {})",
+        endpoint_id, port, slot
     );
 
     // Read the request body
@@ -158,7 +180,8 @@ pub async fn whip_post(
         Ok(b) => b,
         Err(e) => {
             error!("Failed to read request body: {}", e);
-            // Teardown the element we just created
+            // Teardown the element we just created and release slot
+            config.release_slot(slot);
             let session_pipeline_clone = session_pipeline.clone();
             tokio::task::spawn_blocking(move || {
                 WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
@@ -204,6 +227,7 @@ pub async fn whip_post(
         Ok(c) => c,
         Err(e) => {
             error!("Failed to create HTTP client: {}", e);
+            config.release_slot(slot);
             let session_pipeline_clone = session_pipeline.clone();
             tokio::task::spawn_blocking(move || {
                 WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
@@ -246,6 +270,7 @@ pub async fn whip_post(
                     port
                 );
                 if attempt == max_attempts - 1 {
+                    config.release_slot(slot);
                     let session_pipeline_clone = session_pipeline.clone();
                     tokio::task::spawn_blocking(move || {
                         WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
@@ -263,6 +288,7 @@ pub async fn whip_post(
     let (status, resp_headers, resp_body) = match result {
         Some(tuple) => tuple,
         None => {
+            config.release_slot(slot);
             let session_pipeline_clone = session_pipeline.clone();
             tokio::task::spawn_blocking(move || {
                 WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
@@ -279,6 +305,7 @@ pub async fn whip_post(
         );
         // Teardown element on error response
         if status.is_server_error() {
+            config.release_slot(slot);
             let session_pipeline_clone = session_pipeline.clone();
             tokio::task::spawn_blocking(move || {
                 WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
@@ -291,17 +318,32 @@ pub async fn whip_post(
         if let Ok(loc_str) = location.to_str() {
             // Location format: /whip/resource/{resource_id}
             if let Some(resource_id) = loc_str.strip_prefix("/whip/resource/") {
+                // Update slot assignment from temp_resource_id to real resource_id
+                {
+                    let mut slots = config.slot_assignments.write().unwrap();
+                    if let Some(entry) = slots.get_mut(slot) {
+                        *entry = Some(resource_id.to_string());
+                    }
+                }
+
                 info!(
-                    "WHIP: Registering session resource_id='{}' on port {} for endpoint '{}'",
-                    resource_id, port, endpoint_id
+                    "WHIP: Registering session resource_id='{}' on port {} for endpoint '{}' (slot {})",
+                    resource_id, port, endpoint_id, slot
                 );
-                state.whip_session_manager().register_session(
+                let registered = state.whip_session_manager().register_session(
                     resource_id.to_string(),
                     port,
                     element,
                     session_pipeline,
                     endpoint_id.clone(),
+                    slot,
                 );
+                if !registered {
+                    warn!(
+                        "WHIP: Session '{}' was cleaned up before registration (ICE failed early)",
+                        resource_id
+                    );
+                }
             } else {
                 warn!(
                     "WHIP: Unexpected Location header format: '{}', session not registered",
@@ -573,8 +615,8 @@ pub async fn whip_resource_delete(
         endpoint_id, resource_id
     );
 
-    // Look up and remove the session (returns element, session_pipeline, endpoint_id, port)
-    let (_element, session_pipeline, session_endpoint_id, port) =
+    // Look up and remove the session (returns element, session_pipeline, endpoint_id, port, slot)
+    let (element, session_pipeline, session_endpoint_id, _port, slot) =
         match state.whip_session_manager().remove_session(&resource_id) {
             Some(tuple) => tuple,
             None => {
@@ -595,38 +637,41 @@ pub async fn whip_resource_delete(
             }
         };
 
-    // Proxy DELETE to the whipserversrc (best-effort, we tear down regardless)
-    let internal_url = format!("http://127.0.0.1:{}/whip/resource/{}", port, resource_id);
-    let client = reqwest::Client::builder().no_proxy().build();
-    let resp_status = if let Ok(client) = client {
-        match client.delete(&internal_url).send().await {
-            Ok(r) => r.status(),
-            Err(e) => {
-                debug!(
-                    "WHIP DELETE proxy failed (element will be torn down anyway): {}",
-                    e
-                );
-                reqwest::StatusCode::OK
-            }
-        }
+    // Release the slot so new sessions can use it
+    let webrtcbin_store = if let Some(config) = state
+        .whip_session_manager()
+        .get_endpoint_config(&session_endpoint_id)
+    {
+        config.release_slot(slot);
+        Some((
+            config.dynamic_webrtcbin_store.clone(),
+            config.instance_id.clone(),
+        ))
     } else {
-        reqwest::StatusCode::OK
+        None
     };
 
-    // Teardown the whipserversrc element
-    tokio::task::spawn_blocking(move || {
+    // Tear down the session pipeline directly — no need to proxy the DELETE since
+    // set_state(Null) will clean up the whipserversrc and its WebRTC session.
+    // Proxying the DELETE first would cause a race: whipserversrc starts internal
+    // teardown (puts bins in PAUSED) before our set_state(Null) can cascade properly.
+    let _ = tokio::task::spawn_blocking(move || {
         WhipSessionManager::teardown_session_pipeline(&session_pipeline);
-    });
+        drop(element);
+        // Remove stale webrtcbin entries so frontend stops showing dead stats
+        if let Some((store, block_id)) = webrtcbin_store {
+            WhipSessionManager::cleanup_dynamic_webrtcbin_store(&store, &block_id);
+        }
+    })
+    .await;
 
     info!(
-        "WHIP DELETE: session '{}' for endpoint '{}' cleaned up",
-        resource_id, session_endpoint_id
+        "WHIP DELETE: session '{}' for endpoint '{}' cleaned up (slot {} released)",
+        resource_id, session_endpoint_id, slot
     );
 
     Response::builder()
-        .status(
-            StatusCode::from_u16(resp_status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        )
+        .status(StatusCode::OK)
         .header("Access-Control-Allow-Origin", "*")
         .body(Body::empty())
         .unwrap_or_else(|_| {

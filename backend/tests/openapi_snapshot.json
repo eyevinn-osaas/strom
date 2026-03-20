@@ -3417,7 +3417,7 @@
           "whip"
         ],
         "summary": "Handle WHIP POST request (SDP offer from client).",
-        "description": "Proxies the SDP offer to the internal whipserversrc HTTP server and returns\nthe SDP answer, rewriting the Location header to use the proxy path.\n\nIf the internal server returns 500 or times out (stale session), we recreate\nthe whipserversrc element in the background and return the error immediately.\nThe client's own retry logic will resend the offer to the fresh element.",
+        "description": "Creates a new whipserversrc element for this session, proxies the SDP offer\nto it, and registers the session with the WhipSessionManager.",
         "operationId": "whip_post",
         "parameters": [
           {
@@ -3478,7 +3478,7 @@
           "whip"
         ],
         "summary": "Handle WHIP DELETE request (client disconnect).",
-        "description": "Forwards the DELETE to whipserversrc which handles session cleanup\ninternally. The element remains running and ready for new sessions.",
+        "description": "Proxies the DELETE to the session's whipserversrc, then tears down the element\nand removes the session from the session manager.",
         "operationId": "whip_resource_delete",
         "parameters": [
           {
@@ -3505,7 +3505,7 @@
             "description": "WHIP session deleted"
           },
           "404": {
-            "description": "WHIP endpoint not found"
+            "description": "WHIP endpoint or session not found"
           },
           "502": {
             "description": "Proxy error forwarding to internal WHIP server"
@@ -3549,6 +3549,7 @@
           "whip"
         ],
         "summary": "Handle WHIP PATCH request (ICE trickle from client).",
+        "description": "Looks up the session's port by resource_id and proxies the PATCH.",
         "operationId": "whip_resource_patch",
         "parameters": [
           {
@@ -3575,7 +3576,7 @@
             "description": "ICE candidates accepted"
           },
           "404": {
-            "description": "WHIP endpoint not found"
+            "description": "WHIP endpoint or session not found"
           },
           "502": {
             "description": "Proxy error forwarding to internal WHIP server"

@@ -5,6 +5,17 @@ use crate::state::AppMessage;
 use egui::{Color32, Context, TopBottomPanel};
 
 use super::*;
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
+}
+
 impl StromApp {
     /// Render the log panel showing errors, warnings, and info messages.
     pub(super) fn render_log_panel(&mut self, ctx: &Context) {
@@ -75,7 +86,7 @@ impl StromApp {
 
                 ui.separator();
 
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
@@ -120,10 +131,12 @@ impl StromApp {
                                         .get(&flow_id)
                                         .map(|n| n.as_str())
                                         .unwrap_or("unknown");
+                                    let truncated_flow = truncate_str(flow_name, 15);
 
                                     let flow_label = ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(flow_name).color(Color32::GRAY),
+                                            egui::RichText::new(&truncated_flow)
+                                                .color(Color32::GRAY),
                                         )
                                         .sense(egui::Sense::click()),
                                     );
@@ -140,14 +153,15 @@ impl StromApp {
                                     if flow_label.clicked() {
                                         navigate_to = Some((flow_id, entry.source.clone()));
                                     }
-                                    flow_label.on_hover_text("Navigate to flow");
+                                    flow_label.on_hover_text(format!("Navigate to {}", flow_name));
                                 }
 
                                 // Element/block ID (clickable, underline on hover)
                                 if let Some(ref source) = entry.source {
+                                    let truncated_source = truncate_str(source, 15);
                                     let source_label = ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(format!("[{}]", source))
+                                            egui::RichText::new(format!("[{}]", truncated_source))
                                                 .color(Color32::from_rgb(150, 150, 255)),
                                         )
                                         .sense(egui::Sense::click()),
@@ -170,7 +184,7 @@ impl StromApp {
                                             navigate_to = Some((flow_id, Some(source.clone())));
                                         }
                                     }
-                                    source_label.on_hover_text("Navigate to element");
+                                    source_label.on_hover_text(format!("Navigate to {}", source));
                                 }
 
                                 // Message

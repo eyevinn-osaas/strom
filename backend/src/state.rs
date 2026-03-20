@@ -1055,19 +1055,26 @@ impl AppState {
                 whip_info.endpoint_id, whip_info.block_id
             );
             // Remove all active sessions for this endpoint
-            let session_pipelines = self
+            let session_entries = self
                 .inner
                 .whip_session_manager
                 .remove_all_sessions(&whip_info.endpoint_id);
-            for sp in &session_pipelines {
-                WhipSessionManager::teardown_session_pipeline(sp);
-            }
-            if !session_pipelines.is_empty() {
-                info!(
-                    "Torn down {} active WHIP session(s) for endpoint '{}'",
-                    session_pipelines.len(),
-                    whip_info.endpoint_id
-                );
+            let count = session_entries.len();
+            if count > 0 {
+                // Teardown session pipelines on a blocking thread to avoid
+                // blocking the tokio runtime (set_state(Null) can take seconds).
+                let endpoint_id_log = whip_info.endpoint_id.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    for (pipeline, element) in session_entries {
+                        WhipSessionManager::teardown_session_pipeline(&pipeline);
+                        drop(element);
+                    }
+                    info!(
+                        "Torn down {} active WHIP session(s) for endpoint '{}'",
+                        count, endpoint_id_log
+                    );
+                })
+                .await;
             }
             // Unregister the endpoint config from session manager
             self.inner

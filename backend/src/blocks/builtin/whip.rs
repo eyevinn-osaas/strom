@@ -7,26 +7,21 @@
 //! WHIP Input - Hosts a WHIP server for clients to connect and send media:
 //! - `whipserversrc`: One element per WHIP client session, created dynamically
 //!   by the WhipSessionManager when a client POSTs an SDP offer.
-//!   Downstream elements (liveadder, videoconvert) are persistent and shared.
-//!
-//! Note: WHIP is a send-only protocol, but SMB (Symphony Media Bridge) may still
-//! send RTP back to the whipsink. For `whipsink`, we handle this by detecting the
-//! internal webrtcbin and linking any incoming source pads to a fakesink to prevent
-//! "not-linked" errors. This workaround does not work for `whipclientsink` due to
-//! its different internal structure (webrtcbin is not a direct child of the sink bin).
+//!   Each session is assigned to a numbered slot with independent output chains
+//!   (appsrc → decodebin → convert → tee per slot).
 
 use crate::blocks::{
     BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, WhepStreamMode,
 };
-use crate::whip_session_manager::WhipEndpointConfig;
+use crate::whip_session_manager::{SessionCleanupRequest, WhipEndpointConfig};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use gstreamer_video as gst_video;
 use std::collections::HashMap;
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
 use tracing::{debug, error, info, warn};
@@ -90,26 +85,45 @@ impl BlockBuilder for WHIPInputBuilder {
             })
             .unwrap_or(WhepStreamMode::AudioVideo);
 
+        let max_sessions = properties
+            .get("max_sessions")
+            .and_then(|v| match v {
+                PropertyValue::Int(i) => Some((*i).max(1) as usize),
+                _ => None,
+            })
+            .unwrap_or(1);
+
         let mut outputs = Vec::new();
 
-        if mode.has_video() {
-            outputs.push(ExternalPad {
-                label: Some("V0".to_string()),
-                name: "video_out".to_string(),
-                media_type: MediaType::Video,
-                internal_element_id: "video_out_tee".to_string(),
-                internal_pad_name: "src_%u".to_string(),
-            });
-        }
+        for slot in 0..max_sessions {
+            // Slot 0 always uses unsuffixed names (video_out, audio_out) so existing
+            // connections are preserved when max_sessions is increased.
+            // Additional slots use numbered names (video_out_1, audio_out_1, ...).
+            let (video_name, audio_name) = if slot == 0 {
+                ("video_out".to_string(), "audio_out".to_string())
+            } else {
+                (format!("video_out_{}", slot), format!("audio_out_{}", slot))
+            };
 
-        if mode.has_audio() {
-            outputs.push(ExternalPad {
-                label: Some("A0".to_string()),
-                name: "audio_out".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "audio_out_tee".to_string(),
-                internal_pad_name: "src_%u".to_string(),
-            });
+            if mode.has_video() {
+                outputs.push(ExternalPad {
+                    label: Some(format!("V{}", slot)),
+                    name: video_name,
+                    media_type: MediaType::Video,
+                    internal_element_id: format!("video_out_tee_{}", slot),
+                    internal_pad_name: "src_%u".to_string(),
+                });
+            }
+
+            if mode.has_audio() {
+                outputs.push(ExternalPad {
+                    label: Some(format!("A{}", slot)),
+                    name: audio_name,
+                    media_type: MediaType::Audio,
+                    internal_element_id: format!("audio_out_tee_{}", slot),
+                    internal_pad_name: "src_%u".to_string(),
+                });
+            }
         }
 
         Some(ExternalPads {
@@ -123,17 +137,22 @@ impl BlockBuilder for WHIPInputBuilder {
 // WHIP Input (whipserversrc - hosts WHIP server)
 // ============================================================================
 
-/// Build WHIP Input downstream elements (liveadder, videoconvert).
+/// Build WHIP Input per-slot output chains.
 ///
-/// At build time, only persistent downstream elements are created.
+/// At build time, per-slot chains are created in the main pipeline:
+/// - decode=true: appsrc → decodebin → audioconvert → audioresample → tee (audio),
+///   appsrc → decodebin → videoconvert → tee (video)
+/// - decode=false: appsrc → tee (audio/video passthrough)
+///
 /// The actual whipserversrc elements are created dynamically per-session
-/// by `create_whipserversrc_for_session` when clients connect.
+/// by `create_whipserversrc_for_session` when clients connect. Each session
+/// is assigned a slot and its appsink feeds the slot's appsrc.
 fn build_whipserversrc(
     instance_id: &str,
     properties: &HashMap<String, PropertyValue>,
     ctx: &BlockBuildContext,
 ) -> Result<BlockBuildResult, BlockBuildError> {
-    info!("Building WHIP Input downstream elements (per-session whipserversrc)");
+    info!("Building WHIP Input per-slot output chains");
 
     // Get mode (audio_video, audio, or video)
     let mode = properties
@@ -144,7 +163,21 @@ fn build_whipserversrc(
         })
         .unwrap_or(WhepStreamMode::AudioVideo);
 
-    info!("WHIP Input mode: {:?}", mode);
+    let max_sessions = properties
+        .get("max_sessions")
+        .and_then(|v| match v {
+            PropertyValue::Int(i) => Some((*i).max(1) as usize),
+            _ => None,
+        })
+        .unwrap_or(1);
+
+    let decode = properties
+        .get("decode")
+        .and_then(|v| match v {
+            PropertyValue::Bool(b) => Some(*b),
+            _ => None,
+        })
+        .unwrap_or(true);
 
     // Get endpoint_id (user-configurable, defaults to UUID)
     let endpoint_id = properties
@@ -163,145 +196,219 @@ fn build_whipserversrc(
         })
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    // Create downstream elements (these outlive individual WebRTC sessions)
+    info!(
+        "WHIP Input mode: {:?}, max_sessions: {}, decode: {}",
+        mode, max_sessions, decode
+    );
+
     let mut elements: Vec<(String, gst::Element)> = Vec::new();
     let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
+    let mut slot_audio_appsrcs: Vec<gst_app::AppSrc> = Vec::new();
+    let mut slot_video_appsrcs: Vec<gst_app::AppSrc> = Vec::new();
 
-    // Create audio output chain if mode includes audio
-    // Chain: liveadder → capsfilter → audioconvert → audioresample → audio_out_tee
-    // The output tee has allow-not-linked=true to prevent backpressure from stalling
-    // the webrtcbin's NiceAgent when downstream can't consume fast enough.
-    if mode.has_audio() {
-        let liveadder_id = format!("{}:liveadder", instance_id);
-        let capsfilter_id = format!("{}:capsfilter", instance_id);
-        let output_audioconvert_id = format!("{}:output_audioconvert", instance_id);
-        let output_audioresample_id = format!("{}:output_audioresample", instance_id);
-        let audio_out_tee_id = format!("{}:audio_out_tee", instance_id);
+    for slot in 0..max_sessions {
+        // Audio chain for this slot
+        if mode.has_audio() {
+            let appsrc_id = format!("{}:appsrc_audio_{}", instance_id, slot);
+            let audio_out_tee_id = format!("{}:audio_out_tee_{}", instance_id, slot);
 
-        let liveadder = gst::ElementFactory::make("liveadder")
-            .name(&liveadder_id)
-            .property("latency", 30u32)
-            .property("force-live", true)
-            .property_from_str("start-time-selection", "first")
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("liveadder: {}", e)))?;
+            let appsrc = gst_app::AppSrc::builder()
+                .name(&appsrc_id)
+                .format(gst::Format::Time)
+                .is_live(true)
+                .handle_segment_change(true)
+                .leaky_type(gst_app::AppLeakyType::Downstream)
+                .automatic_eos(false)
+                .build();
 
-        let caps = gst::Caps::builder("audio/x-raw")
-            .field("rate", 48000i32)
-            .field("channels", 2i32)
-            .build();
-        let capsfilter = gst::ElementFactory::make("capsfilter")
-            .name(&capsfilter_id)
-            .property("caps", &caps)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))?;
+            let audio_out_tee = gst::ElementFactory::make("tee")
+                .name(&audio_out_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("audio_out_tee_{}: {}", slot, e))
+                })?;
 
-        let output_audioconvert = gst::ElementFactory::make("audioconvert")
-            .name(&output_audioconvert_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("output_audioconvert: {}", e)))?;
+            if decode {
+                let decodebin_id = format!("{}:decodebin_audio_{}", instance_id, slot);
+                let audioconvert_id = format!("{}:audioconvert_{}", instance_id, slot);
+                let audioresample_id = format!("{}:audioresample_{}", instance_id, slot);
 
-        let output_audioresample = gst::ElementFactory::make("audioresample")
-            .name(&output_audioresample_id)
-            .build()
-            .map_err(|e| {
-                BlockBuildError::ElementCreation(format!("output_audioresample: {}", e))
-            })?;
+                let decodebin = gst::ElementFactory::make("decodebin")
+                    .name(&decodebin_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("decodebin_audio_{}: {}", slot, e))
+                    })?;
 
-        let audio_out_tee = gst::ElementFactory::make("tee")
-            .name(&audio_out_tee_id)
-            .property("allow-not-linked", true)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("audio_out_tee: {}", e)))?;
+                let audioconvert = gst::ElementFactory::make("audioconvert")
+                    .name(&audioconvert_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioconvert_{}: {}", slot, e))
+                    })?;
 
-        internal_links.push((
-            ElementPadRef::pad(&liveadder_id, "src"),
-            ElementPadRef::pad(&capsfilter_id, "sink"),
-        ));
-        internal_links.push((
-            ElementPadRef::pad(&capsfilter_id, "src"),
-            ElementPadRef::pad(&output_audioconvert_id, "sink"),
-        ));
-        internal_links.push((
-            ElementPadRef::pad(&output_audioconvert_id, "src"),
-            ElementPadRef::pad(&output_audioresample_id, "sink"),
-        ));
-        internal_links.push((
-            ElementPadRef::pad(&output_audioresample_id, "src"),
-            ElementPadRef::pad(&audio_out_tee_id, "sink"),
-        ));
+                let audioresample = gst::ElementFactory::make("audioresample")
+                    .name(&audioresample_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("audioresample_{}: {}", slot, e))
+                    })?;
 
-        elements.push((liveadder_id, liveadder));
-        elements.push((capsfilter_id, capsfilter));
-        elements.push((output_audioconvert_id, output_audioconvert));
-        elements.push((output_audioresample_id, output_audioresample));
-        elements.push((audio_out_tee_id, audio_out_tee));
+                // appsrc → decodebin
+                internal_links.push((
+                    ElementPadRef::pad(&appsrc_id, "src"),
+                    ElementPadRef::pad(&decodebin_id, "sink"),
+                ));
+
+                // decodebin has dynamic pads — connect pad-added to link to audioconvert
+                let audioconvert_weak = audioconvert.downgrade();
+                decodebin.connect_pad_added(move |_dec, src_pad| {
+                    if src_pad.direction() != gst::PadDirection::Src {
+                        return;
+                    }
+                    if let Some(conv) = audioconvert_weak.upgrade() {
+                        let sink = conv.static_pad("sink").unwrap();
+                        if !sink.is_linked() {
+                            if let Err(e) = src_pad.link(&sink) {
+                                warn!("Failed to link decodebin audio pad to audioconvert: {:?}", e);
+                            } else {
+                                info!(
+                                    "WHIP Input: decodebin audio pad linked to audioconvert for slot {}",
+                                    slot
+                                );
+                            }
+                        }
+                    }
+                });
+
+                // audioconvert → audioresample → tee
+                internal_links.push((
+                    ElementPadRef::pad(&audioconvert_id, "src"),
+                    ElementPadRef::pad(&audioresample_id, "sink"),
+                ));
+                internal_links.push((
+                    ElementPadRef::pad(&audioresample_id, "src"),
+                    ElementPadRef::pad(&audio_out_tee_id, "sink"),
+                ));
+
+                elements.push((decodebin_id, decodebin));
+                elements.push((audioconvert_id, audioconvert));
+                elements.push((audioresample_id, audioresample));
+            } else {
+                // decode=false: clocksync → tee directly
+                internal_links.push((
+                    ElementPadRef::pad(&appsrc_id, "src"),
+                    ElementPadRef::pad(&audio_out_tee_id, "sink"),
+                ));
+            }
+
+            slot_audio_appsrcs.push(appsrc.clone());
+            elements.push((appsrc_id, appsrc.upcast()));
+            elements.push((audio_out_tee_id, audio_out_tee));
+        }
+
+        // Video chain for this slot
+        if mode.has_video() {
+            let appsrc_id = format!("{}:appsrc_video_{}", instance_id, slot);
+            let video_out_tee_id = format!("{}:video_out_tee_{}", instance_id, slot);
+
+            let appsrc = gst_app::AppSrc::builder()
+                .name(&appsrc_id)
+                .format(gst::Format::Time)
+                .is_live(true)
+                .handle_segment_change(true)
+                .leaky_type(gst_app::AppLeakyType::Downstream)
+                .automatic_eos(false)
+                .build();
+
+            let video_out_tee = gst::ElementFactory::make("tee")
+                .name(&video_out_tee_id)
+                .property("allow-not-linked", true)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("video_out_tee_{}: {}", slot, e))
+                })?;
+
+            if decode {
+                let decodebin_id = format!("{}:decodebin_video_{}", instance_id, slot);
+                let videoconvert_id = format!("{}:videoconvert_{}", instance_id, slot);
+
+                let decodebin = gst::ElementFactory::make("decodebin")
+                    .name(&decodebin_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("decodebin_video_{}: {}", slot, e))
+                    })?;
+
+                let videoconvert = gst::ElementFactory::make("videoconvert")
+                    .name(&videoconvert_id)
+                    .build()
+                    .map_err(|e| {
+                        BlockBuildError::ElementCreation(format!("videoconvert_{}: {}", slot, e))
+                    })?;
+
+                // clocksync → decodebin
+                internal_links.push((
+                    ElementPadRef::pad(&appsrc_id, "src"),
+                    ElementPadRef::pad(&decodebin_id, "sink"),
+                ));
+
+                // decodebin has dynamic pads — connect pad-added to link to videoconvert
+                let videoconvert_weak = videoconvert.downgrade();
+                decodebin.connect_pad_added(move |_dec, src_pad| {
+                    if src_pad.direction() != gst::PadDirection::Src {
+                        return;
+                    }
+                    if let Some(vc) = videoconvert_weak.upgrade() {
+                        let sink = vc.static_pad("sink").unwrap();
+                        if !sink.is_linked() {
+                            if let Err(e) = src_pad.link(&sink) {
+                                warn!("Failed to link decodebin video pad to videoconvert: {:?}", e);
+                            } else {
+                                info!(
+                                    "WHIP Input: decodebin video pad linked to videoconvert for slot {}",
+                                    slot
+                                );
+                            }
+                        }
+                    }
+                });
+
+                // videoconvert → tee
+                internal_links.push((
+                    ElementPadRef::pad(&videoconvert_id, "src"),
+                    ElementPadRef::pad(&video_out_tee_id, "sink"),
+                ));
+
+                elements.push((decodebin_id, decodebin));
+                elements.push((videoconvert_id, videoconvert));
+            } else {
+                // decode=false: clocksync → tee directly
+                internal_links.push((
+                    ElementPadRef::pad(&appsrc_id, "src"),
+                    ElementPadRef::pad(&video_out_tee_id, "sink"),
+                ));
+            }
+
+            slot_video_appsrcs.push(appsrc.clone());
+            elements.push((appsrc_id, appsrc.upcast()));
+            elements.push((video_out_tee_id, video_out_tee));
+        }
     }
-
-    // Create video output chain if mode includes video
-    // Chain: output_videoconvert → video_out_tee
-    // The output tee has allow-not-linked=true to prevent backpressure from stalling
-    // the webrtcbin's NiceAgent when downstream can't consume fast enough.
-    if mode.has_video() {
-        let output_videoconvert_id = format!("{}:output_videoconvert", instance_id);
-        let video_out_tee_id = format!("{}:video_out_tee", instance_id);
-
-        let output_videoconvert = gst::ElementFactory::make("videoconvert")
-            .name(&output_videoconvert_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("output_videoconvert: {}", e)))?;
-
-        let video_out_tee = gst::ElementFactory::make("tee")
-            .name(&video_out_tee_id)
-            .property("allow-not-linked", true)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("video_out_tee: {}", e)))?;
-
-        internal_links.push((
-            ElementPadRef::pad(&output_videoconvert_id, "src"),
-            ElementPadRef::pad(&video_out_tee_id, "sink"),
-        ));
-
-        elements.push((output_videoconvert_id, output_videoconvert));
-        elements.push((video_out_tee_id, video_out_tee));
-    }
-
-    // Get weak refs for downstream elements used in session callbacks
-    let liveadder_weak: Option<gst::glib::WeakRef<gst::Element>> = if mode.has_audio() {
-        elements
-            .iter()
-            .find(|(id, _)| id.ends_with(":liveadder"))
-            .map(|(_, e)| e.downgrade())
-    } else {
-        None
-    };
-    let videoconvert_weak: Option<gst::glib::WeakRef<gst::Element>> = if mode.has_video() {
-        elements
-            .iter()
-            .find(|(id, _)| id.ends_with(":output_videoconvert"))
-            .map(|(_, e)| e.downgrade())
-    } else {
-        None
-    };
 
     let stun_server = ctx.stun_server();
     let turn_server = ctx.turn_server();
 
-    let decode = properties
-        .get("decode")
-        .and_then(|v| match v {
-            PropertyValue::Bool(b) => Some(*b),
-            _ => None,
-        })
-        .unwrap_or(true);
-
     info!(
-        "WHIP Input configured: endpoint_id='{}', stun={:?}, turn={:?}, mode={:?}, decode={} (whipserversrc created per-session)",
-        endpoint_id, stun_server, turn_server, mode, decode
+        "WHIP Input configured: endpoint_id='{}', stun={:?}, turn={:?}, mode={:?}, decode={}, max_sessions={} (whipserversrc created per-session)",
+        endpoint_id, stun_server, turn_server, mode, decode, max_sessions
     );
 
     // Register WHIP endpoint with the build context (port=0 placeholder, sessions get their own ports)
     ctx.register_whip_endpoint(instance_id, &endpoint_id, 0, mode);
+
+    let slot_assignments = Arc::new(RwLock::new(vec![None; max_sessions]));
 
     // Store endpoint config for the session manager (will be wired up in start_flow)
     ctx.register_whip_endpoint_config(
@@ -313,11 +420,13 @@ fn build_whipserversrc(
             stun_server,
             turn_server,
             ice_transport_policy: ctx.ice_transport_policy().to_string(),
-            liveadder_weak,
-            videoconvert_weak,
             pipeline_weak: gst::glib::WeakRef::new(),
             decode,
             dynamic_webrtcbin_store: ctx.dynamic_webrtcbin_store(),
+            max_sessions,
+            slot_audio_appsrcs,
+            slot_video_appsrcs,
+            slot_assignments,
         },
     );
 
@@ -335,11 +444,14 @@ fn build_whipserversrc(
 /// libnice issue #52 (multiple NiceAgent instances in the same pipeline
 /// cause outbound UDP to stop working).
 ///
-/// Decoded media is bridged to the main pipeline via appsink→appsrc.
+/// Media is bridged to the main pipeline via appsink→appsrc, where the
+/// appsrc targets are the pre-built slot elements.
 ///
 /// Returns (element, session_pipeline, port) on success.
 pub fn create_whipserversrc_for_session(
     config: &WhipEndpointConfig,
+    slot: usize,
+    cleanup_tx: tokio::sync::mpsc::UnboundedSender<SessionCleanupRequest>,
 ) -> Result<(gst::Element, gst::Pipeline, u16), String> {
     // Allocate a free port
     let listener =
@@ -355,8 +467,8 @@ pub fn create_whipserversrc_for_session(
     let element_name = format!("{}:whipserversrc_{}", config.instance_id, session_uuid);
 
     info!(
-        "WHIP Input: Creating whipserversrc '{}' on port {} in isolated pipeline",
-        element_name, port
+        "WHIP Input: Creating whipserversrc '{}' on port {} in isolated pipeline (slot {})",
+        element_name, port, slot
     );
 
     // Create an isolated pipeline for this session
@@ -400,10 +512,12 @@ pub fn create_whipserversrc_for_session(
         whipserversrc.set_property("video-codecs", &empty);
     }
 
-    // deep-element-added: ICE policy, TWCC, keyframe recovery
+    // deep-element-added: ICE policy, TWCC, keyframe recovery, auto-cleanup on ICE failure
     let dynamic_webrtcbin_store = config.dynamic_webrtcbin_store.clone();
     let block_id_for_callback = config.instance_id.clone();
     let ice_transport_policy = config.ice_transport_policy.clone();
+    // Flag to ensure only one cleanup request per session (shared with ICE callback)
+    let cleanup_sent = Arc::new(AtomicBool::new(false));
 
     if let Ok(bin) = whipserversrc.clone().downcast::<gst::Bin>() {
         bin.connect("deep-element-added", false, move |values| {
@@ -427,13 +541,39 @@ pub fn create_whipserversrc_for_session(
                         .push(("whip-client".to_string(), element.clone()));
                 }
 
+                // Monitor ICE state and trigger auto-cleanup on failure
                 let wrtc_name = element_name.to_string();
+                let cleanup_tx = cleanup_tx.clone();
+                let cleanup_sent = cleanup_sent.clone();
                 element.connect_notify(Some("ice-connection-state"), move |elem, _pspec| {
                     let val = elem.property_value("ice-connection-state");
+                    let state_int = val.get::<i32>().unwrap_or(-1);
+
+                    // WebRTCICEConnectionState: 4=failed, 5=disconnected, 6=closed
+                    let state_name = match state_int {
+                        0 => "new",
+                        1 => "checking",
+                        2 => "connected",
+                        3 => "completed",
+                        4 => "failed",
+                        5 => "disconnected",
+                        6 => "closed",
+                        _ => "unknown",
+                    };
                     info!(
-                        "WHIP Input: [SERVER] {} ice-connection-state changed (raw: {:?})",
-                        wrtc_name, val
+                        "WHIP Input: [SERVER] {} ice-connection-state = {} ({})",
+                        wrtc_name, state_name, state_int
                     );
+
+                    if matches!(state_int, 4..=6)
+                        && !cleanup_sent.swap(true, Ordering::SeqCst)
+                    {
+                        let reason = format!("ICE {}", state_name);
+                        let _ = cleanup_tx.send(SessionCleanupRequest {
+                            port,
+                            reason,
+                        });
+                    }
                 });
             }
 
@@ -498,19 +638,24 @@ pub fn create_whipserversrc_for_session(
         });
     }
 
-    // pad-added: tee → fakesink (drain, prevents backpressure) + appsink (bridge to main pipeline)
-    // Session pipeline always has a drain so NiceAgent is never blocked.
-    // Appsink forwards RTP samples via push_sample to appsrc in the main pipeline.
-    // Decoding (if needed) happens in the main pipeline after appsrc.
+    // Get the slot's appsrc refs — these are the targets in the main pipeline
+    let slot_audio_appsrc: Option<gst_app::AppSrc> = config.slot_audio_appsrcs.get(slot).cloned();
+    let slot_video_appsrc: Option<gst_app::AppSrc> = config.slot_video_appsrcs.get(slot).cloned();
+
+    // Shared timestamp offset for A/V sync across audio and video appsrcs.
+    // Computed from the first buffer on either stream:
+    //   offset = main_pipeline_running_time - buffer_pts
+    // i64::MIN means "not yet computed".
+    let shared_ts_offset = Arc::new(AtomicI64::new(i64::MIN));
+
+    // pad-added: tee → fakesink (drain) + appsink (bridge to slot's appsrc)
     {
         let session_pipeline_weak = session_pipeline.downgrade();
         let main_pipeline_weak = config.pipeline_weak.clone();
-        let liveadder_weak = config.liveadder_weak.clone();
-        let videoconvert_weak = config.videoconvert_weak.clone();
         let prefix = element_name.clone();
         let stream_counter = Arc::new(AtomicUsize::new(0));
+        let audio_connected = Arc::new(AtomicBool::new(false));
         let video_connected = Arc::new(AtomicBool::new(false));
-        let decode = config.decode;
 
         whipserversrc.connect_pad_added(move |_src, pad| {
             let pad_name = pad.name();
@@ -519,12 +664,6 @@ pub fn create_whipserversrc_for_session(
             let session_pipeline: Option<gst::Pipeline> = session_pipeline_weak.upgrade();
             let Some(session_pipeline) = session_pipeline else {
                 error!("WHIP Input: Session pipeline destroyed");
-                return;
-            };
-
-            let main_pipeline: Option<gst::Pipeline> = main_pipeline_weak.upgrade();
-            let Some(main_pipeline) = main_pipeline else {
-                error!("WHIP Input: Main pipeline destroyed");
                 return;
             };
 
@@ -551,134 +690,105 @@ pub fn create_whipserversrc_for_session(
             fakesink.sync_state_with_parent().unwrap();
             appsink.sync_state_with_parent().unwrap();
 
-            // Main pipeline: appsrc → [decodebin →] downstream (liveadder or videoconvert)
-            let appsrc = gst_app::AppSrc::builder()
-                .name(format!("{}:{}_appsrc_{}", prefix, pad_name, stream_num))
-                .format(gst::Format::Time)
-                .is_live(true)
-                .handle_segment_change(true)
-                .leaky_type(gst_app::AppLeakyType::Downstream)
-                .automatic_eos(false)
-                .build();
-
-            let appsrc_elem = appsrc.upcast_ref::<gst::Element>();
-            main_pipeline.add(appsrc_elem).unwrap();
-            appsrc_elem.sync_state_with_parent().unwrap();
-
-            if decode {
-                // decode=true: appsrc → decodebin → audioconvert/audioresample → liveadder (audio)
-                //              appsrc → decodebin → videoconvert (video)
-                let decodebin = gst::ElementFactory::make("decodebin")
-                    .name(format!("{}:{}_decodebin_{}", prefix, pad_name, stream_num))
-                    .build().unwrap();
-
-                main_pipeline.add(&decodebin).unwrap();
-                appsrc.upcast_ref::<gst::Element>().link(&decodebin).unwrap();
-                decodebin.sync_state_with_parent().unwrap();
-
-                if pad_name.starts_with("audio_") {
-                    let liveadder = match liveadder_weak {
-                        Some(ref w) => w.upgrade(),
-                        None => None,
-                    };
-                    if let Some(liveadder) = liveadder {
-                        let main_pipeline_clone = main_pipeline.clone();
-                        let prefix_clone = prefix.clone();
-                        decodebin.connect_pad_added(move |_dec, src_pad| {
-                            if src_pad.direction() != gst::PadDirection::Src { return; }
-
-                            let conv_name = format!("{}:audio_conv_{}", prefix_clone, stream_num);
-                            let resamp_name = format!("{}:audio_resamp_{}", prefix_clone, stream_num);
-                            let conv = gst::ElementFactory::make("audioconvert").name(&conv_name).build().unwrap();
-                            let resamp = gst::ElementFactory::make("audioresample").name(&resamp_name).build().unwrap();
-
-                            main_pipeline_clone.add_many([&conv, &resamp]).unwrap();
-                            src_pad.link(&conv.static_pad("sink").unwrap()).unwrap();
-                            conv.link(&resamp).unwrap();
-
-                            let la_sink = liveadder.request_pad_simple("sink_%u").unwrap();
-                            resamp.static_pad("src").unwrap().link(&la_sink).unwrap();
-
-                            conv.sync_state_with_parent().unwrap();
-                            resamp.sync_state_with_parent().unwrap();
-
-                            info!("WHIP Input: Audio stream {} decoded and linked to liveadder", stream_num);
-                        });
-                    }
+            // Determine which slot appsrc to feed based on pad type
+            let target_appsrc: Option<gst_app::AppSrc> =
+                if pad_name.starts_with("audio_") && !audio_connected.swap(true, Ordering::SeqCst)
+                {
+                    slot_audio_appsrc.clone()
                 } else if pad_name.starts_with("video_")
                     && !video_connected.swap(true, Ordering::SeqCst)
                 {
-                    let vc = match videoconvert_weak {
-                        Some(ref w) => w.upgrade(),
-                        None => None,
-                    };
-                    if let Some(videoconvert) = vc {
-                        decodebin.connect_pad_added(move |_dec, src_pad| {
-                            if src_pad.direction() != gst::PadDirection::Src {
-                                return;
+                    slot_video_appsrc.clone()
+                } else {
+                    None
+                };
+
+            if let Some(appsrc) = target_appsrc {
+                // Bridge: appsink → slot appsrc with shared A/V timestamp offset.
+                // The offset is computed once from the first buffer on either stream,
+                // then applied to all buffers on both streams to preserve A/V sync.
+                let media_type = if pad_name.starts_with("audio_") {
+                    "audio"
+                } else {
+                    "video"
+                };
+                info!(
+                    "WHIP Input: Pad {} (stream {}) → appsink → slot {} appsrc ({})",
+                    pad_name, stream_num, slot, media_type
+                );
+
+                let ts_offset = shared_ts_offset.clone();
+                let main_pipeline_for_ts = main_pipeline_weak.clone();
+                let media_for_log = media_type.to_string();
+
+                appsink.set_callbacks(
+                    gst_app::AppSinkCallbacks::builder()
+                        .new_sample(move |sink| {
+                            let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                            let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                            let pts = buffer.pts();
+
+                            // Compute offset on the first buffer from either stream
+                            let offset_ns = {
+                                let current = ts_offset.load(Ordering::Relaxed);
+                                if current != i64::MIN {
+                                    current
+                                } else if let (Some(pts_val), Some(main_pipeline)) =
+                                    (pts, main_pipeline_for_ts.upgrade())
+                                {
+                                    let clock = main_pipeline.clock();
+                                    let base_time = main_pipeline.base_time();
+                                    if let (Some(clock), Some(base_time)) = (clock, base_time) {
+                                        let now = clock.time();
+                                        let running = now.saturating_sub(base_time);
+                                        let offset = running.nseconds() as i64 - pts_val.nseconds() as i64;
+                                        ts_offset.store(offset, Ordering::Relaxed);
+                                        info!(
+                                            "WHIP Input: Computed shared ts-offset={}ms from {} stream (slot {})",
+                                            offset / 1_000_000,
+                                            media_for_log,
+                                            slot
+                                        );
+                                        offset
+                                    } else {
+                                        0
+                                    }
+                                } else {
+                                    0
+                                }
+                            };
+
+                            // Apply offset to buffer PTS
+                            if offset_ns != 0 {
+                                if let Some(pts_val) = pts {
+                                    let adjusted = (pts_val.nseconds() as i64 + offset_ns).max(0) as u64;
+                                    let mut new_buffer = buffer.copy();
+                                    {
+                                        let buf_ref = new_buffer.get_mut().unwrap();
+                                        buf_ref.set_pts(gst::ClockTime::from_nseconds(adjusted));
+                                    }
+                                    let new_sample = gst::Sample::builder()
+                                        .buffer(&new_buffer)
+                                        .caps(&sample.caps().unwrap().to_owned())
+                                        .build();
+                                    let _ = appsrc.push_sample(&new_sample);
+                                } else {
+                                    let _ = appsrc.push_sample(&sample);
+                                }
+                            } else {
+                                let _ = appsrc.push_sample(&sample);
                             }
-                            let vc_sink = videoconvert.static_pad("sink").unwrap();
-                            if !vc_sink.is_linked() {
-                                src_pad.link(&vc_sink).unwrap();
-                                info!("WHIP Input: Video stream {} decoded and linked to videoconvert", stream_num);
-                            }
-                        });
-                    }
-                }
+
+                            Ok(gst::FlowSuccess::Ok)
+                        })
+                        .build(),
+                );
             } else {
-                // decode=false: appsrc → directly to liveadder/videoconvert (RTP passthrough)
-                if pad_name.starts_with("audio_") {
-                    let liveadder = match liveadder_weak {
-                        Some(ref w) => w.upgrade(),
-                        None => None,
-                    };
-                    if let Some(liveadder) = liveadder {
-                        let la_sink = liveadder.request_pad_simple("sink_%u").unwrap();
-                        appsrc
-                            .upcast_ref::<gst::Element>()
-                            .static_pad("src")
-                            .unwrap()
-                            .link(&la_sink)
-                            .unwrap();
-                        info!("WHIP Input: Audio stream {} RTP passthrough to liveadder", stream_num);
-                    }
-                } else if pad_name.starts_with("video_")
-                    && !video_connected.swap(true, Ordering::SeqCst)
-                {
-                    let vc = match videoconvert_weak {
-                        Some(ref w) => w.upgrade(),
-                        None => None,
-                    };
-                    if let Some(videoconvert) = vc {
-                        let vc_sink = videoconvert.static_pad("sink").unwrap();
-                        appsrc
-                            .upcast_ref::<gst::Element>()
-                            .static_pad("src")
-                            .unwrap()
-                            .link(&vc_sink)
-                            .unwrap();
-                        info!("WHIP Input: Video stream {} RTP passthrough to videoconvert", stream_num);
-                    }
-                }
+                info!(
+                    "WHIP Input: Pad {} (stream {}) → drain only (no slot appsrc or already connected)",
+                    pad_name, stream_num
+                );
             }
-
-            // Bridge: appsink → appsrc via push_sample.
-            // Ignore push errors (e.g. decodebin not ready yet for first H264 buffers).
-            // The session pipeline's fakesink drain ensures no backpressure regardless.
-            appsink.set_callbacks(
-                gst_app::AppSinkCallbacks::builder()
-                    .new_sample(move |sink| {
-                        let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                        let _ = appsrc.push_sample(&sample);
-                        Ok(gst::FlowSuccess::Ok)
-                    })
-                    .build(),
-            );
-
-            info!(
-                "WHIP Input: Pad {} (stream {}) → tee(fakesink+appsink) → appsrc → decodebin → downstream",
-                pad_name, stream_num
-            );
         });
     }
 
@@ -700,10 +810,11 @@ pub fn create_whipserversrc_for_session(
         ));
     }
     info!(
-        "WHIP Input: Session pipeline '{}' on port {}, state: {:?}",
+        "WHIP Input: Session pipeline '{}' on port {}, state: {:?} (slot {})",
         session_pipeline.name(),
         port,
-        current
+        current,
+        slot
     );
 
     Ok((whipserversrc, session_pipeline, port))
@@ -1185,8 +1296,20 @@ fn whip_input_definition() -> BlockDefinition {
                     transform: None,
                 },
             },
+            ExposedProperty {
+                name: "max_sessions".to_string(),
+                label: "Max Sessions".to_string(),
+                description: "Maximum number of simultaneous WHIP client connections. Each session gets its own independent output.".to_string(),
+                property_type: PropertyType::Int,
+                default_value: Some(PropertyValue::Int(1)),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "max_sessions".to_string(),
+                    transform: None,
+                },
+            },
         ],
-        // Note: external_pads here are the static defaults for audio_video mode.
+        // Note: external_pads here are the static defaults for audio_video mode with max_sessions=1.
         // Actual pads are determined dynamically by WHIPInputBuilder::get_external_pads().
         external_pads: ExternalPads {
             inputs: vec![],
@@ -1195,14 +1318,14 @@ fn whip_input_definition() -> BlockDefinition {
                     label: Some("V0".to_string()),
                     name: "video_out".to_string(),
                     media_type: MediaType::Video,
-                    internal_element_id: "video_out_tee".to_string(),
+                    internal_element_id: "video_out_tee_0".to_string(),
                     internal_pad_name: "src_%u".to_string(),
                 },
                 ExternalPad {
                     label: Some("A0".to_string()),
                     name: "audio_out".to_string(),
                     media_type: MediaType::Audio,
-                    internal_element_id: "audio_out_tee".to_string(),
+                    internal_element_id: "audio_out_tee_0".to_string(),
                     internal_pad_name: "src_%u".to_string(),
                 },
             ],
