@@ -516,8 +516,11 @@ pub fn create_whipserversrc_for_session(
     let dynamic_webrtcbin_store = config.dynamic_webrtcbin_store.clone();
     let block_id_for_callback = config.instance_id.clone();
     let ice_transport_policy = config.ice_transport_policy.clone();
-    // Flag to ensure only one cleanup request per session (shared with ICE callback)
+    // Flag to ensure only one cleanup request per session (shared across ICE callback,
+    // inactivity watchdog, etc.)
     let cleanup_sent = Arc::new(AtomicBool::new(false));
+    let cleanup_sent_for_ice = cleanup_sent.clone();
+    let cleanup_tx_for_ice = cleanup_tx.clone();
 
     if let Ok(bin) = whipserversrc.clone().downcast::<gst::Bin>() {
         bin.connect("deep-element-added", false, move |values| {
@@ -543,31 +546,45 @@ pub fn create_whipserversrc_for_session(
 
                 // Monitor ICE state and trigger auto-cleanup on failure
                 let wrtc_name = element_name.to_string();
-                let cleanup_tx = cleanup_tx.clone();
-                let cleanup_sent = cleanup_sent.clone();
+                let cleanup_tx = cleanup_tx_for_ice.clone();
+                let cleanup_sent = cleanup_sent_for_ice.clone();
                 element.connect_notify(Some("ice-connection-state"), move |elem, _pspec| {
                     let val = elem.property_value("ice-connection-state");
-                    let state_int = val.get::<i32>().unwrap_or(-1);
-
-                    // WebRTCICEConnectionState: 4=failed, 5=disconnected, 6=closed
-                    let state_name = match state_int {
-                        0 => "new",
-                        1 => "checking",
-                        2 => "connected",
-                        3 => "completed",
-                        4 => "failed",
-                        5 => "disconnected",
-                        6 => "closed",
-                        _ => "unknown",
+                    // The property is a GLib enum — extract the integer value
+                    // via serialize (returns the nick like "connected") or
+                    // via the raw glib enum value.
+                    // Extract ICE state — try i32 first, fall back to serializing
+                    // the GLib enum value to its nick string
+                    let state_name = if let Ok(v) = val.get::<i32>() {
+                        match v {
+                            0 => "new",
+                            1 => "checking",
+                            2 => "connected",
+                            3 => "completed",
+                            4 => "failed",
+                            5 => "disconnected",
+                            6 => "closed",
+                            _ => "unknown",
+                        }
+                        .to_string()
+                    } else {
+                        val.serialize()
+                            .ok()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| "unknown".to_string())
                     };
-                    info!(
-                        "WHIP Input: [SERVER] {} ice-connection-state = {} ({})",
-                        wrtc_name, state_name, state_int
+
+                    let is_dead = matches!(
+                        state_name.as_str(),
+                        "failed" | "disconnected" | "closed"
                     );
 
-                    if matches!(state_int, 4..=6)
-                        && !cleanup_sent.swap(true, Ordering::SeqCst)
-                    {
+                    info!(
+                        "WHIP Input: [SERVER] {} ice-connection-state = {}",
+                        wrtc_name, state_name
+                    );
+
+                    if is_dead && !cleanup_sent.swap(true, Ordering::SeqCst) {
                         let reason = format!("ICE {}", state_name);
                         let _ = cleanup_tx.send(SessionCleanupRequest {
                             port,
@@ -648,6 +665,49 @@ pub fn create_whipserversrc_for_session(
     // i64::MIN means "not yet computed".
     let shared_ts_offset = Arc::new(AtomicI64::new(i64::MIN));
 
+    // Inactivity watchdog: tracks when the last buffer arrived on any stream.
+    // A background thread checks this and triggers cleanup if no data arrives
+    // for INACTIVITY_TIMEOUT_SECS (covers the case where ICE disconnect
+    // notification doesn't fire from the isolated session pipeline).
+    const INACTIVITY_TIMEOUT_SECS: u64 = 10;
+    let last_buffer_epoch = Instant::now();
+    let last_buffer_ms = Arc::new(AtomicU64::new(0));
+    {
+        let last_buffer_ms_watchdog = last_buffer_ms.clone();
+        let cleanup_sent_watchdog = cleanup_sent.clone();
+        let cleanup_tx_watchdog = cleanup_tx.clone();
+        std::thread::Builder::new()
+            .name(format!("whip-watchdog-{}", port))
+            .spawn(move || {
+                // Wait for the first buffer to arrive before starting the timer
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(INACTIVITY_TIMEOUT_SECS));
+                    let last = last_buffer_ms_watchdog.load(Ordering::Relaxed);
+                    if last == 0 {
+                        // No buffer received yet — keep waiting (session might still be negotiating)
+                        continue;
+                    }
+                    let elapsed_ms = last_buffer_epoch.elapsed().as_millis() as u64;
+                    let idle_ms = elapsed_ms.saturating_sub(last);
+                    if idle_ms >= INACTIVITY_TIMEOUT_SECS * 1000 {
+                        if !cleanup_sent_watchdog.swap(true, Ordering::SeqCst) {
+                            info!(
+                                "WHIP Input: Inactivity timeout ({}s idle) on port {}, triggering cleanup",
+                                idle_ms / 1000,
+                                port
+                            );
+                            let _ = cleanup_tx_watchdog.send(SessionCleanupRequest {
+                                port,
+                                reason: format!("inactivity ({}s idle)", idle_ms / 1000),
+                            });
+                        }
+                        break;
+                    }
+                }
+            })
+            .ok();
+    }
+
     // pad-added: tee → fakesink (drain) + appsink (bridge to slot's appsrc)
     {
         let session_pipeline_weak = session_pipeline.downgrade();
@@ -720,10 +780,18 @@ pub fn create_whipserversrc_for_session(
                 let ts_offset = shared_ts_offset.clone();
                 let main_pipeline_for_ts = main_pipeline_weak.clone();
                 let media_for_log = media_type.to_string();
+                let last_buffer_ms_cb = last_buffer_ms.clone();
+                let last_buffer_epoch_cb = last_buffer_epoch;
 
                 appsink.set_callbacks(
                     gst_app::AppSinkCallbacks::builder()
                         .new_sample(move |sink| {
+                            // Update inactivity watchdog
+                            last_buffer_ms_cb.store(
+                                last_buffer_epoch_cb.elapsed().as_millis() as u64,
+                                Ordering::Relaxed,
+                            );
+
                             let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
                             let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
                             let pts = buffer.pts();
