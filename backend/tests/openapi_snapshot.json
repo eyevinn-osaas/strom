@@ -3478,7 +3478,7 @@
           "whip"
         ],
         "summary": "Handle WHIP DELETE request (client disconnect).",
-        "description": "After forwarding DELETE to whipserversrc, we trigger async element\nrecreation. The whipserversrc element is treated as single-use: it handles\none session, then gets destroyed and replaced with a fresh element.\nThe pad-removed callback also triggers recreation, but the AtomicBool\nidempotency flag in WhipServerContext prevents double-recreation.",
+        "description": "Forwards the DELETE to whipserversrc which handles session cleanup\ninternally. The element remains running and ready for new sessions.",
         "operationId": "whip_resource_delete",
         "parameters": [
           {
@@ -3502,7 +3502,7 @@
         ],
         "responses": {
           "200": {
-            "description": "WHIP session deleted and element recreated"
+            "description": "WHIP session deleted"
           },
           "404": {
             "description": "WHIP endpoint not found"

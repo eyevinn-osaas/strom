@@ -85,10 +85,6 @@ pub use strom_types::whip::ClientLogEntry;
 ///
 /// Proxies the SDP offer to the internal whipserversrc HTTP server and returns
 /// the SDP answer, rewriting the Location header to use the proxy path.
-///
-/// If the internal server returns 500 or times out (stale session), we recreate
-/// the whipserversrc element in the background and return the error immediately.
-/// The client's own retry logic will resend the offer to the fresh element.
 #[utoipa::path(
     post,
     path = "/whip/{endpoint_id}",
@@ -109,8 +105,6 @@ pub async fn whip_post(
     headers: HeaderMap,
     body: Body,
 ) -> impl IntoResponse {
-    debug!("WHIP POST for endpoint: {}", endpoint_id);
-
     let port = match state.whip_registry().get_port(&endpoint_id).await {
         Some(port) => port,
         None => {
@@ -121,9 +115,12 @@ pub async fn whip_post(
 
     // Forward the request to the internal whipserversrc
     let internal_url = format!("http://127.0.0.1:{}/whip/endpoint", port);
+    debug!(
+        "WHIP POST for endpoint '{}': proxying to port {}",
+        endpoint_id, port
+    );
 
     // 5s timeout: a healthy whipserversrc responds in <1s. If it takes longer,
-    // the element is stuck (zombie session) and needs recreation.
     let client = match reqwest::Client::builder()
         .no_proxy()
         .timeout(std::time::Duration::from_secs(5))
@@ -183,24 +180,10 @@ pub async fn whip_post(
     let (status, resp_headers, resp_body) = match result {
         Ok(tuple) => tuple,
         Err(_) => {
-            // Proxy failed (likely timeout) - recreate element in background so it's
-            // ready when the client retries, then return error immediately.
             warn!(
-                "WHIP: Proxy request to whipserversrc timed out for endpoint '{}' -- triggering recreation",
+                "WHIP: Proxy request to whipserversrc timed out for endpoint '{}'",
                 endpoint_id
             );
-            let eid = endpoint_id.clone();
-            tokio::task::spawn(async move {
-                match tokio::task::spawn_blocking(move || {
-                    crate::blocks::builtin::whip::recreate_whipserversrc(&eid)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => warn!("WHIP: Failed to recreate element: {}", e),
-                    Err(e) => error!("WHIP: Recreation task panicked: {:?}", e),
-                }
-            });
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "WHIP element busy, retry in a moment",
@@ -209,28 +192,12 @@ pub async fn whip_post(
         }
     };
 
-    // If internal server returned 500, the element has a stale session.
-    // Recreate in background and return error so the client retries against
-    // the fresh element (no server-side retry to avoid creating zombie sessions).
     if status.is_server_error() {
         let body_str = std::str::from_utf8(&resp_body).unwrap_or("<non-utf8>");
         warn!(
-            "WHIP: Internal server returned {} for endpoint '{}': {} -- triggering recreation",
+            "WHIP: Internal server returned {} for endpoint '{}': {}",
             status, endpoint_id, body_str
         );
-
-        let eid = endpoint_id.clone();
-        tokio::task::spawn(async move {
-            match tokio::task::spawn_blocking(move || {
-                crate::blocks::builtin::whip::recreate_whipserversrc(&eid)
-            })
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => warn!("WHIP: Failed to recreate element: {}", e),
-                Err(e) => error!("WHIP: Recreation task panicked: {:?}", e),
-            }
-        });
     } else if status.is_client_error() {
         let body_str = std::str::from_utf8(&resp_body).unwrap_or("<non-utf8>");
         warn!(
@@ -467,11 +434,8 @@ pub async fn whip_resource_patch(
 
 /// Handle WHIP DELETE request (client disconnect).
 ///
-/// After forwarding DELETE to whipserversrc, we trigger async element
-/// recreation. The whipserversrc element is treated as single-use: it handles
-/// one session, then gets destroyed and replaced with a fresh element.
-/// The pad-removed callback also triggers recreation, but the AtomicBool
-/// idempotency flag in WhipServerContext prevents double-recreation.
+/// Forwards the DELETE to whipserversrc which handles session cleanup
+/// internally. The element remains running and ready for new sessions.
 #[utoipa::path(
     delete,
     path = "/whip/{endpoint_id}/resource/{resource_id}",
@@ -481,7 +445,7 @@ pub async fn whip_resource_patch(
         ("resource_id" = String, Path, description = "WHIP resource/session identifier")
     ),
     responses(
-        (status = 200, description = "WHIP session deleted and element recreated"),
+        (status = 200, description = "WHIP session deleted"),
         (status = 404, description = "WHIP endpoint not found"),
         (status = 502, description = "Proxy error forwarding to internal WHIP server")
     )
@@ -519,31 +483,6 @@ pub async fn whip_resource_delete(
             return (StatusCode::BAD_GATEWAY, format!("Proxy error: {}", e)).into_response();
         }
     };
-
-    // Recreate the whipserversrc element synchronously before returning the
-    // DELETE response. This ensures the new element is ready to accept the next
-    // client connection immediately. We use spawn_blocking + await because
-    // recreate_whipserversrc does GStreamer operations that must not run on
-    // the tokio runtime. The short sleep gives whipserversrc time to finish
-    // its internal teardown before we destroy the element.
-    let endpoint_id_for_recreate = endpoint_id.clone();
-    let recreate_result = tokio::task::spawn_blocking(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        crate::blocks::builtin::whip::recreate_whipserversrc(&endpoint_id_for_recreate)
-    })
-    .await;
-
-    match recreate_result {
-        Ok(Ok(())) => info!("WHIP DELETE: Recreated whipserversrc for '{}'", endpoint_id),
-        Ok(Err(e)) => warn!(
-            "WHIP DELETE: Failed to recreate for '{}': {}",
-            endpoint_id, e
-        ),
-        Err(e) => error!(
-            "WHIP DELETE: Recreation task panicked for '{}': {:?}",
-            endpoint_id, e
-        ),
-    }
 
     Response::builder()
         .status(
