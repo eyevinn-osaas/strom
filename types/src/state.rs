@@ -22,6 +22,18 @@ pub enum PipelineState {
     Playing,
 }
 
+impl PipelineState {
+    /// Returns true if the pipeline is in a state where data may be flowing.
+    ///
+    /// Both `Paused` and `Playing` are considered active because live
+    /// GStreamer pipelines can have data flowing even while the pipeline
+    /// object reports `Paused` (e.g. when an async element has not yet
+    /// reached `Playing`).
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Paused | Self::Playing)
+    }
+}
+
 impl std::fmt::Display for PipelineState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

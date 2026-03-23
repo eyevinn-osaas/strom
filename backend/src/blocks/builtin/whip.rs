@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -265,21 +266,18 @@ impl WhipServerContext {
                 if element_klass.contains("Decoder") && element_klass.contains("Video") {
                     let decoder_name = element_name.to_string();
                     let decoder_weak = element.downgrade();
-                    let last_fku_time = Arc::new(AtomicU64::new(0));
+                    let fku_epoch = Instant::now();
+                    let last_fku_ms = Arc::new(AtomicU64::new(0));
                     let block_id = block_id_for_callback.clone();
 
                     if let Some(sink_pad) = element.static_pad("sink") {
                         sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
                             if let Some(gst::PadProbeData::Buffer(ref buffer)) = info.data {
                                 if buffer.flags().contains(gst::BufferFlags::DISCONT) {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis()
-                                        as u64;
-                                    let last = last_fku_time.load(Ordering::Relaxed);
+                                    let now_ms = fku_epoch.elapsed().as_millis() as u64;
+                                    let last = last_fku_ms.load(Ordering::Relaxed);
                                     if now_ms.saturating_sub(last) >= 1000 {
-                                        last_fku_time.store(now_ms, Ordering::Relaxed);
+                                        last_fku_ms.store(now_ms, Ordering::Relaxed);
                                         if let Some(decoder) = decoder_weak.upgrade() {
                                             debug!(
                                                 "WHIP Input [{}]: Discontinuity on {} sink, requesting keyframe (PLI)",

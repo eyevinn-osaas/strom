@@ -421,10 +421,7 @@ impl InfoPage {
                     }
 
                     // Flow statistics
-                    let running_flows = flows
-                        .iter()
-                        .filter(|f| f.state == Some(strom_types::PipelineState::Playing))
-                        .count();
+                    let running_flows = flows.iter().filter(|f| f.running).count();
                     let total_flows = flows.len();
 
                     ui.label("Flows:");

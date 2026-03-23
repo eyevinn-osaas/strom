@@ -348,7 +348,7 @@ pub async fn update_flow(
     }
 
     // Check if the flow is currently running
-    let is_running = old_flow.state == Some(strom_types::PipelineState::Playing);
+    let is_running = old_flow.running;
 
     if let Err(e) = state.upsert_flow(flow.clone()).await {
         return Err((

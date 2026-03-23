@@ -139,7 +139,7 @@ impl Storage for PostgresStorage {
         for flow in flows.values() {
             let data = serde_json::to_value(flow)?;
             let state = flow
-                .state
+                .gst_state
                 .as_ref()
                 .map(|s| format!("{:?}", s))
                 .unwrap_or_else(|| "Null".to_string());
@@ -174,7 +174,7 @@ impl Storage for PostgresStorage {
 
         let data = serde_json::to_value(flow)?;
         let state = flow
-            .state
+            .gst_state
             .as_ref()
             .map(|s| format!("{:?}", s))
             .unwrap_or_else(|| "Null".to_string());

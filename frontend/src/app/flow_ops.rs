@@ -36,8 +36,6 @@ impl StromApp {
 
     /// Fetch latency for the currently selected flow (if running).
     pub(super) fn fetch_latency_for_running_flows(&self, ctx: &Context) {
-        use strom_types::PipelineState;
-
         // Only fetch for selected flow if it's running
         let flow_id = match self.selected_flow_id {
             Some(id) => id,
@@ -49,7 +47,7 @@ impl StromApp {
             .flows
             .iter()
             .find(|f| f.id == flow_id)
-            .map(|f| f.state == Some(PipelineState::Playing))
+            .map(|f| f.running)
             .unwrap_or(false);
 
         if !is_running {
@@ -81,8 +79,6 @@ impl StromApp {
     /// Fetch RTP statistics and dynamic pads for the currently selected flow (if running).
     /// RTP stats are only fetched if the flow has blocks that produce them (e.g., AES67 Input).
     pub(super) fn fetch_rtp_stats_for_selected_flow(&self, ctx: &Context) {
-        use strom_types::PipelineState;
-
         // Only fetch for selected flow if it's running
         let flow_id = match self.selected_flow_id {
             Some(id) => id,
@@ -91,9 +87,7 @@ impl StromApp {
 
         // Check if the selected flow is running
         let flow = self.flows.iter().find(|f| f.id == flow_id);
-        let is_running = flow
-            .map(|f| f.state == Some(PipelineState::Playing))
-            .unwrap_or(false);
+        let is_running = flow.map(|f| f.running).unwrap_or(false);
 
         if !is_running {
             return;

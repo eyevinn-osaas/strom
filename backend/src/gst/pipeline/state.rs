@@ -7,11 +7,8 @@ use strom_types::{FlowId, PipelineState};
 use tracing::info;
 
 impl PipelineManager {
-    /// Get the current state of the pipeline.
-    /// Uses cached state to avoid querying async sinks during initialization (prevents SRT crashes).
+    /// Get the current cached state of the pipeline.
     pub fn get_state(&self) -> PipelineState {
-        // Return cached state to avoid querying the pipeline during async state changes
-        // This prevents crashes with SRT sink and other async elements
         *self.cached_state.read().unwrap()
     }
 

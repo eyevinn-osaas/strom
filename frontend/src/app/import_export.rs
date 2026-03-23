@@ -329,7 +329,7 @@ impl StromApp {
         flow.id = uuid::Uuid::new_v4();
 
         // Reset state to Null
-        flow.state = Some(PipelineState::Null);
+        flow.set_gst_state(Some(PipelineState::Null));
 
         // Clear auto_restart flag
         flow.properties.auto_restart = false;

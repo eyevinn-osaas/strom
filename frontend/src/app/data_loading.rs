@@ -1,9 +1,7 @@
+use super::*;
 use crate::api::AuthStatusResponse;
 use crate::state::AppMessage;
 use egui::Context;
-use strom_types::PipelineState;
-
-use super::*;
 impl StromApp {
     /// Load GStreamer elements from the backend.
     pub(super) fn load_elements(&mut self, ctx: &Context) {
@@ -166,9 +164,7 @@ impl StromApp {
 
         // Check if the selected flow is running and has WebRTC blocks
         let flow = self.flows.iter().find(|f| f.id == flow_id);
-        let is_running = flow
-            .map(|f| matches!(f.state, Some(PipelineState::Playing)))
-            .unwrap_or(false);
+        let is_running = flow.map(|f| f.running).unwrap_or(false);
 
         if !is_running {
             return;

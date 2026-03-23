@@ -189,7 +189,7 @@ fn select_compositor(
     match preference {
         CompositorPreference::GPUOnly => {
             if has_gl {
-                info!("Using GPU (OpenGL) compositor as requested");
+                debug!("Using GPU (OpenGL) compositor as requested");
                 Ok(CompositorBackend::OpenGL)
             } else {
                 Err(BlockBuildError::InvalidConfiguration(
@@ -199,7 +199,7 @@ fn select_compositor(
         }
         CompositorPreference::CPUOnly => {
             if has_software {
-                info!("Using CPU (software) compositor as requested");
+                debug!("Using CPU (software) compositor as requested");
                 Ok(CompositorBackend::Software)
             } else {
                 Err(BlockBuildError::InvalidConfiguration(

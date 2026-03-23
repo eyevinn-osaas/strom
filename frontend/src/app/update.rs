@@ -799,16 +799,10 @@ impl eframe::App for StromApp {
                             element_id,
                             pad_name,
                             age_ms,
-                            sample_number,
                             ..
                         } => {
-                            self.buffer_age_data.update_probe(
-                                probe_id,
-                                element_id,
-                                pad_name,
-                                age_ms,
-                                sample_number,
-                            );
+                            self.buffer_age_data
+                                .update_probe(probe_id, element_id, pad_name, age_ms);
                         }
                         StromEvent::BufferAgeProbeActivated {
                             probe_id,
@@ -1200,10 +1194,7 @@ impl eframe::App for StromApp {
 
         // Repaint every second while something needs periodic updates
         // (thumbnails, recorder duration counter, etc.)
-        let has_running_flow = self
-            .flows
-            .iter()
-            .any(|f| f.state == Some(strom_types::PipelineState::Playing));
+        let has_running_flow = self.flows.iter().any(|f| f.running);
         if has_running_flow || !self.recorder_start_times.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }

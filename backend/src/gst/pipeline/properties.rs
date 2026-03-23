@@ -633,7 +633,7 @@ impl PipelineManager {
                 }
             }
             PipelineState::Paused => {
-                if !mutable_in_paused && !mutable_in_playing {
+                if !mutable_in_paused && !mutable_in_playing && !can_change_at_runtime {
                     return Err(PipelineError::PropertyNotMutable {
                         element: format!("{}:{}", element_id, pad_name),
                         property: property_name.to_string(),
@@ -723,7 +723,7 @@ impl PipelineManager {
                 }
             }
             PipelineState::Paused => {
-                if !mutable_in_paused && !mutable_in_playing {
+                if !mutable_in_paused && !mutable_in_playing && !can_change_at_runtime {
                     return Err(PipelineError::PropertyNotMutable {
                         element: element_id.to_string(),
                         property: property_name.to_string(),
