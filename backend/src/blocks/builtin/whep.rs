@@ -231,7 +231,7 @@ fn build_whepsrc(
             }
         }
 
-        // Also catch any dynamically added webrtcbins
+        // Also catch any dynamically added webrtcbins and jitterbuffers
         bin.connect("deep-element-added", false, move |values| {
             let element = values[2].get::<gst::Element>().unwrap();
             let element_name = element.name();
@@ -242,6 +242,33 @@ fn build_whepsrc(
                     "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on {}",
                     jitterbuffer_latency_ms, element_name
                 );
+            }
+
+            // Tune rtpjitterbuffer for long mute periods.
+            // SFU participants may mute for minutes, sending zero packets.
+            // Default max-dropout-time (60s) causes the jitterbuffer to consider
+            // the stream dead after the gap. When packets resume, the reset
+            // mishandles clock recovery and liveadder drops buffers as "too late".
+            // Setting max-dropout-time=0 disables the dropout detection entirely.
+            let factory_name = element
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            if factory_name == "rtpjitterbuffer" {
+                if element.has_property("max-dropout-time") {
+                    element.set_property("max-dropout-time", 0u32);
+                    info!(
+                        "WHEP Input (whepsrc): Set max-dropout-time=0 on {}",
+                        element_name
+                    );
+                }
+                if element.has_property("max-misorder-time") {
+                    element.set_property("max-misorder-time", 0u32);
+                    info!(
+                        "WHEP Input (whepsrc): Set max-misorder-time=0 on {}",
+                        element_name
+                    );
+                }
             }
 
             None
@@ -699,6 +726,33 @@ fn build_whepclientsrc(
                             }
                         }
                     });
+                }
+
+                // Tune rtpjitterbuffer for long mute periods.
+                // SFU participants may mute for minutes, sending zero packets.
+                // Default max-dropout-time (60s) causes the jitterbuffer to consider
+                // the stream dead after the gap. When packets resume, the reset
+                // mishandles clock recovery and liveadder drops buffers as "too late".
+                // Setting max-dropout-time=0 disables the dropout detection entirely.
+                let factory_name = element
+                    .factory()
+                    .map(|f| f.name().to_string())
+                    .unwrap_or_default();
+                if factory_name == "rtpjitterbuffer" {
+                    if element.has_property("max-dropout-time") {
+                        element.set_property("max-dropout-time", 0u32);
+                        info!(
+                            "WHEP Input (whepclientsrc): Set max-dropout-time=0 on {}",
+                            element_name
+                        );
+                    }
+                    if element.has_property("max-misorder-time") {
+                        element.set_property("max-misorder-time", 0u32);
+                        info!(
+                            "WHEP Input (whepclientsrc): Set max-misorder-time=0 on {}",
+                            element_name
+                        );
+                    }
                 }
 
                 None
