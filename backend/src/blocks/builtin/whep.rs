@@ -219,13 +219,29 @@ fn build_whepsrc(
     // webrtcbin is created during whepsrc construction, so we must iterate
     // existing children. We also install deep-element-added for any future additions.
     if let Ok(bin) = whepsrc.clone().downcast::<gst::Bin>() {
-        // Set on already-existing webrtcbin children
+        // Set on already-existing children (webrtcbin and its internal rtpbin)
         for element in bin.iterate_recurse().into_iter().flatten() {
             if element.name().starts_with("webrtcbin") && element.has_property("latency") {
                 element.set_property("latency", jitterbuffer_latency_ms);
                 info!(
                     "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on existing {}",
                     jitterbuffer_latency_ms,
+                    element.name()
+                );
+            }
+            let factory_name = element
+                .factory()
+                .map(|f| f.name().to_string())
+                .unwrap_or_default();
+            if factory_name == "rtpbin" {
+                if element.has_property("max-dropout-time") {
+                    element.set_property("max-dropout-time", 0u32);
+                }
+                if element.has_property("max-misorder-time") {
+                    element.set_property("max-misorder-time", 0u32);
+                }
+                info!(
+                    "WHEP Input (whepsrc): Set max-dropout-time=0, max-misorder-time=0 on existing {}",
                     element.name()
                 );
             }
@@ -242,33 +258,6 @@ fn build_whepsrc(
                     "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on {}",
                     jitterbuffer_latency_ms, element_name
                 );
-            }
-
-            // Tune rtpjitterbuffer for long mute periods.
-            // SFU participants may mute for minutes, sending zero packets.
-            // Default max-dropout-time (60s) causes the jitterbuffer to consider
-            // the stream dead after the gap. When packets resume, the reset
-            // mishandles clock recovery and liveadder drops buffers as "too late".
-            // Setting max-dropout-time=0 disables the dropout detection entirely.
-            let factory_name = element
-                .factory()
-                .map(|f| f.name().to_string())
-                .unwrap_or_default();
-            if factory_name == "rtpjitterbuffer" {
-                if element.has_property("max-dropout-time") {
-                    element.set_property("max-dropout-time", 0u32);
-                    info!(
-                        "WHEP Input (whepsrc): Set max-dropout-time=0 on {}",
-                        element_name
-                    );
-                }
-                if element.has_property("max-misorder-time") {
-                    element.set_property("max-misorder-time", 0u32);
-                    info!(
-                        "WHEP Input (whepsrc): Set max-misorder-time=0 on {}",
-                        element_name
-                    );
-                }
             }
 
             None
@@ -576,6 +565,30 @@ fn build_whepclientsrc(
                         );
                     }
 
+                    // Set max-dropout-time and max-misorder-time on rtpbin inside webrtcbin.
+                    // rtpbin already exists when webrtcbin is added, so deep-element-added
+                    // won't fire for it — we must find it by iterating children.
+                    if let Ok(webrtcbin_bin) = element.clone().downcast::<gst::Bin>() {
+                        for child in webrtcbin_bin.iterate_recurse().into_iter().flatten() {
+                            let child_factory = child
+                                .factory()
+                                .map(|f| f.name().to_string())
+                                .unwrap_or_default();
+                            if child_factory == "rtpbin" {
+                                if child.has_property("max-dropout-time") {
+                                    child.set_property("max-dropout-time", 0u32);
+                                }
+                                if child.has_property("max-misorder-time") {
+                                    child.set_property("max-misorder-time", 0u32);
+                                }
+                                info!(
+                                    "WHEP Input (whepclientsrc): Set max-dropout-time=0, max-misorder-time=0 on {}",
+                                    child.name()
+                                );
+                            }
+                        }
+                    }
+
                     // Set ICE transport policy on webrtcbin (from config)
                     if element.has_property("ice-transport-policy") {
                         element.set_property_from_str("ice-transport-policy", &ice_transport_policy);
@@ -726,33 +739,6 @@ fn build_whepclientsrc(
                             }
                         }
                     });
-                }
-
-                // Tune rtpjitterbuffer for long mute periods.
-                // SFU participants may mute for minutes, sending zero packets.
-                // Default max-dropout-time (60s) causes the jitterbuffer to consider
-                // the stream dead after the gap. When packets resume, the reset
-                // mishandles clock recovery and liveadder drops buffers as "too late".
-                // Setting max-dropout-time=0 disables the dropout detection entirely.
-                let factory_name = element
-                    .factory()
-                    .map(|f| f.name().to_string())
-                    .unwrap_or_default();
-                if factory_name == "rtpjitterbuffer" {
-                    if element.has_property("max-dropout-time") {
-                        element.set_property("max-dropout-time", 0u32);
-                        info!(
-                            "WHEP Input (whepclientsrc): Set max-dropout-time=0 on {}",
-                            element_name
-                        );
-                    }
-                    if element.has_property("max-misorder-time") {
-                        element.set_property("max-misorder-time", 0u32);
-                        info!(
-                            "WHEP Input (whepclientsrc): Set max-misorder-time=0 on {}",
-                            element_name
-                        );
-                    }
                 }
 
                 None
