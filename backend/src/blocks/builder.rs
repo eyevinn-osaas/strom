@@ -2,6 +2,7 @@
 
 use crate::events::EventBroadcaster;
 use crate::whip_registry::WhipRegistry;
+use crate::whip_session_manager::WhipEndpointConfig;
 use gstreamer as gst;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -128,6 +129,8 @@ pub struct BlockBuildContext {
     whep_endpoints: RefCell<Vec<WhepEndpointInfo>>,
     /// WHIP endpoints queued for registration
     whip_endpoints: RefCell<Vec<WhipEndpointInfo>>,
+    /// WHIP endpoint configs queued for session manager registration
+    whip_endpoint_configs: RefCell<Vec<(String, WhipEndpointConfig)>>,
     /// ICE servers for WebRTC NAT traversal (STUN/TURN URLs)
     ice_servers: Vec<String>,
     /// ICE transport policy ("all" or "relay")
@@ -147,6 +150,7 @@ impl BlockBuildContext {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
             whip_endpoints: RefCell::new(Vec::new()),
+            whip_endpoint_configs: RefCell::new(Vec::new()),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins: Arc::new(Mutex::new(HashMap::new())),
@@ -165,6 +169,7 @@ impl BlockBuildContext {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
             whip_endpoints: RefCell::new(Vec::new()),
+            whip_endpoint_configs: RefCell::new(Vec::new()),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,
@@ -298,6 +303,23 @@ impl BlockBuildContext {
     /// Called after block expansion to process the registrations.
     pub fn take_whip_endpoints(&self) -> Vec<WhipEndpointInfo> {
         self.whip_endpoints.borrow_mut().drain(..).collect()
+    }
+
+    /// Register a WHIP endpoint configuration for the session manager.
+    ///
+    /// Called by WHIP Input blocks during build to store the config needed
+    /// for per-session whipserversrc creation.
+    pub fn register_whip_endpoint_config(&self, endpoint_id: String, config: WhipEndpointConfig) {
+        self.whip_endpoint_configs
+            .borrow_mut()
+            .push((endpoint_id, config));
+    }
+
+    /// Take all queued WHIP endpoint configs.
+    ///
+    /// Called after block expansion to register configs with the session manager.
+    pub fn take_whip_endpoint_configs(&self) -> Vec<(String, WhipEndpointConfig)> {
+        self.whip_endpoint_configs.borrow_mut().drain(..).collect()
     }
 
     /// Register an element signal setup function to be called at pipeline start.

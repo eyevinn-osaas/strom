@@ -4,6 +4,10 @@
 //! (or skipped) independently. This makes it easy to test which transforms
 //! are actually needed by commenting out individual calls in `whip_ingest.rs`.
 
+use strom_types::whip::{
+    DEFAULT_MAX_VIDEO_BITRATE_KBPS, DEFAULT_MIN_VIDEO_BITRATE_KBPS,
+    DEFAULT_START_VIDEO_BITRATE_KBPS,
+};
 use tracing::info;
 
 /// Strip RED, RTX and ULPFEC payload types from an SDP offer.
@@ -174,7 +178,7 @@ pub(crate) fn add_goog_remb(sdp: &str) -> String {
 /// 1. Reads the values from standalone `a=x-google-*:` lines (or uses defaults)
 /// 2. Appends them to the video codec fmtp line
 /// 3. Removes the standalone lines
-pub(crate) fn fix_video_bitrate_hints(sdp: &str) -> String {
+pub(crate) fn fix_video_bitrate_hints(sdp: &str, max_bitrate_kbps: Option<u32>) -> String {
     // Extract existing standalone x-google values
     let mut min_bitrate: Option<&str> = None;
     let mut start_bitrate: Option<&str> = None;
@@ -191,10 +195,27 @@ pub(crate) fn fix_video_bitrate_hints(sdp: &str) -> String {
         }
     }
 
-    // Use defaults if standalone lines weren't present
-    let min_val = min_bitrate.unwrap_or("1000");
-    let start_val = start_bitrate.unwrap_or("2000");
-    let max_val = max_bitrate.unwrap_or("6000");
+    // Use defaults if standalone lines weren't present.
+    // max_bitrate_kbps overrides the default max (but not an explicit value from the SDP).
+    let default_max = max_bitrate_kbps
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| DEFAULT_MAX_VIDEO_BITRATE_KBPS.to_string());
+    let default_min = DEFAULT_MIN_VIDEO_BITRATE_KBPS.to_string();
+    let default_start = DEFAULT_START_VIDEO_BITRATE_KBPS.to_string();
+    let max_val: u32 = max_bitrate
+        .unwrap_or(&default_max)
+        .parse()
+        .unwrap_or(DEFAULT_MAX_VIDEO_BITRATE_KBPS);
+    let min_val: u32 = min_bitrate
+        .unwrap_or(&default_min)
+        .parse()
+        .unwrap_or(DEFAULT_MIN_VIDEO_BITRATE_KBPS)
+        .min(max_val);
+    let start_val: u32 = start_bitrate
+        .unwrap_or(&default_start)
+        .parse()
+        .unwrap_or(DEFAULT_START_VIDEO_BITRATE_KBPS)
+        .clamp(min_val, max_val);
 
     let hints = format!(
         ";x-google-min-bitrate={};x-google-start-bitrate={};x-google-max-bitrate={}",
@@ -482,7 +503,7 @@ a=x-google-min-bitrate:1500\r\n\
 a=x-google-start-bitrate:1500\r\n\
 a=x-google-max-bitrate:3000\r\n";
 
-        let result = fix_video_bitrate_hints(sdp);
+        let result = fix_video_bitrate_hints(sdp, None);
 
         // Standalone lines should be removed
         assert!(!result.contains("a=x-google-min-bitrate:"));
@@ -504,11 +525,20 @@ m=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
 a=rtpmap:96 H264/90000\r\n\
 a=fmtp:96 level-asymmetry-allowed=1\r\n";
 
-        let result = fix_video_bitrate_hints(sdp);
+        let result = fix_video_bitrate_hints(sdp, None);
 
-        assert!(result.contains("x-google-min-bitrate=1000"));
-        assert!(result.contains("x-google-start-bitrate=2000"));
-        assert!(result.contains("x-google-max-bitrate=6000"));
+        assert!(result.contains(&format!(
+            "x-google-min-bitrate={}",
+            DEFAULT_MIN_VIDEO_BITRATE_KBPS
+        )));
+        assert!(result.contains(&format!(
+            "x-google-start-bitrate={}",
+            DEFAULT_START_VIDEO_BITRATE_KBPS
+        )));
+        assert!(result.contains(&format!(
+            "x-google-max-bitrate={}",
+            DEFAULT_MAX_VIDEO_BITRATE_KBPS
+        )));
     }
 
     #[test]
@@ -518,7 +548,7 @@ m=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
 a=rtpmap:96 H264/90000\r\n\
 a=fmtp:96 level-asymmetry-allowed=1;x-google-start-bitrate=2000;x-google-min-bitrate=2000;x-google-max-bitrate=4000\r\n";
 
-        let result = fix_video_bitrate_hints(sdp);
+        let result = fix_video_bitrate_hints(sdp, None);
         assert_eq!(result, sdp);
     }
 
@@ -529,7 +559,7 @@ m=video 9 UDP/TLS/RTP/SAVPF 96\r\n\
 a=fmtp:96 level-asymmetry-allowed=1;x-google-start-bitrate=2000\r\n\
 a=x-google-min-bitrate:1000\r\n";
 
-        let result = fix_video_bitrate_hints(sdp);
+        let result = fix_video_bitrate_hints(sdp, None);
 
         // Standalone line removed
         assert!(!result.contains("a=x-google-min-bitrate:"));
@@ -544,7 +574,7 @@ m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n\
 a=rtpmap:111 opus/48000/2\r\n\
 a=fmtp:111 minptime=10\r\n";
 
-        let result = fix_video_bitrate_hints(sdp);
+        let result = fix_video_bitrate_hints(sdp, None);
         assert_eq!(result, sdp);
     }
 

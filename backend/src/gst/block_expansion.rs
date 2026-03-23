@@ -6,6 +6,7 @@ use crate::blocks::{
     WhepEndpointInfo, WhipEndpointInfo,
 };
 use crate::whip_registry::WhipRegistry;
+use crate::whip_session_manager::WhipEndpointConfig;
 use gstreamer as gst;
 use strom_types::{BlockInstance, Link};
 use tracing::{debug, info};
@@ -31,6 +32,8 @@ pub struct ExpandedPipeline {
     pub whep_endpoints: Vec<WhepEndpointInfo>,
     /// WHIP endpoints registered by blocks
     pub whip_endpoints: Vec<WhipEndpointInfo>,
+    /// WHIP endpoint configs for session manager registration
+    pub whip_endpoint_configs: Vec<(String, WhipEndpointConfig)>,
 }
 
 /// Expand block instances into GStreamer elements using BlockBuilder trait.
@@ -188,10 +191,19 @@ pub async fn expand_blocks(
     if !whip_endpoints.is_empty() {
         for ep in &whip_endpoints {
             info!(
-                "Block {} registered WHIP endpoint: endpoint_id='{}', port={}",
-                ep.block_id, ep.endpoint_id, ep.internal_port
+                "Block {} registered WHIP endpoint: endpoint_id='{}' (port assigned per-session)",
+                ep.block_id, ep.endpoint_id
             );
         }
+    }
+
+    // Collect WHIP endpoint configs for session manager
+    let whip_endpoint_configs = ctx.take_whip_endpoint_configs();
+    if !whip_endpoint_configs.is_empty() {
+        debug!(
+            "Collected {} WHIP endpoint config(s) for session manager",
+            whip_endpoint_configs.len()
+        );
     }
 
     debug!(
@@ -213,6 +225,7 @@ pub async fn expand_blocks(
         pad_properties: all_pad_properties,
         whep_endpoints,
         whip_endpoints,
+        whip_endpoint_configs,
     })
 }
 

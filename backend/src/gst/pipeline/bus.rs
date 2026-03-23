@@ -69,10 +69,17 @@ impl PipelineManager {
 
             match msg.view() {
                 MessageView::Error(err) => {
-                    // Drop errors from whipserversrc internals (nicesrc, dtlssrtpdec, etc).
-                    // When a WHIP client disconnects, these elements post errors that would
-                    // otherwise transition the pipeline to ERROR state, preventing reconnection.
+                    // Drop errors from WHIP session elements (whipserversrc internals
+                    // and appsrc/appsink bridge elements). These post errors when clients
+                    // disconnect or during session setup that would otherwise transition
+                    // the pipeline to ERROR state, preventing reconnection.
                     let is_whipsrc_internal = err.src().is_some_and(|s| {
+                        let name = s.name();
+                        // appsrc/appsink elements created for WHIP sessions have
+                        // "whipserversrc" in their name
+                        if name.as_str().contains("whipserversrc") {
+                            return true;
+                        }
                         let mut parent = s.parent();
                         while let Some(p) = parent {
                             if p.name().as_str().contains("whipserversrc") {

@@ -268,21 +268,6 @@ class WhipClient {
                 this._log('Adding ' + track.kind + ' track: ' + track.label);
                 const transceiver = this.peerConnection.addTransceiver(track, { direction: 'sendonly' });
 
-                // Set encoding parameters for video
-                if (track.kind === 'video') {
-                    try {
-                        const params = transceiver.sender.getParameters();
-                        if (!params.encodings || params.encodings.length === 0) {
-                            params.encodings = [{}];
-                        }
-                        params.encodings[0].maxBitrate = 4_000_000; // 4 Mbps
-                        params.encodings[0].maxFramerate = 30;
-                        await transceiver.sender.setParameters(params);
-                        this._log('Set video encoding: maxBitrate=4Mbps, maxFramerate=30');
-                    } catch (e) {
-                        this._logAlways('Failed to set video encoding params: ' + e.message, 'error');
-                    }
-                }
             }
 
             // Create SDP offer

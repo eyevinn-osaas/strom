@@ -198,6 +198,8 @@ pub struct PipelineManager {
     whep_endpoints: Vec<crate::blocks::WhepEndpointInfo>,
     /// WHIP endpoints registered by blocks
     whip_endpoints: Vec<crate::blocks::WhipEndpointInfo>,
+    /// WHIP endpoint configs for session manager (collected from block expansion)
+    whip_endpoint_configs: Vec<(String, crate::whip_session_manager::WhipEndpointConfig)>,
     /// Dynamically created webrtcbins (from webrtcsink/whepserversink consumer-added callbacks).
     /// Maps block_id to list of (consumer_id, webrtcbin) pairs.
     dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore,

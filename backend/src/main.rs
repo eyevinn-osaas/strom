@@ -433,6 +433,9 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         // Start pipeline monitor (queue levels, buffer age warnings)
         strom::gst::pipeline_monitor::start(state.clone());
 
+        // Start WHIP session auto-cleanup (handles dead ICE connections, pipeline errors)
+        state.whip_session_manager().start_cleanup_task();
+
         // GStreamer elements are discovered lazily on first /api/elements request
 
         // Create the HTTP app BEFORE auto-restart
@@ -468,7 +471,6 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         let handle_for_signal = handle.clone();
         tokio::spawn(async move {
             wait_for_shutdown_signal().await;
-            strom::blocks::builtin::whip::shutdown_whip_servers();
             info!("Signaling GUI to close...");
             shutdown_flag.store(true, Ordering::SeqCst);
             handle_for_signal.graceful_shutdown(Some(Duration::from_secs(10)));
@@ -569,6 +571,9 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     // Start pipeline monitor (queue levels, buffer age warnings)
     strom::gst::pipeline_monitor::start(state.clone());
 
+    // Start WHIP session auto-cleanup (handles dead ICE connections, pipeline errors)
+    state.whip_session_manager().start_cleanup_task();
+
     // GStreamer elements are discovered lazily on first /api/elements request
 
     // Create the HTTP app BEFORE auto-restart, then bind AFTER
@@ -601,7 +606,6 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     let handle_for_signal = handle.clone();
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
-        strom::blocks::builtin::whip::shutdown_whip_servers();
         info!("Server shutting down");
         handle_for_signal.graceful_shutdown(Some(Duration::from_secs(10)));
     });

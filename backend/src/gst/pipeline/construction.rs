@@ -66,6 +66,7 @@ impl PipelineManager {
             dynamic_pad_tees: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
             whep_endpoints: Vec::new(),
             whip_endpoints: Vec::new(),
+            whip_endpoint_configs: Vec::new(),
             dynamic_webrtcbins: Arc::clone(&dynamic_webrtcbins),
             thumbnail_taps: crate::gst::new_tap_store(),
             thumbnail_deactivation_task: None,
@@ -197,6 +198,7 @@ impl PipelineManager {
             );
         }
         manager.whip_endpoints = expanded.whip_endpoints;
+        manager.whip_endpoint_configs = expanded.whip_endpoint_configs;
 
         // Analyze links and auto-insert tee elements where needed
         let all_links = expanded.links;

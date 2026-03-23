@@ -12,6 +12,7 @@ use crate::system_monitor::{SystemMonitor, ThreadCpuSampler};
 use crate::thread_registry::ThreadRegistry;
 use crate::whep_registry::WhepRegistry;
 use crate::whip_registry::WhipRegistry;
+use crate::whip_session_manager::WhipSessionManager;
 use chrono::Local;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -62,6 +63,8 @@ struct AppStateInner {
     whep_registry: WhepRegistry,
     /// WHIP endpoint registry (maps endpoint IDs to internal ports)
     whip_registry: WhipRegistry,
+    /// WHIP session manager (creates per-client whipserversrc elements)
+    whip_session_manager: Arc<WhipSessionManager>,
     /// ICE servers for WebRTC NAT traversal (STUN/TURN URLs)
     ice_servers: Vec<String>,
     /// ICE transport policy for WebRTC connections ("all" or "relay")
@@ -102,6 +105,7 @@ impl AppState {
                 media_path: media_path.into(),
                 whep_registry: WhepRegistry::new(),
                 whip_registry: WhipRegistry::new(),
+                whip_session_manager: Arc::new(WhipSessionManager::new()),
                 ice_servers,
                 ice_transport_policy,
                 pending_saves: RwLock::new(HashSet::new()),
@@ -117,6 +121,11 @@ impl AppState {
     /// Get the WHIP endpoint registry.
     pub fn whip_registry(&self) -> &WhipRegistry {
         &self.inner.whip_registry
+    }
+
+    /// Get the WHIP session manager.
+    pub fn whip_session_manager(&self) -> &Arc<WhipSessionManager> {
+        &self.inner.whip_session_manager
     }
 
     /// Get the event broadcaster.
@@ -726,19 +735,15 @@ impl AppState {
             let mut endpoints = Vec::new();
             for whip_info in manager.whip_endpoints() {
                 info!(
-                    "Registering WHIP endpoint '{}' (block {}) on port {} mode={:?}",
+                    "Registering WHIP endpoint '{}' (block {}) mode={:?} (port assigned per-session)",
                     whip_info.endpoint_id,
                     whip_info.block_id,
-                    whip_info.internal_port,
                     whip_info.mode
                 );
+                // Register with port=0 placeholder; actual ports are per-session
                 self.inner
                     .whip_registry
-                    .register(
-                        whip_info.endpoint_id.clone(),
-                        whip_info.internal_port,
-                        whip_info.mode,
-                    )
+                    .register(whip_info.endpoint_id.clone(), 0, whip_info.mode)
                     .await;
                 endpoints.push((whip_info.block_id.clone(), whip_info.endpoint_id.clone()));
             }
@@ -747,9 +752,28 @@ impl AppState {
             Vec::new()
         };
 
-        // Drop the pipelines guard - we don't need it anymore
+        // Register WHIP endpoint configs with the session manager
+        // We need mutable access to take configs
         drop(pipelines_guard);
-
+        {
+            let mut pipelines = self.inner.pipelines.write().await;
+            if let Some(manager) = pipelines.get_mut(id) {
+                let configs = manager.take_whip_endpoint_configs();
+                if !configs.is_empty() {
+                    for (endpoint_id, mut config) in configs {
+                        config.pipeline_weak = manager.pipeline_weak();
+                        config.endpoint_id = endpoint_id.clone();
+                        info!(
+                            "Registering WHIP endpoint config '{}' with session manager",
+                            endpoint_id
+                        );
+                        self.inner
+                            .whip_session_manager
+                            .register_endpoint(endpoint_id, config);
+                    }
+                }
+            }
+        }
         // Generate SDP for AES67 output blocks and store in runtime_data
         for block in &mut flow.blocks {
             if block.block_definition_id == "builtin.aes67_output" {
@@ -1042,12 +1066,39 @@ impl AppState {
                 .await;
         }
 
-        // Unregister WHIP endpoints before stopping
+        // Teardown all WHIP sessions and unregister endpoints before stopping
         for whip_info in manager.whip_endpoints() {
             info!(
-                "Unregistering WHIP endpoint '{}' (block {})",
+                "Tearing down WHIP sessions and unregistering endpoint '{}' (block {})",
                 whip_info.endpoint_id, whip_info.block_id
             );
+            // Remove all active sessions for this endpoint
+            let session_entries = self
+                .inner
+                .whip_session_manager
+                .remove_all_sessions(&whip_info.endpoint_id);
+            let count = session_entries.len();
+            if count > 0 {
+                // Teardown session pipelines on a blocking thread to avoid
+                // blocking the tokio runtime (set_state(Null) can take seconds).
+                let endpoint_id_log = whip_info.endpoint_id.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    for (pipeline, element) in session_entries {
+                        WhipSessionManager::teardown_session_pipeline(&pipeline);
+                        drop(element);
+                    }
+                    info!(
+                        "Torn down {} active WHIP session(s) for endpoint '{}'",
+                        count, endpoint_id_log
+                    );
+                })
+                .await;
+            }
+            // Unregister the endpoint config from session manager
+            self.inner
+                .whip_session_manager
+                .unregister_endpoint(&whip_info.endpoint_id);
+            // Unregister from the registry
             self.inner
                 .whip_registry
                 .unregister(&whip_info.endpoint_id)
