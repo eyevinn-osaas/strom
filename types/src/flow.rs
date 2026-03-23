@@ -21,10 +21,10 @@ pub type FlowId = Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum CpuAffinity {
     /// No pinning, OS scheduler decides thread placement
+    #[default]
     Off,
     /// Pin all pipeline threads to a single core for maximum cache locality.
     /// Core is assigned by the AffinityManager using least-loaded strategy.
-    #[default]
     SingleCore,
 }
 
@@ -299,9 +299,18 @@ pub struct Flow {
     /// Links between element pads and/or block external pads
     #[serde(default)]
     pub links: Vec<Link>,
-    /// Current runtime state (persisted to storage for automatic restart)
+    /// Whether the pipeline is actively running (data flowing).
+    ///
+    /// This is the field most callers should use. It is `true` when the
+    /// GStreamer pipeline is in `Playing` *or* in `Paused` due to an
+    /// async element that has not yet completed its transition.
     #[serde(default)]
-    pub state: Option<PipelineState>,
+    pub running: bool,
+    /// Raw GStreamer pipeline state, exposed for diagnostics.
+    ///
+    /// Prefer [`running`](Self::running) for logic and display.
+    #[serde(default)]
+    pub gst_state: Option<PipelineState>,
     /// Flow configuration properties
     #[serde(default)]
     pub properties: FlowProperties,
@@ -316,7 +325,8 @@ impl Flow {
             elements: Vec::new(),
             blocks: Vec::new(),
             links: Vec::new(),
-            state: Some(PipelineState::Null),
+            running: false,
+            gst_state: Some(PipelineState::Null),
             properties: FlowProperties::default(),
         }
     }
@@ -329,8 +339,15 @@ impl Flow {
             elements: Vec::new(),
             blocks: Vec::new(),
             links: Vec::new(),
-            state: Some(PipelineState::Null),
+            running: false,
+            gst_state: Some(PipelineState::Null),
             properties: FlowProperties::default(),
         }
+    }
+
+    /// Set the GStreamer state and update `running` to match.
+    pub fn set_gst_state(&mut self, state: Option<PipelineState>) {
+        self.running = state.is_some_and(|s| s.is_active());
+        self.gst_state = state;
     }
 }

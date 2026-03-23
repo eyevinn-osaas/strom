@@ -7,11 +7,8 @@ use strom_types::{FlowId, PipelineState};
 use tracing::info;
 
 impl PipelineManager {
-    /// Get the current state of the pipeline.
-    /// Uses cached state to avoid querying async sinks during initialization (prevents SRT crashes).
+    /// Get the current cached state of the pipeline.
     pub fn get_state(&self) -> PipelineState {
-        // Return cached state to avoid querying the pipeline during async state changes
-        // This prevents crashes with SRT sink and other async elements
         *self.cached_state.read().unwrap()
     }
 
@@ -223,7 +220,7 @@ impl PipelineManager {
             .pipeline
             .debug_to_dot_data(gst::DebugGraphDetails::all());
 
-        dot.to_string()
+        wrap_dot_labels(&dot, 80)
     }
 
     /// Get debug information about the pipeline.
@@ -318,5 +315,257 @@ impl PipelineManager {
             latency_formatted,
             element_count,
         }
+    }
+}
+
+/// Wrap long property values inside DOT graph labels so that graphviz
+/// produces narrower nodes. GStreamer DOT labels use `\n` as line separator
+/// inside quoted `label="..."` strings.
+///
+/// Strategy:
+/// - `caps=` values are split at `;` (caps alternatives) and then at `, `
+///   if individual alternatives still exceed `max_width`.
+/// - All other property values that exceed `max_width` are truncated with `…`.
+fn wrap_dot_labels(dot: &str, max_width: usize) -> String {
+    let mut result = String::with_capacity(dot.len());
+    let mut remaining = dot;
+
+    while let Some(label_start) = remaining.find("label=\"") {
+        // Copy everything before this label
+        result.push_str(&remaining[..label_start]);
+        result.push_str("label=\"");
+        remaining = &remaining[label_start + 7..]; // skip past label="
+
+        // Find the closing quote (not preceded by backslash)
+        let label_end = find_closing_quote(remaining);
+        let label_content = &remaining[..label_end];
+        remaining = &remaining[label_end..]; // keep the closing "
+
+        // Split label into logical property lines, respecting escaped quotes.
+        // GStreamer DOT labels use \n to separate properties, but property
+        // values can contain escaped quotes with \n inside them, e.g.:
+        //   pem=\"-----BEGIN CERT-----\\nMIIC...\\n-----END CERT-----\\n\"
+        // We must treat such a quoted value as part of one property line.
+        let lines = split_dot_label_lines(label_content);
+        for (i, line) in lines.iter().enumerate() {
+            if i > 0 {
+                result.push_str("\\n");
+            }
+            result.push_str(&wrap_dot_property_line(line, max_width));
+        }
+    }
+
+    // Copy the remainder
+    result.push_str(remaining);
+    result
+}
+
+/// Find the position of the closing `"` for a DOT label, accounting for
+/// escaped quotes (`\"`).
+fn find_closing_quote(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' && (i == 0 || bytes[i - 1] != b'\\') {
+            return i;
+        }
+        i += 1;
+    }
+    s.len()
+}
+
+/// Split DOT label content into logical property lines.
+///
+/// Naive splitting on `\n` breaks when a property value contains escaped
+/// quotes with `\n` inside, e.g. `pem=\"...\\n...\\n\"`. This function
+/// tracks whether we are inside an escaped-quote string and only splits
+/// on `\n` that are outside such strings.
+fn split_dot_label_lines(label: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let bytes = label.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut in_escaped_quote = false;
+
+    while i < len {
+        // Check for escaped quote: \"
+        if i + 1 < len && bytes[i] == b'\\' && bytes[i + 1] == b'"' {
+            in_escaped_quote = !in_escaped_quote;
+            current.push('\\');
+            current.push('"');
+            i += 2;
+            continue;
+        }
+
+        // Check for \n (literal backslash + n in the string)
+        if i + 1 < len && bytes[i] == b'\\' && bytes[i + 1] == b'n' {
+            if in_escaped_quote {
+                // Inside a quoted value — keep the \n as-is
+                current.push('\\');
+                current.push('n');
+            } else {
+                // Property separator — start a new line
+                lines.push(current);
+                current = String::new();
+            }
+            i += 2;
+            continue;
+        }
+
+        current.push(bytes[i] as char);
+        i += 1;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Truncate a single property line from a DOT label if it exceeds max_width.
+fn wrap_dot_property_line(line: &str, max_width: usize) -> String {
+    if line.len() <= max_width {
+        return line.to_string();
+    }
+    truncate_str(line, max_width)
+}
+
+/// Truncate a string to `max_len` characters, appending `…` if shortened.
+/// Also removes any embedded `\n` sequences so graphviz doesn't create
+/// extra line breaks from the truncated content.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    // Reserve 3 bytes for the UTF-8 ellipsis character '…'
+    let mut end = max_len.saturating_sub(3);
+    // Don't cut in the middle of a UTF-8 char
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    // Remove embedded \n sequences that graphviz would interpret as line breaks
+    let truncated = s[..end].replace("\\n", " ");
+    format!("{}…", truncated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_short_label_unchanged() {
+        let dot = r#"node [label="GstElement\nname\n[>]"];"#;
+        assert_eq!(wrap_dot_labels(dot, 80), dot);
+    }
+
+    #[test]
+    fn test_caps_truncated() {
+        let dot = r#"label="GstCapsFilter\ncapsfilter4\n[>]\ncaps=video/x-h264, parsed=(boolean)true; video/x-h264, alignment=(string)au; video/x-h264, parsed=(boolean)true""#;
+        let result = wrap_dot_labels(dot, 80);
+        // Caps line should be truncated to max_width
+        assert!(result.contains("caps=video/x-h264, parsed=(boolean)true; video/x-h264"));
+        assert!(result.contains("…"));
+    }
+
+    #[test]
+    fn test_long_non_caps_property_truncated() {
+        let long_cert = format!("certificate={}", "A".repeat(200));
+        let dot = format!(r#"label="Element\nname\n{}""#, long_cert);
+        let result = wrap_dot_labels(&dot, 80);
+        assert!(result.contains("…"));
+        assert!(!result.contains(&"A".repeat(200)));
+    }
+
+    #[test]
+    fn test_no_label_unchanged() {
+        let dot = r#"digraph { a -> b; }"#;
+        assert_eq!(wrap_dot_labels(dot, 80), dot);
+    }
+
+    #[test]
+    fn test_escaped_quotes_in_label() {
+        let dot = r#"label="foo=\"bar\"\nname""#;
+        let result = wrap_dot_labels(dot, 80);
+        assert!(result.contains(r#"foo=\"bar\""#));
+    }
+
+    #[test]
+    fn test_realistic_capsfilter_truncated() {
+        let caps = "caps=video/x-h264, stream-format=(string){ avc, avc3, byte-stream }, \
+            alignment=(string)au, profile=(string){ high, main }; \
+            video/x-h264, alignment=(string)au";
+        let dot = format!(r#"label="GstCapsFilter\ncapsfilter4\n[>]\n{}""#, caps);
+        let result = wrap_dot_labels(&dot, 80);
+
+        // The caps line should be truncated, not wrapped
+        let label_start = result.find("label=\"").unwrap() + 7;
+        let label_end = find_closing_quote(&result[label_start..]);
+        let label = &result[label_start..label_start + label_end];
+        let lines: Vec<&str> = label.split("\\n").collect();
+        // Should still be 4 lines (type, name, state, caps) — not more
+        assert_eq!(lines.len(), 4, "Expected 4 lines, got {:?}", lines);
+        assert!(lines[3].len() <= 80);
+        assert!(lines[3].ends_with('…'));
+    }
+
+    #[test]
+    fn test_extensions_property_truncated() {
+        let extensions = format!(
+            "extensions=< (GstRTPHeaderExtensionTWCC) twcc, {} >",
+            "(GstRTPHeaderExtensionColorspace) colorspace, ".repeat(10)
+        );
+        let dot = format!(r#"label="GstRtpBin\nrtpbin\n[>]\n{}""#, extensions);
+        let result = wrap_dot_labels(&dot, 80);
+        assert!(result.contains("…"), "Long extensions should be truncated");
+    }
+
+    #[test]
+    fn test_multiple_labels_in_dot() {
+        let dot = r#"node1 [label="Short\nlabel"]; node2 [label="Long\ncaps=a/b; c/d; e/f, x=(int)1, y=(int)2, z=(int)3, w=(int)4, v=(int)5, u=(int)6, t=(int)7"];"#;
+        let result = wrap_dot_labels(dot, 40);
+        // Both labels should be processed
+        assert!(result.contains("Short"));
+        assert!(result.contains("caps=a/b"));
+        // The long caps line should be truncated
+        assert!(result.contains("…"));
+    }
+
+    #[test]
+    fn test_pem_certificate_truncated() {
+        // Simulate GStreamer DOT format: pem value uses escaped quotes and
+        // contains literal \n inside the quoted string
+        let dot = r#"label="GstDtlsDec\ndtlsdec1\n[>]\npem=\"-----BEGIN CERTIFICATE-----\\nMIICpzCCAY+gAwIBAgIJA\\nAAAABBBBCCCC\\n-----END CERTIFICATE-----\\n\"\npeer-pem=\"-----BEGIN CERTIFICATE-----\\nMIIBFjCBvaADAgEC\\n-----END CERTIFICATE-----\\n\"\nconnection-state=connected""#;
+
+        let result = wrap_dot_labels(dot, 80);
+
+        // pem= should be truncated to one short line, not expanded into many
+        assert!(result.contains("pem="), "pem property should still exist");
+        assert!(
+            result.contains("connection-state=connected"),
+            "Properties after pem should survive"
+        );
+
+        // Count lines — should be type + name + state + pem(truncated) +
+        // peer-pem(truncated) + connection-state = 6
+        let label_start = result.find("label=\"").unwrap() + 7;
+        let label_end = find_closing_quote(&result[label_start..]);
+        let label = &result[label_start..label_start + label_end];
+        let lines: Vec<&str> = label.split("\\n").collect();
+        assert_eq!(lines.len(), 6, "Expected 6 lines, got {:?}", lines);
+        // The pem line must be truncated
+        assert!(lines[3].len() <= 80, "pem line too long: {}", lines[3]);
+        assert!(lines[3].contains("…"));
+    }
+
+    #[test]
+    fn test_split_dot_label_lines_respects_escaped_quotes() {
+        // \n inside escaped quotes should NOT split
+        let label = r#"name\npem=\"cert\\ndata\\nmore\"\nstate=ok"#;
+        let lines = split_dot_label_lines(label);
+        assert_eq!(lines.len(), 3, "Got {:?}", lines);
+        assert_eq!(lines[0], "name");
+        assert!(lines[1].starts_with("pem="));
+        assert!(lines[1].contains(r#"\\n"#), "Inner \\n should be preserved");
+        assert_eq!(lines[2], "state=ok");
     }
 }

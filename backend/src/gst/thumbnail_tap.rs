@@ -404,17 +404,19 @@ impl ThumbnailTap {
             // Rate-limit via pad probe on queue src: drop buffers that arrive
             // sooner than update_interval since the last passed buffer.
             // This is invisible to caps negotiation (unlike videorate).
-            let probe_interval = self.config.update_interval;
-            let probe_last = Arc::new(Mutex::new(Instant::now() - probe_interval));
+            let probe_interval_ms = self.config.update_interval.as_millis() as u64;
+            let probe_epoch = Instant::now();
+            let probe_last_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
             let queue_src = queue
                 .static_pad("src")
                 .ok_or_else(|| ThumbnailError::PadNotFound("queue src".to_string()))?;
             queue_src.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
-                let mut last = probe_last.lock().unwrap();
-                if last.elapsed() < probe_interval {
+                let now_ms = probe_epoch.elapsed().as_millis() as u64;
+                let last = probe_last_ms.load(std::sync::atomic::Ordering::Relaxed);
+                if now_ms.saturating_sub(last) < probe_interval_ms {
                     return gst::PadProbeReturn::Drop;
                 }
-                *last = Instant::now();
+                probe_last_ms.store(now_ms, std::sync::atomic::Ordering::Relaxed);
                 gst::PadProbeReturn::Ok
             });
 

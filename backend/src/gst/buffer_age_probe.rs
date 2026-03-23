@@ -2,27 +2,105 @@
 //!
 //! Provides both manual (on-demand) and automatic (always-on) probe modes.
 //!
-//! **Manual probes** are activated via the API, broadcast `BufferAgeProbe` events
-//! for every Nth buffer, and auto-remove after a timeout.
+//! **Manual probes** are activated via the API. The probe callback writes
+//! measurements to a lock-free `ProbeSlot`; a periodic tokio task reads
+//! the slot and broadcasts `BufferAgeProbe` events.
 //!
-//! **Automatic probes** are attached at pipeline start to key measurement points,
-//! only broadcast `BufferAgeWarning` when the age exceeds a threshold, and are
-//! cleaned up when the pipeline stops.
+//! **Automatic probes** are attached at pipeline start to key measurement points.
+//! The periodic task only broadcasts `BufferAgeWarning` when the age exceeds a
+//! threshold, keeping WebSocket traffic minimal.
+//!
+//! This design keeps the GStreamer streaming thread (hot path) free of mutex
+//! locks, heap allocations, string clones, and channel sends.
 
 use crate::events::EventBroadcaster;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use strom_types::{BlockDefinition, BlockInstance, FlowId, StromEvent};
+use strom_types::{
+    BlockDefinition, BlockInstance, FlowId, StromEvent, BUFFER_AGE_WARNING_THRESHOLD_MS,
+};
 use tracing::{debug, info};
 use uuid::Uuid;
+
+/// A `Cell` wrapper that is `Sync`. Safe to use in GStreamer pad probe
+/// callbacks which run on a single streaming thread per pad.
+struct SyncCell<T>(std::cell::Cell<T>);
+
+impl<T: Copy> SyncCell<T> {
+    fn new(val: T) -> Self {
+        Self(std::cell::Cell::new(val))
+    }
+    fn get(&self) -> T {
+        self.0.get()
+    }
+    fn set(&self, val: T) {
+        self.0.set(val);
+    }
+}
+
+// SAFETY: Pad probe callbacks are invoked on a single GStreamer streaming thread.
+unsafe impl<T> Sync for SyncCell<T> {}
 
 /// Sample interval for automatic probes (measure every Nth buffer).
 const AUTO_SAMPLE_INTERVAL: u32 = 30;
 
 /// Buffer age threshold for automatic warnings (milliseconds).
-const AUTO_WARNING_THRESHOLD_MS: u64 = 500;
+const AUTO_WARNING_THRESHOLD_MS: u64 = BUFFER_AGE_WARNING_THRESHOLD_MS;
+
+/// Polling interval for the periodic broadcast task.
+const BROADCAST_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Lock-free slot for probe measurements. Written by the probe callback
+/// (single writer per slot) and read by the periodic broadcast task.
+///
+/// All orderings are `Relaxed` because there is a single writer (the pad
+/// probe on one streaming thread) and the reader (periodic task) only needs
+/// eventual visibility — no cross-field consistency is required.
+struct ProbeSlot {
+    /// Most recently measured buffer age (ms).
+    latest_age_ms: AtomicU64,
+    /// Maximum age since the last reader reset (ms).
+    max_age_ms: AtomicU64,
+    /// Total number of samples recorded.
+    sample_count: AtomicU64,
+}
+
+impl ProbeSlot {
+    fn new() -> Self {
+        Self {
+            latest_age_ms: AtomicU64::new(0),
+            max_age_ms: AtomicU64::new(0),
+            sample_count: AtomicU64::new(0),
+        }
+    }
+
+    /// Record a new measurement (called from the probe callback — hot path).
+    fn record(&self, age_ms: u64) {
+        self.latest_age_ms.store(age_ms, Ordering::Relaxed);
+        // Single writer, so a plain load-then-store is sufficient for max tracking.
+        let prev_max = self.max_age_ms.load(Ordering::Relaxed);
+        if age_ms > prev_max {
+            self.max_age_ms.store(age_ms, Ordering::Relaxed);
+        }
+        self.sample_count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Read the latest values and reset max_age_ms (called from the periodic task).
+    fn read_and_reset(&self) -> (u64, u64, u64) {
+        let latest = self.latest_age_ms.load(Ordering::Relaxed);
+        let max = self.max_age_ms.swap(0, Ordering::Relaxed);
+        let count = self.sample_count.load(Ordering::Relaxed);
+        (latest, max, count)
+    }
+
+    /// Peek at sample_count without resetting (for the list API).
+    fn peek_sample_count(&self) -> u64 {
+        self.sample_count.load(Ordering::Relaxed)
+    }
+}
 
 /// Measure the age of a buffer on a pad (pipeline_running_time - buffer_running_time).
 ///
@@ -89,10 +167,10 @@ struct ProbeState {
     pad: gst::Pad,
     /// Auto-remove timeout handle
     timeout_handle: Option<tokio::task::JoinHandle<()>>,
-    /// Sample counter (total buffers seen by this probe)
-    sample_count: Arc<std::sync::atomic::AtomicU64>,
     /// Whether this is an automatic monitoring probe (excluded from manual API)
     automatic: bool,
+    /// Lock-free measurement slot written by the probe callback
+    slot: Arc<ProbeSlot>,
 }
 
 /// Manages all active buffer age probes for a pipeline.
@@ -100,6 +178,8 @@ pub struct ProbeManager {
     probes: Arc<Mutex<HashMap<String, ProbeState>>>,
     events: EventBroadcaster,
     flow_id: FlowId,
+    /// Handle for the periodic broadcast task
+    broadcast_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl ProbeManager {
@@ -109,6 +189,82 @@ impl ProbeManager {
             probes: Arc::new(Mutex::new(HashMap::new())),
             events,
             flow_id,
+            broadcast_task: None,
+        }
+    }
+
+    /// Start the periodic broadcast task that reads probe slots and emits events.
+    ///
+    /// For manual probes: broadcasts `BufferAgeProbe` with latest values.
+    /// For automatic probes: broadcasts `BufferAgeWarning` only when age exceeds threshold.
+    pub fn start_broadcast_task(&mut self) {
+        self.stop_broadcast_task();
+
+        let probes = self.probes.clone();
+        let events = self.events.clone();
+        let flow_id = self.flow_id;
+
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(BROADCAST_INTERVAL);
+            loop {
+                interval.tick().await;
+
+                // Snapshot the probe data under the lock, then release immediately.
+                let snapshots: Vec<_> = {
+                    let map = probes.lock().unwrap();
+                    map.values()
+                        .map(|s| {
+                            let (latest, _max, count) = s.slot.read_and_reset();
+                            (
+                                s.probe_id.clone(),
+                                s.element_id.clone(),
+                                s.pad_name.clone(),
+                                s.automatic,
+                                latest,
+                                count,
+                            )
+                        })
+                        .collect()
+                };
+
+                for (probe_id, element_id, pad_name, automatic, latest_age_ms, sample_count) in
+                    snapshots
+                {
+                    if sample_count == 0 {
+                        continue;
+                    }
+
+                    if automatic {
+                        if latest_age_ms > AUTO_WARNING_THRESHOLD_MS {
+                            events.broadcast(StromEvent::BufferAgeWarning {
+                                flow_id,
+                                element_id,
+                                pad_name,
+                                age_ms: latest_age_ms,
+                                threshold_ms: AUTO_WARNING_THRESHOLD_MS,
+                            });
+                        }
+                    } else {
+                        events.broadcast(StromEvent::BufferAgeProbe {
+                            flow_id,
+                            probe_id,
+                            element_id,
+                            pad_name,
+                            age_ms: latest_age_ms,
+                            sample_number: sample_count,
+                        });
+                    }
+                }
+            }
+        });
+
+        self.broadcast_task = Some(task);
+    }
+
+    /// Stop the periodic broadcast task.
+    pub fn stop_broadcast_task(&mut self) {
+        if let Some(task) = self.broadcast_task.take() {
+            task.abort();
         }
     }
 
@@ -135,22 +291,21 @@ impl ProbeManager {
         let pad_name = pad.name().to_string();
 
         let probe_id = Uuid::new_v4().to_string();
-        let sample_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let sample_interval = sample_interval.max(1);
 
-        // Capture values for the probe callback (runs on GStreamer streaming thread)
-        let probe_id_cb = probe_id.clone();
-        let element_id_cb = element_id.clone();
-        let pad_name_cb = pad_name.clone();
-        let flow_id = self.flow_id;
-        let events = self.events.clone();
-        let sample_count_cb = sample_count.clone();
+        let slot = Arc::new(ProbeSlot::new());
+
+        // Capture values for the probe callback (runs on GStreamer streaming thread).
+        // Weak pipeline ref to avoid ref cycle (Pipeline → Pad → Closure → Pipeline).
         let pipeline_weak = pipeline.downgrade();
+        let slot_cb = slot.clone();
+        let count = SyncCell::new(0u64);
 
         let gst_probe_id = pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
-            let count = sample_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let c = count.get() + 1;
+            count.set(c);
 
-            if !count.is_multiple_of(sample_interval as u64) {
+            if !c.is_multiple_of(sample_interval as u64) {
                 return gst::PadProbeReturn::Ok;
             }
 
@@ -159,14 +314,7 @@ impl ProbeManager {
             };
 
             if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline) {
-                events.broadcast(StromEvent::BufferAgeProbe {
-                    flow_id,
-                    probe_id: probe_id_cb.clone(),
-                    element_id: element_id_cb.clone(),
-                    pad_name: pad_name_cb.clone(),
-                    age_ms,
-                    sample_number: count,
-                });
+                slot_cb.record(age_ms);
             }
 
             gst::PadProbeReturn::Ok
@@ -216,8 +364,8 @@ impl ProbeManager {
             gst_probe_id: Some(gst_probe_id),
             pad,
             timeout_handle: Some(timeout_handle),
-            sample_count,
             automatic: false,
+            slot,
         };
 
         self.probes.lock().unwrap().insert(probe_id.clone(), state);
@@ -279,8 +427,8 @@ impl ProbeManager {
     /// For standalone elements: probes are attached to each sink pad.
     /// For blocks: probes are attached to the internal elements that receive external input.
     ///
-    /// Automatic probes only broadcast `BufferAgeWarning` when the buffer age
-    /// exceeds the threshold, keeping WebSocket traffic minimal.
+    /// Automatic probes only emit `BufferAgeWarning` (via the periodic task) when
+    /// the buffer age exceeds the threshold.
     pub fn attach_automatic(
         &self,
         pipeline: &gst::Pipeline,
@@ -392,19 +540,19 @@ impl ProbeManager {
 
         let pad_name = pad.name().to_string();
         let probe_id = format!("auto-{}", Uuid::new_v4());
-        let sample_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
-        let element_id_cb = element_id.clone();
-        let pad_name_cb = pad_name.clone();
-        let flow_id = self.flow_id;
-        let events = self.events.clone();
-        let sample_count_cb = sample_count.clone();
+        let slot = Arc::new(ProbeSlot::new());
+
+        // Weak pipeline ref to avoid ref cycle (Pipeline → Pad → Closure → Pipeline).
         let pipeline_weak = pipeline.downgrade();
+        let slot_cb = slot.clone();
+        let count = SyncCell::new(0u64);
 
         let gst_probe_id = pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
-            let count = sample_count_cb.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let c = count.get() + 1;
+            count.set(c);
 
-            if !count.is_multiple_of(AUTO_SAMPLE_INTERVAL as u64) {
+            if !c.is_multiple_of(AUTO_SAMPLE_INTERVAL as u64) {
                 return gst::PadProbeReturn::Ok;
             }
 
@@ -413,15 +561,7 @@ impl ProbeManager {
             };
 
             if let Some(age_ms) = measure_buffer_age(pad, info, &pipeline) {
-                if age_ms > AUTO_WARNING_THRESHOLD_MS {
-                    events.broadcast(StromEvent::BufferAgeWarning {
-                        flow_id,
-                        element_id: element_id_cb.clone(),
-                        pad_name: pad_name_cb.clone(),
-                        age_ms,
-                        threshold_ms: AUTO_WARNING_THRESHOLD_MS,
-                    });
-                }
+                slot_cb.record(age_ms);
             }
 
             gst::PadProbeReturn::Ok
@@ -440,8 +580,8 @@ impl ProbeManager {
             gst_probe_id: Some(gst_probe_id),
             pad,
             timeout_handle: None,
-            sample_count,
             automatic: true,
+            slot,
         };
 
         self.probes.lock().unwrap().insert(probe_id.clone(), state);
@@ -485,7 +625,7 @@ impl ProbeManager {
                 probe_id: s.probe_id.clone(),
                 element_id: s.element_id.clone(),
                 pad_name: s.pad_name.clone(),
-                sample_count: s.sample_count.load(std::sync::atomic::Ordering::Relaxed),
+                sample_count: s.slot.peek_sample_count(),
             })
             .collect()
     }
@@ -531,6 +671,7 @@ impl ProbeManager {
 
 impl Drop for ProbeManager {
     fn drop(&mut self) {
+        self.stop_broadcast_task();
         self.deactivate_all();
     }
 }
@@ -539,9 +680,19 @@ impl Drop for ProbeManager {
 mod tests {
     use super::*;
     use crate::events::EventBroadcaster;
+    use crate::gst::pipeline::test_utils::poll_until;
 
     fn init_gst() {
         gst::init().unwrap();
+    }
+
+    fn wait_for_pipeline_playing(pipeline: &gst::Pipeline) {
+        poll_until(
+            || pipeline.state(gst::ClockTime::from_mseconds(0)).1 == gst::State::Playing,
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(5),
+            "pipeline did not reach Playing",
+        );
     }
 
     fn create_test_pipeline() -> (gst::Pipeline, gst::Element) {
@@ -603,8 +754,7 @@ mod tests {
         let (pipeline, sink) = create_test_pipeline();
         pipeline.set_state(gst::State::Playing).unwrap();
 
-        // Wait for pipeline to start producing buffers
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        wait_for_pipeline_playing(&pipeline);
 
         let flow_id = FlowId::from(uuid::Uuid::new_v4());
         let events = EventBroadcaster::default();
@@ -641,7 +791,7 @@ mod tests {
         init_gst();
         let (pipeline, sink) = create_test_pipeline();
         pipeline.set_state(gst::State::Playing).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        wait_for_pipeline_playing(&pipeline);
 
         let flow_id = FlowId::from(uuid::Uuid::new_v4());
         let events = EventBroadcaster::default();
@@ -679,7 +829,7 @@ mod tests {
         init_gst();
         let (pipeline, sink) = create_test_pipeline();
         pipeline.set_state(gst::State::Playing).unwrap();
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        wait_for_pipeline_playing(&pipeline);
 
         let flow_id = FlowId::from(uuid::Uuid::new_v4());
         let events = EventBroadcaster::default();
@@ -721,5 +871,27 @@ mod tests {
         let pm = ProbeManager::new(flow_id, events);
 
         assert!(pm.deactivate("nonexistent").is_err());
+    }
+
+    #[test]
+    fn test_probe_slot_record_and_read() {
+        let slot = ProbeSlot::new();
+
+        slot.record(10);
+        slot.record(50);
+        slot.record(30);
+
+        assert_eq!(slot.peek_sample_count(), 3);
+
+        let (latest, max, count) = slot.read_and_reset();
+        assert_eq!(latest, 30);
+        assert_eq!(max, 50);
+        assert_eq!(count, 3);
+
+        // max should be reset after read_and_reset
+        slot.record(5);
+        let (latest, max, _) = slot.read_and_reset();
+        assert_eq!(latest, 5);
+        assert_eq!(max, 5);
     }
 }

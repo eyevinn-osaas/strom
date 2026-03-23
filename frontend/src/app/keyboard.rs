@@ -1,6 +1,6 @@
 use crate::state::AppMessage;
 use egui::Context;
-use strom_types::{Flow, PipelineState};
+use strom_types::Flow;
 
 use super::FocusTarget;
 use super::*;
@@ -179,8 +179,7 @@ impl StromApp {
         // F9 - Start/Restart Flow (works even in text inputs)
         else if ctx.input(|i| !i.modifiers.shift && i.key_pressed(egui::Key::F9)) {
             if let Some(flow) = self.current_flow() {
-                let state = flow.state.unwrap_or(PipelineState::Null);
-                let is_running = matches!(state, PipelineState::Playing);
+                let is_running = flow.running;
 
                 if is_running {
                     // Restart

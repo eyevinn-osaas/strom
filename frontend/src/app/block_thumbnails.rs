@@ -16,7 +16,7 @@ impl super::StromApp {
         let running_flows: std::collections::HashSet<_> = self
             .flows
             .iter()
-            .filter(|f| f.state == Some(strom_types::PipelineState::Playing))
+            .filter(|f| f.running)
             .map(|f| f.id)
             .collect();
         self.block_thumbnails
@@ -32,7 +32,7 @@ impl super::StromApp {
         };
 
         // Only poll if running
-        if flow.state != Some(strom_types::PipelineState::Playing) {
+        if !flow.running {
             return;
         }
 

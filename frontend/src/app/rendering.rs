@@ -4,7 +4,7 @@ use crate::info_page::{
 use crate::properties::PropertyInspector;
 use crate::state::AppMessage;
 use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
-use strom_types::{Flow, PipelineState};
+use strom_types::Flow;
 
 use super::*;
 use super::{FocusTarget, ThemePreference};
@@ -291,25 +291,21 @@ impl StromApp {
                 }
 
                 // Flow controls - only show when a flow is selected
-                let flow_info = self.current_flow().map(|f| (f.id, f.state));
+                let flow_info = self.current_flow().map(|f| (f.id, f.running));
 
-                if let Some((flow_id, state)) = flow_info {
+                if let Some((flow_id, running)) = flow_info {
                     ui.separator();
 
-                    let state = state.unwrap_or(PipelineState::Null);
-
-                    // Map internal states to user-friendly names
-                    let (state_text, state_color) = match state {
-                        PipelineState::Null | PipelineState::Ready => ("Stopped", Color32::GRAY),
-                        PipelineState::Paused => ("Paused", Color32::from_rgb(255, 165, 0)),
-                        PipelineState::Playing => ("Started", Color32::GREEN),
+                    let (state_text, state_color) = if running {
+                        ("Started", Color32::GREEN)
+                    } else {
+                        ("Stopped", Color32::GRAY)
                     };
 
                     ui.colored_label(state_color, format!("State: {}", state_text));
 
                     // Show minimum pipeline latency for running live flows
-                    let is_running = matches!(state, PipelineState::Playing);
-                    if is_running {
+                    if running {
                         if let Some(latency) = self.latency_cache.get(&flow_id.to_string()) {
                             if latency.live {
                                 ui.label(format!(
@@ -323,7 +319,7 @@ impl StromApp {
                     ui.separator();
 
                     // Show Start or Restart button depending on state
-                    let button_text = if is_running {
+                    let button_text = if running {
                         format!("{} Restart", egui_phosphor::regular::ARROWS_CLOCKWISE)
                     } else {
                         "▶ Start".to_string()
@@ -331,14 +327,14 @@ impl StromApp {
 
                     if ui
                         .button(button_text)
-                        .on_hover_text(if is_running {
+                        .on_hover_text(if running {
                             "Restart pipeline (F9)"
                         } else {
                             "Start pipeline (F9)"
                         })
                         .clicked()
                     {
-                        if is_running {
+                        if running {
                             // For restart: stop first, then start
                             let api = self.api.clone();
                             let tx = self.channels.sender();
@@ -761,19 +757,11 @@ impl StromApp {
                                 child_ui.add_space(4.0);
 
                                 // Show running state icon
-                                let state_icon = match flow.state {
-                                    Some(PipelineState::Playing) => "▶",
-                                    Some(PipelineState::Paused) => "⏸",
-                                    Some(PipelineState::Ready)
-                                    | Some(PipelineState::Null)
-                                    | None => "■",
-                                };
-                                let state_color = match flow.state {
-                                    Some(PipelineState::Playing) => Color32::from_rgb(0, 200, 0),
-                                    Some(PipelineState::Paused) => Color32::from_rgb(255, 165, 0),
-                                    Some(PipelineState::Ready)
-                                    | Some(PipelineState::Null)
-                                    | None => Color32::GRAY,
+                                let state_icon = if flow.running { "▶" } else { "■" };
+                                let state_color = if flow.running {
+                                    Color32::from_rgb(0, 200, 0)
+                                } else {
+                                    Color32::GRAY
                                 };
                                 child_ui.colored_label(state_color, state_icon);
 
@@ -894,12 +882,10 @@ impl StromApp {
                                     }
 
                                     ui.add_space(5.0);
-                                    let state_text = match flow.state {
-                                        Some(PipelineState::Playing) => "Running",
-                                        Some(PipelineState::Paused) => "Paused",
-                                        Some(PipelineState::Ready)
-                                        | Some(PipelineState::Null)
-                                        | None => "Stopped",
+                                    let state_text = if flow.running {
+                                        "Running"
+                                    } else {
+                                        "Stopped"
                                     };
                                     ui.label(format!("State: {}", state_text));
 
@@ -1137,6 +1123,32 @@ impl StromApp {
                                                 )
                                                 .on_hover_text(tooltip);
                                             }
+                                        }
+
+                                        // Show CPU icon when affinity is not the default (Off)
+                                        if flow.properties.cpu_affinity
+                                            != strom_types::flow::CpuAffinity::default()
+                                        {
+                                            let tooltip = match flow.properties.cpu_affinity {
+                                                strom_types::flow::CpuAffinity::SingleCore => {
+                                                    "CPU affinity: Single Core"
+                                                }
+                                                strom_types::flow::CpuAffinity::Off => {
+                                                    unreachable!()
+                                                }
+                                            };
+                                            ui.add_space(2.0);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(
+                                                        egui_phosphor::regular::CPU,
+                                                    )
+                                                    .size(12.0)
+                                                    .color(Color32::GRAY),
+                                                )
+                                                .sense(egui::Sense::hover()),
+                                            )
+                                            .on_hover_text(tooltip);
                                         }
                                     },
                                 );

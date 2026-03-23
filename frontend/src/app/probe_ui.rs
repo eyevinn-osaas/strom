@@ -92,11 +92,13 @@ impl StromApp {
                     ui.label(egui::RichText::new(pad_name).small().monospace());
                     ui.label(
                         egui::RichText::new(format!("{}ms", current_ms))
-                            .color(if *current_ms > 500 {
-                                egui::Color32::from_rgb(255, 165, 0)
-                            } else {
-                                egui::Color32::from_rgb(100, 200, 100)
-                            })
+                            .color(
+                                if *current_ms > strom_types::BUFFER_AGE_WARNING_THRESHOLD_MS {
+                                    egui::Color32::from_rgb(255, 165, 0)
+                                } else {
+                                    egui::Color32::from_rgb(100, 200, 100)
+                                },
+                            )
                             .small()
                             .strong()
                             .monospace(),

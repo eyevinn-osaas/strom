@@ -215,8 +215,7 @@ impl StromApp {
                 .flows
                 .iter()
                 .find(|f| f.id == flow_id)
-                .and_then(|f| f.state)
-                .map(|s| s == strom_types::PipelineState::Playing)
+                .map(|f| f.running)
                 .unwrap_or(false);
             editor.set_pipeline_running(running);
 

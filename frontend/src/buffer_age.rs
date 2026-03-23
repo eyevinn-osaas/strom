@@ -120,7 +120,6 @@ impl BufferAgeStore {
         element_id: String,
         pad_name: String,
         age_ms: u64,
-        sample_number: u64,
     ) {
         let entry = self
             .probes
@@ -138,7 +137,7 @@ impl BufferAgeStore {
         entry.current_age_ms = age_ms;
         entry.max_age_ms = entry.max_age_ms.max(age_ms);
         entry.sum_age_ms += age_ms;
-        entry.sample_count = sample_number;
+        entry.sample_count += 1;
         entry.last_update = Instant::now();
     }
 

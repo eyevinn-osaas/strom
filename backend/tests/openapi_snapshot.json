@@ -4842,6 +4842,17 @@
             },
             "description": "Elements in this flow"
           },
+          "gst_state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PipelineState",
+                "description": "Raw GStreamer pipeline state, exposed for diagnostics.\n\nPrefer [`running`](Self::running) for logic and display."
+              }
+            ]
+          },
           "id": {
             "type": "string",
             "format": "uuid",
@@ -4862,16 +4873,9 @@
             "$ref": "#/components/schemas/FlowProperties",
             "description": "Flow configuration properties"
           },
-          "state": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PipelineState",
-                "description": "Current runtime state (persisted to storage for automatic restart)"
-              }
-            ]
+          "running": {
+            "type": "boolean",
+            "description": "Whether the pipeline is actively running (data flowing).\n\nThis is the field most callers should use. It is `true` when the\nGStreamer pipeline is in `Playing` *or* in `Paused` due to an\nasync element that has not yet completed its transition."
           }
         }
       },

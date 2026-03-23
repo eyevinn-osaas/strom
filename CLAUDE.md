@@ -13,6 +13,14 @@
 - Do not add emojis to log macros (`info!`, `debug!`, `trace!`, `warn!`, `error!`)
 - If you find emojis in existing log rows, remove them. Emojis in UI icons are OK.
 
+## GStreamer Pad Probes
+- BUFFER probes fire on **every single buffer** in the pipeline — they are the hottest path in GStreamer. Never add a BUFFER probe without careful consideration.
+- Inside a BUFFER probe callback: no Mutex locks, no heap allocations, no string formatting, no system calls. Use atomics and pre-computed values instead.
+- Prefer `Instant::now()` over `SystemTime::now()` (Instant uses the vDSO fast path on Linux).
+- For rate-limiting inside a BUFFER probe, use `AtomicU64` with `Instant`-based epoch offsets rather than `Mutex<Instant>`.
+- EVENT_DOWNSTREAM probes (for caps detection, one-time setup) are fine — they fire infrequently.
+- When reviewing or adding a probe, always ask: "Does this fire per-buffer or per-event?" and treat per-buffer probes as performance-critical code.
+
 ## GStreamer Queues
 - Leave `queue`, `queue2`, and `multiqueue` elements with default property values unless there is a documented latency requirement that justifies overriding them.
 
