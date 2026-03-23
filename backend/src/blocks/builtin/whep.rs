@@ -229,22 +229,6 @@ fn build_whepsrc(
                     element.name()
                 );
             }
-            let factory_name = element
-                .factory()
-                .map(|f| f.name().to_string())
-                .unwrap_or_default();
-            if factory_name == "rtpbin" {
-                if element.has_property("max-dropout-time") {
-                    element.set_property("max-dropout-time", 0u32);
-                }
-                if element.has_property("max-misorder-time") {
-                    element.set_property("max-misorder-time", 0u32);
-                }
-                info!(
-                    "WHEP Input (whepsrc): Set max-dropout-time=0, max-misorder-time=0 on existing {}",
-                    element.name()
-                );
-            }
         }
 
         // Also catch any dynamically added webrtcbins and jitterbuffers
@@ -275,6 +259,19 @@ fn build_whepsrc(
         .property_from_str("start-time-selection", "first")
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("liveadder: {}", e)))?;
+
+    // Set min-upstream-latency so liveadder accounts for jitterbuffer buffering delay
+    if liveadder.find_property("min-upstream-latency").is_some() {
+        let min_upstream_ns = jitterbuffer_latency_ms as u64 * 1_000_000;
+        liveadder.set_property(
+            "min-upstream-latency",
+            min_upstream_ns * gst::ClockTime::NSECOND,
+        );
+        info!(
+            "WHEP Input (whepsrc): Set min-upstream-latency={}ms on liveadder",
+            jitterbuffer_latency_ms
+        );
+    }
 
     // Create capsfilter to enforce 48kHz stereo audio after liveadder
     let caps = gst::Caps::builder("audio/x-raw")
@@ -479,6 +476,19 @@ fn build_whepclientsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("liveadder: {}", e)))?;
 
+    // Set min-upstream-latency so liveadder accounts for jitterbuffer buffering delay
+    if liveadder.find_property("min-upstream-latency").is_some() {
+        let min_upstream_ns = jitterbuffer_latency_ms as u64 * 1_000_000;
+        liveadder.set_property(
+            "min-upstream-latency",
+            min_upstream_ns * gst::ClockTime::NSECOND,
+        );
+        info!(
+            "WHEP Input (whepclientsrc): Set min-upstream-latency={}ms on liveadder",
+            jitterbuffer_latency_ms
+        );
+    }
+
     // Create capsfilter to enforce 48kHz stereo audio after liveadder
     let caps = gst::Caps::builder("audio/x-raw")
         .field("rate", 48000i32)
@@ -563,30 +573,6 @@ fn build_whepclientsrc(
                             "WHEP Input (whepclientsrc): Set jitterbuffer latency={}ms on {}",
                             jitterbuffer_latency_ms, element_name
                         );
-                    }
-
-                    // Set max-dropout-time and max-misorder-time on rtpbin inside webrtcbin.
-                    // rtpbin already exists when webrtcbin is added, so deep-element-added
-                    // won't fire for it — we must find it by iterating children.
-                    if let Ok(webrtcbin_bin) = element.clone().downcast::<gst::Bin>() {
-                        for child in webrtcbin_bin.iterate_recurse().into_iter().flatten() {
-                            let child_factory = child
-                                .factory()
-                                .map(|f| f.name().to_string())
-                                .unwrap_or_default();
-                            if child_factory == "rtpbin" {
-                                if child.has_property("max-dropout-time") {
-                                    child.set_property("max-dropout-time", 0u32);
-                                }
-                                if child.has_property("max-misorder-time") {
-                                    child.set_property("max-misorder-time", 0u32);
-                                }
-                                info!(
-                                    "WHEP Input (whepclientsrc): Set max-dropout-time=0, max-misorder-time=0 on {}",
-                                    child.name()
-                                );
-                            }
-                        }
                     }
 
                     // Set ICE transport policy on webrtcbin (from config)
