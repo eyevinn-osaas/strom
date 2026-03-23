@@ -431,8 +431,11 @@ fn wrap_dot_property_line(line: &str, max_width: usize) -> String {
 }
 
 /// Truncate a string to `max_len` characters, appending `…` if shortened.
-/// Also removes any embedded `\n` sequences so graphviz doesn't create
-/// extra line breaks from the truncated content.
+///
+/// Handles DOT escape sequences correctly:
+/// - Won't cut between `\` and the next character (would break escape sequences)
+/// - Removes embedded `\n` so graphviz doesn't create extra line breaks
+/// - Closes unclosed escaped quotes (`\"`) so the DOT label stays valid
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         return s.to_string();
@@ -443,9 +446,37 @@ fn truncate_str(s: &str, max_len: usize) -> String {
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
     }
-    // Remove embedded \n sequences that graphviz would interpret as line breaks
+    // Don't cut between \ and the next character (would break escape sequences)
+    if end > 0 && s.as_bytes()[end - 1] == b'\\' {
+        end -= 1;
+    }
+
+    // Remove embedded \n sequences that graphviz would interpret as line breaks.
+    // This also handles \\n (literal backslash + newline in DOT) which is still
+    // a line break — the remaining \ is harmless in the displayed label.
     let truncated = s[..end].replace("\\n", " ");
-    format!("{}…", truncated)
+
+    // Count escaped quotes (\") to detect unclosed quoted values.
+    // If we cut inside a quoted value like pem=\"...long..., the opening \"
+    // has no matching close, corrupting the DOT label structure.
+    let mut escaped_quotes = 0usize;
+    let bytes = truncated.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+            escaped_quotes += 1;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+
+    if escaped_quotes % 2 == 1 {
+        // Unclosed escaped quote — close it before the ellipsis
+        format!("{}\\\"…", truncated)
+    } else {
+        format!("{}…", truncated)
+    }
 }
 
 #[cfg(test)]
@@ -567,5 +598,47 @@ mod tests {
         assert!(lines[1].starts_with("pem="));
         assert!(lines[1].contains(r#"\\n"#), "Inner \\n should be preserved");
         assert_eq!(lines[2], "state=ok");
+    }
+
+    #[test]
+    fn test_truncate_closes_unclosed_escaped_quote() {
+        // Truncating inside an escaped quoted value must close the quote
+        // to prevent corrupting the DOT label structure.
+        let line = r#"pem=\"-----BEGIN CERTIFICATE-----\\nMIICpzCCAY+gAwIBAgIJA\\nAAAABBBBCCCC\\n-----END CERTIFICATE-----\\n\""#;
+        let result = truncate_str(line, 60);
+        assert!(result.contains("…"), "Should be truncated");
+        // Must contain a closing \" before the ellipsis
+        assert!(
+            result.ends_with("\\\"…"),
+            "Unclosed escaped quote should be closed, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_truncate_no_extra_close_when_quotes_balanced() {
+        // When escaped quotes are balanced, don't add an extra closing quote
+        let line =
+            r#"key=\"short\" and more padding to exceed the limit for truncation testing here"#;
+        let result = truncate_str(line, 60);
+        assert!(result.contains("…"), "Should be truncated");
+        assert!(
+            !result.ends_with("\\\"…"),
+            "Balanced quotes should not get extra close, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_truncate_does_not_cut_on_backslash() {
+        // Should not cut between \ and the next character.
+        // Build a string where byte at position (max_len - 3 - 1) is a backslash.
+        // With max_len=20, end starts at 17, so byte 16 must be '\'.
+        let line = r"aaaaaaaaaaaaaaaa\bcccccccccc";
+        assert_eq!(line.as_bytes()[16], b'\\');
+        let result = truncate_str(line, 20);
+        assert!(result.contains('…'));
+        // Should truncate to 16 bytes (before the backslash), not 17
+        assert_eq!(result, "aaaaaaaaaaaaaaaa…");
     }
 }

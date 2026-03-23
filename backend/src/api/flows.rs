@@ -20,7 +20,7 @@ use strom_types::{
     },
     Flow, FlowId,
 };
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 use crate::layout;
 use crate::state::AppState;
@@ -549,6 +549,63 @@ pub async fn stop_flow(
     }
 }
 
+/// Run the graphviz `dot` command with the given arguments, feeding `dot_content` via stdin.
+///
+/// Graphviz often produces valid SVG output even when it reports layout warnings
+/// (e.g. "triangulation failed", "lost edge") on stderr. These warnings mean some
+/// edges couldn't be routed but the rest of the graph is fine. We accept the output
+/// as long as it looks like valid SVG, regardless of exit code or stderr content.
+fn run_dot(dot_content: &str, args: &[&str]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+
+    let mut child = Command::new("dot")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'dot': {}. Ensure Graphviz is installed.",
+                e
+            )
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(dot_content.as_bytes())
+            .map_err(|e| format!("Failed to write DOT content to stdin: {}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for 'dot' command: {}", e))?;
+
+    // Accept output if it looks like SVG, even if graphviz reported warnings.
+    // Complex GStreamer pipelines trigger graphviz layout warnings ("triangulation
+    // failed", "lost edge") but still produce usable SVG with some edges missing.
+    let stdout = &output.stdout;
+    let looks_like_svg =
+        stdout.len() > 50 && (stdout.starts_with(b"<?xml") || stdout.starts_with(b"<svg"));
+
+    if looks_like_svg {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(
+                "dot produced SVG despite warnings (exit code {:?}): {}",
+                output.status.code(),
+                stderr.chars().take(200).collect::<String>()
+            );
+        }
+        return Ok(output.stdout);
+    }
+
+    // No usable SVG output — report the error
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    error!("dot command failed with no SVG output: {}", stderr);
+    Err(stderr.to_string())
+}
+
 /// Generate a debug DOT/SVG graph for a flow's pipeline.
 ///
 /// This endpoint generates a GraphViz DOT graph of the GStreamer pipeline
@@ -585,60 +642,21 @@ pub async fn debug_graph(
 
     // Convert DOT to SVG using the 'dot' command via stdin
     // (avoids temp file permission issues on Windows corporate machines)
-    let mut child = Command::new("dot")
-        .arg("-Tsvg")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    //
+    // Try default splines first (curved, best looking). If graphviz fails
+    // (e.g. "triangulation failed" with very complex graphs), retry with
+    // polyline splines which bypass the triangulation algorithm entirely.
+    let svg_output = run_dot(&dot_content, &["-Tsvg"])
+        .or_else(|_| {
+            warn!("dot failed with default splines, retrying with polyline splines");
+            run_dot(&dot_content, &["-Tsvg", "-Gsplines=polyline"])
+        })
         .map_err(|e| {
-            error!("Failed to execute 'dot' command: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::with_details(
-                    "Failed to convert to SVG. Ensure Graphviz is installed.",
-                    e.to_string(),
-                )),
+                Json(ErrorResponse::with_details("SVG conversion failed", e)),
             )
         })?;
-
-    // Write DOT content to stdin
-    use std::io::Write;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(dot_content.as_bytes()).map_err(|e| {
-            error!("Failed to write DOT content to stdin: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::with_details(
-                    "Failed to write DOT content",
-                    e.to_string(),
-                )),
-            )
-        })?;
-    }
-
-    let svg_output = child.wait_with_output().map_err(|e| {
-        error!("Failed to wait for 'dot' command: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::with_details(
-                "Failed to complete SVG conversion",
-                e.to_string(),
-            )),
-        )
-    })?;
-
-    if !svg_output.status.success() {
-        let stderr = String::from_utf8_lossy(&svg_output.stderr);
-        error!("dot command failed: {}", stderr);
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::with_details(
-                "SVG conversion failed",
-                stderr.to_string(),
-            )),
-        ));
-    }
 
     info!("Successfully generated SVG debug graph for flow: {}", id);
 
@@ -646,7 +664,7 @@ pub async fn debug_graph(
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "image/svg+xml")],
-        svg_output.stdout,
+        svg_output,
     )
         .into_response())
 }
