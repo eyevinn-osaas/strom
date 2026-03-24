@@ -424,7 +424,12 @@ impl GraphEditor {
 
         if let Some(idx) = existing {
             let link = self.links.remove(idx);
-            self.selected_link = None;
+            // Fix up selected_link index after removal
+            match self.selected_link {
+                Some(sel) if sel == idx => self.selected_link = None,
+                Some(sel) if sel > idx => self.selected_link = Some(sel - 1),
+                _ => {}
+            }
             // Re-route from the source end of the removed link
             let (from_id, from_pad) = link
                 .from
