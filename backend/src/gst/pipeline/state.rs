@@ -350,7 +350,10 @@ fn wrap_dot_labels(dot: &str, max_width: usize) -> String {
             .map(|nl| before_label[nl..].contains("->"))
             .unwrap_or_else(|| before_label.contains("->"));
 
-        if is_edge {
+        // Also skip truncation for the legend node (Element-States key).
+        let is_legend = label_content.contains("Element-States:");
+
+        if is_edge || is_legend {
             result.push_str(label_content);
         } else {
             // Split label into logical property lines, respecting escaped quotes.
@@ -690,6 +693,19 @@ mod tests {
         );
         // Edge caps should be preserved in full
         assert!(result.contains(&long_caps), "Edge caps should be preserved");
+    }
+
+    #[test]
+    fn test_legend_not_truncated() {
+        let legend =
+            "Element-States: [~] void-pending, [0] null, [-] ready, [=] paused, [>] playing";
+        let dot = format!(r#"legend [label="{}"];"#, legend);
+        let result = wrap_dot_labels(&dot, 80);
+        assert!(
+            result.contains(legend),
+            "Legend should not be truncated, got: {}",
+            result
+        );
     }
 
     #[test]
