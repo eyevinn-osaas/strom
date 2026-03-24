@@ -444,9 +444,10 @@ impl GraphEditor {
                 _ => {}
             }
             // Re-route from the source end of the removed link
+            // Use rsplit_once to handle namespaced block element IDs (e.g. "block_id:element:pad")
             let (from_id, from_pad) = link
                 .from
-                .split_once(':')
+                .rsplit_once(':')
                 .map(|(id, pad)| (id.to_string(), pad.to_string()))
                 .unwrap_or_else(|| (link.from.clone(), String::new()));
             (from_id, from_pad)
