@@ -549,6 +549,10 @@ impl GraphEditor {
 
             // Deselect when clicking on empty space (not a link, not a node)
             if response.clicked() && self.hovered_link.is_none() && self.hovered_element.is_none() {
+                if !self.has_selection() {
+                    // Already deselected — signal to toggle right pane
+                    self.request_toggle_right_pane.set(true);
+                }
                 self.selected = None;
                 self.selected_link = None;
             }
