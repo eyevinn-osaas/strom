@@ -56,20 +56,29 @@ pub async fn vision_mixer_page(
         })
         .unwrap_or_default();
 
-    // Get current PGM/PVW from live overlay state or initial properties
-    let (initial_pgm, initial_pvw) = overlay::get_overlay_state(block_id)
+    // Get current state from live overlay state or fall back to defaults
+    let overlay = overlay::get_overlay_state(block_id);
+    let initial_pgm = overlay
+        .as_ref()
+        .map(|s| s.pgm_input.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or_else(|| vm_props::parse_initial_pgm(&vm_block.properties, num_inputs));
+    let initial_pvw = overlay
+        .as_ref()
+        .map(|s| s.pvw_input.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or_else(|| vm_props::parse_initial_pvw(&vm_block.properties, num_inputs));
+    let ftb_active = overlay
+        .as_ref()
+        .map(|s| s.ftb_active.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(false);
+    let dsk_states: Vec<bool> = overlay
+        .as_ref()
         .map(|s| {
-            (
-                s.pgm_input.load(std::sync::atomic::Ordering::Relaxed),
-                s.pvw_input.load(std::sync::atomic::Ordering::Relaxed),
-            )
+            s.dsk_enabled
+                .iter()
+                .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+                .collect()
         })
-        .unwrap_or_else(|| {
-            (
-                vm_props::parse_initial_pgm(&vm_block.properties, num_inputs),
-                vm_props::parse_initial_pvw(&vm_block.properties, num_inputs),
-            )
-        });
+        .unwrap_or_else(|| vec![true; num_dsk_inputs]);
 
     // Build a single JSON config object (safe injection via <script type="application/json">)
     let config = serde_json::json!({
@@ -81,6 +90,8 @@ pub async fn vision_mixer_page(
         "initial_pgm": initial_pgm,
         "initial_pvw": initial_pvw,
         "num_dsk_inputs": num_dsk_inputs,
+        "ftb_active": ftb_active,
+        "dsk_states": dsk_states,
     });
 
     let html = VISION_MIXER_HTML.replace("{{VM_CONFIG_JSON}}", &config.to_string());

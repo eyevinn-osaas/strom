@@ -409,6 +409,15 @@ impl PipelineManager {
         if let Some(pad) = find_pad(mixer, &pad_name) {
             let alpha = if enabled { 1.0f64 } else { 0.0f64 };
             pad.set_property("alpha", alpha);
+            // Update overlay state for DSK tracking
+            if let Some(state) =
+                crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(block_instance_id)
+            {
+                if dsk_index < state.dsk_enabled.len() {
+                    state.dsk_enabled[dsk_index]
+                        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             info!(
                 "Vision mixer {} DSK {} {}",
                 block_instance_id,

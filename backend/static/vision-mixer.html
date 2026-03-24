@@ -405,11 +405,11 @@
         // ---- State ----
         let currentPgm = _cfg.initial_pgm;
         let currentPvw = _cfg.initial_pvw;
-        let dskEnabled = [true, true, true, true]; // DSK layers start enabled (alpha=1)
+        let dskEnabled = _cfg.dsk_states || [true, true, true, true];
         let transitionType = 'fade';
         let transitionDurationMs = 1000;
         let transitioning = false;
-        let ftbActive = false;
+        let ftbActive = _cfg.ftb_active || false;
 
         // ---- API helpers ----
         const API_BASE = '/api/flows/' + FLOW_ID + '/blocks/' + BLOCK_ID;
@@ -775,6 +775,7 @@
             buildBuses();
             updateButtons();
             initDskUi();
+            updateFtbButton();
             connectMultiview();
             connectWebSocket();
         };

@@ -681,6 +681,7 @@ fn setup_cairo_overlay(
 ) {
     let overlay_state = Arc::new(VisionMixerOverlayState::new(
         p.num_inputs,
+        p.num_dsk_inputs,
         p.pgm_input,
         p.pvw_input,
         p.labels.to_vec(),

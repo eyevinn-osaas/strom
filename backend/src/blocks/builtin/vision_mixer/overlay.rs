@@ -45,6 +45,10 @@ pub struct VisionMixerOverlayState {
     pub num_inputs: usize,
     /// Whether Fade to Black is active.
     pub ftb_active: AtomicBool,
+    /// DSK enabled states (one per DSK input, max 4).
+    pub dsk_enabled: Vec<AtomicBool>,
+    /// Number of DSK inputs.
+    pub num_dsk_inputs: usize,
     /// Pre-computed layout (immutable after construction).
     pub layout: OverlayLayout,
     /// Input labels (set at build time, read-only after).
@@ -58,6 +62,7 @@ pub struct VisionMixerOverlayState {
 impl VisionMixerOverlayState {
     pub fn new(
         num_inputs: usize,
+        num_dsk_inputs: usize,
         pgm_input: usize,
         pvw_input: usize,
         labels: Vec<String>,
@@ -78,6 +83,8 @@ impl VisionMixerOverlayState {
             pvw_input: AtomicUsize::new(pvw_input),
             num_inputs,
             ftb_active: AtomicBool::new(false),
+            dsk_enabled: (0..num_dsk_inputs).map(|_| AtomicBool::new(true)).collect(),
+            num_dsk_inputs,
             layout,
             labels,
             instant_base: now_instant,
