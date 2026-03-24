@@ -443,13 +443,7 @@
         // ---- Transitions ----
         function doTake(type, durationMs) {
             if (transitioning || currentPgm === currentPvw) return;
-            // Auto-un-FTB before transition
-            if (ftbActive) {
-                apiPost('/ftb', { duration_ms: 0 }).then(r => {
-                    ftbActive = r.active;
-                    updateFtbButton();
-                }).catch(() => {});
-            }
+            // FTB is auto-cancelled server-side when a transition is triggered
             transitioning = true;
             if (durationMs > 0) {
                 document.getElementById('autoBtn').classList.add('active');
@@ -494,7 +488,7 @@
 
         // ---- FTB (Fade to Black) ----
         function doFtb() {
-            apiPost('/ftb', { duration_ms: transitionDurationMs })
+            apiPost('/ftb', { duration_ms: 500 })
                 .then(r => {
                     ftbActive = r.active;
                     updateFtbButton();

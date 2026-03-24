@@ -58,8 +58,10 @@ pub struct OverlayLayout {
     /// PGM large display area (top-right).
     pub pgm_rect: Rect,
 
-    /// Thumbnail rectangles for each input.
+    /// Thumbnail video rectangles for each input (video area only, used for compositor pads).
     pub thumbnail_rects: Vec<Rect>,
+    /// Full thumbnail slot rectangles (video + label area, used for borders).
+    pub thumbnail_slot_rects: Vec<Rect>,
 
     /// Label text positions (below each thumbnail).
     pub label_positions: Vec<Point>,
@@ -109,9 +111,13 @@ pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) 
         ((cw - gap * (THUMBNAILS_PER_ROW as f64 + 1.0)) / THUMBNAILS_PER_ROW as f64).round();
 
     let mut thumbnail_rects = Vec::with_capacity(num_inputs);
+    let mut thumbnail_slot_rects = Vec::with_capacity(num_inputs);
     let mut label_positions = Vec::with_capacity(num_inputs);
 
     let label_font_size = (thumb_h * 0.10).clamp(10.0, 20.0);
+    // Reserve space below the video for the label
+    let label_area_h = label_font_size * 1.6;
+    let video_h = thumb_h - label_area_h;
 
     for i in 0..num_inputs {
         let row = i / THUMBNAILS_PER_ROW;
@@ -120,11 +126,14 @@ pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) 
         let x = gap + col as f64 * (thumb_w + gap);
         let y = thumb_y_start + row as f64 * (thumb_h + gap);
 
-        thumbnail_rects.push(Rect::new(x, y, thumb_w, thumb_h));
-        // Label centered horizontally, slightly above bottom edge
+        // Video sits at the top of the slot
+        thumbnail_rects.push(Rect::new(x, y, thumb_w, video_h));
+        // Full slot includes video + label area (used for borders)
+        thumbnail_slot_rects.push(Rect::new(x, y, thumb_w, thumb_h));
+        // Label centered in the label area below the video
         label_positions.push(Point {
             x: x + thumb_w / 2.0,
-            y: y + thumb_h - label_font_size * 0.6,
+            y: y + video_h + label_area_h / 2.0 + label_font_size * 0.35,
         });
     }
 
@@ -137,6 +146,7 @@ pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) 
         pvw_rect,
         pgm_rect,
         thumbnail_rects,
+        thumbnail_slot_rects,
         label_positions,
         pvw_label_pos: Point {
             x: pvw_rect.x + pvw_rect.w / 2.0,

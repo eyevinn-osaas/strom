@@ -68,6 +68,8 @@ impl BlockBuilder for VideoFormatBuilder {
             if parts.len() == 2 {
                 caps_fields.push(format!("width={}", parts[0]));
                 caps_fields.push(format!("height={}", parts[1]));
+                // Pin PAR to 1:1 so autovideoconvert doesn't compensate with non-square pixels
+                caps_fields.push("pixel-aspect-ratio=1/1".to_string());
             }
         }
 

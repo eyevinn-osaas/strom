@@ -1269,7 +1269,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        manager.trigger_transition(
+        let ftb_cancelled = manager.trigger_transition(
             block_instance_id,
             from_input,
             to_input,
@@ -1278,6 +1278,17 @@ impl AppState {
         )?;
 
         drop(pipelines);
+
+        // Broadcast FTB cancelled event so clients update their UI
+        if ftb_cancelled {
+            self.inner
+                .events
+                .broadcast(StromEvent::VisionMixerFtbChanged {
+                    flow_id: *flow_id,
+                    block_id: block_instance_id.to_string(),
+                    active: false,
+                });
+        }
 
         // Sync final alpha values back to flow definition for persistence
         // Clear ALL input alphas to 0.0, then set to_input to 1.0

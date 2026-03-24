@@ -2,7 +2,7 @@
 
 use super::layout::OverlayLayout;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
 
@@ -55,8 +55,14 @@ pub struct VisionMixerOverlayState {
     pub labels: Vec<String>,
     /// Monotonic instant captured at construction for wall-clock derivation.
     instant_base: Instant,
-    /// UTC seconds at `instant_base` + local timezone offset (seconds east of UTC).
-    base_local_secs: u64,
+    /// UTC seconds at `instant_base` (no timezone offset applied).
+    base_utc_secs: u64,
+    /// Local timezone offset in seconds east of UTC. Refreshed periodically for DST changes.
+    tz_offset_secs: AtomicI64,
+    /// Timezone abbreviation packed as bytes (up to 7 ASCII chars + 1 length byte in MSB).
+    tz_abbr_packed: AtomicU64,
+    /// Elapsed seconds (from instant_base) when we next refresh timezone info.
+    tz_next_refresh: AtomicU64,
 }
 
 impl VisionMixerOverlayState {
@@ -74,46 +80,92 @@ impl VisionMixerOverlayState {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        // Compute local timezone offset using libc localtime_r (one-time syscall at construction)
-        let local_offset_secs = local_utc_offset_secs();
-        let base_local_secs = (utc_secs as i64 + local_offset_secs) as u64;
+        let (offset_secs, tz_abbr) = local_tz_info();
 
         Self {
             pgm_input: AtomicUsize::new(pgm_input),
             pvw_input: AtomicUsize::new(pvw_input),
             num_inputs,
             ftb_active: AtomicBool::new(false),
-            dsk_enabled: (0..num_dsk_inputs).map(|_| AtomicBool::new(true)).collect(),
+            dsk_enabled: (0..num_dsk_inputs)
+                .map(|_| AtomicBool::new(false))
+                .collect(),
             num_dsk_inputs,
             layout,
             labels,
             instant_base: now_instant,
-            base_local_secs,
+            base_utc_secs: utc_secs,
+            tz_offset_secs: AtomicI64::new(offset_secs),
+            tz_abbr_packed: AtomicU64::new(pack_tz_abbr(&tz_abbr)),
+            tz_next_refresh: AtomicU64::new(60),
         }
     }
 
-    /// Get local wall-clock time as (hours, minutes, seconds).
-    /// Uses Instant::now() (vDSO fast path) with a pre-computed offset.
+    /// Get local wall-clock time as (hours, minutes, seconds) and timezone abbreviation.
+    /// Uses Instant::now() (vDSO fast path) with a cached offset that refreshes every 60s.
     fn wall_clock_hms(&self) -> (u32, u32, u32) {
         let elapsed_secs = self.instant_base.elapsed().as_secs();
-        let local_secs = self.base_local_secs + elapsed_secs;
+
+        // Refresh timezone info periodically (handles DST transitions)
+        let next_refresh = self.tz_next_refresh.load(Ordering::Relaxed);
+        if elapsed_secs >= next_refresh {
+            let (offset, abbr) = local_tz_info();
+            self.tz_offset_secs.store(offset, Ordering::Relaxed);
+            self.tz_abbr_packed
+                .store(pack_tz_abbr(&abbr), Ordering::Relaxed);
+            self.tz_next_refresh
+                .store(elapsed_secs + 60, Ordering::Relaxed);
+        }
+
+        let offset = self.tz_offset_secs.load(Ordering::Relaxed);
+        let utc_secs = self.base_utc_secs + elapsed_secs;
+        let local_secs = (utc_secs as i64 + offset) as u64;
         let secs_of_day = local_secs % 86400;
         let h = (secs_of_day / 3600) as u32;
         let m = ((secs_of_day % 3600) / 60) as u32;
         let s = (secs_of_day % 60) as u32;
         (h, m, s)
     }
+
+    /// Unpack the cached timezone abbreviation into a stack buffer.
+    /// Returns the number of valid bytes written.
+    fn tz_abbr_bytes(&self, out: &mut [u8; 7]) -> usize {
+        let packed = self.tz_abbr_packed.load(Ordering::Relaxed);
+        let len = ((packed >> 56) & 0x7F) as usize;
+        let bytes = packed.to_le_bytes();
+        let n = len.min(7);
+        out[..n].copy_from_slice(&bytes[..n]);
+        n
+    }
 }
 
-/// Get local timezone offset in seconds east of UTC.
-/// Called once at construction time — uses libc localtime_r.
-fn local_utc_offset_secs() -> i64 {
+/// Get local timezone offset in seconds east of UTC and the timezone abbreviation.
+fn local_tz_info() -> (i64, String) {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&now, &mut tm);
-        tm.tm_gmtoff
+        let abbr = if tm.tm_zone.is_null() {
+            "UTC".to_string()
+        } else {
+            std::ffi::CStr::from_ptr(tm.tm_zone)
+                .to_str()
+                .unwrap_or("UTC")
+                .to_string()
+        };
+        (tm.tm_gmtoff, abbr)
     }
+}
+
+/// Pack a timezone abbreviation (up to 7 ASCII bytes) into a u64.
+/// Layout: bits 63..56 = length, bits 55..0 = bytes in little-endian order.
+fn pack_tz_abbr(abbr: &str) -> u64 {
+    let bytes = abbr.as_bytes();
+    let len = bytes.len().min(7);
+    let mut le = [0u8; 8];
+    le[..len].copy_from_slice(&bytes[..len]);
+    let val = u64::from_le_bytes(le);
+    val | ((len as u64) << 56)
 }
 
 const PVW_R: f64 = 0.0;
@@ -186,9 +238,9 @@ pub fn draw_overlay(state: &VisionMixerOverlayState, cr: &cairo::Context) {
     cr.rectangle(r.x, r.y, r.w, r.h);
     let _ = cr.stroke();
 
-    // --- Thumbnail borders ---
-    for i in 0..layout.num_inputs.min(layout.thumbnail_rects.len()) {
-        let r = &layout.thumbnail_rects[i];
+    // --- Thumbnail borders (drawn around full slot including label area) ---
+    for i in 0..layout.num_inputs.min(layout.thumbnail_slot_rects.len()) {
+        let r = &layout.thumbnail_slot_rects[i];
         if i == pgm {
             cr.set_source_rgb(PGM_R, PGM_G, PGM_B);
             cr.set_line_width(layout.thumb_border_width);
@@ -253,7 +305,8 @@ pub fn draw_overlay(state: &VisionMixerOverlayState, cr: &cairo::Context) {
 
     // --- Clock ---
     let (h, m, s) = state.wall_clock_hms();
-    let mut buf = [0u8; 8]; // "HH:MM:SS"
+    // "HH:MM:SS ABCD" — 8 time chars + space + up to 7 tz chars = 16 max
+    let mut buf = [b' '; 16];
     buf[0] = b'0' + (h / 10) as u8;
     buf[1] = b'0' + (h % 10) as u8;
     buf[2] = b':';
@@ -262,8 +315,12 @@ pub fn draw_overlay(state: &VisionMixerOverlayState, cr: &cairo::Context) {
     buf[5] = b':';
     buf[6] = b'0' + (s / 10) as u8;
     buf[7] = b'0' + (s % 10) as u8;
-    // SAFETY: buf contains only ASCII digits and colons
-    let clock_str = unsafe { std::str::from_utf8_unchecked(&buf) };
+    let mut tz_buf = [0u8; 7];
+    let tz_len = state.tz_abbr_bytes(&mut tz_buf);
+    buf[9..9 + tz_len].copy_from_slice(&tz_buf[..tz_len]);
+    let total_len = 9 + tz_len;
+    // SAFETY: buf contains only ASCII digits, colons, spaces, and ASCII tz abbreviation
+    let clock_str = unsafe { std::str::from_utf8_unchecked(&buf[..total_len]) };
 
     cr.set_font_size(layout.header_font_size * 0.8);
     let clock_cx = layout.canvas_width / 2.0;

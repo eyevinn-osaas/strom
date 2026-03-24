@@ -592,7 +592,7 @@ fn build_pad_properties(
         let props = dist_pads.entry(pad_name).or_default();
         props.insert("width".to_string(), PropertyValue::Int(p.pgm_w as i64));
         props.insert("height".to_string(), PropertyValue::Int(p.pgm_h as i64));
-        props.insert("alpha".to_string(), PropertyValue::Float(1.0));
+        props.insert("alpha".to_string(), PropertyValue::Float(0.0));
         props.insert("zorder".to_string(), PropertyValue::UInt(100 + i as u64));
         if is_gl {
             props.insert(

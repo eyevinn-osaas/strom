@@ -6,12 +6,7 @@ use tracing::{debug, info};
 impl PipelineManager {
     /// Trigger a transition on a compositor/mixer block.
     ///
-    /// # Arguments
-    /// * `block_instance_id` - The instance ID of the compositor block (e.g., "comp_1").
-    /// * `from_input` - Index of the currently active input.
-    /// * `to_input` - Index of the input to transition to.
-    /// * `transition_type` - Type of transition ("fade", "cut", "slide_left", etc.).
-    /// * `duration_ms` - Duration of the transition in milliseconds.
+    /// Returns whether FTB was auto-cancelled.
     pub fn trigger_transition(
         &self,
         block_instance_id: &str,
@@ -19,7 +14,7 @@ impl PipelineManager {
         to_input: usize,
         transition_type: &str,
         duration_ms: u64,
-    ) -> Result<(), PipelineError> {
+    ) -> Result<bool, PipelineError> {
         use crate::gst::transitions::{TransitionController, TransitionType};
 
         debug!(
@@ -48,33 +43,26 @@ impl PipelineManager {
             .map(|s| s.pgm_input.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(from_input);
 
-        for pad in mixer.sink_pads() {
-            let name = pad.name();
-            if name.starts_with("sink_") {
-                if let Ok(idx) = name.trim_start_matches("sink_").parse::<usize>() {
-                    if idx < num_video_inputs {
-                        let alpha = if idx == actual_pgm { 1.0f64 } else { 0.0f64 };
-                        pad.set_property("alpha", alpha);
-                    }
-                }
-            }
+        // Auto-cancel FTB if active — clear control bindings and restore clean alpha state.
+        // This avoids race conditions with the client sending un-FTB + transition in parallel.
+        let was_ftb = overlay_state
+            .as_ref()
+            .map(|s| {
+                s.ftb_active
+                    .swap(false, std::sync::atomic::Ordering::Relaxed)
+            })
+            .unwrap_or(false);
+        if was_ftb {
+            info!(
+                "Auto-cancelling FTB before transition on {}",
+                block_instance_id
+            );
         }
 
-        // Parse transition type
-        let trans_type = transition_type.parse::<TransitionType>().map_err(|_| {
-            PipelineError::InvalidProperty {
-                element: block_instance_id.to_string(),
-                property: "transition_type".to_string(),
-                reason: format!("Unknown transition type: {}", transition_type),
-            }
-        })?;
-
-        // Get canvas dimensions from the mixer's output caps or use defaults
-        // We'll try to get them from the capsfilter
+        // Get canvas dimensions from the capsfilter caps (needed for pad size reset)
         let capsfilter_id = format!("{}:capsfilter", block_instance_id);
         let (canvas_width, canvas_height) =
             if let Some(capsfilter) = self.elements.get(&capsfilter_id) {
-                // Try to get dimensions from caps
                 if let Some(caps) = capsfilter.property::<Option<gst::Caps>>("caps") {
                     if let Some(structure) = caps.structure(0) {
                         let width = structure.get::<i32>("width").unwrap_or(1920);
@@ -90,6 +78,45 @@ impl PipelineManager {
                 (1920, 1080)
             };
 
+        // Reset all video pads to a clean state before the transition:
+        // clear control bindings, restore alpha/position/size.
+        for pad in mixer.sink_pads() {
+            let name = pad.name();
+            if name.starts_with("sink_") {
+                if let Ok(idx) = name.trim_start_matches("sink_").parse::<usize>() {
+                    for prop in ["alpha", "xpos", "ypos", "width", "height"] {
+                        if let Some(binding) = pad.control_binding(prop) {
+                            pad.remove_control_binding(&binding);
+                        }
+                    }
+                    if idx < num_video_inputs {
+                        let alpha = if idx == actual_pgm { 1.0f64 } else { 0.0f64 };
+                        pad.set_property("alpha", alpha);
+                        pad.set_property("xpos", 0i32);
+                        pad.set_property("ypos", 0i32);
+                        pad.set_property("width", canvas_width);
+                        pad.set_property("height", canvas_height);
+                    } else if let Some(state) = overlay_state.as_ref() {
+                        let dsk_idx = idx - num_video_inputs;
+                        let enabled = dsk_idx < state.dsk_enabled.len()
+                            && state.dsk_enabled[dsk_idx]
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                        let alpha = if enabled { 1.0f64 } else { 0.0f64 };
+                        pad.set_property("alpha", alpha);
+                    }
+                }
+            }
+        }
+
+        // Parse transition type
+        let trans_type = transition_type.parse::<TransitionType>().map_err(|_| {
+            PipelineError::InvalidProperty {
+                element: block_instance_id.to_string(),
+                property: "transition_type".to_string(),
+                reason: format!("Unknown transition type: {}", transition_type),
+            }
+        })?;
+
         // Create transition controller and execute transition
         let controller = TransitionController::new(mixer.clone(), canvas_width, canvas_height);
         controller
@@ -102,7 +129,7 @@ impl PipelineManager {
             )
             .map_err(|e| PipelineError::TransitionError(e.to_string()))?;
 
-        Ok(())
+        Ok(was_ftb)
     }
 
     /// Animate a single input's position/size on a compositor block.
@@ -435,15 +462,18 @@ impl PipelineManager {
 
     /// Toggle Fade to Black on a vision mixer block.
     ///
-    /// FTB sets ALL mixer sink pads (video + DSK) to alpha=0.
-    /// Un-FTB restores PGM pad to alpha=1 and DSK pads to their previous state.
+    /// Animates ALL mixer sink pads alpha to 0 (fade out) or restores them (fade in).
     /// Returns the new FTB state (true = active/black).
     pub fn fade_to_black(
         &self,
         block_instance_id: &str,
-        _duration_ms: u64,
+        duration_ms: u64,
     ) -> Result<bool, PipelineError> {
         use crate::blocks::builtin::vision_mixer::overlay;
+        use gstreamer_controller::prelude::*;
+        use gstreamer_controller::{
+            DirectControlBinding, InterpolationControlSource, InterpolationMode,
+        };
 
         let mixer_id = format!("{}:mixer", block_instance_id);
         let mixer = self
@@ -462,21 +492,85 @@ impl PipelineManager {
         let pgm = state.pgm_input.load(std::sync::atomic::Ordering::Relaxed);
         let now_active = !was_active;
 
-        // FTB: set ALL pads to alpha=0 (video + DSK = everything goes black)
-        // Un-FTB: restore PGM pad to alpha=1, DSK pads to alpha=1
+        let current_time = self
+            .pipeline
+            .query_position::<gst::ClockTime>()
+            .unwrap_or(gst::ClockTime::ZERO);
+        let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
+
+        // Collect control sources so they stay alive for the duration of the animation
+        let mut control_sources: Vec<InterpolationControlSource> = Vec::new();
+
         for pad in mixer.sink_pads() {
             let name = pad.name();
             if name.starts_with("sink_") {
                 if let Ok(idx) = name.trim_start_matches("sink_").parse::<usize>() {
-                    if now_active {
-                        // FTB on: everything to black
-                        pad.set_property("alpha", 0.0f64);
-                    } else if idx == pgm || idx >= state.num_inputs {
-                        // FTB off: restore PGM and DSK pads
-                        pad.set_property("alpha", 1.0f64);
+                    let (start_alpha, end_alpha) = if now_active {
+                        // FTB on: fade current alpha to 0
+                        let current = pad.property::<f64>("alpha");
+                        (current, 0.0)
+                    } else if idx == pgm {
+                        (0.0, 1.0)
+                    } else if idx >= state.num_inputs {
+                        let dsk_idx = idx - state.num_inputs;
+                        let enabled = dsk_idx < state.dsk_enabled.len()
+                            && state.dsk_enabled[dsk_idx]
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                        if enabled {
+                            (0.0, 1.0)
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    };
+
+                    if (start_alpha - end_alpha).abs() < f64::EPSILON {
+                        continue;
                     }
+
+                    // Clear any existing alpha control binding
+                    if let Some(binding) = pad.control_binding("alpha") {
+                        pad.remove_control_binding(&binding);
+                    }
+
+                    let cs = InterpolationControlSource::new();
+                    cs.set_mode(InterpolationMode::Linear);
+
+                    // Ease-in-out keyframes
+                    let duration_ns = (end_time - current_time).nseconds() as f64;
+                    let num_keyframes = 10u32;
+                    for i in 0..=num_keyframes {
+                        let t = i as f64 / num_keyframes as f64;
+                        let eased = (1.0 - (t * std::f64::consts::PI).cos()) / 2.0;
+                        let value = start_alpha + (end_alpha - start_alpha) * eased;
+                        let time =
+                            current_time + gst::ClockTime::from_nseconds((duration_ns * t) as u64);
+                        cs.set(time, value);
+                    }
+
+                    let binding = DirectControlBinding::new(&pad, "alpha", &cs);
+                    let _ = pad.add_control_binding(&binding);
+                    control_sources.push(cs);
                 }
             }
+        }
+
+        // Keep control sources alive until the animation completes, then clean up bindings
+        if !control_sources.is_empty() {
+            let cleanup_mixer = mixer.clone();
+            let cleanup_duration = duration_ms + 100; // small margin
+            gst::glib::timeout_add_once(
+                std::time::Duration::from_millis(cleanup_duration),
+                move || {
+                    for pad in cleanup_mixer.sink_pads() {
+                        if let Some(binding) = pad.control_binding("alpha") {
+                            pad.remove_control_binding(&binding);
+                        }
+                    }
+                    drop(control_sources);
+                },
+            );
         }
 
         state

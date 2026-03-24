@@ -146,6 +146,7 @@ pub fn make_capsfilter(
     let caps = gst::Caps::builder("video/x-raw")
         .field("width", width as i32)
         .field("height", height as i32)
+        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
         .build();
 
     gst::ElementFactory::make("capsfilter")
