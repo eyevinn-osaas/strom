@@ -1575,28 +1575,20 @@ impl StromApp {
                         .spacing([8.0, 4.0])
                         .show(ui, |ui| {
                             ui.strong("From:");
-                            ui.label(&from_label);
-                            ui.end_row();
-
                             if let Some(ref pad) = from_ref.pad_name {
-                                ui.strong("Pad:");
-                                ui.label(pad);
-                                ui.end_row();
+                                ui.label(format!("{} ({})", from_label, pad));
+                            } else {
+                                ui.label(&from_label);
                             }
-
-                            ui.label("");
-                            ui.label(egui_phosphor::regular::ARROW_DOWN);
                             ui.end_row();
 
                             ui.strong("To:");
-                            ui.label(&to_label);
-                            ui.end_row();
-
                             if let Some(ref pad) = to_ref.pad_name {
-                                ui.strong("Pad:");
-                                ui.label(pad);
-                                ui.end_row();
+                                ui.label(format!("{} ({})", to_label, pad));
+                            } else {
+                                ui.label(&to_label);
                             }
+                            ui.end_row();
                         });
 
                     if delete_link {

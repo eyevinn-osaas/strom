@@ -396,16 +396,29 @@ impl GraphEditor {
     }
 
     /// Get a display label for an element or block by ID.
-    /// Returns the element type (e.g. "videotestsrc") or block name, falling back to the raw ID.
+    ///
+    /// Handles plain element IDs, block IDs, and namespaced block element IDs
+    /// (format "block_id:internal_element") by resolving the block name.
     pub fn node_label(&self, id: &str) -> String {
+        // Direct element match
         if let Some(element) = self.elements.iter().find(|e| e.id == id) {
             return element.element_type.clone();
         }
+        // Direct block match
         if let Some(block) = self.blocks.iter().find(|b| b.id == id) {
             return block
                 .name
                 .clone()
                 .unwrap_or_else(|| block.block_definition_id.clone());
+        }
+        // Namespaced block element: "block_id:internal_element"
+        if let Some((block_id, _)) = id.split_once(':') {
+            if let Some(block) = self.blocks.iter().find(|b| b.id == block_id) {
+                return block
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| block.block_definition_id.clone());
+            }
         }
         id.to_string()
     }
