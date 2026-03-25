@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
+use strom_types::vision_mixer::TIMEZONE_REFRESH_SECS;
 use tracing::{debug, warn};
 
 /// Global registry of vision mixer overlay states, keyed by block instance ID.
@@ -106,7 +107,7 @@ impl VisionMixerOverlayState {
             base_utc_secs: utc_secs,
             tz_offset_secs: AtomicI64::new(offset_secs),
             tz_abbr_packed: AtomicU64::new(pack_tz_abbr(&tz_abbr)),
-            tz_next_refresh: AtomicU64::new(60),
+            tz_next_refresh: AtomicU64::new(TIMEZONE_REFRESH_SECS),
         }
     }
 
@@ -123,7 +124,7 @@ impl VisionMixerOverlayState {
             self.tz_abbr_packed
                 .store(pack_tz_abbr(&abbr), Ordering::Relaxed);
             self.tz_next_refresh
-                .store(elapsed_secs + 60, Ordering::Relaxed);
+                .store(elapsed_secs + TIMEZONE_REFRESH_SECS, Ordering::Relaxed);
         }
 
         let offset = self.tz_offset_secs.load(Ordering::Relaxed);

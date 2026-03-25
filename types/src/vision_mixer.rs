@@ -44,3 +44,30 @@ pub const DEFAULT_LATENCY_MS: u64 = 20;
 
 /// Default minimum upstream latency in milliseconds.
 pub const DEFAULT_MIN_UPSTREAM_LATENCY_MS: u64 = 20;
+
+// --- Z-order constants for compositor pads ---
+
+/// Z-order for thumbnail pads on the multiview compositor.
+pub const MV_THUMBNAIL_ZORDER: u32 = 1;
+
+/// Z-order for PGM/PVW big display pads on the multiview compositor.
+pub const MV_BIG_DISPLAY_ZORDER: u32 = 10;
+
+/// Base z-order for DSK pads on the distribution compositor (+ dsk index).
+pub const DIST_DSK_BASE_ZORDER: u32 = 100;
+
+/// Z-order for the overlay pad on the multiview compositor.
+pub const MV_OVERLAY_ZORDER: u32 = 200;
+
+// --- Overlay rendering constants ---
+
+/// Overlay appsrc output framerate (fps).
+pub const OVERLAY_FRAMERATE: i32 = 30;
+
+/// Timezone refresh interval in seconds (for DST transitions).
+pub const TIMEZONE_REFRESH_SECS: u64 = 60;
+
+// --- Transition animation constants ---
+
+/// Number of keyframes for easing curve interpolation.
+pub const TRANSITION_KEYFRAMES: usize = 10;

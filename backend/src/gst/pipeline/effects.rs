@@ -331,13 +331,14 @@ impl PipelineManager {
 
             // Show new PVW big pad
             if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + new_pvw)) {
+                use strom_types::vision_mixer;
                 let r = &state.layout.pvw_rect;
                 pad.set_property("xpos", r.x as i32);
                 pad.set_property("ypos", r.y as i32);
                 pad.set_property("width", r.w as i32);
                 pad.set_property("height", r.h as i32);
                 pad.set_property("alpha", 1.0f64);
-                pad.set_property("zorder", 10u32);
+                pad.set_property("zorder", vision_mixer::MV_BIG_DISPLAY_ZORDER);
             }
         }
 
@@ -394,13 +395,14 @@ impl PipelineManager {
 
         // Swap: old PGM becomes new PVW — show at PVW position
         if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + old_pgm)) {
+            use strom_types::vision_mixer;
             let r = &state.layout.pvw_rect;
             pad.set_property("xpos", r.x as i32);
             pad.set_property("ypos", r.y as i32);
             pad.set_property("width", r.w as i32);
             pad.set_property("height", r.h as i32);
             pad.set_property("alpha", 1.0f64);
-            pad.set_property("zorder", 10u32);
+            pad.set_property("zorder", vision_mixer::MV_BIG_DISPLAY_ZORDER);
         }
 
         // Hide the old PVW's candidate pad (the source that just became PGM)

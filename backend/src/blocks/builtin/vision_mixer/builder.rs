@@ -274,8 +274,8 @@ fn build_gpu_pipeline(
     // --- Overlay appsrc → glupload → mv_comp (composited in GPU at high zorder) ---
     let appsrc_overlay_id = p.id("appsrc_overlay");
     let overlay_caps_str = format!(
-        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate=30/1,interlace-mode=progressive,multiview-mode=mono",
-        p.mv_w, p.mv_h
+        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate={}/1,interlace-mode=progressive,multiview-mode=mono",
+        p.mv_w, p.mv_h, vision_mixer::OVERLAY_FRAMERATE
     );
     let overlay_caps: gst::Caps = overlay_caps_str
         .parse()
@@ -532,8 +532,8 @@ fn build_cpu_pipeline(
     // --- Overlay appsrc → mv_comp (CPU compositor accepts raw BGRA directly) ---
     let appsrc_overlay_id = p.id("appsrc_overlay");
     let overlay_caps_str = format!(
-        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate=30/1,interlace-mode=progressive,multiview-mode=mono",
-        p.mv_w, p.mv_h
+        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate={}/1,interlace-mode=progressive,multiview-mode=mono",
+        p.mv_w, p.mv_h, vision_mixer::OVERLAY_FRAMERATE
     );
     let overlay_caps: gst::Caps = overlay_caps_str
         .parse()
@@ -721,7 +721,10 @@ fn build_pad_properties(
         props.insert("width".to_string(), PropertyValue::Int(p.pgm_w as i64));
         props.insert("height".to_string(), PropertyValue::Int(p.pgm_h as i64));
         props.insert("alpha".to_string(), PropertyValue::Float(0.0));
-        props.insert("zorder".to_string(), PropertyValue::UInt(100 + i as u64));
+        props.insert(
+            "zorder".to_string(),
+            PropertyValue::UInt(vision_mixer::DIST_DSK_BASE_ZORDER as u64 + i as u64),
+        );
         if is_gl {
             props.insert(
                 "sizing-policy".to_string(),
@@ -743,7 +746,10 @@ fn build_pad_properties(
         props.insert("width".to_string(), PropertyValue::Int(w as i64));
         props.insert("height".to_string(), PropertyValue::Int(h as i64));
         props.insert("alpha".to_string(), PropertyValue::Float(1.0));
-        props.insert("zorder".to_string(), PropertyValue::UInt(1));
+        props.insert(
+            "zorder".to_string(),
+            PropertyValue::UInt(vision_mixer::MV_THUMBNAIL_ZORDER as u64),
+        );
         if is_gl {
             props.insert(
                 "sizing-policy".to_string(),
@@ -762,7 +768,10 @@ fn build_pad_properties(
         props.insert("width".to_string(), PropertyValue::Int(w as i64));
         props.insert("height".to_string(), PropertyValue::Int(h as i64));
         props.insert("alpha".to_string(), PropertyValue::Float(1.0));
-        props.insert("zorder".to_string(), PropertyValue::UInt(10));
+        props.insert(
+            "zorder".to_string(),
+            PropertyValue::UInt(vision_mixer::MV_BIG_DISPLAY_ZORDER as u64),
+        );
         if is_gl {
             props.insert(
                 "sizing-policy".to_string(),
@@ -788,7 +797,10 @@ fn build_pad_properties(
         props.insert("width".to_string(), PropertyValue::Int(w as i64));
         props.insert("height".to_string(), PropertyValue::Int(h as i64));
         props.insert("alpha".to_string(), PropertyValue::Float(alpha));
-        props.insert("zorder".to_string(), PropertyValue::UInt(10));
+        props.insert(
+            "zorder".to_string(),
+            PropertyValue::UInt(vision_mixer::MV_BIG_DISPLAY_ZORDER as u64),
+        );
         if is_gl {
             props.insert(
                 "sizing-policy".to_string(),
@@ -806,7 +818,10 @@ fn build_pad_properties(
         props.insert("width".to_string(), PropertyValue::Int(p.mv_w as i64));
         props.insert("height".to_string(), PropertyValue::Int(p.mv_h as i64));
         props.insert("alpha".to_string(), PropertyValue::Float(1.0));
-        props.insert("zorder".to_string(), PropertyValue::UInt(200));
+        props.insert(
+            "zorder".to_string(),
+            PropertyValue::UInt(vision_mixer::MV_OVERLAY_ZORDER as u64),
+        );
     }
 
     pad_props

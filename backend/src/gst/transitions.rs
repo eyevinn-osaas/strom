@@ -9,6 +9,7 @@ use gstreamer_controller::prelude::*;
 use gstreamer_controller::{DirectControlBinding, InterpolationControlSource, InterpolationMode};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use strom_types::vision_mixer;
 use tracing::{debug, info};
 
 /// Transition type for scene switching.
@@ -435,7 +436,7 @@ impl TransitionController {
         cs_from.set_mode(InterpolationMode::Linear);
 
         // Add eased keyframes for first half (fade out)
-        let num_keyframes = 10;
+        let num_keyframes = vision_mixer::TRANSITION_KEYFRAMES;
         for i in 0..=num_keyframes {
             let t = i as f64 / num_keyframes as f64;
             let eased_t = Self::ease_in_out(t);
@@ -533,7 +534,7 @@ impl TransitionController {
         let value_range = end_value - start_value;
 
         // Add keyframes along ease-in-out curve for smooth animation
-        let num_keyframes = 10;
+        let num_keyframes = vision_mixer::TRANSITION_KEYFRAMES;
         for i in 0..=num_keyframes {
             let t = i as f64 / num_keyframes as f64;
             let eased_t = Self::ease_in_out(t);
@@ -593,7 +594,7 @@ impl TransitionController {
         let value_range = (end_value - start_value) as f64;
 
         // Add keyframes along ease-in-out curve for smooth animation
-        let num_keyframes = 10;
+        let num_keyframes = vision_mixer::TRANSITION_KEYFRAMES;
         for i in 0..=num_keyframes {
             let t = i as f64 / num_keyframes as f64;
             let eased_t = Self::ease_in_out(t);
