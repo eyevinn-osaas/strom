@@ -2,13 +2,14 @@
 
 use super::elements::{self, CompositorBackend};
 use super::layout;
-use super::overlay::{self, VisionMixerOverlayState};
+use super::overlay::{self, OverlayRenderer, VisionMixerOverlayState};
 use super::properties;
 use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use strom_types::vision_mixer;
 use strom_types::{
     block::{ExternalPad, ExternalPads},
@@ -74,8 +75,8 @@ impl BlockBuilder for VisionMixerBuilder {
         let pvw_input = properties::parse_initial_pvw(props, num_inputs);
         let labels = properties::parse_input_labels(props, num_inputs);
         let force_live = properties::parse_bool(props, "force_live", true);
-        let latency_ms = properties::parse_u64(props, "latency", 200);
-        let min_upstream_ms = properties::parse_u64(props, "min_upstream_latency", 200);
+        let latency_ms = properties::parse_u64(props, "latency", 20);
+        let min_upstream_ms = properties::parse_u64(props, "min_upstream_latency", 20);
         let (pgm_w, pgm_h) = properties::parse_resolution(
             props,
             "pgm_resolution",
@@ -237,51 +238,75 @@ fn build_gpu_pipeline(
     }
 
     // --- Multiview output chain ---
-    // glcolorconvert + capsfilter force BGRA in GL memory before gldownload — the GPU
-    // does the format conversion, and gldownload reads out BGRA directly.
-    // No CPU videoconvert needed. Cairo's ARGB32 is BGRA in memory on little-endian.
-    let cc_mv_id = p.id("glcolorconvert_mv_out");
-    let cf_bgra_id = p.id("capsfilter_bgra");
+    // Simplified: mv_comp → queue → gldownload → capsfilter
+    // The overlay is composited by mv_comp via an appsrc overlay pad (see below).
+    let q_mv_out_id = p.id("queue_mv_out");
     let dl_id = p.id("gldownload_mv");
-    let co_id = p.id("cairooverlay");
     let cf_mv_id = p.id("capsfilter_mv");
 
-    let glcolorconvert_mv = elements::make_element("glcolorconvert", &cc_mv_id)?;
-    let capsfilter_bgra = elements::make_capsfilter_gl_format("capsfilter_bgra", "BGRA")?;
-    capsfilter_bgra.set_property("name", &cf_bgra_id);
+    let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
     let gldownload_mv = elements::make_element("gldownload", "gldownload_mv")?;
     gldownload_mv.set_property("name", &dl_id);
-    let cairooverlay = elements::make_element("cairooverlay", "cairooverlay")?;
-    cairooverlay.set_property("name", &co_id);
     let capsfilter_mv = elements::make_capsfilter("capsfilter_mv", p.mv_w, p.mv_h)?;
     capsfilter_mv.set_property("name", &cf_mv_id);
 
-    elems.push((cc_mv_id.clone(), glcolorconvert_mv));
-    elems.push((cf_bgra_id.clone(), capsfilter_bgra));
+    elems.push((q_mv_out_id.clone(), queue_mv_out));
     elems.push((dl_id.clone(), gldownload_mv));
-    elems.push((co_id.clone(), cairooverlay.clone()));
     elems.push((cf_mv_id.clone(), capsfilter_mv));
 
     links.push((
         ElementPadRef::pad(&mv_comp_id, "src"),
-        ElementPadRef::pad(&cc_mv_id, "sink"),
+        ElementPadRef::pad(&q_mv_out_id, "sink"),
     ));
     links.push((
-        ElementPadRef::pad(&cc_mv_id, "src"),
-        ElementPadRef::pad(&cf_bgra_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&cf_bgra_id, "src"),
+        ElementPadRef::pad(&q_mv_out_id, "src"),
         ElementPadRef::pad(&dl_id, "sink"),
     ));
     links.push((
         ElementPadRef::pad(&dl_id, "src"),
-        ElementPadRef::pad(&co_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&co_id, "src"),
         ElementPadRef::pad(&cf_mv_id, "sink"),
     ));
+
+    // --- Overlay appsrc → glupload → mv_comp (composited in GPU at high zorder) ---
+    let appsrc_overlay_id = p.id("appsrc_overlay");
+    let overlay_caps_str = format!(
+        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate=30/1,interlace-mode=progressive,multiview-mode=mono",
+        p.mv_w, p.mv_h
+    );
+    let overlay_caps: gst::Caps = overlay_caps_str
+        .parse()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("overlay caps: {}", e)))?;
+    let appsrc_overlay = gst_app::AppSrc::builder()
+        .name(&appsrc_overlay_id)
+        .format(gst::Format::Time)
+        .is_live(true)
+        .automatic_eos(false)
+        .do_timestamp(true)
+        .max_buffers(2)
+        .leaky_type(gst_app::AppLeakyType::Upstream)
+        .build();
+
+    // Overlay appsrc → queue → glupload → mv_comp.
+    // No caps set on appsrc at build time — caps are pushed with the first sample
+    // after the pipeline is PLAYING (GL context available). Same pattern as WHIP inputs.
+    let q_overlay_id = p.id("queue_overlay");
+    let up_overlay_id = p.id("glupload_overlay");
+    let queue_overlay = elements::make_queue(&q_overlay_id)?;
+    let glupload_overlay = elements::make_element("glupload", &up_overlay_id)?;
+
+    elems.push((appsrc_overlay_id.clone(), appsrc_overlay.clone().upcast()));
+    elems.push((q_overlay_id.clone(), queue_overlay));
+    elems.push((up_overlay_id.clone(), glupload_overlay));
+
+    links.push((
+        ElementPadRef::pad(&appsrc_overlay_id, "src"),
+        ElementPadRef::pad(&q_overlay_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&q_overlay_id, "src"),
+        ElementPadRef::pad(&up_overlay_id, "sink"),
+    ));
+    // Link to mv_comp is added AFTER all other mv_comp links (pad ordering matters)
 
     // --- Per-input elements ---
     for i in 0..p.num_inputs {
@@ -299,6 +324,16 @@ fn build_gpu_pipeline(
         elems.push((up_id.clone(), glupload));
         elems.push((cc_id.clone(), glcolorconvert));
         elems.push((tee_id.clone(), tee));
+
+        // Queues after tee decouple input processing from compositor backpressure.
+        // Without these, the tee pushes synchronously to all 3 compositors — if any
+        // compositor blocks, glupload/glcolorconvert stall and the input queue fills.
+        let q_dist_id = p.id(&format!("queue_to_dist_{}", i));
+        let q_thumb_id = p.id(&format!("queue_to_mv_thumb_{}", i));
+        let q_pvw_id = p.id(&format!("queue_to_mv_pvw_{}", i));
+        elems.push((q_dist_id.clone(), elements::make_queue(&q_dist_id)?));
+        elems.push((q_thumb_id.clone(), elements::make_queue(&q_thumb_id)?));
+        elems.push((q_pvw_id.clone(), elements::make_queue(&q_pvw_id)?));
 
         // queue → glupload → glcolorconvert → tee
         links.push((
@@ -319,8 +354,13 @@ fn build_gpu_pipeline(
     // Distribution compositor: video inputs first (sink_0..N-1), then DSK (sink_N..N+dsk-1)
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
+        let q_dist_id = p.id(&format!("queue_to_dist_{}", i));
         links.push((
             ElementPadRef::pad(&tee_id, "src_0"),
+            ElementPadRef::pad(&q_dist_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_dist_id, "src"),
             ElementPadRef::pad(&mixer_id, format!("sink_{}", i)),
         ));
     }
@@ -333,17 +373,21 @@ fn build_gpu_pipeline(
         ));
     }
 
-    // Multiview compositor thumbnails: tee_i.src_1 → mv_comp (creates sink_0..sink_{N-1})
+    // Multiview compositor thumbnails: tee_i.src_1 → queue → mv_comp
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
+        let q_thumb_id = p.id(&format!("queue_to_mv_thumb_{}", i));
         links.push((
             ElementPadRef::pad(&tee_id, "src_1"),
+            ElementPadRef::pad(&q_thumb_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_thumb_id, "src"),
             ElementPadRef::pad(&mv_comp_id, format!("sink_{}", i)),
         ));
     }
 
     // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
-    // Queue decouples distribution and multiview compositors onto separate threads.
     links.push((
         ElementPadRef::pad(&tee_pgm_id, "src_1"),
         ElementPadRef::pad(&q_pgm_mv_id, "sink"),
@@ -353,20 +397,32 @@ fn build_gpu_pipeline(
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
     ));
 
-    // Multiview PVW big candidates: tee_i.src_2 → mv_comp.sink_{N+1+i}
+    // Multiview PVW big candidates: tee_i.src_2 → queue → mv_comp.sink_{N+1+i}
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
+        let q_pvw_id = p.id(&format!("queue_to_mv_pvw_{}", i));
         links.push((
             ElementPadRef::pad(&tee_id, "src_2"),
+            ElementPadRef::pad(&q_pvw_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_pvw_id, "src"),
             ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs + 1 + i)),
         ));
     }
 
+    // Overlay pad: glupload_overlay → mv_comp (must be last link to get correct pad index)
+    let overlay_pad_idx = 2 * p.num_inputs + 1;
+    links.push((
+        ElementPadRef::pad(&up_overlay_id, "src"),
+        ElementPadRef::pad(&mv_comp_id, format!("sink_{}", overlay_pad_idx)),
+    ));
+
     // --- Pad properties (applied after linking when auto-created pads exist) ---
     let pad_properties = build_pad_properties(p, &mv_layout);
 
-    // --- Set up cairooverlay draw signal ---
-    setup_cairo_overlay(p, &cairooverlay, &mv_layout, ctx);
+    // --- Set up overlay appsrc renderer ---
+    setup_overlay_renderer(p, &appsrc_overlay, &overlay_caps, &mv_layout, ctx);
 
     info!(
         "Vision mixer GPU pipeline built: {} inputs, PGM={}x{}, MV={}x{}",
@@ -449,31 +505,56 @@ fn build_cpu_pipeline(
     }
 
     // --- Multiview output chain (no gldownload needed for CPU) ---
-    let vc_id = p.id("videoconvert_pre_cairo");
-    let co_id = p.id("cairooverlay");
+    // Overlay is composited by mv_comp via appsrc pad (see below).
+    let q_mv_out_id = p.id("queue_mv_out");
     let cf_mv_id = p.id("capsfilter_mv");
 
-    let videoconvert_mv = elements::make_element("videoconvert", &vc_id)?;
-    let cairooverlay = elements::make_element("cairooverlay", &co_id)?;
+    let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
     let capsfilter_mv = elements::make_capsfilter("capsfilter_mv", p.mv_w, p.mv_h)?;
     capsfilter_mv.set_property("name", &cf_mv_id);
 
-    elems.push((vc_id.clone(), videoconvert_mv));
-    elems.push((co_id.clone(), cairooverlay.clone()));
+    elems.push((q_mv_out_id.clone(), queue_mv_out));
     elems.push((cf_mv_id.clone(), capsfilter_mv));
 
     links.push((
         ElementPadRef::pad(&mv_comp_id, "src"),
-        ElementPadRef::pad(&vc_id, "sink"),
+        ElementPadRef::pad(&q_mv_out_id, "sink"),
     ));
     links.push((
-        ElementPadRef::pad(&vc_id, "src"),
-        ElementPadRef::pad(&co_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&co_id, "src"),
+        ElementPadRef::pad(&q_mv_out_id, "src"),
         ElementPadRef::pad(&cf_mv_id, "sink"),
     ));
+
+    // --- Overlay appsrc → mv_comp (CPU compositor accepts raw BGRA directly) ---
+    let appsrc_overlay_id = p.id("appsrc_overlay");
+    let overlay_caps_str = format!(
+        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate=30/1,interlace-mode=progressive,multiview-mode=mono",
+        p.mv_w, p.mv_h
+    );
+    let overlay_caps: gst::Caps = overlay_caps_str
+        .parse()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("overlay caps: {}", e)))?;
+    let appsrc_overlay = gst_app::AppSrc::builder()
+        .name(&appsrc_overlay_id)
+        .format(gst::Format::Time)
+        .is_live(true)
+        .automatic_eos(false)
+        .do_timestamp(true)
+        .max_buffers(2)
+        .leaky_type(gst_app::AppLeakyType::Upstream)
+        .build();
+
+    let q_overlay_id = p.id("queue_overlay");
+    let queue_overlay = elements::make_queue(&q_overlay_id)?;
+
+    elems.push((appsrc_overlay_id.clone(), appsrc_overlay.clone().upcast()));
+    elems.push((q_overlay_id.clone(), queue_overlay));
+
+    links.push((
+        ElementPadRef::pad(&appsrc_overlay_id, "src"),
+        ElementPadRef::pad(&q_overlay_id, "sink"),
+    ));
+    // Link to mv_comp is added AFTER all other mv_comp links (pad ordering matters)
 
     // --- Per-input elements ---
     for i in 0..p.num_inputs {
@@ -488,6 +569,14 @@ fn build_cpu_pipeline(
         elems.push((q_id.clone(), queue));
         elems.push((vc_in_id.clone(), videoconvert));
         elems.push((tee_id.clone(), tee));
+
+        // Queues after tee decouple input processing from compositor backpressure
+        let q_dist_id = p.id(&format!("queue_to_dist_{}", i));
+        let q_thumb_id = p.id(&format!("queue_to_mv_thumb_{}", i));
+        let q_pvw_id = p.id(&format!("queue_to_mv_pvw_{}", i));
+        elems.push((q_dist_id.clone(), elements::make_queue(&q_dist_id)?));
+        elems.push((q_thumb_id.clone(), elements::make_queue(&q_thumb_id)?));
+        elems.push((q_pvw_id.clone(), elements::make_queue(&q_pvw_id)?));
 
         // queue → videoconvert → tee
         links.push((
@@ -504,8 +593,13 @@ fn build_cpu_pipeline(
     // Distribution compositor: video inputs first, then DSK
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
+        let q_dist_id = p.id(&format!("queue_to_dist_{}", i));
         links.push((
             ElementPadRef::pad(&tee_id, "src_0"),
+            ElementPadRef::pad(&q_dist_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_dist_id, "src"),
             ElementPadRef::pad(&mixer_id, format!("sink_{}", i)),
         ));
     }
@@ -517,17 +611,21 @@ fn build_cpu_pipeline(
         ));
     }
 
-    // Multiview compositor thumbnails
+    // Multiview compositor thumbnails: tee_i.src_1 → queue → mv_comp
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
+        let q_thumb_id = p.id(&format!("queue_to_mv_thumb_{}", i));
         links.push((
             ElementPadRef::pad(&tee_id, "src_1"),
+            ElementPadRef::pad(&q_thumb_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_thumb_id, "src"),
             ElementPadRef::pad(&mv_comp_id, format!("sink_{}", i)),
         ));
     }
 
     // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
-    // Queue decouples distribution and multiview compositors onto separate threads.
     links.push((
         ElementPadRef::pad(&tee_pgm_id, "src_1"),
         ElementPadRef::pad(&q_pgm_mv_id, "sink"),
@@ -537,17 +635,29 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
     ));
 
-    // Multiview PVW big candidates at offset N+1
+    // Multiview PVW big candidates: tee_i.src_2 → queue → mv_comp.sink_{N+1+i}
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
+        let q_pvw_id = p.id(&format!("queue_to_mv_pvw_{}", i));
         links.push((
             ElementPadRef::pad(&tee_id, "src_2"),
+            ElementPadRef::pad(&q_pvw_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_pvw_id, "src"),
             ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs + 1 + i)),
         ));
     }
 
+    // Overlay pad: queue_overlay → mv_comp (must be last link for correct pad index)
+    let overlay_pad_idx = 2 * p.num_inputs + 1;
+    links.push((
+        ElementPadRef::pad(&q_overlay_id, "src"),
+        ElementPadRef::pad(&mv_comp_id, format!("sink_{}", overlay_pad_idx)),
+    ));
+
     let pad_properties = build_pad_properties(p, &mv_layout);
-    setup_cairo_overlay(p, &cairooverlay, &mv_layout, ctx);
+    setup_overlay_renderer(p, &appsrc_overlay, &overlay_caps, &mv_layout, ctx);
 
     info!(
         "Vision mixer CPU pipeline built: {} inputs, PGM={}x{}, MV={}x{}",
@@ -683,13 +793,27 @@ fn build_pad_properties(
         }
     }
 
+    // --- Overlay pad: fullscreen, highest zorder ---
+    {
+        let overlay_pad_name = format!("sink_{}", 2 * p.num_inputs + 1);
+        let props = mv_pads.entry(overlay_pad_name).or_default();
+        props.insert("xpos".to_string(), PropertyValue::Int(0));
+        props.insert("ypos".to_string(), PropertyValue::Int(0));
+        props.insert("width".to_string(), PropertyValue::Int(p.mv_w as i64));
+        props.insert("height".to_string(), PropertyValue::Int(p.mv_h as i64));
+        props.insert("alpha".to_string(), PropertyValue::Float(1.0));
+        props.insert("zorder".to_string(), PropertyValue::UInt(200));
+    }
+
     pad_props
 }
 
-/// Set up the cairooverlay draw signal with shared state.
-fn setup_cairo_overlay(
+/// Set up the overlay renderer: creates shared state, registers it, and starts
+/// a 1Hz timer that pushes overlay frames via appsrc when state changes.
+fn setup_overlay_renderer(
     p: &PipelineParams,
-    cairooverlay: &gst::Element,
+    appsrc: &gst_app::AppSrc,
+    overlay_caps: &gst::Caps,
     mv_layout: &layout::OverlayLayout,
     ctx: &BlockBuildContext,
 ) {
@@ -705,25 +829,21 @@ fn setup_cairo_overlay(
     // Register the overlay state so the API layer can access it
     overlay::register_overlay_state(p.instance_id, Arc::clone(&overlay_state));
 
-    let state_for_draw = Arc::clone(&overlay_state);
-    let cairooverlay_clone = cairooverlay.clone();
+    let renderer = Arc::new(Mutex::new(OverlayRenderer::new(
+        appsrc.clone(),
+        overlay_caps.clone(),
+        Arc::clone(&overlay_state),
+        p.mv_w as i32,
+        p.mv_h as i32,
+    )));
+
+    let block_id = p.instance_id.to_string();
+    overlay::register_overlay_renderer(&block_id, Arc::clone(&renderer));
+
+    let block_id_for_timer = block_id.clone();
+    let renderer_for_timer = Arc::clone(&renderer);
     ctx.register_element_setup(Box::new(move |_flow_id, _events| {
-        cairooverlay_clone.connect("draw", false, move |args| {
-            // The cairooverlay "draw" signal provides the cairo context as the 2nd argument.
-            // Extract raw pointer from GValue boxed type and wrap in cairo::Context.
-            // SAFETY: The cairooverlay element guarantees the 2nd signal argument is a valid
-            // cairo_t pointer during the "draw" callback. We borrow (from_raw_none) because
-            // GStreamer owns the context and destroys it after the signal returns.
-            unsafe {
-                let value_ptr = args[1].as_ptr();
-                let cr_ptr = gst::glib::gobject_ffi::g_value_get_boxed(value_ptr)
-                    as *mut cairo::ffi::cairo_t;
-                if !cr_ptr.is_null() {
-                    let cr = cairo::Context::from_raw_none(cr_ptr);
-                    overlay::draw_overlay(&state_for_draw, &cr);
-                }
-            }
-            None
-        });
+        // Start 1Hz timer for clock updates; also pushes initial frame
+        overlay::start_overlay_timer(block_id_for_timer.clone(), renderer_for_timer.clone());
     }));
 }

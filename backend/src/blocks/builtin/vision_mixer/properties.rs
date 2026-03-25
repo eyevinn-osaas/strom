@@ -93,7 +93,9 @@ pub fn parse_resolution(
             _ => None,
         })
         .unwrap_or(default);
-    strom_types::parse_resolution_string(s).unwrap_or((1920, 1080))
+    strom_types::parse_resolution_string(s).unwrap_or_else(|| {
+        strom_types::parse_resolution_string(default).expect("default resolution must be valid")
+    })
 }
 
 /// Parse a boolean property with a default.

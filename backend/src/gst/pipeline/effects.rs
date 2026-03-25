@@ -4,6 +4,27 @@ use gstreamer::prelude::*;
 use tracing::{debug, info};
 
 impl PipelineManager {
+    /// Get the distribution compositor canvas size from its capsfilter.
+    fn dist_canvas_size(&self, block_instance_id: &str) -> (i32, i32) {
+        let default =
+            strom_types::parse_resolution_string(strom_types::vision_mixer::DEFAULT_PGM_RESOLUTION)
+                .map(|(w, h)| (w as i32, h as i32))
+                .expect("DEFAULT_PGM_RESOLUTION must be valid");
+
+        let capsfilter_id = format!("{}:capsfilter_dist", block_instance_id);
+        self.elements
+            .get(&capsfilter_id)
+            .and_then(|cf| cf.property::<Option<gst::Caps>>("caps"))
+            .and_then(|caps| {
+                let s = caps.structure(0)?;
+                Some((
+                    s.get::<i32>("width").unwrap_or(default.0),
+                    s.get::<i32>("height").unwrap_or(default.1),
+                ))
+            })
+            .unwrap_or(default)
+    }
+
     /// Trigger a transition on a compositor/mixer block.
     ///
     /// Returns whether FTB was auto-cancelled.
@@ -59,24 +80,7 @@ impl PipelineManager {
             );
         }
 
-        // Get canvas dimensions from the capsfilter caps (needed for pad size reset)
-        let capsfilter_id = format!("{}:capsfilter", block_instance_id);
-        let (canvas_width, canvas_height) =
-            if let Some(capsfilter) = self.elements.get(&capsfilter_id) {
-                if let Some(caps) = capsfilter.property::<Option<gst::Caps>>("caps") {
-                    if let Some(structure) = caps.structure(0) {
-                        let width = structure.get::<i32>("width").unwrap_or(1920);
-                        let height = structure.get::<i32>("height").unwrap_or(1080);
-                        (width, height)
-                    } else {
-                        (1920, 1080)
-                    }
-                } else {
-                    (1920, 1080)
-                }
-            } else {
-                (1920, 1080)
-            };
+        let (canvas_width, canvas_height) = self.dist_canvas_size(block_instance_id);
 
         // Reset all video pads to a clean state before the transition:
         // clear control bindings, restore alpha/position/size.
@@ -164,8 +168,10 @@ impl PipelineManager {
             .get(&mixer_id)
             .ok_or_else(|| PipelineError::ElementNotFound(mixer_id.clone()))?;
 
+        let (canvas_width, canvas_height) = self.dist_canvas_size(block_instance_id);
+
         // Create transition controller and animate
-        let controller = TransitionController::new(mixer.clone(), 1920, 1080);
+        let controller = TransitionController::new(mixer.clone(), canvas_width, canvas_height);
         controller
             .animate_input(
                 input_index,
@@ -339,6 +345,8 @@ impl PipelineManager {
             .pvw_input
             .store(new_pvw, std::sync::atomic::Ordering::Relaxed);
 
+        overlay::trigger_overlay_update(block_instance_id);
+
         info!(
             "Vision mixer {} preview changed: {} -> {}",
             block_instance_id, old_pvw, new_pvw
@@ -408,6 +416,8 @@ impl PipelineManager {
         state
             .pvw_input
             .store(old_pgm, std::sync::atomic::Ordering::Relaxed);
+
+        overlay::trigger_overlay_update(block_instance_id);
 
         info!(
             "Vision mixer {} take: PGM {} -> {}, PVW {} -> {} (swap)",
@@ -576,6 +586,8 @@ impl PipelineManager {
         state
             .ftb_active
             .store(now_active, std::sync::atomic::Ordering::Relaxed);
+
+        overlay::trigger_overlay_update(block_instance_id);
 
         info!(
             "Vision mixer {} FTB {}",
