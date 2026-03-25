@@ -128,7 +128,9 @@ fn vision_mixer_definition() -> BlockDefinition {
             label: "Latency (ms)".to_string(),
             description: "Compositor latency in milliseconds".to_string(),
             property_type: PropertyType::UInt,
-            default_value: Some(PropertyValue::UInt(200)),
+            default_value: Some(PropertyValue::UInt(
+                strom_types::vision_mixer::DEFAULT_LATENCY_MS,
+            )),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "latency".to_string(),
@@ -141,7 +143,9 @@ fn vision_mixer_definition() -> BlockDefinition {
             label: "Min Upstream Latency (ms)".to_string(),
             description: "Minimum upstream latency in milliseconds".to_string(),
             property_type: PropertyType::UInt,
-            default_value: Some(PropertyValue::UInt(200)),
+            default_value: Some(PropertyValue::UInt(
+                strom_types::vision_mixer::DEFAULT_MIN_UPSTREAM_LATENCY_MS,
+            )),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "min_upstream_latency".to_string(),

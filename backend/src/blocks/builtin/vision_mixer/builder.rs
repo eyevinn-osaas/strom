@@ -75,8 +75,12 @@ impl BlockBuilder for VisionMixerBuilder {
         let pvw_input = properties::parse_initial_pvw(props, num_inputs);
         let labels = properties::parse_input_labels(props, num_inputs);
         let force_live = properties::parse_bool(props, "force_live", true);
-        let latency_ms = properties::parse_u64(props, "latency", 20);
-        let min_upstream_ms = properties::parse_u64(props, "min_upstream_latency", 20);
+        let latency_ms = properties::parse_u64(props, "latency", vision_mixer::DEFAULT_LATENCY_MS);
+        let min_upstream_ms = properties::parse_u64(
+            props,
+            "min_upstream_latency",
+            vision_mixer::DEFAULT_MIN_UPSTREAM_LATENCY_MS,
+        );
         let (pgm_w, pgm_h) = properties::parse_resolution(
             props,
             "pgm_resolution",

@@ -38,3 +38,9 @@ pub const MAX_DSK_INPUTS: usize = 4;
 
 /// Default number of DSK inputs (0 = no DSK).
 pub const DEFAULT_DSK_INPUTS: usize = 0;
+
+/// Default compositor latency in milliseconds.
+pub const DEFAULT_LATENCY_MS: u64 = 20;
+
+/// Default minimum upstream latency in milliseconds.
+pub const DEFAULT_MIN_UPSTREAM_LATENCY_MS: u64 = 20;

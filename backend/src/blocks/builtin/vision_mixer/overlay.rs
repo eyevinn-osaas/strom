@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 /// Global registry of vision mixer overlay states, keyed by block instance ID.
 /// Used by the API layer to access overlay state for preview/PGM updates.
@@ -284,7 +284,7 @@ impl OverlayRenderer {
         let t0 = std::time::Instant::now();
         let pushed = self.push_frame(pgm, pvw, ftb, h, m, s);
         let elapsed = t0.elapsed();
-        info!(
+        debug!(
             "Overlay render+push: {:.1}ms (pgm={}, pvw={}, ftb={}, pushed={})",
             elapsed.as_secs_f64() * 1000.0,
             pgm,
@@ -366,7 +366,7 @@ impl OverlayRenderer {
 
             let t_push = t0.elapsed();
 
-            info!(
+            debug!(
                 "Overlay breakdown: surface={:.1}ms cairo={:.1}ms copy={:.1}ms push={:.1}ms total={:.1}ms ({}x{})",
                 t_surface.as_secs_f64() * 1000.0,
                 (t_cairo - t_surface).as_secs_f64() * 1000.0,
@@ -413,7 +413,7 @@ pub fn trigger_overlay_update(block_id: &str) {
     if let Some(renderer) = get_overlay_renderer(block_id) {
         if let Ok(mut r) = renderer.lock() {
             let pushed = r.render_if_dirty();
-            info!(
+            debug!(
                 "Overlay trigger for {}: pushed={}",
                 &block_id[..8.min(block_id.len())],
                 pushed
