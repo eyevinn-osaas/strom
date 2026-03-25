@@ -388,23 +388,8 @@ fn build_cpu_pipeline(
 
     let mv_layout = layout::compute_layout(p.mv_w, p.mv_h, p.num_inputs);
 
-    // --- Distribution output chain: mixer → [dsk_comp →] tee_pgm → capsfilter ---
-    let dsk_comp_id = p.id("dsk_comp");
-    if p.num_dsk_inputs > 0 {
-        let dsk_comp = elements::make_dist_compositor(
-            p.backend,
-            p.force_live,
-            p.latency_ms,
-            p.min_upstream_ms,
-        )?;
-        dsk_comp.set_property("name", dsk_comp_id.clone());
-        elems.push((dsk_comp_id.clone(), dsk_comp));
-        links.push((
-            ElementPadRef::pad(&mixer_id, "src"),
-            ElementPadRef::pad(&dsk_comp_id, "sink_0".to_string()),
-        ));
-    }
-
+    // --- Distribution output chain: mixer → tee_pgm → capsfilter ---
+    // DSK inputs are composited on the main mixer (same as GPU path).
     let tee_pgm_id = p.id("tee_pgm");
     let tee_pgm = elements::make_tee(&tee_pgm_id)?;
     let cf_dist_id = p.id("capsfilter_dist");

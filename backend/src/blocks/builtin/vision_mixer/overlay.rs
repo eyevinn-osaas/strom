@@ -141,20 +141,10 @@ impl VisionMixerOverlayState {
 
 /// Get local timezone offset in seconds east of UTC and the timezone abbreviation.
 fn local_tz_info() -> (i64, String) {
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&now, &mut tm);
-        let abbr = if tm.tm_zone.is_null() {
-            "UTC".to_string()
-        } else {
-            std::ffi::CStr::from_ptr(tm.tm_zone)
-                .to_str()
-                .unwrap_or("UTC")
-                .to_string()
-        };
-        (tm.tm_gmtoff, abbr)
-    }
+    let now = chrono::Local::now();
+    let offset_secs = now.offset().local_minus_utc() as i64;
+    let abbr = now.format("%Z").to_string();
+    (offset_secs, abbr)
 }
 
 /// Pack a timezone abbreviation (up to 7 ASCII bytes) into a u64.
