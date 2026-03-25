@@ -156,6 +156,24 @@ pub fn make_capsfilter(
         .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))
 }
 
+/// Create a capsfilter that constrains GL memory output to a specific pixel format.
+/// Used to force format conversion in GL space before gldownload.
+pub fn make_capsfilter_gl_format(
+    name: &str,
+    format: &str,
+) -> Result<gst::Element, BlockBuildError> {
+    let caps_str = format!("video/x-raw(memory:GLMemory),format={}", format);
+    let caps: gst::Caps = caps_str
+        .parse()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("caps parse: {}", e)))?;
+
+    gst::ElementFactory::make("capsfilter")
+        .name(name)
+        .property("caps", &caps)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))
+}
+
 /// Create a simple GStreamer element by factory name.
 pub fn make_element(factory: &str, name: &str) -> Result<gst::Element, BlockBuildError> {
     gst::ElementFactory::make(factory)

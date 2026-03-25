@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.1"
+    "version": "0.4.2-dev"
   },
   "paths": {
     "/api/auth/status": {
@@ -861,6 +861,67 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DskToggleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/ftb": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Toggle Fade to Black on a vision mixer block.",
+        "operationId": "fade_to_black",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FadeToBlackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "FTB toggled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FadeToBlackResponse"
                 }
               }
             }
@@ -4604,13 +4665,13 @@
         "type": "object",
         "description": "Request to toggle a DSK (Downstream Keyer) layer on a vision mixer block.",
         "required": [
-          "dsk_index",
+          "dsk",
           "enabled"
         ],
         "properties": {
-          "dsk_index": {
+          "dsk": {
             "type": "integer",
-            "description": "DSK layer index (0 or 1)",
+            "description": "DSK layer number (1 or 2, 1-based)",
             "minimum": 0
           },
           "enabled": {
@@ -4624,12 +4685,13 @@
         "description": "Response after toggling a DSK layer.",
         "required": [
           "message",
-          "dsk_index",
+          "dsk",
           "enabled"
         ],
         "properties": {
-          "dsk_index": {
+          "dsk": {
             "type": "integer",
+            "description": "DSK layer number (1-based)",
             "minimum": 0
           },
           "enabled": {
@@ -4989,6 +5051,37 @@
               "$ref": "#/components/schemas/ExternalPad"
             },
             "description": "Output pads (mapped to internal element pads)"
+          }
+        }
+      },
+      "FadeToBlackRequest": {
+        "type": "object",
+        "description": "Request to toggle Fade to Black on a vision mixer block.",
+        "required": [
+          "duration_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Duration in milliseconds (0 = instant)",
+            "minimum": 0
+          }
+        }
+      },
+      "FadeToBlackResponse": {
+        "type": "object",
+        "description": "Response after toggling Fade to Black.",
+        "required": [
+          "message",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
           }
         }
       },
@@ -8551,6 +8644,86 @@
                 "type": "string",
                 "enum": [
                   "VisionMixerStateChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer DSK layer toggled",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer DSK layer toggled",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "dsk",
+                  "enabled"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "dsk": {
+                    "type": "integer",
+                    "description": "DSK layer number (1-based)",
+                    "minimum": 0
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerDskChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer Fade to Black state changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer Fade to Black state changed",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "active"
+                ],
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerFtbChanged"
                 ]
               }
             }

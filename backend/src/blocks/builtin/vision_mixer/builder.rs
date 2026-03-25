@@ -206,6 +206,11 @@ fn build_gpu_pipeline(
         ElementPadRef::pad(&cf_dist_id, "sink"),
     ));
 
+    // Queue to decouple tee_pgm from the multiview compositor (separate thread)
+    let q_pgm_mv_id = p.id("queue_pgm_mv");
+    let queue_pgm_mv = elements::make_queue(&q_pgm_mv_id)?;
+    elems.push((q_pgm_mv_id.clone(), queue_pgm_mv));
+
     // DSK input element chains (elements only, links to mixer added later after video inputs)
     for i in 0..p.num_dsk_inputs {
         let q_id = p.id(&format!("queue_dsk_{}", i));
@@ -232,35 +237,45 @@ fn build_gpu_pipeline(
     }
 
     // --- Multiview output chain ---
+    // glcolorconvert + capsfilter force BGRA in GL memory before gldownload — the GPU
+    // does the format conversion, and gldownload reads out BGRA directly.
+    // No CPU videoconvert needed. Cairo's ARGB32 is BGRA in memory on little-endian.
+    let cc_mv_id = p.id("glcolorconvert_mv_out");
+    let cf_bgra_id = p.id("capsfilter_bgra");
     let dl_id = p.id("gldownload_mv");
-    let vc_id = p.id("videoconvert_pre_cairo");
     let co_id = p.id("cairooverlay");
     let cf_mv_id = p.id("capsfilter_mv");
 
+    let glcolorconvert_mv = elements::make_element("glcolorconvert", &cc_mv_id)?;
+    let capsfilter_bgra = elements::make_capsfilter_gl_format("capsfilter_bgra", "BGRA")?;
+    capsfilter_bgra.set_property("name", &cf_bgra_id);
     let gldownload_mv = elements::make_element("gldownload", "gldownload_mv")?;
     gldownload_mv.set_property("name", &dl_id);
-    let videoconvert_mv = elements::make_element("videoconvert", "videoconvert_pre_cairo")?;
-    videoconvert_mv.set_property("name", &vc_id);
     let cairooverlay = elements::make_element("cairooverlay", "cairooverlay")?;
     cairooverlay.set_property("name", &co_id);
     let capsfilter_mv = elements::make_capsfilter("capsfilter_mv", p.mv_w, p.mv_h)?;
     capsfilter_mv.set_property("name", &cf_mv_id);
 
+    elems.push((cc_mv_id.clone(), glcolorconvert_mv));
+    elems.push((cf_bgra_id.clone(), capsfilter_bgra));
     elems.push((dl_id.clone(), gldownload_mv));
-    elems.push((vc_id.clone(), videoconvert_mv));
     elems.push((co_id.clone(), cairooverlay.clone()));
     elems.push((cf_mv_id.clone(), capsfilter_mv));
 
     links.push((
         ElementPadRef::pad(&mv_comp_id, "src"),
+        ElementPadRef::pad(&cc_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&cc_mv_id, "src"),
+        ElementPadRef::pad(&cf_bgra_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&cf_bgra_id, "src"),
         ElementPadRef::pad(&dl_id, "sink"),
     ));
     links.push((
         ElementPadRef::pad(&dl_id, "src"),
-        ElementPadRef::pad(&vc_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&vc_id, "src"),
         ElementPadRef::pad(&co_id, "sink"),
     ));
     links.push((
@@ -327,10 +342,14 @@ fn build_gpu_pipeline(
         ));
     }
 
-    // Multiview PGM big display: tee_pgm.src_1 → mv_comp.sink_N
-    // Shows the actual dist_comp output (transitions, DSK visible)
+    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
+    // Queue decouples distribution and multiview compositors onto separate threads.
     links.push((
         ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&q_pgm_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&q_pgm_mv_id, "src"),
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
     ));
 
@@ -406,6 +425,11 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&tee_pgm_id, "src_0"),
         ElementPadRef::pad(&cf_dist_id, "sink"),
     ));
+
+    // Queue to decouple tee_pgm from the multiview compositor (separate thread)
+    let q_pgm_mv_id = p.id("queue_pgm_mv");
+    let queue_pgm_mv = elements::make_queue(&q_pgm_mv_id)?;
+    elems.push((q_pgm_mv_id.clone(), queue_pgm_mv));
 
     // DSK input element chains (links to mixer added later after video inputs)
     for i in 0..p.num_dsk_inputs {
@@ -502,9 +526,14 @@ fn build_cpu_pipeline(
         ));
     }
 
-    // Multiview PGM big display from tee_pgm (shows actual transitions)
+    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
+    // Queue decouples distribution and multiview compositors onto separate threads.
     links.push((
         ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&q_pgm_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&q_pgm_mv_id, "src"),
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
     ));
 
