@@ -53,8 +53,17 @@ pub const MV_THUMBNAIL_ZORDER: u32 = 1;
 /// Z-order for PGM/PVW big display pads on the multiview compositor.
 pub const MV_BIG_DISPLAY_ZORDER: u32 = 10;
 
+/// Z-order for the background source on the distribution compositor.
+pub const DIST_BACKGROUND_ZORDER: u32 = 0;
+
+/// Z-order for PGM group sources on the distribution compositor.
+pub const DIST_PGM_ZORDER: u32 = 1;
+
 /// Base z-order for DSK pads on the distribution compositor (+ dsk index).
 pub const DIST_DSK_BASE_ZORDER: u32 = 100;
+
+/// Sentinel value for "no background source".
+pub const NO_BACKGROUND: u64 = u64::MAX;
 
 /// Z-order for the overlay pad on the multiview compositor.
 pub const MV_OVERLAY_ZORDER: u32 = 200;

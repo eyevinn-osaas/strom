@@ -817,6 +817,67 @@
         }
       }
     },
+    "/api/flows/{flow_id}/blocks/{block_id}/background": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Set or clear the background source on a vision mixer block.",
+        "operationId": "set_background",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBackgroundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Background source set/cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetBackgroundResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/flows/{flow_id}/blocks/{block_id}/dsk": {
       "post": {
         "tags": [
@@ -6817,6 +6878,40 @@
         ],
         "description": "Messages sent from server to client via WebSocket."
       },
+      "SetBackgroundRequest": {
+        "type": "object",
+        "description": "Request to set or clear the background source on a vision mixer block.",
+        "properties": {
+          "input": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Source index to use as background (0-based), or null to clear.",
+            "minimum": 0
+          }
+        }
+      },
+      "SetBackgroundResponse": {
+        "type": "object",
+        "description": "Response after setting/clearing the background source.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "background_input": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Current background source index, or null if none.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "SetPlaylistRequest": {
         "type": "object",
         "description": "Request to set the playlist.",
@@ -8768,6 +8863,47 @@
                 "type": "string",
                 "enum": [
                   "VisionMixerFtbChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer background source changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer background source changed",
+                "required": [
+                  "flow_id",
+                  "block_id"
+                ],
+                "properties": {
+                  "background_input": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "Background source index, or null if cleared.",
+                    "minimum": 0
+                  },
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerBackgroundChanged"
                 ]
               }
             }

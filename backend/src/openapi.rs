@@ -11,9 +11,10 @@ use strom_types::api::{
     LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
     PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, ProbeInfo, ProbeResponse,
     RenameMediaRequest, RtpStreamStats, SelectPreviewRequest, SelectPreviewResponse, ServerMessage,
-    SourceFlowInfo, SystemInfo, TransitionResponse, TransportStats, TriggerTransitionRequest,
-    UpdateFlowPropertiesRequest, UpdatePadPropertyRequest, UpdatePropertyRequest, VisionMixerState,
-    WebRtcConnectionStats, WebRtcStats, WebRtcStatsResponse,
+    SetBackgroundRequest, SetBackgroundResponse, SourceFlowInfo, SystemInfo, TransitionResponse,
+    TransportStats, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
+    UpdatePadPropertyRequest, UpdatePropertyRequest, VisionMixerState, WebRtcConnectionStats,
+    WebRtcStats, WebRtcStatsResponse,
 };
 use strom_types::auth::{LoginRequest, LoginResponse};
 use strom_types::block::{
@@ -56,6 +57,7 @@ use utoipa::OpenApi;
         crate::api::flows::trigger_transition,
         crate::api::flows::select_preview,
         crate::api::flows::toggle_dsk,
+        crate::api::flows::set_background,
         crate::api::flows::fade_to_black,
         crate::api::flows::animate_input,
         crate::api::flows::debug_graph,
@@ -207,6 +209,8 @@ use utoipa::OpenApi;
             VisionMixerState,
             DskToggleRequest,
             DskToggleResponse,
+            SetBackgroundRequest,
+            SetBackgroundResponse,
             FadeToBlackRequest,
             FadeToBlackResponse,
             // Discovery types

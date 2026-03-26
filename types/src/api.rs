@@ -880,6 +880,23 @@ pub struct VisionMixerState {
     pub input_labels: Vec<String>,
 }
 
+/// Request to set or clear the background source on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetBackgroundRequest {
+    /// Source index to use as background (0-based), or null to clear.
+    pub input: Option<usize>,
+}
+
+/// Response after setting/clearing the background source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetBackgroundResponse {
+    pub message: String,
+    /// Current background source index, or null if none.
+    pub background_input: Option<usize>,
+}
+
 /// Request to toggle a DSK (Downstream Keyer) layer on a vision mixer block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]

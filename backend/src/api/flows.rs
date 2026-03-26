@@ -1422,6 +1422,54 @@ pub async fn select_preview(
     }))
 }
 
+/// Set or clear the background source on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/background",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::SetBackgroundRequest,
+    responses(
+        (status = 200, description = "Background source set/cleared", body = strom_types::api::SetBackgroundResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn set_background(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::SetBackgroundRequest>,
+) -> Result<Json<strom_types::api::SetBackgroundResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Setting background {:?} on vision mixer {} in flow {}",
+        req.input, block_id, flow_id
+    );
+
+    let bg = state
+        .set_vision_mixer_background(&flow_id, &block_id, req.input)
+        .await
+        .map_err(|e| {
+            error!("Failed to set background: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to set background",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::SetBackgroundResponse {
+        message: match bg {
+            Some(idx) => format!("Background set to input {}", idx),
+            None => "Background cleared".to_string(),
+        },
+        background_input: bg,
+    }))
+}
+
 /// Toggle a DSK (Downstream Keyer) layer on a vision mixer block.
 #[utoipa::path(
     post,

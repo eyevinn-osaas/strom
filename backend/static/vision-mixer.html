@@ -121,6 +121,16 @@
             box-shadow: 0 0 8px rgba(0, 255, 0, 0.3);
         }
 
+        .src-btn.bg-active {
+            border-color: #cc9900;
+            box-shadow: 0 0 6px rgba(204, 153, 0, 0.4);
+        }
+        .src-btn.bg-active::after {
+            content: ' BG';
+            font-size: 8px;
+            color: #cc9900;
+        }
+
         /* Transition section */
         .transition-panel {
             display: flex;
@@ -417,7 +427,7 @@
             <span class="conn-dot" id="wsDot" title="WebSocket control">WS</span>
         </div>
         <span class="status-text" id="statusText">Connecting...</span>
-        <span class="shortcut-hint">1-9,0 = PVW | Hold G+N = Multi | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
+        <span class="shortcut-hint">1-9,0 = PVW | G+N = Multi | B+N = BG | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
     </div>
 
     <!-- Server-injected configuration (safe JSON encoding) -->
@@ -439,12 +449,14 @@
         // Groups: ordered arrays of 0-based input indices (1-4 items each)
         let currentPgmGroup = _cfg.initial_pgm_group || [_cfg.initial_pgm];
         let currentPvwGroup = _cfg.initial_pvw_group || [_cfg.initial_pvw];
+        let currentBackground = _cfg.background_input != null ? _cfg.background_input : null;
         let dskEnabled = _cfg.dsk_states || [true, true, true, true];
         let transitionType = 'fade';
         let transitionDurationMs = 1000;
         let transitioning = false;
         let ftbActive = _cfg.ftb_active || false;
         let groupMode = false;  // true while G is held down
+        let bgMode = false;     // true while B is held down
         let controlsMinimized = localStorage.getItem('vm-controls-minimized') === 'true';
 
         function toggleMinimize() {
@@ -471,9 +483,9 @@
 
         // ---- PVW/PGM selection ----
         function selectPreview(input, multi) {
+            if (currentBackground === input) return;  // background source is exclusive
             if (!multi && currentPgmGroup.length === 1 && currentPgmGroup[0] === input) return;
             if (!multi && currentPvwGroup.length === 1 && currentPvwGroup[0] === input) return;
-            // In group mode, allow adding PGM sources to the PVW group
             apiPost('/preview', { input, multi: !!multi })
                 .then(r => {
                     currentPvwGroup = r.preview_inputs || [r.preview_input];
@@ -548,6 +560,29 @@
             btn.textContent = ftbActive ? 'FTB ON' : 'FTB';
         }
 
+        // ---- Background source ----
+        function setBackground(input) {
+            // Toggle: if already background, clear it
+            const newBg = (currentBackground === input) ? null : input;
+            apiPost('/background', { input: newBg })
+                .then(r => {
+                    currentBackground = r.background_input;
+                    updateButtons();
+                    setStatus(r.message);
+                })
+                .catch(e => setStatus('Background error: ' + e.message));
+        }
+
+        function clearBackground() {
+            apiPost('/background', { input: null })
+                .then(r => {
+                    currentBackground = r.background_input;
+                    updateButtons();
+                    setStatus(r.message);
+                })
+                .catch(e => setStatus('Background error: ' + e.message));
+        }
+
         // ---- DSK toggle ----
         function toggleDsk(index) {
             dskEnabled[index] = !dskEnabled[index];
@@ -614,9 +649,11 @@
         function updateButtons() {
             document.querySelectorAll('#pgmBus .src-btn').forEach((btn, i) => {
                 btn.classList.toggle('pgm-active', currentPgmGroup.includes(i));
+                btn.classList.toggle('bg-active', currentBackground === i);
             });
             document.querySelectorAll('#pvwBus .src-btn').forEach((btn, i) => {
                 btn.classList.toggle('pvw-active', currentPvwGroup.includes(i));
+                btn.classList.toggle('bg-active', currentBackground === i);
             });
         }
 
@@ -664,15 +701,26 @@
                 return;
             }
 
-            // 1-9, 0 = select PVW source (group mode = multi-toggle)
+            // Hold B = background mode (B + number sets background)
+            if ((e.key === 'b' || e.key === 'B') && !e.repeat) {
+                bgMode = true;
+                e.preventDefault();
+                return;
+            }
+
+            // 1-9, 0 = action depends on mode
             if (e.key >= '1' && e.key <= '9') {
                 const input = parseInt(e.key) - 1;
-                if (input < NUM_INPUTS) selectPreview(input, groupMode);
+                if (input < NUM_INPUTS) {
+                    if (bgMode) { setBackground(input); }
+                    else { selectPreview(input, groupMode); }
+                }
                 e.preventDefault();
                 return;
             }
             if (e.key === '0' && NUM_INPUTS >= 10) {
-                selectPreview(9, groupMode);
+                if (bgMode) { setBackground(9); }
+                else { selectPreview(9, groupMode); }
                 e.preventDefault();
                 return;
             }
@@ -707,9 +755,8 @@
         });
 
         document.addEventListener('keyup', (e) => {
-            if (e.key === 'g' || e.key === 'G') {
-                groupMode = false;
-            }
+            if (e.key === 'g' || e.key === 'G') groupMode = false;
+            if (e.key === 'b' || e.key === 'B') bgMode = false;
         });
 
         // ---- Connection status helpers ----
@@ -785,11 +832,38 @@
         // ---- WebSocket for state sync ----
         let ws = null;
 
+        // Fetch current server state to resync after WS reconnect
+        async function resyncState() {
+            try {
+                // Fetch the page HTML and parse the embedded config JSON
+                const resp = await fetch(location.pathname);
+                if (!resp.ok) return;
+                const html = await resp.text();
+                const match = html.match(/<script id="vm-config" type="application\/json">([\s\S]*?)<\/script>/);
+                if (!match) return;
+                const cfg = JSON.parse(match[1]);
+                currentPgmGroup = cfg.initial_pgm_group || [cfg.initial_pgm];
+                currentPvwGroup = cfg.initial_pvw_group || [cfg.initial_pvw];
+                currentBackground = cfg.background_input != null ? cfg.background_input : null;
+                ftbActive = cfg.ftb_active || false;
+                dskEnabled = cfg.dsk_states || [true, true, true, true];
+                updateButtons();
+                updateFtbButton();
+                updateDskButtons();
+                setStatus('Reconnected - state synced');
+            } catch (e) {
+                setStatus('Resync failed: ' + e.message);
+            }
+        }
+
         function connectWebSocket() {
             const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(wsProto + '//' + location.host + '/api/ws');
 
-            ws.onopen = () => setDot('wsDot', 'ok');
+            ws.onopen = () => {
+                setDot('wsDot', 'ok');
+                resyncState();
+            };
 
             ws.onmessage = (e) => {
                 try {
@@ -814,6 +888,13 @@
                         if (d.block_id === BLOCK_ID) {
                             ftbActive = d.active;
                             updateFtbButton();
+                        }
+                    }
+                    if (event.type === 'VisionMixerBackgroundChanged' && event.data) {
+                        const d = event.data;
+                        if (d.block_id === BLOCK_ID) {
+                            currentBackground = d.background_input;
+                            updateButtons();
                         }
                     }
                 } catch {}

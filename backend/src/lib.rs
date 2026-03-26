@@ -168,6 +168,10 @@ pub async fn create_app_with_config(
             post(api::flows::toggle_dsk),
         )
         .route(
+            "/flows/{flow_id}/blocks/{block_id}/background",
+            post(api::flows::set_background),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/ftb",
             post(api::flows::fade_to_black),
         )

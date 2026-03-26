@@ -89,6 +89,7 @@ impl PipelineManager {
 
         // Reset all video pads to a clean state before the transition:
         // clear control bindings, restore alpha/position/size for current PGM group.
+        // Background pad stays fullscreen at low z-order.
         let pgm_rects = strom_types::vision_mixer::compute_group_rects(
             0,
             0,
@@ -96,6 +97,7 @@ impl PipelineManager {
             canvas_height,
             old_pgm_group.len(),
         );
+        let bg_input = overlay_state.as_ref().and_then(|s| s.background_input());
 
         for pad in mixer.sink_pads() {
             let name = pad.name();
@@ -120,6 +122,18 @@ impl PipelineManager {
                             pad.set_property("ypos", y);
                             pad.set_property("width", w);
                             pad.set_property("height", h);
+                            pad.set_property("zorder", strom_types::vision_mixer::DIST_PGM_ZORDER);
+                        } else if bg_input == Some(idx) {
+                            // Background source: fullscreen, low z-order
+                            pad.set_property("alpha", 1.0f64);
+                            pad.set_property("xpos", 0i32);
+                            pad.set_property("ypos", 0i32);
+                            pad.set_property("width", canvas_width);
+                            pad.set_property("height", canvas_height);
+                            pad.set_property(
+                                "zorder",
+                                strom_types::vision_mixer::DIST_BACKGROUND_ZORDER,
+                            );
                         } else {
                             pad.set_property("alpha", 0.0f64);
                             pad.set_property("xpos", 0i32);
@@ -168,7 +182,7 @@ impl PipelineManager {
                 new_pgm_group.len(),
             );
 
-            // Set incoming pad positions (invisible at alpha=0)
+            // Set incoming pad positions (invisible at alpha=0, above background)
             for (slot, &idx) in new_pgm_group.iter().enumerate() {
                 if let Some(pad) = mixer.static_pad(&format!("sink_{}", idx)) {
                     let (x, y, w, h) =
@@ -181,6 +195,7 @@ impl PipelineManager {
                     pad.set_property("width", w);
                     pad.set_property("height", h);
                     pad.set_property("alpha", 0.0f64);
+                    pad.set_property("zorder", strom_types::vision_mixer::DIST_PGM_ZORDER);
                 }
             }
 
@@ -396,6 +411,15 @@ impl PipelineManager {
             });
         }
 
+        // Background source is exclusive — can't be used in PVW/PGM groups
+        if state.background_input() == Some(input) {
+            return Err(PipelineError::InvalidProperty {
+                element: block_instance_id.to_string(),
+                property: "preview_input".to_string(),
+                reason: format!("Input {} is the background source", input),
+            });
+        }
+
         // Compute new PVW group
         let new_pvw_group = if multi {
             // Toggle mode: add/remove the input from the PVW group
@@ -426,7 +450,7 @@ impl PipelineManager {
         };
 
         // Update multiview PVW candidate pads
-        // First hide all old PVW pads
+        // First hide all old PVW pads (and old background PVW pad)
         for &old_idx in &old_pvw_group {
             if !pgm_group.contains(&old_idx) {
                 if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + old_idx))
@@ -436,7 +460,27 @@ impl PipelineManager {
             }
         }
 
-        // Position new PVW pads in sub-rects of the PVW area
+        let bg = state.background_input();
+
+        // If there's a background, show it fullscreen in the PVW area at lower z-order
+        if let Some(bg_idx) = bg {
+            if !new_pvw_group.contains(&bg_idx) {
+                if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + bg_idx)) {
+                    let r = &state.layout.pvw_rect;
+                    pad.set_property("xpos", r.x as i32);
+                    pad.set_property("ypos", r.y as i32);
+                    pad.set_property("width", r.w as i32);
+                    pad.set_property("height", r.h as i32);
+                    pad.set_property("alpha", 1.0f64);
+                    pad.set_property(
+                        "zorder",
+                        strom_types::vision_mixer::MV_BIG_DISPLAY_ZORDER - 1,
+                    );
+                }
+            }
+        }
+
+        // Position new PVW pads in sub-rects of the PVW area (above background)
         let sub_rects =
             layout::compute_group_sub_rects(&state.layout.pvw_rect, new_pvw_group.len());
         for (slot, &idx) in new_pvw_group.iter().enumerate() {
@@ -499,7 +543,27 @@ impl PipelineManager {
             }
         }
 
-        // Position new PVW group in sub-rects of the PVW area
+        let bg = state.background_input();
+
+        // If there's a background, show it fullscreen in the PVW area at lower z-order
+        if let Some(bg_idx) = bg {
+            if !new_pvw_group.contains(&bg_idx) {
+                if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + bg_idx)) {
+                    let r = &state.layout.pvw_rect;
+                    pad.set_property("xpos", r.x as i32);
+                    pad.set_property("ypos", r.y as i32);
+                    pad.set_property("width", r.w as i32);
+                    pad.set_property("height", r.h as i32);
+                    pad.set_property("alpha", 1.0f64);
+                    pad.set_property(
+                        "zorder",
+                        strom_types::vision_mixer::MV_BIG_DISPLAY_ZORDER - 1,
+                    );
+                }
+            }
+        }
+
+        // Position new PVW group in sub-rects of the PVW area (above background)
         let sub_rects =
             layout::compute_group_sub_rects(&state.layout.pvw_rect, new_pvw_group.len());
         for (slot, &idx) in new_pvw_group.iter().enumerate() {
@@ -525,6 +589,81 @@ impl PipelineManager {
             "Vision mixer {} take: PGM -> {:?}, PVW -> {:?}",
             block_instance_id, new_pgm_group, new_pvw_group
         );
+
+        Ok(())
+    }
+
+    /// Set or clear the background source on a vision mixer block.
+    ///
+    /// The background source is placed fullscreen at a low z-order on the distribution
+    /// compositor, behind the PGM group sources. Visible through gaps in split-screen layouts.
+    pub fn set_vision_mixer_background(
+        &self,
+        block_instance_id: &str,
+        input: Option<usize>,
+    ) -> Result<(), PipelineError> {
+        use crate::blocks::builtin::vision_mixer::overlay;
+        use strom_types::vision_mixer;
+
+        let mixer_id = format!("{}:mixer", block_instance_id);
+        let mixer = self
+            .elements
+            .get(&mixer_id)
+            .ok_or_else(|| PipelineError::ElementNotFound(mixer_id.clone()))?;
+
+        let state = overlay::get_overlay_state(block_instance_id).ok_or_else(|| {
+            PipelineError::ElementNotFound(format!(
+                "Vision mixer overlay state not found for {}",
+                block_instance_id
+            ))
+        })?;
+
+        let (canvas_width, canvas_height) = self.dist_canvas_size(block_instance_id);
+
+        // Clear old background pad (if any)
+        if let Some(old_bg) = state.background_input() {
+            if let Some(pad) = mixer.static_pad(&format!("sink_{}", old_bg)) {
+                pad.set_property("alpha", 0.0f64);
+            }
+        }
+
+        // Set new background pad
+        if let Some(bg_idx) = input {
+            if bg_idx >= state.num_inputs {
+                return Err(PipelineError::InvalidProperty {
+                    element: block_instance_id.to_string(),
+                    property: "background_input".to_string(),
+                    reason: format!(
+                        "Input {} out of range (max {})",
+                        bg_idx,
+                        state.num_inputs - 1
+                    ),
+                });
+            }
+            // Background is exclusive — can't use a source that's in PGM or PVW
+            let pgm_group = state.pgm_group();
+            let pvw_group = state.pvw_group();
+            if pgm_group.contains(&bg_idx) || pvw_group.contains(&bg_idx) {
+                return Err(PipelineError::InvalidProperty {
+                    element: block_instance_id.to_string(),
+                    property: "background_input".to_string(),
+                    reason: format!("Input {} is in use as a PGM/PVW source", bg_idx),
+                });
+            }
+            if let Some(pad) = mixer.static_pad(&format!("sink_{}", bg_idx)) {
+                pad.set_property("xpos", 0i32);
+                pad.set_property("ypos", 0i32);
+                pad.set_property("width", canvas_width);
+                pad.set_property("height", canvas_height);
+                pad.set_property("zorder", vision_mixer::DIST_BACKGROUND_ZORDER);
+                pad.set_property("alpha", 1.0f64);
+            }
+        }
+
+        state.set_background_input(input);
+        overlay::trigger_overlay_update(block_instance_id);
+
+        info!("Vision mixer {} background: {:?}", block_instance_id, input);
 
         Ok(())
     }
@@ -617,11 +756,12 @@ impl PipelineManager {
             let name = pad.name();
             if name.starts_with("sink_") {
                 if let Ok(idx) = name.trim_start_matches("sink_").parse::<usize>() {
+                    let bg = state.background_input();
                     let (start_alpha, end_alpha) = if now_active {
                         // FTB on: fade current alpha to 0
                         let current = pad.property::<f64>("alpha");
                         (current, 0.0)
-                    } else if pgm_group.contains(&idx) {
+                    } else if pgm_group.contains(&idx) || bg == Some(idx) {
                         (0.0, 1.0)
                     } else if idx >= state.num_inputs {
                         let dsk_idx = idx - state.num_inputs;

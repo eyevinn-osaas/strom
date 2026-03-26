@@ -51,6 +51,8 @@ pub struct VisionMixerOverlayState {
     pgm_group: AtomicU64,
     /// Packed PVW source group (up to 4 source indices). See `vision_mixer::pack_source_group`.
     pvw_group: AtomicU64,
+    /// Background source index (u64::MAX = no background).
+    background_input: AtomicU64,
     /// Number of inputs.
     pub num_inputs: usize,
     /// Whether Fade to Black is active.
@@ -95,6 +97,7 @@ impl VisionMixerOverlayState {
         Self {
             pgm_group: AtomicU64::new(vision_mixer::pack_single_source(pgm_input)),
             pvw_group: AtomicU64::new(vision_mixer::pack_single_source(pvw_input)),
+            background_input: AtomicU64::new(vision_mixer::NO_BACKGROUND),
             num_inputs,
             ftb_active: AtomicBool::new(false),
             dsk_enabled: (0..num_dsk_inputs)
@@ -151,6 +154,29 @@ impl VisionMixerOverlayState {
     pub fn set_pvw_group(&self, indices: &[usize]) {
         self.pvw_group
             .store(vision_mixer::pack_source_group(indices), Ordering::Relaxed);
+    }
+
+    /// Get the background source index, or None if no background.
+    pub fn background_input(&self) -> Option<usize> {
+        let val = self.background_input.load(Ordering::Relaxed);
+        if val == vision_mixer::NO_BACKGROUND {
+            None
+        } else {
+            Some(val as usize)
+        }
+    }
+
+    /// Get the raw background atomic value (for dirty checking).
+    pub fn background_input_packed(&self) -> u64 {
+        self.background_input.load(Ordering::Relaxed)
+    }
+
+    /// Set or clear the background source.
+    pub fn set_background_input(&self, input: Option<usize>) {
+        let val = input
+            .map(|i| i as u64)
+            .unwrap_or(vision_mixer::NO_BACKGROUND);
+        self.background_input.store(val, Ordering::Relaxed);
     }
 
     /// Get local wall-clock time as (hours, minutes, seconds) and timezone abbreviation.
@@ -220,6 +246,11 @@ const PGM_R: f64 = 0.0; // want R=0.9 in output → feed to cairo B channel
 const PGM_G: f64 = 0.0;
 const PGM_B: f64 = 0.9; // want B=0 in output → feed to cairo R channel
 
+// Yellow for background indicator: want output R=0.9, G=0.7, B=0
+const BG_R: f64 = 0.0; // fed to cairo B channel → outputs as R=0 → WRONG, need B=0.9
+const BG_G: f64 = 0.7;
+const BG_B: f64 = 0.9; // fed to cairo R channel → outputs as B=0 → WRONG, need R=0.0
+
 const GRAY: f64 = 0.5;
 
 /// Helper to get text extents, returning (width, height) with a fallback.
@@ -277,6 +308,7 @@ pub struct OverlayRenderer {
     surface: Option<cairo::ImageSurface>,
     last_pgm: u64,
     last_pvw: u64,
+    last_bg: u64,
     last_ftb: bool,
     last_clock_secs: u64,
 }
@@ -303,6 +335,7 @@ impl OverlayRenderer {
             surface: None,
             last_pgm: u64::MAX,
             last_pvw: u64::MAX,
+            last_bg: u64::MAX - 1,
             last_ftb: false,
             last_clock_secs: u64::MAX,
         }
@@ -312,12 +345,14 @@ impl OverlayRenderer {
     pub fn render_if_dirty(&mut self) -> bool {
         let pgm_packed = self.state.pgm_group_packed();
         let pvw_packed = self.state.pvw_group_packed();
+        let bg_packed = self.state.background_input_packed();
         let ftb = self.state.ftb_active.load(Ordering::Relaxed);
         let (h, m, s) = self.state.wall_clock_hms();
         let clock_secs = h as u64 * 3600 + m as u64 * 60 + s as u64;
 
         if self.last_pgm == pgm_packed
             && self.last_pvw == pvw_packed
+            && self.last_bg == bg_packed
             && self.last_ftb == ftb
             && self.last_clock_secs == clock_secs
         {
@@ -326,9 +361,10 @@ impl OverlayRenderer {
 
         let pgm_group = vision_mixer::unpack_source_group(pgm_packed);
         let pvw_group = vision_mixer::unpack_source_group(pvw_packed);
+        let bg = self.state.background_input();
 
         let t0 = std::time::Instant::now();
-        let pushed = self.push_frame(&pgm_group, &pvw_group, ftb, h, m, s);
+        let pushed = self.push_frame(&pgm_group, &pvw_group, bg, ftb, h, m, s);
         let elapsed = t0.elapsed();
         debug!(
             "Overlay render+push: {:.1}ms (pgm={:?}, pvw={:?}, ftb={}, pushed={})",
@@ -342,6 +378,7 @@ impl OverlayRenderer {
         if pushed {
             self.last_pgm = pgm_packed;
             self.last_pvw = pvw_packed;
+            self.last_bg = bg_packed;
             self.last_ftb = ftb;
             self.last_clock_secs = clock_secs;
             true
@@ -350,10 +387,12 @@ impl OverlayRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_frame(
         &mut self,
         pgm_group: &[usize],
         pvw_group: &[usize],
+        bg: Option<usize>,
         ftb: bool,
         h: u32,
         m: u32,
@@ -379,7 +418,7 @@ impl OverlayRenderer {
             cr.set_operator(cairo::Operator::Clear);
             let _ = cr.paint();
             cr.set_operator(cairo::Operator::Over);
-            render_overlay(&self.state, &cr, pgm_group, pvw_group, ftb, h, m, s);
+            render_overlay(&self.state, &cr, pgm_group, pvw_group, bg, ftb, h, m, s);
         }
 
         let t_cairo = t0.elapsed();
@@ -539,6 +578,7 @@ fn render_overlay(
     cr: &cairo::Context,
     pgm_group: &[usize],
     pvw_group: &[usize],
+    bg: Option<usize>,
     ftb: bool,
     h: u32,
     m: u32,
@@ -569,6 +609,9 @@ fn render_overlay(
         } else if pvw_group.contains(&i) {
             cr.set_source_rgb(PVW_R, PVW_G, PVW_B);
             cr.set_line_width(layout.thumb_border_width);
+        } else if bg == Some(i) {
+            cr.set_source_rgb(BG_R, BG_G, BG_B);
+            cr.set_line_width(layout.thumb_border_width);
         } else {
             cr.set_source_rgb(GRAY, GRAY, GRAY);
             cr.set_line_width((1.0 * layout.scale).max(1.0));
@@ -596,6 +639,26 @@ fn render_overlay(
             2.0 * sc,
             2.0 * sc,
         );
+    }
+
+    // --- BG indicator on background source thumbnail ---
+    if let Some(bg_idx) = bg {
+        if bg_idx < layout.thumbnail_rects.len() {
+            let r = &layout.thumbnail_rects[bg_idx];
+            cr.set_font_size(layout.label_font_size * 0.8);
+            draw_label_centered(
+                cr,
+                "BG",
+                r.x + r.w / 2.0,
+                r.y + layout.label_font_size,
+                BG_R,
+                BG_G,
+                BG_B,
+                0.7,
+                2.0 * sc,
+                1.0 * sc,
+            );
+        }
     }
 
     // --- PVW / PGM header labels ---

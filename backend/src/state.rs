@@ -1441,6 +1441,31 @@ impl AppState {
             .unwrap_or(4)
     }
 
+    /// Set or clear the background source on a vision mixer block.
+    pub async fn set_vision_mixer_background(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        input: Option<usize>,
+    ) -> Result<Option<usize>, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.set_vision_mixer_background(block_instance_id, input)?;
+        drop(pipelines);
+
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerBackgroundChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                background_input: input,
+            });
+
+        Ok(input)
+    }
+
     /// Toggle a DSK (Downstream Keyer) layer on a vision mixer block.
     pub async fn set_dsk_enabled(
         &self,
