@@ -518,7 +518,7 @@ fn render_overlay(
             cr.set_line_width(layout.thumb_border_width);
         } else {
             cr.set_source_rgb(GRAY, GRAY, GRAY);
-            cr.set_line_width(1.0);
+            cr.set_line_width((1.0 * layout.scale).max(1.0));
         }
         cr.rectangle(r.x, r.y, r.w, r.h);
         let _ = cr.stroke();
@@ -528,6 +528,7 @@ fn render_overlay(
     cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
     cr.set_font_size(layout.label_font_size);
 
+    let sc = layout.scale;
     for i in 0..layout.num_inputs.min(layout.label_positions.len()) {
         let pos = &layout.label_positions[i];
         draw_label_centered(
@@ -539,8 +540,8 @@ fn render_overlay(
             0.0,
             0.0,
             0.6,
-            2.0,
-            2.0,
+            2.0 * sc,
+            2.0 * sc,
         );
     }
 
@@ -556,8 +557,8 @@ fn render_overlay(
         PVW_G,
         PVW_B,
         0.7,
-        4.0,
-        2.0,
+        4.0 * sc,
+        2.0 * sc,
     );
     draw_label_centered(
         cr,
@@ -568,8 +569,8 @@ fn render_overlay(
         PGM_G,
         PGM_B,
         0.7,
-        4.0,
-        2.0,
+        4.0 * sc,
+        2.0 * sc,
     );
 
     // --- Clock ---
@@ -595,7 +596,16 @@ fn render_overlay(
     let clock_y = layout.header_font_size * 1.2;
 
     draw_label_centered(
-        cr, clock_str, clock_cx, clock_y, 0.0, 0.0, 0.0, 0.7, 8.0, 4.0,
+        cr,
+        clock_str,
+        clock_cx,
+        clock_y,
+        0.0,
+        0.0,
+        0.0,
+        0.7,
+        8.0 * sc,
+        4.0 * sc,
     );
 
     // --- FTB indicator ---
@@ -604,6 +614,17 @@ fn render_overlay(
         let ftb_cx = r.x + r.w / 2.0;
         let ftb_cy = r.y + r.h / 2.0;
         cr.set_font_size(layout.header_font_size * 2.0);
-        draw_label_centered(cr, "FTB", ftb_cx, ftb_cy, 0.0, 0.0, 0.8, 0.8, 12.0, 6.0);
+        draw_label_centered(
+            cr,
+            "FTB",
+            ftb_cx,
+            ftb_cy,
+            0.0,
+            0.0,
+            0.8,
+            0.8,
+            12.0 * sc,
+            6.0 * sc,
+        );
     }
 }

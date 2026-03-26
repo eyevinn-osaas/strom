@@ -4,29 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vision Mixer - Strom</title>
-    <link rel="stylesheet" href="/static/webrtc.css">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            width: 100%;
+            height: 100%;
+        }
         body {
-            background: #1a1a1a;
+            background: #000;
             color: #ddd;
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
             display: flex;
             flex-direction: column;
-            height: 100vh;
             overflow: hidden;
         }
 
         /* Multiview player */
         .multiview {
             flex: 1;
-            display: flex;
-            justify-content: center;
-            align-items: center;
             background: #000;
             min-height: 0;
         }
         .multiview video {
+            display: block;
             width: 100%;
             height: 100%;
             object-fit: contain;
@@ -35,11 +35,13 @@
         /* Control surface */
         .controls {
             background: #252525;
-            border-top: 2px solid #333;
             padding: 12px 16px;
             display: flex;
             gap: 16px;
             align-items: stretch;
+            transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease;
+            max-height: 200px;
+            overflow: hidden;
         }
 
         /* Bus section */
@@ -229,6 +231,7 @@
         .duration-input {
             width: 60px;
             height: 26px;
+            padding: 0 4px;
             background: #333;
             border: 1px solid #555;
             border-radius: 3px;
@@ -326,6 +329,31 @@
         .conn-dot.err::before { background: #cc0000; }
         .conn-dot.warn::before { background: #cc9900; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        /* Minimize-control mode */
+        body.minimized .controls {
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .minimize-indicator {
+            display: none;
+            position: fixed;
+            bottom: 28px;
+            right: 16px;
+            background: rgba(40, 40, 40, 0.85);
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 10px;
+            color: #888;
+            cursor: pointer;
+            z-index: 10;
+        }
+        .minimize-indicator:hover { color: #ccc; border-color: #888; }
+        body.minimized .minimize-indicator { display: block; }
     </style>
 </head>
 <body>
@@ -345,6 +373,15 @@
             <div class="bus-row">
                 <span class="bus-label pvw">PVW</span>
                 <div class="bus-buttons" id="pvwBus"></div>
+            </div>
+            <div class="bus-row" id="dskRow" style="display:none;">
+                <span class="bus-label" style="color:#ff6666;">DSK</span>
+                <div class="bus-buttons">
+                    <button class="dsk-btn on" id="dsk0Btn" onclick="toggleDsk(0)">DSK 1 ON</button>
+                    <button class="dsk-btn on" id="dsk1Btn" onclick="toggleDsk(1)" style="display:none;">DSK 2 ON</button>
+                    <button class="dsk-btn on" id="dsk2Btn" onclick="toggleDsk(2)" style="display:none;">DSK 3 ON</button>
+                    <button class="dsk-btn on" id="dsk3Btn" onclick="toggleDsk(3)" style="display:none;">DSK 4 ON</button>
+                </div>
             </div>
         </div>
 
@@ -367,14 +404,10 @@
                 <button class="duration-preset" onclick="setDuration(2.0)">2.0s</button>
                 <input type="number" class="duration-input" id="durationInput" value="1.0" min="0.1" max="10" step="0.1" onchange="onDurationInput()">
             </div>
-            <div class="type-row" id="dskRow" style="display:none;">
-                <button class="dsk-btn on" id="dsk0Btn" onclick="toggleDsk(0)">DSK 1 ON</button>
-                <button class="dsk-btn on" id="dsk1Btn" onclick="toggleDsk(1)" style="display:none;">DSK 2 ON</button>
-                <button class="dsk-btn on" id="dsk2Btn" onclick="toggleDsk(2)" style="display:none;">DSK 3 ON</button>
-                <button class="dsk-btn on" id="dsk3Btn" onclick="toggleDsk(3)" style="display:none;">DSK 4 ON</button>
-            </div>
         </div>
     </div>
+
+    <div class="minimize-indicator" onclick="toggleMinimize()" title="Show controls (M)">Controls hidden &middot; press M</div>
 
     <!-- Status bar -->
     <div class="status-bar">
@@ -384,7 +417,7 @@
             <span class="conn-dot" id="wsDot" title="WebSocket control">WS</span>
         </div>
         <span class="status-text" id="statusText">Connecting...</span>
-        <span class="shortcut-hint">1-9,0 = PVW | Space = AUTO | X = CUT | F = FTB</span>
+        <span class="shortcut-hint">1-9,0 = PVW | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
     </div>
 
     <!-- Server-injected configuration (safe JSON encoding) -->
@@ -410,6 +443,13 @@
         let transitionDurationMs = 1000;
         let transitioning = false;
         let ftbActive = _cfg.ftb_active || false;
+        let controlsMinimized = localStorage.getItem('vm-controls-minimized') === 'true';
+
+        function toggleMinimize() {
+            controlsMinimized = !controlsMinimized;
+            document.body.classList.toggle('minimized', controlsMinimized);
+            localStorage.setItem('vm-controls-minimized', controlsMinimized);
+        }
 
         // ---- API helpers ----
         const API_BASE = '/api/flows/' + FLOW_ID + '/blocks/' + BLOCK_ID;
@@ -646,6 +686,13 @@
                 e.preventDefault();
                 return;
             }
+
+            // M = toggle minimize controls
+            if (e.key === 'm' || e.key === 'M') {
+                toggleMinimize();
+                e.preventDefault();
+                return;
+            }
         });
 
         // ---- Connection status helpers ----
@@ -772,6 +819,7 @@
             updateFtbButton();
             connectMultiview();
             connectWebSocket();
+            if (controlsMinimized) document.body.classList.add('minimized');
         };
     </script>
 </body>

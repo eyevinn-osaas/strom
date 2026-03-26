@@ -80,6 +80,8 @@ pub struct OverlayLayout {
     pub pgm_border_width: f64,
     /// Thumbnail border width.
     pub thumb_border_width: f64,
+    /// Scale factor relative to 720p reference resolution (canvas_height / 720).
+    pub scale: f64,
 }
 
 /// Spacing between panels as a fraction of canvas dimension.
@@ -95,6 +97,7 @@ const THUMB_ROW_HEIGHT_FRACTION: f64 = 0.235;
 pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) -> OverlayLayout {
     let cw = canvas_width as f64;
     let ch = canvas_height as f64;
+    let scale = ch / 720.0;
     let gap = (cw * GAP_FRACTION).round();
 
     // Top row: PVW (left half) and PGM (right half)
@@ -114,7 +117,7 @@ pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) 
     let mut thumbnail_slot_rects = Vec::with_capacity(num_inputs);
     let mut label_positions = Vec::with_capacity(num_inputs);
 
-    let label_font_size = (thumb_h * 0.10).clamp(10.0, 20.0);
+    let label_font_size = thumb_h * 0.10;
     // Reserve space below the video for the label
     let label_area_h = label_font_size * 1.6;
     let video_h = thumb_h - label_area_h;
@@ -137,7 +140,7 @@ pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) 
         });
     }
 
-    let header_font_size = (top_h * 0.06).clamp(14.0, 32.0);
+    let header_font_size = top_h * 0.06;
 
     OverlayLayout {
         canvas_width: cw,
@@ -158,9 +161,10 @@ pub fn compute_layout(canvas_width: u32, canvas_height: u32, num_inputs: usize) 
         },
         label_font_size,
         header_font_size,
-        pvw_border_width: strom_types::vision_mixer::PVW_BORDER_WIDTH,
-        pgm_border_width: strom_types::vision_mixer::PGM_BORDER_WIDTH,
-        thumb_border_width: strom_types::vision_mixer::THUMBNAIL_BORDER_WIDTH,
+        pvw_border_width: strom_types::vision_mixer::PVW_BORDER_WIDTH * scale,
+        pgm_border_width: strom_types::vision_mixer::PGM_BORDER_WIDTH * scale,
+        thumb_border_width: strom_types::vision_mixer::THUMBNAIL_BORDER_WIDTH * scale,
+        scale,
     }
 }
 
