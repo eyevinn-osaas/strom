@@ -247,9 +247,9 @@ const PGM_G: f64 = 0.0;
 const PGM_B: f64 = 0.9; // want B=0 in output → feed to cairo R channel
 
 // Yellow for background indicator: want output R=0.9, G=0.7, B=0
-const BG_R: f64 = 0.0; // fed to cairo B channel → outputs as R=0 → WRONG, need B=0.9
+const BG_R: f64 = 0.0; // fed to cairo R channel → outputs as B=0
 const BG_G: f64 = 0.7;
-const BG_B: f64 = 0.9; // fed to cairo R channel → outputs as B=0 → WRONG, need R=0.0
+const BG_B: f64 = 0.9; // fed to cairo B channel → outputs as R=0.9
 
 const GRAY: f64 = 0.5;
 
