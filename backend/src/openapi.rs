@@ -4,15 +4,16 @@ use crate::mcp::handler::JsonRpcRequest;
 use strom_types::api::{
     ActivateProbeRequest, ActiveProbesResponse, AnimateInputRequest, AuthStatusResponse,
     AvailableOutput, AvailableSourcesResponse, ClientMessage, CodecStats, CreateDirectoryRequest,
-    CreateFlowRequest, DynamicPadsResponse, ElementInfoResponse, ElementListResponse,
-    ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse,
+    CreateFlowRequest, DskToggleRequest, DskToggleResponse, DynamicPadsResponse,
+    ElementInfoResponse, ElementListResponse, ElementPropertiesResponse, ErrorResponse,
+    ExportGstLaunchRequest, ExportGstLaunchResponse, FadeToBlackRequest, FadeToBlackResponse,
     FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse, IceCandidateStats,
     LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
     PadPropertiesResponse, ParseGstLaunchRequest, ParseGstLaunchResponse, ProbeInfo, ProbeResponse,
-    RenameMediaRequest, RtpStreamStats, ServerMessage, SourceFlowInfo, SystemInfo,
-    TransitionResponse, TransportStats, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
-    UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcConnectionStats, WebRtcStats,
-    WebRtcStatsResponse,
+    RenameMediaRequest, RtpStreamStats, SelectPreviewRequest, SelectPreviewResponse, ServerMessage,
+    SourceFlowInfo, SystemInfo, TransitionResponse, TransportStats, TriggerTransitionRequest,
+    UpdateFlowPropertiesRequest, UpdatePadPropertyRequest, UpdatePropertyRequest, VisionMixerState,
+    WebRtcConnectionStats, WebRtcStats, WebRtcStatsResponse,
 };
 use strom_types::auth::{LoginRequest, LoginResponse};
 use strom_types::block::{
@@ -200,6 +201,14 @@ use utoipa::OpenApi;
             TriggerTransitionRequest,
             TransitionResponse,
             AnimateInputRequest,
+            // Vision mixer types
+            SelectPreviewRequest,
+            SelectPreviewResponse,
+            VisionMixerState,
+            DskToggleRequest,
+            DskToggleResponse,
+            FadeToBlackRequest,
+            FadeToBlackResponse,
             // Discovery types
             DiscoveredStreamResponse,
             DeviceResponse,

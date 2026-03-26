@@ -551,7 +551,7 @@ impl PipelineManager {
 
                     // Ease-in-out keyframes
                     let duration_ns = (end_time - current_time).nseconds() as f64;
-                    let num_keyframes = 10u32;
+                    let num_keyframes = strom_types::vision_mixer::TRANSITION_KEYFRAMES as u32;
                     for i in 0..=num_keyframes {
                         let t = i as f64 / num_keyframes as f64;
                         let eased = (1.0 - (t * std::f64::consts::PI).cos()) / 2.0;

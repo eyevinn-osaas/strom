@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.2-dev"
+    "version": "0.4.2"
   },
   "paths": {
     "/api/auth/status": {
@@ -9111,6 +9111,36 @@
           "value": {
             "$ref": "#/components/schemas/PropertyValue",
             "description": "The new value for the property"
+          }
+        }
+      },
+      "VisionMixerState": {
+        "type": "object",
+        "description": "Current state of a vision mixer block.",
+        "required": [
+          "preview_input",
+          "program_input",
+          "num_inputs",
+          "input_labels"
+        ],
+        "properties": {
+          "input_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "num_inputs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preview_input": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "program_input": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
