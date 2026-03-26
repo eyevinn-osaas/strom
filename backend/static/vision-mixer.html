@@ -417,7 +417,7 @@
             <span class="conn-dot" id="wsDot" title="WebSocket control">WS</span>
         </div>
         <span class="status-text" id="statusText">Connecting...</span>
-        <span class="shortcut-hint">1-9,0 = PVW | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
+        <span class="shortcut-hint">1-9,0 = PVW | Hold G+N = Multi | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
     </div>
 
     <!-- Server-injected configuration (safe JSON encoding) -->
@@ -436,13 +436,15 @@
         const NUM_DSK_INPUTS = _cfg.num_dsk_inputs || 0;
 
         // ---- State ----
-        let currentPgm = _cfg.initial_pgm;
-        let currentPvw = _cfg.initial_pvw;
+        // Groups: ordered arrays of 0-based input indices (1-4 items each)
+        let currentPgmGroup = _cfg.initial_pgm_group || [_cfg.initial_pgm];
+        let currentPvwGroup = _cfg.initial_pvw_group || [_cfg.initial_pvw];
         let dskEnabled = _cfg.dsk_states || [true, true, true, true];
         let transitionType = 'fade';
         let transitionDurationMs = 1000;
         let transitioning = false;
         let ftbActive = _cfg.ftb_active || false;
+        let groupMode = false;  // true while G is held down
         let controlsMinimized = localStorage.getItem('vm-controls-minimized') === 'true';
 
         function toggleMinimize() {
@@ -468,21 +470,24 @@
         }
 
         // ---- PVW/PGM selection ----
-        function selectPreview(input) {
-            if (input === currentPgm || input === currentPvw) return;
-            apiPost('/preview', { input })
+        function selectPreview(input, multi) {
+            if (!multi && currentPgmGroup.length === 1 && currentPgmGroup[0] === input) return;
+            if (!multi && currentPvwGroup.length === 1 && currentPvwGroup[0] === input) return;
+            // In group mode, allow adding PGM sources to the PVW group
+            apiPost('/preview', { input, multi: !!multi })
                 .then(r => {
-                    currentPvw = r.preview_input;
-                    currentPgm = r.program_input;
+                    currentPvwGroup = r.preview_inputs || [r.preview_input];
+                    currentPgmGroup = r.program_inputs || [r.program_input];
                     updateButtons();
-                    setStatus('PVW: Input ' + (currentPvw + 1));
+                    const label = currentPvwGroup.map(i => i + 1).join('+');
+                    setStatus('PVW: Input ' + label);
                 })
                 .catch(e => setStatus('Preview error: ' + e.message));
         }
 
         // ---- Transitions ----
         function doTake(type, durationMs) {
-            if (transitioning || currentPgm === currentPvw) return;
+            if (transitioning) return;
             // FTB is auto-cancelled server-side when a transition is triggered
             transitioning = true;
             if (durationMs > 0) {
@@ -490,15 +495,15 @@
             }
 
             // Capture state before sending — swap immediately for responsive UI
-            const fromInput = currentPgm;
-            const toInput = currentPvw;
-            currentPgm = toInput;
-            currentPvw = fromInput;
+            const fromGroup = [...currentPgmGroup];
+            const toGroup = [...currentPvwGroup];
+            currentPgmGroup = toGroup;
+            currentPvwGroup = fromGroup;
             updateButtons();
 
             apiPost('/transition', {
-                from_input: fromInput,
-                to_input: toInput,
+                from_input: fromGroup[0] || 0,
+                to_input: toGroup[0] || 0,
                 transition_type: type,
                 duration_ms: durationMs
             }).then(r => {
@@ -509,8 +514,8 @@
                 }, durationMs);
             }).catch(e => {
                 // Revert swap on error
-                currentPgm = fromInput;
-                currentPvw = toInput;
+                currentPgmGroup = fromGroup;
+                currentPvwGroup = toGroup;
                 updateButtons();
                 transitioning = false;
                 document.getElementById('autoBtn').classList.remove('active');
@@ -608,10 +613,10 @@
         // ---- UI update ----
         function updateButtons() {
             document.querySelectorAll('#pgmBus .src-btn').forEach((btn, i) => {
-                btn.classList.toggle('pgm-active', i === currentPgm);
+                btn.classList.toggle('pgm-active', currentPgmGroup.includes(i));
             });
             document.querySelectorAll('#pvwBus .src-btn').forEach((btn, i) => {
-                btn.classList.toggle('pvw-active', i === currentPvw);
+                btn.classList.toggle('pvw-active', currentPvwGroup.includes(i));
             });
         }
 
@@ -633,35 +638,41 @@
 
                 // PGM button (display only)
                 const pgmBtn = document.createElement('button');
-                pgmBtn.className = 'src-btn' + (i === currentPgm ? ' pgm-active' : '');
+                pgmBtn.className = 'src-btn' + (currentPgmGroup.includes(i) ? ' pgm-active' : '');
                 pgmBtn.textContent = btnText;
                 pgmBtn.title = label + (keyHint ? ' (' + keyHint + ')' : '');
                 pgmBus.appendChild(pgmBtn);
 
-                // PVW button
+                // PVW button (click = single select, shift+click = multi-toggle)
                 const pvwBtn = document.createElement('button');
-                pvwBtn.className = 'src-btn' + (i === currentPvw ? ' pvw-active' : '');
+                pvwBtn.className = 'src-btn' + (currentPvwGroup.includes(i) ? ' pvw-active' : '');
                 pvwBtn.textContent = btnText;
-                pvwBtn.title = label + (keyHint ? ' (' + keyHint + ')' : '');
-                pvwBtn.onclick = () => selectPreview(i);
+                pvwBtn.title = label + (keyHint ? ' (' + keyHint + ', hold G + ' + keyHint + ' multi)' : '');
+                pvwBtn.onclick = () => selectPreview(i, groupMode);
                 pvwBus.appendChild(pvwBtn);
             }
         }
 
         // ---- Keyboard shortcuts ----
+        // Hold G = group mode (multi-select), release G = normal mode
         document.addEventListener('keydown', (e) => {
-            // Ignore when typing in input fields
             if (e.target.tagName === 'INPUT') return;
 
-            // 1-9, 0 = select PVW source
-            if (e.key >= '1' && e.key <= '9' && !e.shiftKey) {
-                const input = parseInt(e.key) - 1;
-                if (input < NUM_INPUTS) selectPreview(input);
+            if ((e.key === 'g' || e.key === 'G') && !e.repeat) {
+                groupMode = true;
                 e.preventDefault();
                 return;
             }
-            if (e.key === '0' && !e.shiftKey && NUM_INPUTS >= 10) {
-                selectPreview(9);
+
+            // 1-9, 0 = select PVW source (group mode = multi-toggle)
+            if (e.key >= '1' && e.key <= '9') {
+                const input = parseInt(e.key) - 1;
+                if (input < NUM_INPUTS) selectPreview(input, groupMode);
+                e.preventDefault();
+                return;
+            }
+            if (e.key === '0' && NUM_INPUTS >= 10) {
+                selectPreview(9, groupMode);
                 e.preventDefault();
                 return;
             }
@@ -692,6 +703,12 @@
                 toggleMinimize();
                 e.preventDefault();
                 return;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'g' || e.key === 'G') {
+                groupMode = false;
             }
         });
 
@@ -780,8 +797,8 @@
                     if (event.type === 'VisionMixerStateChanged' && event.data) {
                         const d = event.data;
                         if (d.block_id === BLOCK_ID) {
-                            currentPvw = d.preview_input;
-                            currentPgm = d.program_input;
+                            currentPvwGroup = d.preview_inputs || [d.preview_input];
+                            currentPgmGroup = d.program_inputs || [d.program_input];
                             updateButtons();
                         }
                     }

@@ -847,6 +847,10 @@ impl MediaOperationResponse {
 pub struct SelectPreviewRequest {
     /// Index of the input to set as preview (0-based)
     pub input: usize,
+    /// If true, toggle the input in/out of the current PVW group (shift+click).
+    /// If false (default), replace the PVW group with just this input.
+    #[serde(default)]
+    pub multi: bool,
 }
 
 /// Response after selecting a preview source.
@@ -854,8 +858,14 @@ pub struct SelectPreviewRequest {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SelectPreviewResponse {
     pub message: String,
+    /// First source in the PVW group (backward compat).
     pub preview_input: usize,
+    /// First source in the PGM group (backward compat).
     pub program_input: usize,
+    /// Full ordered PVW source group.
+    pub preview_inputs: Vec<usize>,
+    /// Full ordered PGM source group.
+    pub program_inputs: Vec<usize>,
 }
 
 /// Current state of a vision mixer block.
@@ -864,6 +874,8 @@ pub struct SelectPreviewResponse {
 pub struct VisionMixerState {
     pub preview_input: usize,
     pub program_input: usize,
+    pub preview_inputs: Vec<usize>,
+    pub program_inputs: Vec<usize>,
     pub num_inputs: usize,
     pub input_labels: Vec<String>,
 }

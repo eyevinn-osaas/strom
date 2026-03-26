@@ -1395,12 +1395,12 @@ pub async fn select_preview(
     Json(req): Json<strom_types::api::SelectPreviewRequest>,
 ) -> Result<Json<strom_types::api::SelectPreviewResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!(
-        "Selecting preview input {} on vision mixer {} in flow {}",
-        req.input, block_id, flow_id
+        "Selecting preview input {} (multi={}) on vision mixer {} in flow {}",
+        req.input, req.multi, block_id, flow_id
     );
 
-    let (pvw, pgm) = state
-        .select_vision_mixer_preview(&flow_id, &block_id, req.input)
+    let (pvw_group, pgm_group) = state
+        .select_vision_mixer_preview(&flow_id, &block_id, req.input, req.multi)
         .await
         .map_err(|e| {
             error!("Failed to select preview: {}", e);
@@ -1414,9 +1414,11 @@ pub async fn select_preview(
         })?;
 
     Ok(Json(strom_types::api::SelectPreviewResponse {
-        message: format!("Preview set to input {}", req.input),
-        preview_input: pvw,
-        program_input: pgm,
+        message: format!("Preview set to {:?}", pvw_group),
+        preview_input: pvw_group.first().copied().unwrap_or(0),
+        program_input: pgm_group.first().copied().unwrap_or(0),
+        preview_inputs: pvw_group,
+        program_inputs: pgm_group,
     }))
 }
 

@@ -27,7 +27,11 @@ impl PipelineManager {
 
     /// Trigger a transition on a compositor/mixer block.
     ///
-    /// Returns whether FTB was auto-cancelled.
+    /// Uses the server's authoritative PGM/PVW groups from overlay state.
+    /// For single-source groups, uses standard single-pad transitions.
+    /// For multi-source groups, cross-fades between group layouts.
+    ///
+    /// Returns (was_ftb_cancelled, old_pgm_group, new_pgm_group).
     pub fn trigger_transition(
         &self,
         block_instance_id: &str,
@@ -35,7 +39,7 @@ impl PipelineManager {
         to_input: usize,
         transition_type: &str,
         duration_ms: u64,
-    ) -> Result<bool, PipelineError> {
+    ) -> Result<(bool, Vec<usize>, Vec<usize>), PipelineError> {
         use crate::gst::transitions::{TransitionController, TransitionType};
 
         debug!(
@@ -50,22 +54,23 @@ impl PipelineManager {
             .get(&mixer_id)
             .ok_or_else(|| PipelineError::ElementNotFound(mixer_id.clone()))?;
 
-        // Clean up stale alpha values on video input pads only (not DSK pads).
-        // Use the server's authoritative PGM state, not the client-provided from_input,
-        // to avoid race conditions where the client's local state is out of sync.
+        // Read authoritative PGM/PVW groups from overlay state
         let overlay_state =
             crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(block_instance_id);
         let num_video_inputs = overlay_state
             .as_ref()
             .map(|s| s.num_inputs)
             .unwrap_or(usize::MAX);
-        let actual_pgm = overlay_state
+        let old_pgm_group = overlay_state
             .as_ref()
-            .map(|s| s.pgm_input.load(std::sync::atomic::Ordering::Relaxed))
-            .unwrap_or(from_input);
+            .map(|s| s.pgm_group())
+            .unwrap_or_else(|| vec![from_input]);
+        let new_pgm_group = overlay_state
+            .as_ref()
+            .map(|s| s.pvw_group())
+            .unwrap_or_else(|| vec![to_input]);
 
-        // Auto-cancel FTB if active — clear control bindings and restore clean alpha state.
-        // This avoids race conditions with the client sending un-FTB + transition in parallel.
+        // Auto-cancel FTB if active
         let was_ftb = overlay_state
             .as_ref()
             .map(|s| {
@@ -83,7 +88,15 @@ impl PipelineManager {
         let (canvas_width, canvas_height) = self.dist_canvas_size(block_instance_id);
 
         // Reset all video pads to a clean state before the transition:
-        // clear control bindings, restore alpha/position/size.
+        // clear control bindings, restore alpha/position/size for current PGM group.
+        let pgm_rects = strom_types::vision_mixer::compute_group_rects(
+            0,
+            0,
+            canvas_width,
+            canvas_height,
+            old_pgm_group.len(),
+        );
+
         for pad in mixer.sink_pads() {
             let name = pad.name();
             if name.starts_with("sink_") {
@@ -94,12 +107,26 @@ impl PipelineManager {
                         }
                     }
                     if idx < num_video_inputs {
-                        let alpha = if idx == actual_pgm { 1.0f64 } else { 0.0f64 };
-                        pad.set_property("alpha", alpha);
-                        pad.set_property("xpos", 0i32);
-                        pad.set_property("ypos", 0i32);
-                        pad.set_property("width", canvas_width);
-                        pad.set_property("height", canvas_height);
+                        if let Some(slot) = old_pgm_group.iter().position(|&x| x == idx) {
+                            // This pad is in the current PGM group — restore its position
+                            let (x, y, w, h) = pgm_rects.get(slot).copied().unwrap_or((
+                                0,
+                                0,
+                                canvas_width,
+                                canvas_height,
+                            ));
+                            pad.set_property("alpha", 1.0f64);
+                            pad.set_property("xpos", x);
+                            pad.set_property("ypos", y);
+                            pad.set_property("width", w);
+                            pad.set_property("height", h);
+                        } else {
+                            pad.set_property("alpha", 0.0f64);
+                            pad.set_property("xpos", 0i32);
+                            pad.set_property("ypos", 0i32);
+                            pad.set_property("width", canvas_width);
+                            pad.set_property("height", canvas_height);
+                        }
                     } else if let Some(state) = overlay_state.as_ref() {
                         let dsk_idx = idx - num_video_inputs;
                         let enabled = dsk_idx < state.dsk_enabled.len()
@@ -121,19 +148,72 @@ impl PipelineManager {
             }
         })?;
 
-        // Create transition controller and execute transition
-        let controller = TransitionController::new(mixer.clone(), canvas_width, canvas_height);
-        controller
-            .transition(
-                from_input,
-                to_input,
-                trans_type,
-                duration_ms,
-                &self.pipeline,
-            )
-            .map_err(|e| PipelineError::TransitionError(e.to_string()))?;
+        // Check if this is a single-to-single transition (use existing optimized path)
+        let single_to_single = old_pgm_group.len() == 1 && new_pgm_group.len() == 1;
 
-        Ok(was_ftb)
+        if single_to_single {
+            let from = old_pgm_group[0];
+            let to = new_pgm_group[0];
+            let controller = TransitionController::new(mixer.clone(), canvas_width, canvas_height);
+            controller
+                .transition(from, to, trans_type, duration_ms, &self.pipeline)
+                .map_err(|e| PipelineError::TransitionError(e.to_string()))?;
+        } else {
+            // Group transition: position incoming pads at target sub-rects, then cross-fade
+            let new_rects = strom_types::vision_mixer::compute_group_rects(
+                0,
+                0,
+                canvas_width,
+                canvas_height,
+                new_pgm_group.len(),
+            );
+
+            // Set incoming pad positions (invisible at alpha=0)
+            for (slot, &idx) in new_pgm_group.iter().enumerate() {
+                if let Some(pad) = mixer.static_pad(&format!("sink_{}", idx)) {
+                    let (x, y, w, h) =
+                        new_rects
+                            .get(slot)
+                            .copied()
+                            .unwrap_or((0, 0, canvas_width, canvas_height));
+                    pad.set_property("xpos", x);
+                    pad.set_property("ypos", y);
+                    pad.set_property("width", w);
+                    pad.set_property("height", h);
+                    pad.set_property("alpha", 0.0f64);
+                }
+            }
+
+            // For group transitions, always use fade (slides don't make sense)
+            let effective_type = if matches!(trans_type, TransitionType::Cut) {
+                TransitionType::Cut
+            } else {
+                TransitionType::Fade
+            };
+
+            if effective_type == TransitionType::Cut {
+                // Instant: hide old, show new
+                for &idx in &old_pgm_group {
+                    if let Some(pad) = mixer.static_pad(&format!("sink_{}", idx)) {
+                        pad.set_property("alpha", 0.0f64);
+                    }
+                }
+                for &idx in &new_pgm_group {
+                    if let Some(pad) = mixer.static_pad(&format!("sink_{}", idx)) {
+                        pad.set_property("alpha", 1.0f64);
+                    }
+                }
+            } else {
+                // Fade: cross-fade all outgoing/incoming pads
+                let controller =
+                    TransitionController::new(mixer.clone(), canvas_width, canvas_height);
+                controller
+                    .transition_groups(&old_pgm_group, &new_pgm_group, duration_ms, &self.pipeline)
+                    .map_err(|e| PipelineError::TransitionError(e.to_string()))?;
+            }
+        }
+
+        Ok((was_ftb, old_pgm_group, new_pgm_group))
     }
 
     /// Animate a single input's position/size on a compositor block.
@@ -279,14 +359,18 @@ impl PipelineManager {
 
     /// Select a preview input on a vision mixer block.
     ///
-    /// Updates the multiview compositor to show the selected input in the PVW area.
+    /// If `multi` is false, replaces the PVW group with a single source (standard behavior).
+    /// If `multi` is true, toggles the input in/out of the current PVW group (shift+click).
+    ///
+    /// Returns (pvw_group, pgm_group).
     pub fn select_vision_mixer_preview(
         &self,
         block_instance_id: &str,
-        new_pvw: usize,
+        input: usize,
         num_inputs: usize,
-    ) -> Result<usize, PipelineError> {
-        use crate::blocks::builtin::vision_mixer::overlay;
+        multi: bool,
+    ) -> Result<(Vec<usize>, Vec<usize>), PipelineError> {
+        use crate::blocks::builtin::vision_mixer::{layout, overlay};
 
         let mv_comp_id = format!("{}:mv_comp", block_instance_id);
         let mv_comp = self
@@ -301,70 +385,95 @@ impl PipelineManager {
             ))
         })?;
 
-        let old_pvw = state.pvw_input.load(std::sync::atomic::Ordering::Relaxed);
-        let pgm = state.pgm_input.load(std::sync::atomic::Ordering::Relaxed);
+        let old_pvw_group = state.pvw_group();
+        let pgm_group = state.pgm_group();
 
-        if new_pvw >= num_inputs {
+        if input >= num_inputs {
             return Err(PipelineError::InvalidProperty {
                 element: block_instance_id.to_string(),
                 property: "preview_input".to_string(),
-                reason: format!("Input {} out of range (max {})", new_pvw, num_inputs - 1),
-            });
-        }
-        if new_pvw == pgm {
-            return Err(PipelineError::InvalidProperty {
-                element: block_instance_id.to_string(),
-                property: "preview_input".to_string(),
-                reason: format!("Input {} is already on program", new_pvw),
+                reason: format!("Input {} out of range (max {})", input, num_inputs - 1),
             });
         }
 
-        // PVW candidate pads are at offset N+1 (sink_N is the PGM big display from tee_pgm)
-        if old_pvw != new_pvw {
-            // Hide old PVW big pad
-            if old_pvw != pgm {
-                if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + old_pvw))
+        // Compute new PVW group
+        let new_pvw_group = if multi {
+            // Toggle mode: add/remove the input from the PVW group
+            let mut group = old_pvw_group.clone();
+            if let Some(pos) = group.iter().position(|&x| x == input) {
+                // Remove if present (unless it's the last one)
+                if group.len() > 1 {
+                    group.remove(pos);
+                } else {
+                    return Ok((old_pvw_group, pgm_group));
+                }
+            } else if group.len() < strom_types::vision_mixer::MAX_GROUP_SIZE {
+                group.push(input);
+            }
+            group
+        } else {
+            // Single select: replace entire PVW group
+            // Only block if this input IS the entire PGM (single-source PGM).
+            // If PGM is multi-source, previewing one of its members is fine.
+            if pgm_group.len() == 1 && pgm_group[0] == input {
+                return Err(PipelineError::InvalidProperty {
+                    element: block_instance_id.to_string(),
+                    property: "preview_input".to_string(),
+                    reason: format!("Input {} is already the sole program source", input),
+                });
+            }
+            vec![input]
+        };
+
+        // Update multiview PVW candidate pads
+        // First hide all old PVW pads
+        for &old_idx in &old_pvw_group {
+            if !pgm_group.contains(&old_idx) {
+                if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + old_idx))
                 {
                     pad.set_property("alpha", 0.0f64);
                 }
             }
+        }
 
-            // Show new PVW big pad
-            if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + new_pvw)) {
-                use strom_types::vision_mixer;
-                let r = &state.layout.pvw_rect;
-                pad.set_property("xpos", r.x as i32);
-                pad.set_property("ypos", r.y as i32);
-                pad.set_property("width", r.w as i32);
-                pad.set_property("height", r.h as i32);
-                pad.set_property("alpha", 1.0f64);
-                pad.set_property("zorder", vision_mixer::MV_BIG_DISPLAY_ZORDER);
+        // Position new PVW pads in sub-rects of the PVW area
+        let sub_rects =
+            layout::compute_group_sub_rects(&state.layout.pvw_rect, new_pvw_group.len());
+        for (slot, &idx) in new_pvw_group.iter().enumerate() {
+            if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + idx)) {
+                if let Some(r) = sub_rects.get(slot) {
+                    pad.set_property("xpos", r.x as i32);
+                    pad.set_property("ypos", r.y as i32);
+                    pad.set_property("width", r.w as i32);
+                    pad.set_property("height", r.h as i32);
+                    pad.set_property("alpha", 1.0f64);
+                    pad.set_property("zorder", strom_types::vision_mixer::MV_BIG_DISPLAY_ZORDER);
+                }
             }
         }
 
-        state
-            .pvw_input
-            .store(new_pvw, std::sync::atomic::Ordering::Relaxed);
-
+        state.set_pvw_group(&new_pvw_group);
         overlay::trigger_overlay_update(block_instance_id);
 
         info!(
-            "Vision mixer {} preview changed: {} -> {}",
-            block_instance_id, old_pvw, new_pvw
+            "Vision mixer {} preview changed: {:?} -> {:?}",
+            block_instance_id, old_pvw_group, new_pvw_group
         );
 
-        Ok(pgm)
+        Ok((new_pvw_group, pgm_group))
     }
 
     /// Update the multiview compositor after a PGM transition on a vision mixer.
+    ///
+    /// Swaps PGM and PVW groups: old PVW group becomes new PGM, old PGM group becomes new PVW.
     pub fn update_vision_mixer_after_take(
         &self,
         block_instance_id: &str,
-        old_pgm: usize,
-        new_pgm: usize,
+        new_pgm_group: &[usize],
+        new_pvw_group: &[usize],
         num_inputs: usize,
     ) -> Result<(), PipelineError> {
-        use crate::blocks::builtin::vision_mixer::overlay;
+        use crate::blocks::builtin::vision_mixer::{layout, overlay};
 
         let mv_comp_id = format!("{}:mv_comp", block_instance_id);
         let mv_comp = self
@@ -379,51 +488,42 @@ impl PipelineManager {
             ))
         })?;
 
-        let old_pvw = state.pvw_input.load(std::sync::atomic::Ordering::Relaxed);
-
         // PGM big display (sink_N) is fed from tee_pgm — it always shows the dist_comp
         // output automatically, so no pad manipulation needed for PGM.
-        // Only update PVW: hide old PVW, show old PGM as new PVW (swap).
-        // PVW candidate pads are at offset N+1.
+        // Only update PVW: hide all old PVW pads, show new PVW group pads.
 
-        // Hide old PVW big pad
-        if old_pvw != old_pgm {
-            if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + old_pvw)) {
+        // Hide all PVW candidate pads first
+        for i in 0..num_inputs {
+            if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + i)) {
                 pad.set_property("alpha", 0.0f64);
             }
         }
 
-        // Swap: old PGM becomes new PVW — show at PVW position
-        if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + old_pgm)) {
-            use strom_types::vision_mixer;
-            let r = &state.layout.pvw_rect;
-            pad.set_property("xpos", r.x as i32);
-            pad.set_property("ypos", r.y as i32);
-            pad.set_property("width", r.w as i32);
-            pad.set_property("height", r.h as i32);
-            pad.set_property("alpha", 1.0f64);
-            pad.set_property("zorder", vision_mixer::MV_BIG_DISPLAY_ZORDER);
+        // Position new PVW group in sub-rects of the PVW area
+        let sub_rects =
+            layout::compute_group_sub_rects(&state.layout.pvw_rect, new_pvw_group.len());
+        for (slot, &idx) in new_pvw_group.iter().enumerate() {
+            if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + idx)) {
+                if let Some(r) = sub_rects.get(slot) {
+                    pad.set_property("xpos", r.x as i32);
+                    pad.set_property("ypos", r.y as i32);
+                    pad.set_property("width", r.w as i32);
+                    pad.set_property("height", r.h as i32);
+                    pad.set_property("alpha", 1.0f64);
+                    pad.set_property("zorder", strom_types::vision_mixer::MV_BIG_DISPLAY_ZORDER);
+                }
+            }
         }
 
-        // Hide the old PVW's candidate pad (the source that just became PGM)
-        // Its video is now shown via the PGM big display from tee_pgm
-        if let Some(pad) = find_pad(mv_comp, &format!("sink_{}", num_inputs + 1 + new_pgm)) {
-            pad.set_property("alpha", 0.0f64);
-        }
-
-        // Update state: PGM = new_pgm, PVW = old_pgm (swap)
-        state
-            .pgm_input
-            .store(new_pgm, std::sync::atomic::Ordering::Relaxed);
-        state
-            .pvw_input
-            .store(old_pgm, std::sync::atomic::Ordering::Relaxed);
+        // Update state
+        state.set_pgm_group(new_pgm_group);
+        state.set_pvw_group(new_pvw_group);
 
         overlay::trigger_overlay_update(block_instance_id);
 
         info!(
-            "Vision mixer {} take: PGM {} -> {}, PVW {} -> {} (swap)",
-            block_instance_id, old_pgm, new_pgm, old_pvw, old_pgm
+            "Vision mixer {} take: PGM -> {:?}, PVW -> {:?}",
+            block_instance_id, new_pgm_group, new_pvw_group
         );
 
         Ok(())
@@ -501,7 +601,7 @@ impl PipelineManager {
         })?;
 
         let was_active = state.ftb_active.load(std::sync::atomic::Ordering::Relaxed);
-        let pgm = state.pgm_input.load(std::sync::atomic::Ordering::Relaxed);
+        let pgm_group = state.pgm_group();
         let now_active = !was_active;
 
         let current_time = self
@@ -521,7 +621,7 @@ impl PipelineManager {
                         // FTB on: fade current alpha to 0
                         let current = pad.property::<f64>("alpha");
                         (current, 0.0)
-                    } else if idx == pgm {
+                    } else if pgm_group.contains(&idx) {
                         (0.0, 1.0)
                     } else if idx >= state.num_inputs {
                         let dsk_idx = idx - state.num_inputs;

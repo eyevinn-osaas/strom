@@ -10,10 +10,10 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Instant, SystemTime};
-use strom_types::vision_mixer::TIMEZONE_REFRESH_SECS;
+use strom_types::vision_mixer::{self, TIMEZONE_REFRESH_SECS};
 use tracing::{debug, warn};
 
 /// Global registry of vision mixer overlay states, keyed by block instance ID.
@@ -47,10 +47,10 @@ pub fn unregister_overlay_state(block_id: &str) {
 ///
 /// Updated atomically from the API thread; read lock-free from the streaming thread.
 pub struct VisionMixerOverlayState {
-    /// Index of the current PGM input.
-    pub pgm_input: AtomicUsize,
-    /// Index of the current PVW input.
-    pub pvw_input: AtomicUsize,
+    /// Packed PGM source group (up to 4 source indices). See `vision_mixer::pack_source_group`.
+    pgm_group: AtomicU64,
+    /// Packed PVW source group (up to 4 source indices). See `vision_mixer::pack_source_group`.
+    pvw_group: AtomicU64,
     /// Number of inputs.
     pub num_inputs: usize,
     /// Whether Fade to Black is active.
@@ -93,8 +93,8 @@ impl VisionMixerOverlayState {
         let (offset_secs, tz_abbr) = local_tz_info();
 
         Self {
-            pgm_input: AtomicUsize::new(pgm_input),
-            pvw_input: AtomicUsize::new(pvw_input),
+            pgm_group: AtomicU64::new(vision_mixer::pack_single_source(pgm_input)),
+            pvw_group: AtomicU64::new(vision_mixer::pack_single_source(pvw_input)),
             num_inputs,
             ftb_active: AtomicBool::new(false),
             dsk_enabled: (0..num_dsk_inputs)
@@ -109,6 +109,48 @@ impl VisionMixerOverlayState {
             tz_abbr_packed: AtomicU64::new(pack_tz_abbr(&tz_abbr)),
             tz_next_refresh: AtomicU64::new(TIMEZONE_REFRESH_SECS),
         }
+    }
+
+    /// Get the PGM source group as a Vec of indices.
+    pub fn pgm_group(&self) -> Vec<usize> {
+        vision_mixer::unpack_source_group(self.pgm_group.load(Ordering::Relaxed))
+    }
+
+    /// Get the PVW source group as a Vec of indices.
+    pub fn pvw_group(&self) -> Vec<usize> {
+        vision_mixer::unpack_source_group(self.pvw_group.load(Ordering::Relaxed))
+    }
+
+    /// Get the packed PGM group value (for atomic comparison).
+    pub fn pgm_group_packed(&self) -> u64 {
+        self.pgm_group.load(Ordering::Relaxed)
+    }
+
+    /// Get the packed PVW group value (for atomic comparison).
+    pub fn pvw_group_packed(&self) -> u64 {
+        self.pvw_group.load(Ordering::Relaxed)
+    }
+
+    /// Get first PGM source index (backward compat).
+    pub fn pgm_first(&self) -> usize {
+        vision_mixer::group_first(self.pgm_group.load(Ordering::Relaxed))
+    }
+
+    /// Get first PVW source index (backward compat).
+    pub fn pvw_first(&self) -> usize {
+        vision_mixer::group_first(self.pvw_group.load(Ordering::Relaxed))
+    }
+
+    /// Set the PGM source group.
+    pub fn set_pgm_group(&self, indices: &[usize]) {
+        self.pgm_group
+            .store(vision_mixer::pack_source_group(indices), Ordering::Relaxed);
+    }
+
+    /// Set the PVW source group.
+    pub fn set_pvw_group(&self, indices: &[usize]) {
+        self.pvw_group
+            .store(vision_mixer::pack_source_group(indices), Ordering::Relaxed);
     }
 
     /// Get local wall-clock time as (hours, minutes, seconds) and timezone abbreviation.
@@ -233,8 +275,8 @@ pub struct OverlayRenderer {
     width: i32,
     height: i32,
     surface: Option<cairo::ImageSurface>,
-    last_pgm: usize,
-    last_pvw: usize,
+    last_pgm: u64,
+    last_pvw: u64,
     last_ftb: bool,
     last_clock_secs: u64,
 }
@@ -259,8 +301,8 @@ impl OverlayRenderer {
             width,
             height,
             surface: None,
-            last_pgm: usize::MAX,
-            last_pvw: usize::MAX,
+            last_pgm: u64::MAX,
+            last_pvw: u64::MAX,
             last_ftb: false,
             last_clock_secs: u64::MAX,
         }
@@ -268,35 +310,38 @@ impl OverlayRenderer {
 
     /// Render overlay and push to appsrc if state changed. Returns true if pushed.
     pub fn render_if_dirty(&mut self) -> bool {
-        let pgm = self.state.pgm_input.load(Ordering::Relaxed);
-        let pvw = self.state.pvw_input.load(Ordering::Relaxed);
+        let pgm_packed = self.state.pgm_group_packed();
+        let pvw_packed = self.state.pvw_group_packed();
         let ftb = self.state.ftb_active.load(Ordering::Relaxed);
         let (h, m, s) = self.state.wall_clock_hms();
         let clock_secs = h as u64 * 3600 + m as u64 * 60 + s as u64;
 
-        if self.last_pgm == pgm
-            && self.last_pvw == pvw
+        if self.last_pgm == pgm_packed
+            && self.last_pvw == pvw_packed
             && self.last_ftb == ftb
             && self.last_clock_secs == clock_secs
         {
             return false;
         }
 
+        let pgm_group = vision_mixer::unpack_source_group(pgm_packed);
+        let pvw_group = vision_mixer::unpack_source_group(pvw_packed);
+
         let t0 = std::time::Instant::now();
-        let pushed = self.push_frame(pgm, pvw, ftb, h, m, s);
+        let pushed = self.push_frame(&pgm_group, &pvw_group, ftb, h, m, s);
         let elapsed = t0.elapsed();
         debug!(
-            "Overlay render+push: {:.1}ms (pgm={}, pvw={}, ftb={}, pushed={})",
+            "Overlay render+push: {:.1}ms (pgm={:?}, pvw={:?}, ftb={}, pushed={})",
             elapsed.as_secs_f64() * 1000.0,
-            pgm,
-            pvw,
+            pgm_group,
+            pvw_group,
             ftb,
             pushed
         );
 
         if pushed {
-            self.last_pgm = pgm;
-            self.last_pvw = pvw;
+            self.last_pgm = pgm_packed;
+            self.last_pvw = pvw_packed;
             self.last_ftb = ftb;
             self.last_clock_secs = clock_secs;
             true
@@ -305,7 +350,15 @@ impl OverlayRenderer {
         }
     }
 
-    fn push_frame(&mut self, pgm: usize, pvw: usize, ftb: bool, h: u32, m: u32, s: u32) -> bool {
+    fn push_frame(
+        &mut self,
+        pgm_group: &[usize],
+        pvw_group: &[usize],
+        ftb: bool,
+        h: u32,
+        m: u32,
+        s: u32,
+    ) -> bool {
         let t0 = Instant::now();
 
         // Reuse or create cairo surface
@@ -326,7 +379,7 @@ impl OverlayRenderer {
             cr.set_operator(cairo::Operator::Clear);
             let _ = cr.paint();
             cr.set_operator(cairo::Operator::Over);
-            render_overlay(&self.state, &cr, pgm, pvw, ftb, h, m, s);
+            render_overlay(&self.state, &cr, pgm_group, pvw_group, ftb, h, m, s);
         }
 
         let t_cairo = t0.elapsed();
@@ -484,8 +537,8 @@ pub fn start_overlay_timer(block_id: String, renderer: Arc<Mutex<OverlayRenderer
 fn render_overlay(
     state: &VisionMixerOverlayState,
     cr: &cairo::Context,
-    pgm: usize,
-    pvw: usize,
+    pgm_group: &[usize],
+    pvw_group: &[usize],
     ftb: bool,
     h: u32,
     m: u32,
@@ -510,10 +563,10 @@ fn render_overlay(
     // --- Thumbnail borders (drawn around full slot including label area) ---
     for i in 0..layout.num_inputs.min(layout.thumbnail_slot_rects.len()) {
         let r = &layout.thumbnail_slot_rects[i];
-        if i == pgm {
+        if pgm_group.contains(&i) {
             cr.set_source_rgb(PGM_R, PGM_G, PGM_B);
             cr.set_line_width(layout.thumb_border_width);
-        } else if i == pvw {
+        } else if pvw_group.contains(&i) {
             cr.set_source_rgb(PVW_R, PVW_G, PVW_B);
             cr.set_line_width(layout.thumb_border_width);
         } else {

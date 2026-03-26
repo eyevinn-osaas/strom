@@ -58,14 +58,18 @@ pub async fn vision_mixer_page(
 
     // Get current state from live overlay state or fall back to defaults
     let overlay = overlay::get_overlay_state(block_id);
-    let initial_pgm = overlay
-        .as_ref()
-        .map(|s| s.pgm_input.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or_else(|| vm_props::parse_initial_pgm(&vm_block.properties, num_inputs));
-    let initial_pvw = overlay
-        .as_ref()
-        .map(|s| s.pvw_input.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or_else(|| vm_props::parse_initial_pvw(&vm_block.properties, num_inputs));
+    let initial_pgm_group = overlay.as_ref().map(|s| s.pgm_group()).unwrap_or_else(|| {
+        vec![vm_props::parse_initial_pgm(
+            &vm_block.properties,
+            num_inputs,
+        )]
+    });
+    let initial_pvw_group = overlay.as_ref().map(|s| s.pvw_group()).unwrap_or_else(|| {
+        vec![vm_props::parse_initial_pvw(
+            &vm_block.properties,
+            num_inputs,
+        )]
+    });
     let ftb_active = overlay
         .as_ref()
         .map(|s| s.ftb_active.load(std::sync::atomic::Ordering::Relaxed))
@@ -87,8 +91,10 @@ pub async fn vision_mixer_page(
         "num_inputs": num_inputs,
         "multiview_endpoint": multiview_endpoint,
         "input_labels": labels,
-        "initial_pgm": initial_pgm,
-        "initial_pvw": initial_pvw,
+        "initial_pgm": initial_pgm_group.first().copied().unwrap_or(0),
+        "initial_pvw": initial_pvw_group.first().copied().unwrap_or(1),
+        "initial_pgm_group": initial_pgm_group,
+        "initial_pvw_group": initial_pvw_group,
         "num_dsk_inputs": num_dsk_inputs,
         "ftb_active": ftb_active,
         "dsk_states": dsk_states,

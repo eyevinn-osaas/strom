@@ -636,6 +636,58 @@ impl TransitionController {
         }
     }
 
+    /// Perform a cross-fade transition between two source groups.
+    ///
+    /// Fades out all pads in `from_group` and fades in all pads in `to_group`.
+    /// The to_group pads should already have their positions set before calling this.
+    pub fn transition_groups(
+        &self,
+        from_group: &[usize],
+        to_group: &[usize],
+        duration_ms: u64,
+        pipeline: &gst::Pipeline,
+    ) -> Result<(), TransitionError> {
+        // Clean up any previous transitions
+        if let Ok(mut transitions) = self.active_transitions.lock() {
+            transitions.clear();
+        }
+
+        let current_time = pipeline
+            .query_position::<gst::ClockTime>()
+            .ok_or(TransitionError::PositionQueryFailed)?;
+        let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
+
+        let mut control_sources = Vec::new();
+
+        // Fade out all from_group pads
+        for &idx in from_group {
+            let pad = self.get_sink_pad(idx)?;
+            self.clear_control_bindings(&pad);
+            let cs = self.setup_alpha_animation(&pad, current_time, end_time, 1.0, 0.0)?;
+            control_sources.push(cs);
+        }
+
+        // Fade in all to_group pads
+        for &idx in to_group {
+            let pad = self.get_sink_pad(idx)?;
+            self.clear_control_bindings(&pad);
+            let cs = self.setup_alpha_animation(&pad, current_time, end_time, 0.0, 1.0)?;
+            control_sources.push(cs);
+        }
+
+        let key = format!("group_{:?}_{:?}", from_group, to_group);
+        if let Ok(mut transitions) = self.active_transitions.lock() {
+            transitions.insert(key, control_sources);
+        }
+
+        info!(
+            "Group fade transition started: {:?} -> {:?} ({}ms)",
+            from_group, to_group, duration_ms
+        );
+
+        Ok(())
+    }
+
     /// Clean up completed transitions.
     pub fn cleanup_old_transitions(&self) {
         if let Ok(mut transitions) = self.active_transitions.lock() {

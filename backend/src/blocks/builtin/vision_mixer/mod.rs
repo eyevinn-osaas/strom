@@ -23,7 +23,7 @@
 mod builder;
 mod definition;
 mod elements;
-mod layout;
+pub(crate) mod layout;
 pub mod overlay;
 pub(crate) mod properties;
 #[cfg(test)]

@@ -188,3 +188,24 @@ pub fn pvw_pad_position(layout: &OverlayLayout) -> (i32, i32, i32, i32) {
 pub fn pgm_pad_position(layout: &OverlayLayout) -> (i32, i32, i32, i32) {
     layout.pgm_rect.as_ints()
 }
+
+/// Compute sub-rectangles for a source group within a container Rect.
+///
+/// Returns Vec<Rect> with one rectangle per group member, following the standard layout:
+/// - 1: fullscreen
+/// - 2: side-by-side
+/// - 3: 2 top + 1 bottom-left
+/// - 4: 2x2 grid
+pub fn compute_group_sub_rects(container: &Rect, count: usize) -> Vec<Rect> {
+    let rects = strom_types::vision_mixer::compute_group_rects(
+        container.x as i32,
+        container.y as i32,
+        container.w as i32,
+        container.h as i32,
+        count,
+    );
+    rects
+        .into_iter()
+        .map(|(x, y, w, h)| Rect::new(x as f64, y as f64, w as f64, h as f64))
+        .collect()
+}

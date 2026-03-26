@@ -6670,6 +6670,10 @@
             "type": "integer",
             "description": "Index of the input to set as preview (0-based)",
             "minimum": 0
+          },
+          "multi": {
+            "type": "boolean",
+            "description": "If true, toggle the input in/out of the current PVW group (shift+click).\nIf false (default), replace the PVW group with just this input."
           }
         }
       },
@@ -6679,7 +6683,9 @@
         "required": [
           "message",
           "preview_input",
-          "program_input"
+          "program_input",
+          "preview_inputs",
+          "program_inputs"
         ],
         "properties": {
           "message": {
@@ -6687,11 +6693,29 @@
           },
           "preview_input": {
             "type": "integer",
+            "description": "First source in the PVW group (backward compat).",
             "minimum": 0
+          },
+          "preview_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Full ordered PVW source group."
           },
           "program_input": {
             "type": "integer",
+            "description": "First source in the PGM group (backward compat).",
             "minimum": 0
+          },
+          "program_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Full ordered PGM source group."
           }
         }
       },
@@ -8620,7 +8644,9 @@
                   "flow_id",
                   "block_id",
                   "preview_input",
-                  "program_input"
+                  "program_input",
+                  "preview_inputs",
+                  "program_inputs"
                 ],
                 "properties": {
                   "block_id": {
@@ -8632,11 +8658,29 @@
                   },
                   "preview_input": {
                     "type": "integer",
+                    "description": "First source in PVW group (backward compat).",
                     "minimum": 0
+                  },
+                  "preview_inputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "Full ordered PVW source group."
                   },
                   "program_input": {
                     "type": "integer",
+                    "description": "First source in PGM group (backward compat).",
                     "minimum": 0
+                  },
+                  "program_inputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "Full ordered PGM source group."
                   }
                 }
               },
@@ -9120,6 +9164,8 @@
         "required": [
           "preview_input",
           "program_input",
+          "preview_inputs",
+          "program_inputs",
           "num_inputs",
           "input_labels"
         ],
@@ -9138,9 +9184,23 @@
             "type": "integer",
             "minimum": 0
           },
+          "preview_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
           "program_input": {
             "type": "integer",
             "minimum": 0
+          },
+          "program_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         }
       },

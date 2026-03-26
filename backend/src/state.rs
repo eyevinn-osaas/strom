@@ -1269,7 +1269,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        let ftb_cancelled = manager.trigger_transition(
+        let (ftb_cancelled, old_pgm_group, new_pgm_group) = manager.trigger_transition(
             block_instance_id,
             from_input,
             to_input,
@@ -1291,8 +1291,7 @@ impl AppState {
         }
 
         // Sync final alpha values back to flow definition for persistence
-        // Clear ALL input alphas to 0.0, then set to_input to 1.0
-        // This prevents stale alpha=1.0 from earlier transitions
+        // Clear ALL input alphas to 0.0, then set active group inputs to 1.0
         if let Some(block_id) = block_instance_id.split(':').next() {
             let mut flows = self.inner.flows.write().await;
             if let Some(flow) = flows.get_mut(flow_id) {
@@ -1307,14 +1306,15 @@ impl AppState {
                     for key in alpha_keys {
                         block.properties.insert(key, PropertyValue::Float(0.0));
                     }
-                    // Set the active input
-                    block.properties.insert(
-                        format!("input_{}_alpha", to_input),
-                        PropertyValue::Float(1.0),
-                    );
+                    // Set the active inputs (new PGM group)
+                    for &idx in &new_pgm_group {
+                        block
+                            .properties
+                            .insert(format!("input_{}_alpha", idx), PropertyValue::Float(1.0));
+                    }
                     trace!(
-                        "Synced transition alpha values: all -> 0.0, input {} -> 1.0",
-                        to_input
+                        "Synced transition alpha values: all -> 0.0, inputs {:?} -> 1.0",
+                        new_pgm_group
                     );
                 }
             }
@@ -1325,6 +1325,7 @@ impl AppState {
         }
 
         // Check if this is a vision mixer block and update multiview accordingly
+        // After take: new PGM = old PVW group, new PVW = old PGM group (swap)
         if let Some(block_id) = block_instance_id.split(':').next() {
             let flows = self.inner.flows.read().await;
             let is_vision_mixer = flows
@@ -1336,21 +1337,32 @@ impl AppState {
 
             if is_vision_mixer {
                 let num_inputs = self.get_vision_mixer_num_inputs(flow_id, block_id).await;
+                let new_pvw_group = old_pgm_group.clone();
                 let pipelines = self.inner.pipelines.read().await;
                 if let Some(manager) = pipelines.get(flow_id) {
-                    let _ = manager
-                        .update_vision_mixer_after_take(block_id, from_input, to_input, num_inputs);
+                    let _ = manager.update_vision_mixer_after_take(
+                        block_id,
+                        &new_pgm_group,
+                        &new_pvw_group,
+                        num_inputs,
+                    );
                 }
                 drop(pipelines);
 
-                // Broadcast vision mixer state change (after swap: PVW = old PGM)
+                // Broadcast vision mixer state change
                 self.inner
                     .events
                     .broadcast(StromEvent::VisionMixerStateChanged {
                         flow_id: *flow_id,
                         block_id: block_id.to_string(),
-                        preview_input: from_input,
-                        program_input: to_input,
+                        preview_input: strom_types::vision_mixer::group_first(
+                            strom_types::vision_mixer::pack_source_group(&new_pvw_group),
+                        ),
+                        program_input: strom_types::vision_mixer::group_first(
+                            strom_types::vision_mixer::pack_source_group(&new_pgm_group),
+                        ),
+                        preview_inputs: new_pvw_group,
+                        program_inputs: new_pgm_group.clone(),
                     });
             }
         }
@@ -1371,12 +1383,18 @@ impl AppState {
     }
 
     /// Select a preview input on a vision mixer block.
+    ///
+    /// If `multi` is false, replaces PVW group with a single source.
+    /// If `multi` is true, toggles the input in/out of the PVW group.
+    ///
+    /// Returns (pvw_group, pgm_group).
     pub async fn select_vision_mixer_preview(
         &self,
         flow_id: &FlowId,
         block_instance_id: &str,
         input: usize,
-    ) -> Result<(usize, usize), PipelineError> {
+        multi: bool,
+    ) -> Result<(Vec<usize>, Vec<usize>), PipelineError> {
         let pipelines = self.inner.pipelines.read().await;
 
         let manager = pipelines.get(flow_id).ok_or_else(|| {
@@ -1388,7 +1406,8 @@ impl AppState {
             .get_vision_mixer_num_inputs(flow_id, block_instance_id)
             .await;
 
-        let pgm = manager.select_vision_mixer_preview(block_instance_id, input, num_inputs)?;
+        let (pvw_group, pgm_group) =
+            manager.select_vision_mixer_preview(block_instance_id, input, num_inputs, multi)?;
 
         drop(pipelines);
 
@@ -1398,11 +1417,13 @@ impl AppState {
             .broadcast(StromEvent::VisionMixerStateChanged {
                 flow_id: *flow_id,
                 block_id: block_instance_id.to_string(),
-                preview_input: input,
-                program_input: pgm,
+                preview_input: pvw_group.first().copied().unwrap_or(0),
+                program_input: pgm_group.first().copied().unwrap_or(0),
+                preview_inputs: pvw_group.clone(),
+                program_inputs: pgm_group.clone(),
             });
 
-        Ok((input, pgm))
+        Ok((pvw_group, pgm_group))
     }
 
     /// Get num_inputs for a vision mixer block from the flow definition.
