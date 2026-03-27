@@ -352,7 +352,7 @@ install_gstreamer() {
                     packages+=(
                         gstreamer1-plugins-bad-free
                         gstreamer1-plugins-ugly-free
-                        libnice-gstreamer
+                        libnice-gstreamer1
                     )
                 fi
 
