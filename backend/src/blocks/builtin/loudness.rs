@@ -183,6 +183,7 @@ fn loudness_definition() -> BlockDefinition {
                 property_name: "interval".to_string(),
                 transform: None,
             },
+            live: false,
         }],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {

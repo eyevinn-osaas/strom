@@ -170,6 +170,7 @@ fn latency_definition() -> BlockDefinition {
                     property_name: "samplesperbuffer".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "print_latency".to_string(),
@@ -182,6 +183,7 @@ fn latency_definition() -> BlockDefinition {
                     property_name: "print_latency".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

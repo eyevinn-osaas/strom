@@ -5044,6 +5044,10 @@
             "type": "string",
             "description": "Human-readable label for display in UI (e.g., \"Auth Token\" instead of \"auth_token\")"
           },
+          "live": {
+            "type": "boolean",
+            "description": "Whether this property updates the pipeline in real-time without requiring a flow save.\nLive properties show a LIVE badge in the UI and send updates directly to running elements."
+          },
           "mapping": {
             "$ref": "#/components/schemas/PropertyMapping",
             "description": "Mapping to internal element property"

@@ -252,6 +252,7 @@ fn inter_output_definition() -> BlockDefinition {
                     property_name: "description".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "sync".to_string(),
@@ -264,6 +265,7 @@ fn inter_output_definition() -> BlockDefinition {
                     property_name: "sync".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -310,6 +312,7 @@ fn inter_input_definition() -> BlockDefinition {
                     property_name: "channel".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "max_time".to_string(),
@@ -330,6 +333,7 @@ fn inter_input_definition() -> BlockDefinition {
                     property_name: "max_time".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

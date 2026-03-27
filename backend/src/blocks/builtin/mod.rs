@@ -3,6 +3,7 @@
 pub mod aes67;
 pub mod audioanalyzer;
 pub mod audioformat;
+pub mod audiogain;
 pub mod audiorouter;
 pub mod compositor;
 pub mod decklink;
@@ -44,6 +45,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
 
     // Add AudioFormat blocks
     blocks.extend(audioformat::get_blocks());
+
+    // Add AudioGain blocks
+    blocks.extend(audiogain::get_blocks());
 
     // Add AudioRouter blocks
     blocks.extend(audiorouter::get_blocks());
@@ -127,6 +131,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.aes67_output" => Some(Arc::new(aes67::AES67OutputBuilder)),
         "builtin.audioanalyzer" => Some(Arc::new(audioanalyzer::AudioAnalyzerBuilder)),
         "builtin.audioformat" => Some(Arc::new(audioformat::AudioFormatBuilder)),
+        "builtin.audiogain" => Some(Arc::new(audiogain::AudioGainBuilder)),
         "builtin.audiorouter" => Some(Arc::new(audiorouter::AudioRouterBuilder)),
         "builtin.compositor" => Some(Arc::new(compositor::CompositorBuilder)),
         "builtin.decklink_video_input" => Some(Arc::new(decklink::DeckLinkVideoInputBuilder)),

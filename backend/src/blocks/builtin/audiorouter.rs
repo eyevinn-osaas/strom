@@ -776,6 +776,7 @@ fn audiorouter_definition() -> BlockDefinition {
                 property_name: "num_inputs".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Number of outputs
         ExposedProperty {
@@ -789,6 +790,7 @@ fn audiorouter_definition() -> BlockDefinition {
                 property_name: "num_outputs".to_string(),
                 transform: None,
             },
+            live: false,
         },
     ];
 
@@ -805,6 +807,7 @@ fn audiorouter_definition() -> BlockDefinition {
                 property_name: format!("input_{}_channels", i),
                 transform: None,
             },
+            live: false,
         });
     }
 
@@ -821,6 +824,7 @@ fn audiorouter_definition() -> BlockDefinition {
                 property_name: format!("output_{}_channels", i),
                 transform: None,
             },
+            live: false,
         });
     }
 
@@ -836,6 +840,7 @@ fn audiorouter_definition() -> BlockDefinition {
             property_name: "routing_matrix".to_string(),
             transform: None,
         },
+        live: false,
     });
 
     BlockDefinition {

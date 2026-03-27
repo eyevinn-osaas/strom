@@ -874,6 +874,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "num_video_tracks".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "num_audio_tracks".to_string(),
@@ -886,6 +887,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "num_audio_tracks".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "container".to_string(),
@@ -905,6 +907,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "container".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "output_dir".to_string(),
@@ -917,6 +920,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "output_dir".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "filename_prefix".to_string(),
@@ -929,6 +933,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "filename_prefix".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "max_size_time_secs".to_string(),
@@ -941,6 +946,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "max_size_time_secs".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "max_size_mb".to_string(),
@@ -953,6 +959,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "max_size_mb".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "max_duration_mins".to_string(),
@@ -965,6 +972,7 @@ fn recorder_definition() -> BlockDefinition {
                     property_name: "max_duration_mins".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

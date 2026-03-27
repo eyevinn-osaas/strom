@@ -1152,6 +1152,7 @@ fn media_player_definition() -> BlockDefinition {
                     property_name: "decode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "loop_playlist".to_string(),
@@ -1165,6 +1166,7 @@ fn media_player_definition() -> BlockDefinition {
                     property_name: "loop_playlist".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "position_update_interval".to_string(),
@@ -1178,6 +1180,7 @@ fn media_player_definition() -> BlockDefinition {
                     property_name: "position_update_interval".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

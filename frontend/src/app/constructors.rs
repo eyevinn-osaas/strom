@@ -186,6 +186,7 @@ impl StromApp {
             qr_cache: crate::qr::QrCache::new(),
             recorder_filenames: std::collections::HashMap::new(),
             recorder_start_times: std::collections::HashMap::new(),
+            live_property_debounce: std::collections::HashMap::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility
@@ -347,6 +348,7 @@ impl StromApp {
             qr_cache: crate::qr::QrCache::new(),
             recorder_filenames: std::collections::HashMap::new(),
             recorder_start_times: std::collections::HashMap::new(),
+            live_property_debounce: std::collections::HashMap::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility

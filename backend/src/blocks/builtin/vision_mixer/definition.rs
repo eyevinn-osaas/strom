@@ -40,6 +40,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "compositor_preference".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Number of inputs
         ExposedProperty {
@@ -76,6 +77,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "num_inputs".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // PGM output resolution
         ExposedProperty {
@@ -91,6 +93,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "pgm_resolution".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Multiview output resolution
         ExposedProperty {
@@ -108,6 +111,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "multiview_resolution".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Force live
         ExposedProperty {
@@ -121,6 +125,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "force_live".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Latency
         ExposedProperty {
@@ -136,6 +141,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "latency".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Min upstream latency
         ExposedProperty {
@@ -151,6 +157,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "min_upstream_latency".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Initial PGM input
         ExposedProperty {
@@ -164,6 +171,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "initial_pgm_input".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Initial PVW input
         ExposedProperty {
@@ -177,6 +185,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "initial_pvw_input".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Number of DSK inputs
         ExposedProperty {
@@ -213,6 +222,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: "num_dsk_inputs".to_string(),
                 transform: None,
             },
+            live: false,
         },
     ];
 
@@ -229,6 +239,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 property_name: format!("input_{}_label", i),
                 transform: None,
             },
+            live: false,
         });
     }
 
