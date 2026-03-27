@@ -164,6 +164,7 @@ fn audiogain_definition() -> BlockDefinition {
                     property_name: "volume".to_string(),
                     transform: None,
                 },
+                live: true,
             },
             ExposedProperty {
                 name: "mute".to_string(),
@@ -176,6 +177,7 @@ fn audiogain_definition() -> BlockDefinition {
                     property_name: "mute".to_string(),
                     transform: None,
                 },
+                live: true,
             },
             ExposedProperty {
                 name: "invert".to_string(),
@@ -188,6 +190,7 @@ fn audiogain_definition() -> BlockDefinition {
                     property_name: "amplification".to_string(),
                     transform: None,
                 },
+                live: true,
             },
         ],
         external_pads: ExternalPads {

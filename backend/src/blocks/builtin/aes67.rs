@@ -820,6 +820,7 @@ fn aes67_input_definition() -> BlockDefinition {
                     property_name: "SDP".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "decode".to_string(),
@@ -833,6 +834,7 @@ fn aes67_input_definition() -> BlockDefinition {
                     property_name: "decode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "latency_ms".to_string(),
@@ -845,6 +847,7 @@ fn aes67_input_definition() -> BlockDefinition {
                     property_name: "latency_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "timeout_ms".to_string(),
@@ -857,6 +860,7 @@ fn aes67_input_definition() -> BlockDefinition {
                     property_name: "timeout_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "interface".to_string(),
@@ -869,6 +873,7 @@ fn aes67_input_definition() -> BlockDefinition {
                     property_name: "interface".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "buffer_duration_ms".to_string(),
@@ -881,6 +886,7 @@ fn aes67_input_definition() -> BlockDefinition {
                     property_name: "buffer_duration_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -925,6 +931,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "session_name".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "bit_depth".to_string(),
@@ -942,6 +949,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "bit_depth".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "sample_rate".to_string(),
@@ -964,6 +972,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "sample_rate".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "channels".to_string(),
@@ -976,6 +985,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "channels".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "ptime".to_string(),
@@ -995,6 +1005,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "ptime".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "host".to_string(),
@@ -1007,6 +1018,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "host".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "port".to_string(),
@@ -1019,6 +1031,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "port".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "source_port".to_string(),
@@ -1031,6 +1044,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "source_port".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "interface".to_string(),
@@ -1043,6 +1057,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "interface".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "ttl".to_string(),
@@ -1055,6 +1070,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "ttl".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "qos_dscp".to_string(),
@@ -1069,6 +1085,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "qos_dscp".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "ravenna_extensions".to_string(),
@@ -1081,6 +1098,7 @@ fn aes67_output_definition() -> BlockDefinition {
                     property_name: "ravenna_extensions".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

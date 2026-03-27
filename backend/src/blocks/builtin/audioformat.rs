@@ -187,6 +187,7 @@ fn audioformat_definition() -> BlockDefinition {
                     property_name: "sample_rate".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "channels".to_string(),
@@ -215,6 +216,7 @@ fn audioformat_definition() -> BlockDefinition {
                     property_name: "channels".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "format".to_string(),
@@ -243,6 +245,7 @@ fn audioformat_definition() -> BlockDefinition {
                     property_name: "format".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

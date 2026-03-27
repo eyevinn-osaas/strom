@@ -319,6 +319,7 @@ fn spectrum_definition() -> BlockDefinition {
                     property_name: "interval".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "bands".to_string(),
@@ -339,6 +340,7 @@ fn spectrum_definition() -> BlockDefinition {
                     property_name: "bands".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "threshold".to_string(),
@@ -357,6 +359,7 @@ fn spectrum_definition() -> BlockDefinition {
                     property_name: "threshold".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "multi_channel".to_string(),
@@ -370,6 +373,7 @@ fn spectrum_definition() -> BlockDefinition {
                     property_name: "multi_channel".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

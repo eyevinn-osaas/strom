@@ -17,10 +17,11 @@ pub struct EnumValue {
 }
 
 /// Property type enumeration for exposed properties
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum PropertyType {
+    #[default]
     String,
     Multiline,
     Int,
@@ -68,7 +69,7 @@ pub struct BlockDefinition {
 }
 
 /// Property exposed by a block to the outside
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ExposedProperty {
     /// Name of the exposed property (used as key)
@@ -89,10 +90,15 @@ pub struct ExposedProperty {
 
     /// Mapping to internal element property
     pub mapping: PropertyMapping,
+
+    /// Whether this property updates the pipeline in real-time without requiring a flow save.
+    /// Live properties show a LIVE badge in the UI and send updates directly to running elements.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
 }
 
 /// Maps an exposed property to one or more internal element properties
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PropertyMapping {
     /// Which internal element's property to set

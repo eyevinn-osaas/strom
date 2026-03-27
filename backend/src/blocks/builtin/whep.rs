@@ -1827,6 +1827,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "implementation".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "whep_endpoint".to_string(),
@@ -1840,6 +1841,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "whep_endpoint".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "auth_token".to_string(),
@@ -1852,6 +1854,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "auth_token".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "mixer_latency_ms".to_string(),
@@ -1864,6 +1867,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "mixer_latency_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "jitterbuffer_latency_ms".to_string(),
@@ -1876,6 +1880,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "jitterbuffer_latency_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -1932,6 +1937,7 @@ fn whep_output_definition() -> BlockDefinition {
                     property_name: "mode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "endpoint_id".to_string(),
@@ -1944,6 +1950,7 @@ fn whep_output_definition() -> BlockDefinition {
                     property_name: "endpoint_id".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         // Note: external_pads here are the static defaults for audio_video mode.

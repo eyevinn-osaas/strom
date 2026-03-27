@@ -718,8 +718,6 @@ impl PropertyInspector {
                                 None
                             };
 
-                            let is_audiogain = definition.id == "builtin.audiogain";
-
                             for exposed_prop in &definition.exposed_properties {
                                 if let Some(ref skip) = mixer_skip {
                                     if skip.contains(exposed_prop.name.as_str()) {
@@ -736,8 +734,8 @@ impl PropertyInspector {
                                     available_channels,
                                 );
 
-                                // For audiogain blocks, send live property updates
-                                if changed && is_audiogain {
+                                // For live properties, send updates directly to the pipeline
+                                if changed && exposed_prop.live {
                                     if let Some(fid) = flow_id {
                                         let element_id = format!(
                                             "{}:{}",
@@ -1384,7 +1382,7 @@ impl PropertyInspector {
         }
 
         let mut property_changed = false;
-        let is_live = definition.id == "builtin.audiogain";
+        let is_live = exposed_prop.live;
 
         // For multiline, use vertical layout
         if is_multiline {

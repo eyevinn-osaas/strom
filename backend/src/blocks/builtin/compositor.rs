@@ -895,6 +895,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "compositor_preference".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Number of inputs
         ExposedProperty {
@@ -908,6 +909,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "num_inputs".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Output resolution
         ExposedProperty {
@@ -923,6 +925,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "output_resolution".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Background
         ExposedProperty {
@@ -951,6 +954,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "background".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Latency
         ExposedProperty {
@@ -964,6 +968,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "latency".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Min upstream latency
         ExposedProperty {
@@ -977,6 +982,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "min_upstream_latency".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Force live mode
         ExposedProperty {
@@ -990,6 +996,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "force_live".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // Use queues
         ExposedProperty {
@@ -1003,6 +1010,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "use_queues".to_string(),
                 transform: None,
             },
+                live: false,
         },
         // GL output (GPU only)
         ExposedProperty {
@@ -1016,6 +1024,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "gl_output".to_string(),
                 transform: None,
             },
+                live: false,
         },
     ];
 
@@ -1036,6 +1045,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_xpos", i),
                 transform: None,
             },
+            live: false,
         });
 
         // YPos
@@ -1050,6 +1060,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_ypos", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Width
@@ -1064,6 +1075,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_width", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Height
@@ -1078,6 +1090,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_height", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Alpha
@@ -1092,6 +1105,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_alpha", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Z-Order
@@ -1106,6 +1120,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_zorder", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Sizing Policy (GPU only)
@@ -1134,6 +1149,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_sizing_policy", i),
                 transform: None,
             },
+            live: false,
         });
     }
 

@@ -540,6 +540,7 @@ fn mpegtssrt_input_definition() -> BlockDefinition {
                     property_name: "srt_uri".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "latency".to_string(),
@@ -552,6 +553,7 @@ fn mpegtssrt_input_definition() -> BlockDefinition {
                     property_name: "latency".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "decode".to_string(),
@@ -564,6 +566,7 @@ fn mpegtssrt_input_definition() -> BlockDefinition {
                     property_name: "decode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "num_video_tracks".to_string(),
@@ -576,6 +579,7 @@ fn mpegtssrt_input_definition() -> BlockDefinition {
                     property_name: "num_video_tracks".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "num_audio_tracks".to_string(),
@@ -588,6 +592,7 @@ fn mpegtssrt_input_definition() -> BlockDefinition {
                     property_name: "num_audio_tracks".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
