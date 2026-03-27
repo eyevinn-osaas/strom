@@ -8,6 +8,15 @@ use strom_types::{
     BlockDefinition, BlockInstance, Element, FlowId, PropertyValue,
 };
 
+/// A live property update to send to a running pipeline element.
+pub struct LivePropertyUpdate {
+    pub flow_id: FlowId,
+    /// Full element ID: "{block_id}:{element_suffix}"
+    pub element_id: String,
+    pub property_name: String,
+    pub value: PropertyValue,
+}
+
 /// Result from showing the block property inspector.
 #[derive(Default)]
 pub struct BlockInspectorResult {
@@ -42,6 +51,8 @@ pub struct BlockInspectorResult {
     pub recorder_download_requested: Option<String>,
     /// Vision mixer control page requested - contains flow_id
     pub vision_mixer_url: Option<FlowId>,
+    /// Live property updates to send to running pipeline elements
+    pub live_property_updates: Vec<LivePropertyUpdate>,
 }
 
 /// Property inspector panel.
@@ -707,13 +718,15 @@ impl PropertyInspector {
                                 None
                             };
 
+                            let is_audiogain = definition.id == "builtin.audiogain";
+
                             for exposed_prop in &definition.exposed_properties {
                                 if let Some(ref skip) = mixer_skip {
                                     if skip.contains(exposed_prop.name.as_str()) {
                                         continue;
                                     }
                                 }
-                                Self::show_exposed_property(
+                                let changed = Self::show_exposed_property(
                                     ui,
                                     block,
                                     exposed_prop,
@@ -722,6 +735,35 @@ impl PropertyInspector {
                                     network_interfaces,
                                     available_channels,
                                 );
+
+                                // For audiogain blocks, send live property updates
+                                if changed && is_audiogain {
+                                    if let Some(fid) = flow_id {
+                                        let element_id = format!(
+                                            "{}:{}",
+                                            block.id, exposed_prop.mapping.element_id
+                                        );
+                                        // Use the current value (or default) for the update
+                                        let value = block
+                                            .properties
+                                            .get(&exposed_prop.name)
+                                            .or(exposed_prop.default_value.as_ref())
+                                            .cloned();
+                                        if let Some(value) = value {
+                                            result.live_property_updates.push(
+                                                LivePropertyUpdate {
+                                                    flow_id: fid,
+                                                    element_id,
+                                                    property_name: exposed_prop
+                                                        .mapping
+                                                        .property_name
+                                                        .clone(),
+                                                    value,
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1308,6 +1350,7 @@ impl PropertyInspector {
         // The modal routing editor handles all routing configuration
     }
 
+    /// Show an exposed property editor. Returns true if the value was changed.
     fn show_exposed_property(
         ui: &mut Ui,
         block: &mut BlockInstance,
@@ -1316,7 +1359,7 @@ impl PropertyInspector {
         _flow_id: Option<strom_types::FlowId>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
-    ) {
+    ) -> bool {
         let prop_name = &exposed_prop.name;
         let display_label = &exposed_prop.label;
         let default_value = exposed_prop.default_value.as_ref();
@@ -1339,6 +1382,9 @@ impl PropertyInspector {
                 current_value = Some(PropertyValue::String(String::new()));
             }
         }
+
+        let mut property_changed = false;
+        let is_live = definition.id == "builtin.audiogain";
 
         // For multiline, use vertical layout
         if is_multiline {
@@ -1378,6 +1424,7 @@ impl PropertyInspector {
             );
 
             if response.changed() {
+                property_changed = true;
                 // Only save if different from default
                 if let Some(PropertyValue::String(default)) = default_value {
                     if text != *default {
@@ -1397,7 +1444,7 @@ impl PropertyInspector {
             }
         } else {
             // For non-multiline, use horizontal layout
-            ui.horizontal(|ui| {
+            let changed_in_row = ui.horizontal(|ui| {
                 // Show property label with indicator if modified
                 if has_custom_value {
                     ui.colored_label(
@@ -1408,13 +1455,32 @@ impl PropertyInspector {
                     ui.label(format!("{}:", display_label));
                 }
 
+                // Show LIVE badge for real-time properties
+                if is_live {
+                    let badge = ui.colored_label(
+                        Color32::from_rgb(50, 200, 50),
+                        "LIVE",
+                    );
+                    badge.on_hover_text(
+                        "This property updates the audio pipeline in real-time.\nSave the flow to persist changes across restarts.",
+                    );
+                }
+
+                let mut changed = false;
+
                 if let Some(mut value) = current_value {
                     // Special handling for InterInput channel property - show dropdown with available channels
                     let is_inter_input_channel =
                         definition.id == "builtin.inter_input" && prop_name == "channel";
 
-                    let changed = if is_inter_input_channel {
+                    // Special handling for AudioGain gain property - show dB slider
+                    let is_audiogain_gain =
+                        definition.id == "builtin.audiogain" && prop_name == "gain";
+
+                    changed = if is_inter_input_channel {
                         Self::show_inter_channel_editor(ui, &mut value, available_channels)
+                    } else if is_audiogain_gain {
+                        Self::show_db_gain_editor(ui, &mut value)
                     } else {
                         // Check property type for special handling
                         match &exposed_prop.property_type {
@@ -1465,8 +1531,12 @@ impl PropertyInspector {
                         .clicked()
                 {
                     block.properties.remove(prop_name);
+                    changed = true;
                 }
+
+                changed
             });
+            property_changed = changed_in_row.inner;
         }
 
         // Show description
@@ -1478,6 +1548,8 @@ impl PropertyInspector {
 
         // Add spacing after each property
         ui.add_space(8.0);
+
+        property_changed
     }
 
     fn show_pad_property_from_info(
@@ -1838,6 +1910,21 @@ impl PropertyInspector {
 
     /// Show channel selector for InterInput blocks.
     /// Shows a dropdown with available channels (from all flows with InterOutput blocks).
+    /// Show a dB gain slider for the AudioGain block.
+    /// The value is stored directly in dB — no conversion needed here.
+    fn show_db_gain_editor(ui: &mut Ui, value: &mut PropertyValue) -> bool {
+        if let PropertyValue::Float(db) = value {
+            ui.add(
+                egui::Slider::new(db, -60.0..=20.0)
+                    .suffix(" dB")
+                    .fixed_decimals(1),
+            )
+            .changed()
+        } else {
+            false
+        }
+    }
+
     fn show_inter_channel_editor(
         ui: &mut Ui,
         value: &mut PropertyValue,

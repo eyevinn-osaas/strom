@@ -162,13 +162,21 @@ impl PipelineManager {
         // Get current pipeline state
         let state = self.get_state();
 
-        // Translate property name/value for lsp-rs elements (they use different
-        // property names than the LV2 equivalents used in ExposedProperty mappings)
-        let translations = crate::blocks::builtin::mixer::translate_property_for_element(
+        // Translate property name/value for elements that need conversion.
+        // Mixer lsp-rs elements use different property names than LV2 conventions.
+        // AudioGain stores gain in dB but GStreamer volume element expects linear.
+        let mut translations = crate::blocks::builtin::mixer::translate_property_for_element(
             element,
             property_name,
             value,
         );
+        if translations.is_empty() {
+            translations = crate::blocks::builtin::audiogain::translate_property(
+                element_id,
+                property_name,
+                value,
+            );
+        }
 
         if translations.is_empty() {
             // No translation needed, use original property

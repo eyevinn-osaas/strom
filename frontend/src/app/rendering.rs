@@ -1547,6 +1547,24 @@ impl StromApp {
                             let url = self.api.get_media_download_url(&relative_path);
                             ctx.open_url(egui::OpenUrl::new_tab(&url));
                         }
+
+                        // Handle live property updates (e.g., audiogain real-time control)
+                        for update in result.live_property_updates {
+                            let api = self.api.clone();
+                            spawn_task(async move {
+                                if let Err(e) = api
+                                    .update_element_property(
+                                        &update.flow_id,
+                                        &update.element_id,
+                                        &update.property_name,
+                                        update.value,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!("Live property update failed: {}", e);
+                                }
+                            });
+                        }
                     } else {
                         ui.label("Block definition not found");
                     }
