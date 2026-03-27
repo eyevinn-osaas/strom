@@ -739,4 +739,8 @@ pub struct StromApp {
     /// Recording start time per recorder block (flow_id, block_id) -> Instant
     recorder_start_times:
         std::collections::HashMap<(strom_types::FlowId, String), instant::Instant>,
+    /// Debounce state for live property updates: tracks last-sent time and any pending update
+    /// Key: (element_id, property_name)
+    live_property_debounce:
+        std::collections::HashMap<(String, String), crate::properties::LivePropertyDebounce>,
 }

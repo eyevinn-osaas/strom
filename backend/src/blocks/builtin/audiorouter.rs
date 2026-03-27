@@ -840,7 +840,7 @@ fn audiorouter_definition() -> BlockDefinition {
             property_name: "routing_matrix".to_string(),
             transform: None,
         },
-    live: false,
+        live: false,
     });
 
     BlockDefinition {

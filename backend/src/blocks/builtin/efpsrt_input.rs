@@ -638,7 +638,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "srt_uri".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "latency".to_string(),
@@ -651,7 +651,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "latency".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "decode".to_string(),
@@ -664,7 +664,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "decode".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "bucket_timeout".to_string(),
@@ -677,7 +677,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "bucket_timeout".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "hol_timeout".to_string(),
@@ -690,7 +690,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "hol_timeout".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "keep_listening".to_string(),
@@ -703,7 +703,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "keep_listening".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "num_video_tracks".to_string(),
@@ -716,7 +716,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "num_video_tracks".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
             ExposedProperty {
                 name: "num_audio_tracks".to_string(),
@@ -729,7 +729,7 @@ fn efpsrt_input_definition() -> BlockDefinition {
                     property_name: "num_audio_tracks".to_string(),
                     transform: None,
                 },
-            live: false,
+                live: false,
             },
         ],
         external_pads: ExternalPads {

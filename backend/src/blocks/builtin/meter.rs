@@ -204,7 +204,7 @@ fn meter_definition() -> BlockDefinition {
                 property_name: "interval".to_string(),
                 transform: None,
             },
-        live: false,
+            live: false,
         }],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {

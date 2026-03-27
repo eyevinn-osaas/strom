@@ -224,7 +224,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "force_live".to_string(),
             transform: None,
         },
-    live: false,
+        live: false,
     });
     exposed_properties.push(ExposedProperty {
         name: "latency".to_string(),
@@ -237,7 +237,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "latency".to_string(),
             transform: None,
         },
-    live: false,
+        live: false,
     });
     exposed_properties.push(ExposedProperty {
         name: "min_upstream_latency".to_string(),
@@ -250,7 +250,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "min_upstream_latency".to_string(),
             transform: None,
         },
-    live: false,
+        live: false,
     });
 
     // ========================================================================

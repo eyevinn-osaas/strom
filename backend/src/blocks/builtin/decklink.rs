@@ -754,7 +754,7 @@ fn decklink_audio_output_definition() -> BlockDefinition {
                 property_name: "device_number".to_string(),
                 transform: None,
             },
-        live: false,
+            live: false,
         }],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {

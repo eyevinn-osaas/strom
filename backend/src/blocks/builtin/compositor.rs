@@ -895,7 +895,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "compositor_preference".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Number of inputs
         ExposedProperty {
@@ -909,7 +909,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "num_inputs".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Output resolution
         ExposedProperty {
@@ -925,7 +925,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "output_resolution".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Background
         ExposedProperty {
@@ -954,7 +954,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "background".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Latency
         ExposedProperty {
@@ -968,7 +968,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "latency".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Min upstream latency
         ExposedProperty {
@@ -982,7 +982,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "min_upstream_latency".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Force live mode
         ExposedProperty {
@@ -996,7 +996,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "force_live".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // Use queues
         ExposedProperty {
@@ -1010,7 +1010,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "use_queues".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
         // GL output (GPU only)
         ExposedProperty {
@@ -1024,7 +1024,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "gl_output".to_string(),
                 transform: None,
             },
-                live: false,
+            live: false,
         },
     ];
 

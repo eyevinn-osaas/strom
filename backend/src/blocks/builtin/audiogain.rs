@@ -95,7 +95,7 @@ impl BlockBuilder for AudioGainBuilder {
                 _ => None,
             })
             .unwrap_or(false);
-        let amplification: f32 = if inverted { -1.0 } else { 1.0 };
+        let amplification: f64 = if inverted { -1.0 } else { 1.0 };
 
         info!(
             "AudioGain properties: gain_db={}, gain_linear={}, mute={}, inverted={}",

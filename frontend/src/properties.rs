@@ -17,6 +17,84 @@ pub struct LivePropertyUpdate {
     pub value: PropertyValue,
 }
 
+/// Minimum interval between live property API calls for the same element+property.
+pub const LIVE_PROPERTY_DEBOUNCE_MS: u64 = 80;
+
+/// Debounce state for a single element+property combination.
+/// Tracks when the last API call was sent and stores any pending update
+/// that was suppressed by the debounce interval (so the final value is
+/// always delivered).
+pub struct LivePropertyDebounce {
+    pub last_sent: instant::Instant,
+    pub pending: Option<LivePropertyUpdate>,
+}
+
+/// Drain live property updates through the debounce filter.
+///
+/// For each incoming update, if enough time has elapsed since the last send
+/// for that (element_id, property_name) pair, the update is returned
+/// immediately. Otherwise it is stored as a pending update.
+///
+/// Additionally, any previously-pending updates whose debounce interval has
+/// now expired are flushed — this ensures the final slider value is always
+/// delivered even if no new `changed` event arrives.
+pub fn drain_live_updates(
+    debounce_map: &mut std::collections::HashMap<(String, String), LivePropertyDebounce>,
+    incoming: Vec<LivePropertyUpdate>,
+) -> Vec<LivePropertyUpdate> {
+    let now = instant::Instant::now();
+    let interval = std::time::Duration::from_millis(LIVE_PROPERTY_DEBOUNCE_MS);
+    let mut to_send: Vec<LivePropertyUpdate> = Vec::new();
+
+    // Keys that received a fresh incoming update this frame
+    let mut touched_keys: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    // Process incoming updates
+    for update in incoming {
+        let key = (update.element_id.clone(), update.property_name.clone());
+        touched_keys.insert(key.clone());
+
+        let entry = debounce_map
+            .entry(key)
+            .or_insert_with(|| LivePropertyDebounce {
+                // Set last_sent far enough in the past so the first update always goes through
+                last_sent: now - interval,
+                pending: None,
+            });
+
+        if now.duration_since(entry.last_sent) >= interval {
+            // Enough time has passed — send immediately
+            entry.last_sent = now;
+            entry.pending = None;
+            to_send.push(update);
+        } else {
+            // Too soon — store as pending (overwrites any previous pending value)
+            entry.pending = Some(update);
+        }
+    }
+
+    // Flush any previously-pending updates whose interval has expired
+    // (but skip keys we already handled above to avoid double-sends)
+    let expired_keys: Vec<(String, String)> = debounce_map
+        .iter()
+        .filter(|(k, v)| v.pending.is_some() && !touched_keys.contains(*k))
+        .filter(|(_, v)| now.duration_since(v.last_sent) >= interval)
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    for key in expired_keys {
+        if let Some(entry) = debounce_map.get_mut(&key) {
+            if let Some(update) = entry.pending.take() {
+                entry.last_sent = now;
+                to_send.push(update);
+            }
+        }
+    }
+
+    to_send
+}
+
 /// Result from showing the block property inspector.
 #[derive(Default)]
 pub struct BlockInspectorResult {
@@ -1906,8 +1984,6 @@ impl PropertyInspector {
         }
     }
 
-    /// Show channel selector for InterInput blocks.
-    /// Shows a dropdown with available channels (from all flows with InterOutput blocks).
     /// Show a dB gain slider for the AudioGain block.
     /// The value is stored directly in dB — no conversion needed here.
     fn show_db_gain_editor(ui: &mut Ui, value: &mut PropertyValue) -> bool {
@@ -1923,6 +1999,8 @@ impl PropertyInspector {
         }
     }
 
+    /// Show channel selector for InterInput blocks.
+    /// Shows a dropdown with available channels (from all flows with InterOutput blocks).
     fn show_inter_channel_editor(
         ui: &mut Ui,
         value: &mut PropertyValue,
