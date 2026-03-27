@@ -37,6 +37,7 @@ Run this service in the cloud with a single click.
 - **Native or Web** - Run as desktop app or web service
 - **MCP Integration** - Control pipelines with AI assistants (Claude, etc.)
 - **CI/CD** - Automated testing, building, and releases for Linux, Windows, macOS, and ARM64
+- **Vision Mixer** - Broadcast-style PVW/PGM video switcher with web control UI
 - **HTML Rendering** - Render web pages as video sources using CEF (via `strom-full` Docker image)
 
 ### Advanced Capabilities
@@ -111,7 +112,8 @@ sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-  gstreamer1.0-tools libnice-dev gstreamer1.0-nice graphviz
+  gstreamer1.0-tools libnice-dev gstreamer1.0-nice \
+  libcairo2-dev graphviz
 
 # Install GStreamer (macOS)
 brew install gstreamer gst-plugins-base libnice-gstreamer
@@ -324,6 +326,7 @@ Create reusable components from element groups:
 - **Video Format** - Resolution, framerate, and pixel format conversion
 - **Audio Format** - Sample rate, channels, and PCM format conversion (supports surround sound)
 - **Video Compositor** - Multi-input compositing with GPU (OpenGL) and CPU backends
+- **Vision Mixer** - Broadcast-style PVW/PGM video switcher with CUT/AUTO transitions, DSK overlays, fade-to-black, multiview output, and web control UI
 
 **Analysis:**
 - **Audio Meter** - RMS and peak level monitoring per channel
