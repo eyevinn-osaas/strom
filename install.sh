@@ -122,10 +122,8 @@ is_gstreamer_installed() {
     case "$os" in
         linux)
             if command -v dpkg-query >/dev/null 2>&1; then
-                # Debian/Ubuntu: check core packages
+                # Debian/Ubuntu: check core runtime packages
                 local required_packages=(
-                    libgstreamer1.0-dev
-                    libgstreamer-plugins-base1.0-dev
                     gstreamer1.0-plugins-base
                     gstreamer1.0-plugins-good
                 )
@@ -143,7 +141,7 @@ is_gstreamer_installed() {
                 return 0
             elif command -v rpm >/dev/null 2>&1; then
                 # Fedora/RHEL
-                local required_packages=(gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good)
+                local required_packages=(gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good)
                 if [ "$install_type" = "full" ]; then
                     required_packages+=(gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free)
                 fi
@@ -318,10 +316,8 @@ install_gstreamer() {
             if command -v apt-get >/dev/null 2>&1; then
                 run_elevated env DEBIAN_FRONTEND=noninteractive apt-get update
 
-                # Minimal: core libraries + basic plugins
+                # Minimal: core runtime libraries + basic plugins
                 local packages=(
-                    libgstreamer1.0-dev
-                    libgstreamer-plugins-base1.0-dev
                     gstreamer1.0-plugins-base
                     gstreamer1.0-plugins-good
                     gstreamer1.0-tools
@@ -330,7 +326,6 @@ install_gstreamer() {
                 # Full: add advanced plugins and extras
                 if [ "$install_type" = "full" ]; then
                     packages+=(
-                        libgstreamer-plugins-bad1.0-dev
                         gstreamer1.0-plugins-bad
                         gstreamer1.0-plugins-ugly
                         gstreamer1.0-libav
@@ -348,8 +343,8 @@ install_gstreamer() {
                 log_success "GStreamer installed successfully"
             elif command -v dnf >/dev/null 2>&1; then
                 local packages=(
-                    gstreamer1-devel
-                    gstreamer1-plugins-base-devel
+                    gstreamer1
+                    gstreamer1-plugins-base
                     gstreamer1-plugins-good
                 )
 
