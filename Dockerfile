@@ -89,6 +89,7 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     # Install ARM64 GStreamer development libraries
     apt-get install -y --no-install-recommends \
         libssl-dev:arm64 \
+        libcairo2-dev:arm64 \
         libglib2.0-dev:arm64 \
         libgstreamer1.0-dev:arm64 \
         libgstreamer-plugins-base1.0-dev:arm64 \
@@ -100,6 +101,7 @@ else \
     echo "==> Native build for $TARGETPLATFORM - Installing native GStreamer libs"; \
     apt-get update && apt-get install -y \
         libssl-dev \
+        libcairo2-dev \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
         libgstreamer-plugins-bad1.0-dev \

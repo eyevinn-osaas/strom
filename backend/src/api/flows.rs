@@ -20,7 +20,7 @@ use strom_types::{
     },
     Flow, FlowId,
 };
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::layout;
 use crate::state::AppState;
@@ -1337,7 +1337,7 @@ pub async fn trigger_transition(
     Path((flow_id, block_id)): Path<(FlowId, String)>,
     ValidatedJson(req): ValidatedJson<TriggerTransitionRequest>,
 ) -> Result<Json<TransitionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    info!(
+    debug!(
         "Triggering {} transition on block {} in flow {} ({} -> {}, {}ms)",
         req.transition_type, block_id, flow_id, req.from_input, req.to_input, req.duration_ms
     );
@@ -1370,6 +1370,213 @@ pub async fn trigger_transition(
         ),
         transition_type: req.transition_type,
         duration_ms: req.duration_ms,
+    }))
+}
+
+/// Select a preview source on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/preview",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::SelectPreviewRequest,
+    responses(
+        (status = 200, description = "Preview source selected", body = strom_types::api::SelectPreviewResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Flow or block not found", body = ErrorResponse),
+    )
+)]
+pub async fn select_preview(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::SelectPreviewRequest>,
+) -> Result<Json<strom_types::api::SelectPreviewResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Selecting preview input {} (multi={}) on vision mixer {} in flow {}",
+        req.input, req.multi, block_id, flow_id
+    );
+
+    let (pvw_group, pgm_group) = state
+        .select_vision_mixer_preview(&flow_id, &block_id, req.input, req.multi)
+        .await
+        .map_err(|e| {
+            error!("Failed to select preview: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to select preview",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::SelectPreviewResponse {
+        message: format!("Preview set to {:?}", pvw_group),
+        preview_input: pvw_group.first().copied().unwrap_or(0),
+        program_input: pgm_group.first().copied().unwrap_or(0),
+        preview_inputs: pvw_group,
+        program_inputs: pgm_group,
+    }))
+}
+
+/// Set or clear the background source on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/background",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::SetBackgroundRequest,
+    responses(
+        (status = 200, description = "Background source set/cleared", body = strom_types::api::SetBackgroundResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn set_background(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::SetBackgroundRequest>,
+) -> Result<Json<strom_types::api::SetBackgroundResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Setting background {:?} on vision mixer {} in flow {}",
+        req.input, block_id, flow_id
+    );
+
+    let bg = state
+        .set_vision_mixer_background(&flow_id, &block_id, req.input)
+        .await
+        .map_err(|e| {
+            error!("Failed to set background: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to set background",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::SetBackgroundResponse {
+        message: match bg {
+            Some(idx) => format!("Background set to input {}", idx),
+            None => "Background cleared".to_string(),
+        },
+        background_input: bg,
+    }))
+}
+
+/// Toggle a DSK (Downstream Keyer) layer on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/dsk",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::DskToggleRequest,
+    responses(
+        (status = 200, description = "DSK toggled", body = strom_types::api::DskToggleResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn toggle_dsk(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::DskToggleRequest>,
+) -> Result<Json<strom_types::api::DskToggleResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if req.dsk < 1 || req.dsk > strom_types::vision_mixer::MAX_DSK_INPUTS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::with_details(
+                "Invalid DSK number",
+                format!(
+                    "DSK must be 1-{}, got {}",
+                    strom_types::vision_mixer::MAX_DSK_INPUTS,
+                    req.dsk
+                ),
+            )),
+        ));
+    }
+
+    info!(
+        "Toggling DSK {} {} on vision mixer {} in flow {}",
+        req.dsk,
+        if req.enabled { "on" } else { "off" },
+        block_id,
+        flow_id
+    );
+
+    // Convert 1-based DSK number to 0-based internal index
+    let dsk_index = req.dsk - 1;
+
+    state
+        .set_dsk_enabled(&flow_id, &block_id, dsk_index, req.enabled)
+        .await
+        .map_err(|e| {
+            error!("Failed to toggle DSK: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to toggle DSK",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::DskToggleResponse {
+        message: format!(
+            "DSK {} {}",
+            req.dsk,
+            if req.enabled { "enabled" } else { "disabled" }
+        ),
+        dsk: req.dsk,
+        enabled: req.enabled,
+    }))
+}
+
+/// Toggle Fade to Black on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/ftb",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::FadeToBlackRequest,
+    responses(
+        (status = 200, description = "FTB toggled", body = strom_types::api::FadeToBlackResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn fade_to_black(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::FadeToBlackRequest>,
+) -> Result<Json<strom_types::api::FadeToBlackResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let active = state
+        .fade_to_black(&flow_id, &block_id, req.duration_ms)
+        .await
+        .map_err(|e| {
+            error!("Failed to toggle FTB: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to toggle FTB",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::FadeToBlackResponse {
+        message: format!("FTB {}", if active { "activated" } else { "deactivated" }),
+        active,
     }))
 }
 

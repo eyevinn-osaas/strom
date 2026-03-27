@@ -326,6 +326,44 @@ pub enum StromEvent {
         /// Reason: "manual", "timeout", "flow_stopped"
         reason: String,
     },
+    /// Vision mixer PVW/PGM state changed
+    VisionMixerStateChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        /// First source in PVW group (backward compat).
+        preview_input: usize,
+        /// First source in PGM group (backward compat).
+        program_input: usize,
+        /// Full ordered PVW source group.
+        preview_inputs: Vec<usize>,
+        /// Full ordered PGM source group.
+        program_inputs: Vec<usize>,
+    },
+    /// Vision mixer DSK layer toggled
+    VisionMixerDskChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        /// DSK layer number (1-based)
+        dsk: usize,
+        enabled: bool,
+    },
+    /// Vision mixer Fade to Black state changed
+    VisionMixerFtbChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        active: bool,
+    },
+    /// Vision mixer background source changed
+    VisionMixerBackgroundChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        /// Background source index, or null if cleared.
+        background_input: Option<usize>,
+    },
 }
 
 impl StromEvent {
@@ -702,6 +740,54 @@ impl StromEvent {
                 format!(
                     "Buffer age probe {} deactivated in flow {}: {}",
                     probe_id, flow_id, reason
+                )
+            }
+            StromEvent::VisionMixerStateChanged {
+                flow_id,
+                block_id,
+                preview_inputs,
+                program_inputs,
+                ..
+            } => {
+                format!(
+                    "Vision mixer {} in flow {}: PVW={:?}, PGM={:?}",
+                    block_id, flow_id, preview_inputs, program_inputs
+                )
+            }
+            StromEvent::VisionMixerDskChanged {
+                flow_id,
+                block_id,
+                dsk,
+                enabled,
+            } => {
+                format!(
+                    "Vision mixer {} in flow {}: DSK {} {}",
+                    block_id,
+                    flow_id,
+                    dsk,
+                    if *enabled { "ON" } else { "OFF" }
+                )
+            }
+            StromEvent::VisionMixerFtbChanged {
+                flow_id,
+                block_id,
+                active,
+            } => {
+                format!(
+                    "Vision mixer {} in flow {}: FTB {}",
+                    block_id,
+                    flow_id,
+                    if *active { "ON" } else { "OFF" }
+                )
+            }
+            StromEvent::VisionMixerBackgroundChanged {
+                flow_id,
+                block_id,
+                background_input,
+            } => {
+                format!(
+                    "Vision mixer {} in flow {}: BG {:?}",
+                    block_id, flow_id, background_input
                 )
             }
         }

@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.1"
+    "version": "0.4.2"
   },
   "paths": {
     "/api/auth/status": {
@@ -817,6 +817,189 @@
         }
       }
     },
+    "/api/flows/{flow_id}/blocks/{block_id}/background": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Set or clear the background source on a vision mixer block.",
+        "operationId": "set_background",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBackgroundRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Background source set/cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetBackgroundResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/dsk": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Toggle a DSK (Downstream Keyer) layer on a vision mixer block.",
+        "operationId": "toggle_dsk",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DskToggleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "DSK toggled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DskToggleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/ftb": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Toggle Fade to Black on a vision mixer block.",
+        "operationId": "fade_to_black",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FadeToBlackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "FTB toggled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FadeToBlackResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/flows/{flow_id}/blocks/{block_id}/loudness/reset": {
       "post": {
         "tags": [
@@ -1157,6 +1340,77 @@
           },
           "404": {
             "description": "Player not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/preview": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Select a preview source on a vision mixer block.",
+        "operationId": "select_preview",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelectPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Preview source selected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SelectPreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Flow or block not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -4468,6 +4722,47 @@
           }
         }
       },
+      "DskToggleRequest": {
+        "type": "object",
+        "description": "Request to toggle a DSK (Downstream Keyer) layer on a vision mixer block.",
+        "required": [
+          "dsk",
+          "enabled"
+        ],
+        "properties": {
+          "dsk": {
+            "type": "integer",
+            "description": "DSK layer number (1 or 2, 1-based)",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable or disable the DSK layer"
+          }
+        }
+      },
+      "DskToggleResponse": {
+        "type": "object",
+        "description": "Response after toggling a DSK layer.",
+        "required": [
+          "message",
+          "dsk",
+          "enabled"
+        ],
+        "properties": {
+          "dsk": {
+            "type": "integer",
+            "description": "DSK layer number (1-based)",
+            "minimum": 0
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "DynamicPadsResponse": {
         "type": "object",
         "description": "Response containing runtime dynamic pads information.",
@@ -4817,6 +5112,37 @@
               "$ref": "#/components/schemas/ExternalPad"
             },
             "description": "Output pads (mapped to internal element pads)"
+          }
+        }
+      },
+      "FadeToBlackRequest": {
+        "type": "object",
+        "description": "Request to toggle Fade to Black on a vision mixer block.",
+        "required": [
+          "duration_ms"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Duration in milliseconds (0 = instant)",
+            "minimum": 0
+          }
+        }
+      },
+      "FadeToBlackResponse": {
+        "type": "object",
+        "description": "Response after toggling Fade to Black.",
+        "required": [
+          "message",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
           }
         }
       },
@@ -6394,6 +6720,66 @@
           }
         }
       },
+      "SelectPreviewRequest": {
+        "type": "object",
+        "description": "Request to select a preview source on a vision mixer block.",
+        "required": [
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "type": "integer",
+            "description": "Index of the input to set as preview (0-based)",
+            "minimum": 0
+          },
+          "multi": {
+            "type": "boolean",
+            "description": "If true, toggle the input in/out of the current PVW group (shift+click).\nIf false (default), replace the PVW group with just this input."
+          }
+        }
+      },
+      "SelectPreviewResponse": {
+        "type": "object",
+        "description": "Response after selecting a preview source.",
+        "required": [
+          "message",
+          "preview_input",
+          "program_input",
+          "preview_inputs",
+          "program_inputs"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "preview_input": {
+            "type": "integer",
+            "description": "First source in the PVW group (backward compat).",
+            "minimum": 0
+          },
+          "preview_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Full ordered PVW source group."
+          },
+          "program_input": {
+            "type": "integer",
+            "description": "First source in the PGM group (backward compat).",
+            "minimum": 0
+          },
+          "program_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Full ordered PGM source group."
+          }
+        }
+      },
       "ServerMessage": {
         "oneOf": [
           {
@@ -6491,6 +6877,40 @@
           }
         ],
         "description": "Messages sent from server to client via WebSocket."
+      },
+      "SetBackgroundRequest": {
+        "type": "object",
+        "description": "Request to set or clear the background source on a vision mixer block.",
+        "properties": {
+          "input": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Source index to use as background (0-based), or null to clear.",
+            "minimum": 0
+          }
+        }
+      },
+      "SetBackgroundResponse": {
+        "type": "object",
+        "description": "Response after setting/clearing the background source.",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "background_input": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Current background source index, or null if none.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          }
+        }
       },
       "SetPlaylistRequest": {
         "type": "object",
@@ -8303,6 +8723,190 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer PVW/PGM state changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer PVW/PGM state changed",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "preview_input",
+                  "program_input",
+                  "preview_inputs",
+                  "program_inputs"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "preview_input": {
+                    "type": "integer",
+                    "description": "First source in PVW group (backward compat).",
+                    "minimum": 0
+                  },
+                  "preview_inputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "Full ordered PVW source group."
+                  },
+                  "program_input": {
+                    "type": "integer",
+                    "description": "First source in PGM group (backward compat).",
+                    "minimum": 0
+                  },
+                  "program_inputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "description": "Full ordered PGM source group."
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerStateChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer DSK layer toggled",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer DSK layer toggled",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "dsk",
+                  "enabled"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "dsk": {
+                    "type": "integer",
+                    "description": "DSK layer number (1-based)",
+                    "minimum": 0
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerDskChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer Fade to Black state changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer Fade to Black state changed",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "active"
+                ],
+                "properties": {
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerFtbChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer background source changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer background source changed",
+                "required": [
+                  "flow_id",
+                  "block_id"
+                ],
+                "properties": {
+                  "background_input": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "Background source index, or null if cleared.",
+                    "minimum": 0
+                  },
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerBackgroundChanged"
+                ]
+              }
+            }
           }
         ],
         "description": "Event types that can be broadcast to all connected clients."
@@ -8687,6 +9291,52 @@
           "value": {
             "$ref": "#/components/schemas/PropertyValue",
             "description": "The new value for the property"
+          }
+        }
+      },
+      "VisionMixerState": {
+        "type": "object",
+        "description": "Current state of a vision mixer block.",
+        "required": [
+          "preview_input",
+          "program_input",
+          "preview_inputs",
+          "program_inputs",
+          "num_inputs",
+          "input_labels"
+        ],
+        "properties": {
+          "input_labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "num_inputs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preview_input": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "preview_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "program_input": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "program_inputs": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         }
       },

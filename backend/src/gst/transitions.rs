@@ -9,6 +9,7 @@ use gstreamer_controller::prelude::*;
 use gstreamer_controller::{DirectControlBinding, InterpolationControlSource, InterpolationMode};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use strom_types::vision_mixer;
 use tracing::{debug, info};
 
 /// Transition type for scene switching.
@@ -132,7 +133,7 @@ impl TransitionController {
             return Ok(());
         }
 
-        info!(
+        debug!(
             "Starting {:?} transition from input {} to {} over {}ms",
             transition_type, from_input, to_input, duration_ms
         );
@@ -199,7 +200,7 @@ impl TransitionController {
         from_pad.set_property("alpha", 0.0f64);
         to_pad.set_property("alpha", 1.0f64);
 
-        info!("Cut transition complete: {} -> {}", from_input, to_input);
+        debug!("Cut transition complete: {} -> {}", from_input, to_input);
         Ok(())
     }
 
@@ -435,7 +436,7 @@ impl TransitionController {
         cs_from.set_mode(InterpolationMode::Linear);
 
         // Add eased keyframes for first half (fade out)
-        let num_keyframes = 10;
+        let num_keyframes = vision_mixer::TRANSITION_KEYFRAMES;
         for i in 0..=num_keyframes {
             let t = i as f64 / num_keyframes as f64;
             let eased_t = Self::ease_in_out(t);
@@ -533,7 +534,7 @@ impl TransitionController {
         let value_range = end_value - start_value;
 
         // Add keyframes along ease-in-out curve for smooth animation
-        let num_keyframes = 10;
+        let num_keyframes = vision_mixer::TRANSITION_KEYFRAMES;
         for i in 0..=num_keyframes {
             let t = i as f64 / num_keyframes as f64;
             let eased_t = Self::ease_in_out(t);
@@ -593,7 +594,7 @@ impl TransitionController {
         let value_range = (end_value - start_value) as f64;
 
         // Add keyframes along ease-in-out curve for smooth animation
-        let num_keyframes = 10;
+        let num_keyframes = vision_mixer::TRANSITION_KEYFRAMES;
         for i in 0..=num_keyframes {
             let t = i as f64 / num_keyframes as f64;
             let eased_t = Self::ease_in_out(t);
@@ -633,6 +634,58 @@ impl TransitionController {
                 debug!("Removed {} control binding from pad {}", prop, pad.name());
             }
         }
+    }
+
+    /// Perform a cross-fade transition between two source groups.
+    ///
+    /// Fades out all pads in `from_group` and fades in all pads in `to_group`.
+    /// The to_group pads should already have their positions set before calling this.
+    pub fn transition_groups(
+        &self,
+        from_group: &[usize],
+        to_group: &[usize],
+        duration_ms: u64,
+        pipeline: &gst::Pipeline,
+    ) -> Result<(), TransitionError> {
+        // Clean up any previous transitions
+        if let Ok(mut transitions) = self.active_transitions.lock() {
+            transitions.clear();
+        }
+
+        let current_time = pipeline
+            .query_position::<gst::ClockTime>()
+            .ok_or(TransitionError::PositionQueryFailed)?;
+        let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
+
+        let mut control_sources = Vec::new();
+
+        // Fade out all from_group pads
+        for &idx in from_group {
+            let pad = self.get_sink_pad(idx)?;
+            self.clear_control_bindings(&pad);
+            let cs = self.setup_alpha_animation(&pad, current_time, end_time, 1.0, 0.0)?;
+            control_sources.push(cs);
+        }
+
+        // Fade in all to_group pads
+        for &idx in to_group {
+            let pad = self.get_sink_pad(idx)?;
+            self.clear_control_bindings(&pad);
+            let cs = self.setup_alpha_animation(&pad, current_time, end_time, 0.0, 1.0)?;
+            control_sources.push(cs);
+        }
+
+        let key = format!("group_{:?}_{:?}", from_group, to_group);
+        if let Ok(mut transitions) = self.active_transitions.lock() {
+            transitions.insert(key, control_sources);
+        }
+
+        info!(
+            "Group fade transition started: {:?} -> {:?} ({}ms)",
+            from_group, to_group, duration_ms
+        );
+
+        Ok(())
     }
 
     /// Clean up completed transitions.

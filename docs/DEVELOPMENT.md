@@ -14,7 +14,7 @@ Make sure you have the following installed:
 2. **GStreamer development libraries**
    ```bash
    # Ubuntu/Debian
-   sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+   sudo apt-get install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libcairo2-dev
 
    # Fedora
    sudo dnf install gstreamer1-devel gstreamer1-plugins-base-devel

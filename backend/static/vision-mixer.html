@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vision Mixer - Strom</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            width: 100%;
+            height: 100%;
+        }
+        body {
+            background: #000;
+            color: #ddd;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Multiview player */
+        .multiview {
+            flex: 1;
+            background: #000;
+            min-height: 0;
+        }
+        .multiview video {
+            display: block;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* Control surface */
+        .controls {
+            background: #252525;
+            padding: 12px 16px;
+            display: flex;
+            gap: 16px;
+            align-items: stretch;
+            transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease;
+            max-height: 200px;
+            overflow: hidden;
+        }
+
+        /* Bus section */
+        .buses {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .bus-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .bus-label {
+            font-size: 11px;
+            font-weight: 700;
+            width: 36px;
+            text-align: right;
+            flex-shrink: 0;
+            letter-spacing: 0.5px;
+        }
+
+        .bus-label.pgm { color: #ff3333; }
+        .bus-label.pvw { color: #33cc33; }
+
+        .bus-buttons {
+            display: flex;
+            gap: 3px;
+            flex: 1;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+
+        .src-btn {
+            flex: 1 1 0;
+            min-width: 36px;
+            height: 36px;
+            border: 2px solid #444;
+            border-radius: 4px;
+            background: #2a2a2a;
+            color: #999;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.1s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            padding: 0 4px;
+        }
+
+        .src-btn:hover {
+            border-color: #666;
+            color: #ccc;
+        }
+        .src-btn:focus {
+            outline: none;
+        }
+
+        .src-btn.pgm-active {
+            background: #cc0000;
+            border-color: #ff3333;
+            color: #fff;
+            box-shadow: 0 0 8px rgba(255, 0, 0, 0.4);
+        }
+
+        .src-btn.pvw-active {
+            background: #006600;
+            border-color: #33cc33;
+            color: #fff;
+            box-shadow: 0 0 8px rgba(0, 255, 0, 0.3);
+        }
+
+        .src-btn.bg-active {
+            border-color: #cc9900;
+            box-shadow: 0 0 6px rgba(204, 153, 0, 0.4);
+        }
+        .src-btn.bg-active::after {
+            content: ' BG';
+            font-size: 8px;
+            color: #cc9900;
+        }
+
+        /* Transition section */
+        .transition-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 180px;
+            flex-shrink: 0;
+            border-left: 1px solid #444;
+            padding-left: 16px;
+        }
+
+        .transition-buttons {
+            display: flex;
+            gap: 6px;
+        }
+
+        .take-btn {
+            height: 42px;
+            border: 2px solid;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            flex: 1;
+            transition: all 0.15s ease;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+
+        .take-btn.cut {
+            background: #cc0000;
+            border-color: #ff3333;
+            color: #fff;
+        }
+        .take-btn:focus, .type-btn:focus, .duration-preset:focus {
+            outline: none;
+        }
+        .take-btn.cut:hover {
+            background: #ee0000;
+            box-shadow: 0 0 12px rgba(255, 0, 0, 0.5);
+        }
+
+        .take-btn.auto {
+            background: #333;
+            border-color: #666;
+            color: #ddd;
+        }
+        .take-btn.auto:hover {
+            background: #444;
+            border-color: #888;
+        }
+        .take-btn.auto.active {
+            background: #995500;
+            border-color: #ff9900;
+            color: #fff;
+            box-shadow: 0 0 8px rgba(255, 153, 0, 0.4);
+        }
+        .take-btn.ftb-active {
+            background: #cc0000;
+            border-color: #ff3333;
+            color: #fff;
+            box-shadow: 0 0 12px rgba(255, 0, 0, 0.6);
+            animation: pulse 1.5s infinite;
+        }
+
+        /* Transition type selector */
+        .type-row {
+            display: flex;
+            gap: 4px;
+        }
+
+        .type-btn {
+            flex: 1;
+            height: 28px;
+            border: 1px solid #444;
+            border-radius: 3px;
+            background: #2a2a2a;
+            color: #888;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+        .type-btn.active {
+            background: #444;
+            border-color: #888;
+            color: #fff;
+        }
+        .type-btn:hover { border-color: #666; }
+
+        /* Duration row */
+        .duration-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .duration-row label {
+            font-size: 11px;
+            color: #888;
+            white-space: nowrap;
+        }
+        .duration-input {
+            width: 60px;
+            height: 26px;
+            padding: 0 4px;
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 3px;
+            color: #ddd;
+            text-align: center;
+            font-size: 12px;
+        }
+        .duration-preset {
+            height: 26px;
+            padding: 0 8px;
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 3px;
+            color: #888;
+            font-size: 11px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .duration-preset:hover { border-color: #666; color: #ccc; }
+        .duration-preset.active { background: #444; color: #fff; border-color: #888; }
+
+        /* Status bar */
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 16px;
+            background: #1e1e1e;
+            border-top: 1px solid #333;
+            font-size: 11px;
+            color: #666;
+        }
+        .on-air {
+            background: #cc0000;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 2px;
+            font-weight: 700;
+            font-size: 10px;
+            letter-spacing: 1px;
+        }
+        .status-text { color: #888; }
+        .shortcut-hint { color: #555; font-size: 10px; }
+        .dsk-btn {
+            flex: 1;
+            height: 28px;
+            border: 2px solid #555;
+            border-radius: 3px;
+            background: #2a2a2a;
+            color: #666;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+        }
+        .dsk-btn:focus { outline: none; }
+        .dsk-btn:hover { border-color: #888; }
+        .dsk-btn.on {
+            background: #cc0000;
+            border-color: #ff3333;
+            color: #fff;
+            box-shadow: 0 0 6px rgba(255, 0, 0, 0.4);
+        }
+        .dsk-btn.off {
+            background: #333;
+            border-color: #555;
+            color: #888;
+        }
+        .conn-indicators {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .conn-dot {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: #888;
+        }
+        .conn-dot::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #555;
+        }
+        .conn-dot.ok::before { background: #33cc33; }
+        .conn-dot.err::before { background: #cc0000; }
+        .conn-dot.warn::before { background: #cc9900; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        /* Minimize-control mode */
+        body.minimized .controls {
+            max-height: 0;
+            padding-top: 0;
+            padding-bottom: 0;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .minimize-indicator {
+            display: none;
+            position: fixed;
+            bottom: 28px;
+            right: 16px;
+            background: rgba(40, 40, 40, 0.85);
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 10px;
+            color: #888;
+            cursor: pointer;
+            z-index: 10;
+        }
+        .minimize-indicator:hover { color: #ccc; border-color: #888; }
+        body.minimized .minimize-indicator { display: block; }
+    </style>
+</head>
+<body>
+    <!-- Multiview monitor -->
+    <div class="multiview">
+        <video id="multiviewVideo" autoplay muted playsinline></video>
+    </div>
+
+    <!-- Control surface -->
+    <div class="controls">
+        <!-- PGM + PVW buses -->
+        <div class="buses">
+            <div class="bus-row">
+                <span class="bus-label pgm">PGM</span>
+                <div class="bus-buttons" id="pgmBus"></div>
+            </div>
+            <div class="bus-row">
+                <span class="bus-label pvw">PVW</span>
+                <div class="bus-buttons" id="pvwBus"></div>
+            </div>
+            <div class="bus-row" id="dskRow" style="display:none;">
+                <span class="bus-label" style="color:#ff6666;">DSK</span>
+                <div class="bus-buttons">
+                    <button class="dsk-btn on" id="dsk0Btn" onclick="toggleDsk(0)">DSK 1 ON</button>
+                    <button class="dsk-btn on" id="dsk1Btn" onclick="toggleDsk(1)" style="display:none;">DSK 2 ON</button>
+                    <button class="dsk-btn on" id="dsk2Btn" onclick="toggleDsk(2)" style="display:none;">DSK 3 ON</button>
+                    <button class="dsk-btn on" id="dsk3Btn" onclick="toggleDsk(3)" style="display:none;">DSK 4 ON</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transition controls -->
+        <div class="transition-panel">
+            <div class="transition-buttons">
+                <button class="take-btn cut" onclick="doCut()" title="Cut (X)">CUT</button>
+                <button class="take-btn auto" id="autoBtn" onclick="doAuto()" title="Auto transition (Space)">AUTO</button>
+                <button class="take-btn auto" id="ftbBtn" onclick="doFtb()" title="Fade to Black (F)">FTB</button>
+            </div>
+            <div class="type-row">
+                <button class="type-btn active" data-type="fade" onclick="setTransitionType('fade')">MIX</button>
+                <button class="type-btn" data-type="dip_to_black" onclick="setTransitionType('dip_to_black')">DIP</button>
+                <button class="type-btn" data-type="push_left" onclick="setTransitionType('push_left')">PUSH</button>
+            </div>
+            <div class="duration-row">
+                <label>Duration:</label>
+                <button class="duration-preset" onclick="setDuration(0.5)">0.5s</button>
+                <button class="duration-preset active" onclick="setDuration(1.0)">1.0s</button>
+                <button class="duration-preset" onclick="setDuration(2.0)">2.0s</button>
+                <input type="number" class="duration-input" id="durationInput" value="1.0" min="0.1" max="10" step="0.1" onchange="onDurationInput()">
+            </div>
+        </div>
+    </div>
+
+    <div class="minimize-indicator" onclick="toggleMinimize()" title="Show controls (M)">Controls hidden &middot; press M</div>
+
+    <!-- Status bar -->
+    <div class="status-bar">
+        <span class="on-air">ON AIR</span>
+        <div class="conn-indicators">
+            <span class="conn-dot" id="whepDot" title="WHEP multiview">Video</span>
+            <span class="conn-dot" id="wsDot" title="WebSocket control">WS</span>
+        </div>
+        <span class="status-text" id="statusText">Connecting...</span>
+        <span class="shortcut-hint">1-9,0 = PVW | G+N = Multi | B+N = BG | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
+    </div>
+
+    <!-- Server-injected configuration (safe JSON encoding) -->
+    <script id="vm-config" type="application/json">{{VM_CONFIG_JSON}}</script>
+
+    <script src="/static/webrtc.js"></script>
+    <script src="/static/whep.js"></script>
+    <script>
+        // ---- Configuration (parsed from safe JSON block) ----
+        const _cfg = JSON.parse(document.getElementById('vm-config').textContent);
+        const FLOW_ID = _cfg.flow_id;
+        const BLOCK_ID = _cfg.block_id;
+        const NUM_INPUTS = _cfg.num_inputs;
+        const MULTIVIEW_ENDPOINT = _cfg.multiview_endpoint;
+        const INPUT_LABELS = _cfg.input_labels;
+        const NUM_DSK_INPUTS = _cfg.num_dsk_inputs || 0;
+
+        // ---- State ----
+        // Groups: ordered arrays of 0-based input indices (1-4 items each)
+        let currentPgmGroup = _cfg.initial_pgm_group || [_cfg.initial_pgm];
+        let currentPvwGroup = _cfg.initial_pvw_group || [_cfg.initial_pvw];
+        let currentBackground = _cfg.background_input != null ? _cfg.background_input : null;
+        let dskEnabled = _cfg.dsk_states || [true, true, true, true];
+        let transitionType = 'fade';
+        let transitionDurationMs = 1000;
+        let transitioning = false;
+        let ftbActive = _cfg.ftb_active || false;
+        let groupMode = false;  // true while G is held down
+        let bgMode = false;     // true while B is held down
+        let controlsMinimized = localStorage.getItem('vm-controls-minimized') === 'true';
+
+        function toggleMinimize() {
+            controlsMinimized = !controlsMinimized;
+            document.body.classList.toggle('minimized', controlsMinimized);
+            localStorage.setItem('vm-controls-minimized', controlsMinimized);
+        }
+
+        // ---- API helpers ----
+        const API_BASE = '/api/flows/' + FLOW_ID + '/blocks/' + BLOCK_ID;
+
+        async function apiPost(path, body) {
+            const resp = await fetch(API_BASE + path, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.details || err.message || resp.statusText);
+            }
+            return resp.json();
+        }
+
+        // ---- PVW/PGM selection ----
+        function selectPreview(input, multi) {
+            if (currentBackground === input) return;  // background source is exclusive
+            if (!multi && currentPgmGroup.length === 1 && currentPgmGroup[0] === input) return;
+            if (!multi && currentPvwGroup.length === 1 && currentPvwGroup[0] === input) return;
+            apiPost('/preview', { input, multi: !!multi })
+                .then(r => {
+                    currentPvwGroup = r.preview_inputs || [r.preview_input];
+                    currentPgmGroup = r.program_inputs || [r.program_input];
+                    updateButtons();
+                    const label = currentPvwGroup.map(i => i + 1).join('+');
+                    setStatus('PVW: Input ' + label);
+                })
+                .catch(e => setStatus('Preview error: ' + e.message));
+        }
+
+        // ---- Transitions ----
+        function doTake(type, durationMs) {
+            if (transitioning) return;
+            // FTB is auto-cancelled server-side when a transition is triggered
+            transitioning = true;
+            if (durationMs > 0) {
+                document.getElementById('autoBtn').classList.add('active');
+            }
+
+            // Capture state before sending — swap immediately for responsive UI
+            const fromGroup = [...currentPgmGroup];
+            const toGroup = [...currentPvwGroup];
+            currentPgmGroup = toGroup;
+            currentPvwGroup = fromGroup;
+            updateButtons();
+
+            apiPost('/transition', {
+                from_input: fromGroup[0] || 0,
+                to_input: toGroup[0] || 0,
+                transition_type: type,
+                duration_ms: durationMs
+            }).then(r => {
+                setStatus(r.message);
+                setTimeout(() => {
+                    transitioning = false;
+                    document.getElementById('autoBtn').classList.remove('active');
+                }, durationMs);
+            }).catch(e => {
+                // Revert swap on error
+                currentPgmGroup = fromGroup;
+                currentPvwGroup = toGroup;
+                updateButtons();
+                transitioning = false;
+                document.getElementById('autoBtn').classList.remove('active');
+                setStatus('Transition error: ' + e.message);
+            });
+        }
+
+        function doCut() {
+            doTake('cut', 0);
+        }
+
+        function doAuto() {
+            doTake(transitionType, transitionDurationMs);
+        }
+
+        // ---- FTB (Fade to Black) ----
+        function doFtb() {
+            apiPost('/ftb', { duration_ms: 500 })
+                .then(r => {
+                    ftbActive = r.active;
+                    updateFtbButton();
+                    setStatus(r.message);
+                })
+                .catch(e => setStatus('FTB error: ' + e.message));
+        }
+
+        function updateFtbButton() {
+            const btn = document.getElementById('ftbBtn');
+            btn.classList.toggle('ftb-active', ftbActive);
+            btn.textContent = ftbActive ? 'FTB ON' : 'FTB';
+        }
+
+        // ---- Background source ----
+        function setBackground(input) {
+            // Toggle: if already background, clear it
+            const newBg = (currentBackground === input) ? null : input;
+            apiPost('/background', { input: newBg })
+                .then(r => {
+                    currentBackground = r.background_input;
+                    updateButtons();
+                    setStatus(r.message);
+                })
+                .catch(e => setStatus('Background error: ' + e.message));
+        }
+
+        function clearBackground() {
+            apiPost('/background', { input: null })
+                .then(r => {
+                    currentBackground = r.background_input;
+                    updateButtons();
+                    setStatus(r.message);
+                })
+                .catch(e => setStatus('Background error: ' + e.message));
+        }
+
+        // ---- DSK toggle ----
+        function toggleDsk(index) {
+            dskEnabled[index] = !dskEnabled[index];
+            apiPost('/dsk', { dsk: index + 1, enabled: dskEnabled[index] })
+                .then(r => {
+                    updateDskButtons();
+                    setStatus(r.message);
+                })
+                .catch(e => {
+                    dskEnabled[index] = !dskEnabled[index]; // revert
+                    setStatus('DSK error: ' + e.message);
+                });
+        }
+
+        function updateDskButtons() {
+            for (let i = 0; i < 4; i++) {
+                const btn = document.getElementById('dsk' + i + 'Btn');
+                if (btn) {
+                    btn.classList.toggle('on', dskEnabled[i]);
+                    btn.classList.toggle('off', !dskEnabled[i]);
+                    btn.textContent = 'DSK ' + (i + 1) + (dskEnabled[i] ? ' ON' : ' OFF');
+                }
+            }
+        }
+
+        function initDskUi() {
+            if (NUM_DSK_INPUTS > 0) {
+                document.getElementById('dskRow').style.display = 'flex';
+                for (let i = 1; i < NUM_DSK_INPUTS; i++) {
+                    const btn = document.getElementById('dsk' + i + 'Btn');
+                    if (btn) btn.style.display = '';
+                }
+                updateDskButtons();
+            }
+        }
+
+        // ---- Transition type & duration ----
+        function setTransitionType(type) {
+            transitionType = type;
+            document.querySelectorAll('.type-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.type === type);
+            });
+        }
+
+        function setDuration(seconds) {
+            transitionDurationMs = Math.round(seconds * 1000);
+            document.getElementById('durationInput').value = seconds;
+            document.querySelectorAll('.duration-preset').forEach(b => {
+                b.classList.toggle('active', parseFloat(b.textContent) === seconds);
+            });
+        }
+
+        function onDurationInput() {
+            const val = parseFloat(document.getElementById('durationInput').value);
+            if (!isNaN(val) && val >= 0.1 && val <= 10) {
+                transitionDurationMs = Math.round(val * 1000);
+                document.querySelectorAll('.duration-preset').forEach(b => {
+                    b.classList.toggle('active', parseFloat(b.textContent) === val);
+                });
+            }
+        }
+
+        // ---- UI update ----
+        function updateButtons() {
+            document.querySelectorAll('#pgmBus .src-btn').forEach((btn, i) => {
+                btn.classList.toggle('pgm-active', currentPgmGroup.includes(i));
+                btn.classList.toggle('bg-active', currentBackground === i);
+            });
+            document.querySelectorAll('#pvwBus .src-btn').forEach((btn, i) => {
+                btn.classList.toggle('pvw-active', currentPvwGroup.includes(i));
+                btn.classList.toggle('bg-active', currentBackground === i);
+            });
+        }
+
+        function setStatus(msg) {
+            document.getElementById('statusText').textContent = msg;
+        }
+
+        // ---- Build bus buttons ----
+        function buildBuses() {
+            const pgmBus = document.getElementById('pgmBus');
+            const pvwBus = document.getElementById('pvwBus');
+            pgmBus.innerHTML = '';
+            pvwBus.innerHTML = '';
+
+            for (let i = 0; i < NUM_INPUTS; i++) {
+                const label = INPUT_LABELS[i] || ('Input ' + (i + 1));
+                const btnText = String(i + 1);
+                const keyHint = i < 9 ? (i + 1) : (i === 9 ? '0' : '');
+
+                // PGM button (display only)
+                const pgmBtn = document.createElement('button');
+                pgmBtn.className = 'src-btn' + (currentPgmGroup.includes(i) ? ' pgm-active' : '');
+                pgmBtn.textContent = btnText;
+                pgmBtn.title = label + (keyHint ? ' (' + keyHint + ')' : '');
+                pgmBus.appendChild(pgmBtn);
+
+                // PVW button (click = single select, shift+click = multi-toggle)
+                const pvwBtn = document.createElement('button');
+                pvwBtn.className = 'src-btn' + (currentPvwGroup.includes(i) ? ' pvw-active' : '');
+                pvwBtn.textContent = btnText;
+                pvwBtn.title = label + (keyHint ? ' (' + keyHint + ', hold G + ' + keyHint + ' multi)' : '');
+                pvwBtn.onclick = () => selectPreview(i, groupMode);
+                pvwBus.appendChild(pvwBtn);
+            }
+        }
+
+        // ---- Keyboard shortcuts ----
+        // Hold G = group mode (multi-select), release G = normal mode
+        document.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT') return;
+
+            if ((e.key === 'g' || e.key === 'G') && !e.repeat) {
+                groupMode = true;
+                e.preventDefault();
+                return;
+            }
+
+            // Hold B = background mode (B + number sets background)
+            if ((e.key === 'b' || e.key === 'B') && !e.repeat) {
+                bgMode = true;
+                e.preventDefault();
+                return;
+            }
+
+            // 1-9, 0 = action depends on mode
+            if (e.key >= '1' && e.key <= '9') {
+                const input = parseInt(e.key) - 1;
+                if (input < NUM_INPUTS) {
+                    if (bgMode) { setBackground(input); }
+                    else { selectPreview(input, groupMode); }
+                }
+                e.preventDefault();
+                return;
+            }
+            if (e.key === '0' && NUM_INPUTS >= 10) {
+                if (bgMode) { setBackground(9); }
+                else { selectPreview(9, groupMode); }
+                e.preventDefault();
+                return;
+            }
+
+            // Space = AUTO
+            if (e.key === ' ' || e.key === 'Enter') {
+                doAuto();
+                e.preventDefault();
+                return;
+            }
+
+            // X = CUT
+            if (e.key === 'x' || e.key === 'X') {
+                doCut();
+                e.preventDefault();
+                return;
+            }
+
+            // F = FTB
+            if (e.key === 'f' || e.key === 'F') {
+                doFtb();
+                e.preventDefault();
+                return;
+            }
+
+            // M = toggle minimize controls
+            if (e.key === 'm' || e.key === 'M') {
+                toggleMinimize();
+                e.preventDefault();
+                return;
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === 'g' || e.key === 'G') groupMode = false;
+            if (e.key === 'b' || e.key === 'B') bgMode = false;
+        });
+
+        // ---- Connection status helpers ----
+        function setDot(id, state) {
+            const el = document.getElementById(id);
+            el.className = 'conn-dot ' + state; // 'ok', 'err', 'warn', or ''
+        }
+
+        // ---- WHEP multiview connection ----
+        let whepConnection = null;
+        let videoStallTimer = null;
+        let lastVideoTime = 0;
+
+        function startVideoStallDetection() {
+            if (videoStallTimer) clearInterval(videoStallTimer);
+            videoStallTimer = setInterval(() => {
+                const video = document.getElementById('multiviewVideo');
+                if (!video.srcObject) return;
+                if (video.readyState >= 2 && video.currentTime === lastVideoTime && !video.paused) {
+                    setDot('whepDot', 'warn');
+                } else if (video.readyState >= 2) {
+                    setDot('whepDot', 'ok');
+                }
+                lastVideoTime = video.currentTime;
+            }, 2000);
+        }
+
+        function connectMultiview() {
+            if (!MULTIVIEW_ENDPOINT) {
+                setStatus('No multiview endpoint configured');
+                setDot('whepDot', 'err');
+                return;
+            }
+
+            const endpoint = location.protocol + '//' + location.host + MULTIVIEW_ENDPOINT;
+            setDot('whepDot', 'warn');
+
+            if (whepConnection) {
+                whepConnection.callbacks = {};
+                whepConnection.close();
+                whepConnection = null;
+            }
+
+            whepConnection = new WhepConnection(endpoint, {
+                onVideoTrack: (stream) => {
+                    const video = document.getElementById('multiviewVideo');
+                    video.srcObject = stream;
+                    video.play().catch(() => {});
+                    startVideoStallDetection();
+                },
+                onAudioTrack: () => {},
+                onConnected: () => {
+                    setDot('whepDot', 'ok');
+                    setStatus('Connected');
+                },
+                onMediaStatus: () => {},
+                onError: (msg) => {
+                    setDot('whepDot', 'err');
+                    setStatus('Video error: ' + msg);
+                    setTimeout(connectMultiview, 5000);
+                },
+                onDisconnected: () => {
+                    setDot('whepDot', 'err');
+                    setStatus('Video disconnected - reconnecting...');
+                    setTimeout(connectMultiview, 3000);
+                },
+                onIceState: () => {},
+                onLog: () => {}
+            });
+            whepConnection.connect();
+        }
+
+        // ---- WebSocket for state sync ----
+        let ws = null;
+
+        // Fetch current server state to resync after WS reconnect
+        async function resyncState() {
+            try {
+                // Fetch the page HTML and parse the embedded config JSON
+                const resp = await fetch(location.pathname);
+                if (!resp.ok) return;
+                const html = await resp.text();
+                const match = html.match(/<script id="vm-config" type="application\/json">([\s\S]*?)<\/script>/);
+                if (!match) return;
+                const cfg = JSON.parse(match[1]);
+                currentPgmGroup = cfg.initial_pgm_group || [cfg.initial_pgm];
+                currentPvwGroup = cfg.initial_pvw_group || [cfg.initial_pvw];
+                currentBackground = cfg.background_input != null ? cfg.background_input : null;
+                ftbActive = cfg.ftb_active || false;
+                dskEnabled = cfg.dsk_states || [true, true, true, true];
+                updateButtons();
+                updateFtbButton();
+                updateDskButtons();
+                setStatus('Reconnected - state synced');
+            } catch (e) {
+                setStatus('Resync failed: ' + e.message);
+            }
+        }
+
+        function connectWebSocket() {
+            const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(wsProto + '//' + location.host + '/api/ws');
+
+            ws.onopen = () => {
+                setDot('wsDot', 'ok');
+                resyncState();
+            };
+
+            ws.onmessage = (e) => {
+                try {
+                    const event = JSON.parse(e.data);
+                    if (event.type === 'VisionMixerStateChanged' && event.data) {
+                        const d = event.data;
+                        if (d.block_id === BLOCK_ID) {
+                            currentPvwGroup = d.preview_inputs || [d.preview_input];
+                            currentPgmGroup = d.program_inputs || [d.program_input];
+                            updateButtons();
+                        }
+                    }
+                    if (event.type === 'VisionMixerDskChanged' && event.data) {
+                        const d = event.data;
+                        if (d.block_id === BLOCK_ID) {
+                            dskEnabled[d.dsk - 1] = d.enabled;
+                            updateDskButtons();
+                        }
+                    }
+                    if (event.type === 'VisionMixerFtbChanged' && event.data) {
+                        const d = event.data;
+                        if (d.block_id === BLOCK_ID) {
+                            ftbActive = d.active;
+                            updateFtbButton();
+                        }
+                    }
+                    if (event.type === 'VisionMixerBackgroundChanged' && event.data) {
+                        const d = event.data;
+                        if (d.block_id === BLOCK_ID) {
+                            currentBackground = d.background_input;
+                            updateButtons();
+                        }
+                    }
+                } catch {}
+            };
+
+            ws.onclose = () => {
+                setDot('wsDot', 'err');
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = () => setDot('wsDot', 'err');
+        }
+
+        // ---- Init ----
+        window.onload = () => {
+            document.title = 'Vision Mixer | Strom | ' + location.host;
+            buildBuses();
+            updateButtons();
+            initDskUi();
+            updateFtbButton();
+            connectMultiview();
+            connectWebSocket();
+            if (controlsMinimized) document.body.classList.add('minimized');
+        };
+    </script>
+</body>
+</html>

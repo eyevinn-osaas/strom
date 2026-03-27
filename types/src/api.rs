@@ -836,3 +836,99 @@ impl MediaOperationResponse {
         }
     }
 }
+
+// ============================================================================
+// Vision Mixer API Types
+// ============================================================================
+
+/// Request to select a preview source on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SelectPreviewRequest {
+    /// Index of the input to set as preview (0-based)
+    pub input: usize,
+    /// If true, toggle the input in/out of the current PVW group (shift+click).
+    /// If false (default), replace the PVW group with just this input.
+    #[serde(default)]
+    pub multi: bool,
+}
+
+/// Response after selecting a preview source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SelectPreviewResponse {
+    pub message: String,
+    /// First source in the PVW group (backward compat).
+    pub preview_input: usize,
+    /// First source in the PGM group (backward compat).
+    pub program_input: usize,
+    /// Full ordered PVW source group.
+    pub preview_inputs: Vec<usize>,
+    /// Full ordered PGM source group.
+    pub program_inputs: Vec<usize>,
+}
+
+/// Current state of a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct VisionMixerState {
+    pub preview_input: usize,
+    pub program_input: usize,
+    pub preview_inputs: Vec<usize>,
+    pub program_inputs: Vec<usize>,
+    pub num_inputs: usize,
+    pub input_labels: Vec<String>,
+}
+
+/// Request to set or clear the background source on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetBackgroundRequest {
+    /// Source index to use as background (0-based), or null to clear.
+    pub input: Option<usize>,
+}
+
+/// Response after setting/clearing the background source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetBackgroundResponse {
+    pub message: String,
+    /// Current background source index, or null if none.
+    pub background_input: Option<usize>,
+}
+
+/// Request to toggle a DSK (Downstream Keyer) layer on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DskToggleRequest {
+    /// DSK layer number (1 or 2, 1-based)
+    pub dsk: usize,
+    /// Enable or disable the DSK layer
+    pub enabled: bool,
+}
+
+/// Response after toggling a DSK layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DskToggleResponse {
+    pub message: String,
+    /// DSK layer number (1-based)
+    pub dsk: usize,
+    pub enabled: bool,
+}
+
+/// Request to toggle Fade to Black on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FadeToBlackRequest {
+    /// Duration in milliseconds (0 = instant)
+    pub duration_ms: u64,
+}
+
+/// Response after toggling Fade to Black.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FadeToBlackResponse {
+    pub message: String,
+    pub active: bool,
+}
