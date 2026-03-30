@@ -8,25 +8,13 @@ use std::collections::HashMap;
 use strom::blocks::BlockRegistry;
 use strom::events::EventBroadcaster;
 use strom::gst::pipeline::PipelineManager;
-use strom_types::block::BlockInstance;
 use strom_types::{Flow, Link};
 use tempfile::NamedTempFile;
 
-/// Build a simple flow: audiotestsrc → meter → fakesink
+/// Build a simple flow: audiotestsrc → fakesink
+/// Uses only core GStreamer elements to work in CI without plugins-good.
 fn build_test_flow(name: &str) -> Flow {
     let mut flow = Flow::new(name);
-
-    let meter_block = BlockInstance {
-        id: "test_meter".to_string(),
-        block_definition_id: "builtin.meter".to_string(),
-        name: Some("Test Meter".to_string()),
-        properties: HashMap::new(),
-        position: strom_types::block::Position { x: 200.0, y: 200.0 },
-        runtime_data: None,
-        computed_external_pads: None,
-    };
-
-    flow.blocks.push(meter_block);
 
     flow.elements.push(strom_types::Element {
         id: "src".to_string(),
@@ -53,10 +41,6 @@ fn build_test_flow(name: &str) -> Flow {
 
     flow.links.push(Link {
         from: "src:src".to_string(),
-        to: "test_meter:audio_in".to_string(),
-    });
-    flow.links.push(Link {
-        from: "test_meter:audio_out".to_string(),
         to: "sink:sink".to_string(),
     });
 
@@ -75,13 +59,7 @@ async fn test_pipeline_cleanup_after_stop_and_drop() {
     let events = EventBroadcaster::new(10);
     let media_path = std::env::temp_dir();
 
-    let mut flow = build_test_flow("lifecycle_test");
-
-    for block in &mut flow.blocks {
-        if let Some(builder) = strom::blocks::builtin::get_builder(&block.block_definition_id) {
-            block.computed_external_pads = builder.get_external_pads(&block.properties);
-        }
-    }
+    let flow = build_test_flow("lifecycle_test");
 
     let mut manager = PipelineManager::new(
         &flow,
@@ -145,13 +123,7 @@ async fn test_leak_detection_catches_circular_reference() {
     let events = EventBroadcaster::new(10);
     let media_path = std::env::temp_dir();
 
-    let mut flow = build_test_flow("leak_detection_test");
-
-    for block in &mut flow.blocks {
-        if let Some(builder) = strom::blocks::builtin::get_builder(&block.block_definition_id) {
-            block.computed_external_pads = builder.get_external_pads(&block.properties);
-        }
-    }
+    let flow = build_test_flow("leak_detection_test");
 
     let mut manager = PipelineManager::new(
         &flow,
