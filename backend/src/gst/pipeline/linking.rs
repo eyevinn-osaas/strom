@@ -326,15 +326,13 @@ impl PipelineManager {
         // Strong refs to pipeline/elements inside pad-added closures would prevent
         // the pipeline from ever being finalized (elements own the closures via
         // signal handlers, and the closures would own the pipeline).
-        use gstreamer::prelude::ObjectExt;
-        use std::collections::HashMap;
-        let elements_weak: HashMap<String, gst::glib::WeakRef<gst::Element>> = self
-            .elements
-            .iter()
-            .map(|(name, elem)| (name.clone(), ObjectExt::downgrade(elem)))
-            .collect();
+        let elements_weak: std::collections::HashMap<String, gst::glib::WeakRef<gst::Element>> =
+            self.elements
+                .iter()
+                .map(|(name, elem)| (name.clone(), elem.downgrade()))
+                .collect();
         let pending_links = self.pending_links.clone();
-        let pipeline_weak: gst::glib::WeakRef<gst::Pipeline> = ObjectExt::downgrade(&self.pipeline);
+        let pipeline_weak: gst::glib::WeakRef<gst::Pipeline> = self.pipeline.downgrade();
         let dynamic_pad_tees = self.dynamic_pad_tees.clone();
 
         for (element_id, element) in &self.elements {

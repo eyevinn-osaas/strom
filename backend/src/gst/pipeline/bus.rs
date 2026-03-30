@@ -237,8 +237,9 @@ impl PipelineManager {
                     bus.disconnect(handler_id);
                 }
                 // remove_signal_watch is ref-counted — each add_signal_watch call
-                // needs a matching remove. We call add_signal_watch once per block
-                // message handler (in their connect_fn) plus once in setup_bus_watch.
+                // needs a matching remove. handler_count matches the number of
+                // add_signal_watch calls: one per block connect_fn plus one in
+                // setup_bus_watch (which also adds the main handler to the list).
                 for _ in 0..handler_count {
                     bus.remove_signal_watch();
                 }
