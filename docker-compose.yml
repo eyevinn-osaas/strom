@@ -1,47 +1,15 @@
-version: '3.8'
-
 services:
-  # Strom backend server
   strom:
-    build: .
-    image: strom:latest
+    image: eyevinntechnology/strom:0.4.2
     container_name: strom
-    ports:
-      - "8080:8080"
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 524288
     volumes:
       - ./data:/data
-    environment:
-      - RUST_LOG=info
-      - STROM_PORT=8080
-      - STROM_DATA_DIR=/data
-    restart: unless-stopped
-    networks:
-      - strom-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Strom MCP server for AI integration
-  strom-mcp:
-    image: strom:latest
-    container_name: strom-mcp
-    depends_on:
-      - strom
-    environment:
-      - RUST_LOG=info
-      - STROM_API_URL=http://strom:8080
-    stdin_open: true
-    tty: true
-    command: ["strom-mcp-server"]
-    networks:
-      - strom-network
-    restart: unless-stopped
-
-networks:
-  strom-network:
-    driver: bridge
-
-volumes:
-  data:
+      - ./target/debug/strom:/app/strom
+    command: ["/app/strom", "--headless"]

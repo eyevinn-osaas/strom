@@ -187,6 +187,96 @@ fn vision_mixer_definition() -> BlockDefinition {
             },
             live: false,
         },
+        // Output pixel format
+        ExposedProperty {
+            name: "output_format".to_string(),
+            label: "Output Pixel Format".to_string(),
+            description: "Pixel format for compositor outputs. Auto lets GStreamer negotiate."
+                .to_string(),
+            property_type: PropertyType::Enum {
+                values: vec![
+                    EnumValue {
+                        value: "".to_string(),
+                        label: Some("Auto".to_string()),
+                    },
+                    EnumValue {
+                        value: "I420".to_string(),
+                        label: Some("I420 (YUV 4:2:0 planar)".to_string()),
+                    },
+                    EnumValue {
+                        value: "A420".to_string(),
+                        label: Some("A420 (YUV 4:2:0 + alpha)".to_string()),
+                    },
+                    EnumValue {
+                        value: "YV12".to_string(),
+                        label: Some("YV12 (YUV 4:2:0 planar)".to_string()),
+                    },
+                    EnumValue {
+                        value: "NV12".to_string(),
+                        label: Some("NV12 (YUV 4:2:0 semi-planar)".to_string()),
+                    },
+                    EnumValue {
+                        value: "NV21".to_string(),
+                        label: Some("NV21 (YUV 4:2:0 semi-planar)".to_string()),
+                    },
+                    EnumValue {
+                        value: "YUY2".to_string(),
+                        label: Some("YUY2 (YUV 4:2:2 packed)".to_string()),
+                    },
+                    EnumValue {
+                        value: "UYVY".to_string(),
+                        label: Some("UYVY (YUV 4:2:2 packed)".to_string()),
+                    },
+                    EnumValue {
+                        value: "A422".to_string(),
+                        label: Some("A422 (YUV 4:2:2 + alpha)".to_string()),
+                    },
+                    EnumValue {
+                        value: "v210".to_string(),
+                        label: Some("v210 (10-bit YUV 4:2:2)".to_string()),
+                    },
+                    EnumValue {
+                        value: "AYUV".to_string(),
+                        label: Some("AYUV (YUV 4:4:4 + alpha packed)".to_string()),
+                    },
+                    EnumValue {
+                        value: "A444".to_string(),
+                        label: Some("A444 (YUV 4:4:4 + alpha planar)".to_string()),
+                    },
+                    EnumValue {
+                        value: "RGB".to_string(),
+                        label: Some("RGB".to_string()),
+                    },
+                    EnumValue {
+                        value: "BGR".to_string(),
+                        label: Some("BGR".to_string()),
+                    },
+                    EnumValue {
+                        value: "RGBA".to_string(),
+                        label: Some("RGBA".to_string()),
+                    },
+                    EnumValue {
+                        value: "BGRA".to_string(),
+                        label: Some("BGRA".to_string()),
+                    },
+                    EnumValue {
+                        value: "ARGB".to_string(),
+                        label: Some("ARGB".to_string()),
+                    },
+                    EnumValue {
+                        value: "ABGR".to_string(),
+                        label: Some("ABGR".to_string()),
+                    },
+                ],
+            },
+            default_value: Some(PropertyValue::String("".to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "output_format".to_string(),
+                transform: None,
+            },
+            live: false,
+        },
         // Number of DSK inputs
         ExposedProperty {
             name: "num_dsk_inputs".to_string(),
@@ -281,14 +371,14 @@ fn vision_mixer_definition() -> BlockDefinition {
                     "pgm_out",
                     "PGM",
                     MediaType::Video,
-                    "capsfilter_dist",
+                    "queue_dist_out",
                     "src",
                 ),
                 ExternalPad::with_label(
                     "multiview_out",
                     "MV",
                     MediaType::Video,
-                    "capsfilter_mv",
+                    "queue_mv_out",
                     "src",
                 ),
             ],

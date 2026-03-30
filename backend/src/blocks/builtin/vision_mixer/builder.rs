@@ -51,12 +51,12 @@ impl BlockBuilder for VisionMixerBuilder {
         }
 
         let outputs = vec![
-            ExternalPad::with_label("pgm_out", "PGM", MediaType::Video, "capsfilter_dist", "src"),
+            ExternalPad::with_label("pgm_out", "PGM", MediaType::Video, "queue_dist_out", "src"),
             ExternalPad::with_label(
                 "multiview_out",
                 "MV",
                 MediaType::Video,
-                "capsfilter_mv",
+                "queue_mv_out",
                 "src",
             ),
         ];
@@ -94,6 +94,8 @@ impl BlockBuilder for VisionMixerBuilder {
 
         let num_dsk_inputs = properties::parse_num_dsk_inputs(props);
 
+        let output_format = properties::parse_output_format(props);
+
         let pref = props
             .get("compositor_preference")
             .and_then(|v| match v {
@@ -123,6 +125,7 @@ impl BlockBuilder for VisionMixerBuilder {
             mv_w,
             mv_h,
             backend,
+            output_format,
         };
 
         match backend {
@@ -148,12 +151,25 @@ struct PipelineParams<'a> {
     mv_w: u32,
     mv_h: u32,
     backend: CompositorBackend,
+    output_format: Option<String>,
 }
 
 impl<'a> PipelineParams<'a> {
     /// Create a namespaced element ID.
     fn id(&self, name: &str) -> String {
         format!("{}:{}", self.instance_id, name)
+    }
+
+    /// Build output caps with resolution and optional pixel format.
+    fn output_caps(&self, width: u32, height: u32) -> gst::Caps {
+        let mut builder = gst::Caps::builder("video/x-raw")
+            .field("width", width as i32)
+            .field("height", height as i32)
+            .field("pixel-aspect-ratio", gst::Fraction::new(1, 1));
+        if let Some(ref fmt) = self.output_format {
+            builder = builder.field("format", fmt.as_str());
+        }
+        builder.build()
     }
 }
 
@@ -467,28 +483,42 @@ fn build_cpu_pipeline(
 
     let mv_layout = layout::compute_layout(p.mv_w, p.mv_h, p.num_inputs);
 
-    // --- Distribution output chain: mixer → tee_pgm → capsfilter ---
+    // --- Distribution output chain: mixer → capsfilter_dist → tee_pgm → queue_dist_out ---
     // DSK inputs are composited on the main mixer (same as GPU path).
+    // capsfilter_dist forces resolution (and optional pixel format) on the compositor output.
+    let cf_dist_id = p.id("capsfilter_dist");
+    let capsfilter_dist = gst::ElementFactory::make("capsfilter")
+        .name(&cf_dist_id)
+        .property("caps", p.output_caps(p.pgm_w, p.pgm_h))
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_dist: {}", e)))?;
     let tee_pgm_id = p.id("tee_pgm");
     let tee_pgm = elements::make_tee(&tee_pgm_id)?;
-    let cf_dist_id = p.id("capsfilter_dist");
-    let capsfilter_dist = elements::make_capsfilter("capsfilter_dist", p.pgm_w, p.pgm_h)?;
-    capsfilter_dist.set_property("name", &cf_dist_id);
-    elems.push((tee_pgm_id.clone(), tee_pgm));
+    let q_dist_out_id = p.id("queue_dist_out");
+    let queue_dist_out = elements::make_queue(&q_dist_out_id)?;
     elems.push((cf_dist_id.clone(), capsfilter_dist));
+    elems.push((tee_pgm_id.clone(), tee_pgm));
+    elems.push((q_dist_out_id.clone(), queue_dist_out));
 
     links.push((
         ElementPadRef::pad(&mixer_id, "src"),
+        ElementPadRef::pad(&cf_dist_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&cf_dist_id, "src"),
         ElementPadRef::pad(&tee_pgm_id, "sink"),
     ));
     links.push((
         ElementPadRef::pad(&tee_pgm_id, "src_0"),
-        ElementPadRef::pad(&cf_dist_id, "sink"),
+        ElementPadRef::pad(&q_dist_out_id, "sink"),
     ));
 
-    // Queue to decouple tee_pgm from the multiview compositor (separate thread)
+    // Queue to decouple tee_pgm from the multiview compositor (separate thread).
+    // leaky=upstream drops old buffers while mv_comp is still negotiating caps.
     let q_pgm_mv_id = p.id("queue_pgm_mv");
     let queue_pgm_mv = elements::make_queue(&q_pgm_mv_id)?;
+    queue_pgm_mv.set_property_from_str("leaky", "upstream");
+    queue_pgm_mv.set_property("max-size-buffers", 1u32);
     elems.push((q_pgm_mv_id.clone(), queue_pgm_mv));
 
     // DSK input element chains (links to mixer added later after video inputs)
@@ -510,23 +540,26 @@ fn build_cpu_pipeline(
 
     // --- Multiview output chain (no gldownload needed for CPU) ---
     // Overlay is composited by mv_comp via appsrc pad (see below).
-    let q_mv_out_id = p.id("queue_mv_out");
+    // capsfilter_mv forces resolution (and optional pixel format) on the mv compositor output.
     let cf_mv_id = p.id("capsfilter_mv");
-
+    let capsfilter_mv = gst::ElementFactory::make("capsfilter")
+        .name(&cf_mv_id)
+        .property("caps", p.output_caps(p.mv_w, p.mv_h))
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_mv: {}", e)))?;
+    let q_mv_out_id = p.id("queue_mv_out");
     let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
-    let capsfilter_mv = elements::make_capsfilter("capsfilter_mv", p.mv_w, p.mv_h)?;
-    capsfilter_mv.set_property("name", &cf_mv_id);
 
-    elems.push((q_mv_out_id.clone(), queue_mv_out));
     elems.push((cf_mv_id.clone(), capsfilter_mv));
+    elems.push((q_mv_out_id.clone(), queue_mv_out));
 
     links.push((
         ElementPadRef::pad(&mv_comp_id, "src"),
-        ElementPadRef::pad(&q_mv_out_id, "sink"),
+        ElementPadRef::pad(&cf_mv_id, "sink"),
     ));
     links.push((
-        ElementPadRef::pad(&q_mv_out_id, "src"),
-        ElementPadRef::pad(&cf_mv_id, "sink"),
+        ElementPadRef::pad(&cf_mv_id, "src"),
+        ElementPadRef::pad(&q_mv_out_id, "sink"),
     ));
 
     // --- Overlay appsrc → mv_comp (CPU compositor accepts raw BGRA directly) ---
@@ -550,14 +583,52 @@ fn build_cpu_pipeline(
 
     let q_overlay_id = p.id("queue_overlay");
     let queue_overlay = elements::make_queue(&q_overlay_id)?;
+    let vc_overlay_id = p.id("videoconvert_overlay");
+    let videoconvert_overlay = elements::make_element("videoconvert", &vc_overlay_id)?;
 
     elems.push((appsrc_overlay_id.clone(), appsrc_overlay.clone().upcast()));
     elems.push((q_overlay_id.clone(), queue_overlay));
+    elems.push((vc_overlay_id.clone(), videoconvert_overlay));
 
-    links.push((
-        ElementPadRef::pad(&appsrc_overlay_id, "src"),
-        ElementPadRef::pad(&q_overlay_id, "sink"),
-    ));
+    // Optional capsfilter to match compositor output format
+    let overlay_last_id = if let Some(ref fmt) = p.output_format {
+        let cf_overlay_id = p.id("capsfilter_overlay");
+        let capsfilter_overlay = gst::ElementFactory::make("capsfilter")
+            .name(&cf_overlay_id)
+            .property(
+                "caps",
+                gst::Caps::builder("video/x-raw")
+                    .field("format", fmt.as_str())
+                    .build(),
+            )
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_overlay: {}", e)))?;
+        elems.push((cf_overlay_id.clone(), capsfilter_overlay));
+
+        links.push((
+            ElementPadRef::pad(&appsrc_overlay_id, "src"),
+            ElementPadRef::pad(&q_overlay_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_overlay_id, "src"),
+            ElementPadRef::pad(&vc_overlay_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&vc_overlay_id, "src"),
+            ElementPadRef::pad(&cf_overlay_id, "sink"),
+        ));
+        cf_overlay_id
+    } else {
+        links.push((
+            ElementPadRef::pad(&appsrc_overlay_id, "src"),
+            ElementPadRef::pad(&q_overlay_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&q_overlay_id, "src"),
+            ElementPadRef::pad(&vc_overlay_id, "sink"),
+        ));
+        vc_overlay_id.clone()
+    };
     // Link to mv_comp is added AFTER all other mv_comp links (pad ordering matters)
 
     // --- Per-input elements ---
@@ -572,7 +643,50 @@ fn build_cpu_pipeline(
 
         elems.push((q_id.clone(), queue));
         elems.push((vc_in_id.clone(), videoconvert));
-        elems.push((tee_id.clone(), tee));
+
+        // Capsfilter after videoconvert forces all inputs to the same format before tee split.
+        // Without this, the two compositors negotiate independently and tee can't satisfy both.
+        if let Some(ref fmt) = p.output_format {
+            let cf_in_id = p.id(&format!("capsfilter_in_{}", i));
+            let capsfilter_in = gst::ElementFactory::make("capsfilter")
+                .name(&cf_in_id)
+                .property(
+                    "caps",
+                    gst::Caps::builder("video/x-raw")
+                        .field("format", fmt.as_str())
+                        .build(),
+                )
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("capsfilter_in_{}: {}", i, e))
+                })?;
+            elems.push((cf_in_id.clone(), capsfilter_in));
+            elems.push((tee_id.clone(), tee));
+
+            links.push((
+                ElementPadRef::pad(&q_id, "src"),
+                ElementPadRef::pad(&vc_in_id, "sink"),
+            ));
+            links.push((
+                ElementPadRef::pad(&vc_in_id, "src"),
+                ElementPadRef::pad(&cf_in_id, "sink"),
+            ));
+            links.push((
+                ElementPadRef::pad(&cf_in_id, "src"),
+                ElementPadRef::pad(&tee_id, "sink"),
+            ));
+        } else {
+            elems.push((tee_id.clone(), tee));
+
+            links.push((
+                ElementPadRef::pad(&q_id, "src"),
+                ElementPadRef::pad(&vc_in_id, "sink"),
+            ));
+            links.push((
+                ElementPadRef::pad(&vc_in_id, "src"),
+                ElementPadRef::pad(&tee_id, "sink"),
+            ));
+        }
 
         // Queues after tee decouple input processing from compositor backpressure
         let q_dist_id = p.id(&format!("queue_to_dist_{}", i));
@@ -581,16 +695,6 @@ fn build_cpu_pipeline(
         elems.push((q_dist_id.clone(), elements::make_queue(&q_dist_id)?));
         elems.push((q_thumb_id.clone(), elements::make_queue(&q_thumb_id)?));
         elems.push((q_pvw_id.clone(), elements::make_queue(&q_pvw_id)?));
-
-        // queue → videoconvert → tee
-        links.push((
-            ElementPadRef::pad(&q_id, "src"),
-            ElementPadRef::pad(&vc_in_id, "sink"),
-        ));
-        links.push((
-            ElementPadRef::pad(&vc_in_id, "src"),
-            ElementPadRef::pad(&tee_id, "sink"),
-        ));
     }
 
     // --- Compositor links (grouped by compositor, order matters) ---
@@ -629,16 +733,6 @@ fn build_cpu_pipeline(
         ));
     }
 
-    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
-    links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_1"),
-        ElementPadRef::pad(&q_pgm_mv_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&q_pgm_mv_id, "src"),
-        ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
-    ));
-
     // Multiview PVW big candidates: tee_i.src_2 → queue → mv_comp.sink_{N+1+i}
     for i in 0..p.num_inputs {
         let tee_id = p.id(&format!("tee_{}", i));
@@ -653,11 +747,21 @@ fn build_cpu_pipeline(
         ));
     }
 
-    // Overlay pad: queue_overlay → mv_comp (must be last link for correct pad index)
+    // Overlay pad: last overlay element → mv_comp (must be last link for correct pad index)
     let overlay_pad_idx = 2 * p.num_inputs + 1;
     links.push((
-        ElementPadRef::pad(&q_overlay_id, "src"),
+        ElementPadRef::pad(&overlay_last_id, "src"),
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", overlay_pad_idx)),
+    ));
+
+    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
+    links.push((
+        ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&q_pgm_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&q_pgm_mv_id, "src"),
+        ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
     ));
 
     let pad_properties = build_pad_properties(p, &mv_layout);
