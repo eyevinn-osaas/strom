@@ -129,3 +129,64 @@ async fn test_pipeline_cleanup_after_stop_and_drop() {
         leaked
     );
 }
+
+/// Negative test: intentionally create a circular reference by capturing a
+/// strong pipeline clone in a signal handler closure. Verify that our weak
+/// ref detection catches the leak. If this test ever fails (i.e. no leak
+/// detected), it means the detection mechanism is broken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_leak_detection_catches_circular_reference() {
+    use gstreamer::prelude::*;
+
+    gstreamer::init().unwrap();
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let registry = BlockRegistry::new(temp_file.path());
+    let events = EventBroadcaster::new(10);
+    let media_path = std::env::temp_dir();
+
+    let mut flow = build_test_flow("leak_detection_test");
+
+    for block in &mut flow.blocks {
+        if let Some(builder) = strom::blocks::builtin::get_builder(&block.block_definition_id) {
+            block.computed_external_pads = builder.get_external_pads(&block.properties);
+        }
+    }
+
+    let mut manager = PipelineManager::new(
+        &flow,
+        events,
+        &registry,
+        vec![],
+        "all".to_string(),
+        None,
+        media_path,
+    )
+    .expect("Failed to create PipelineManager");
+
+    // Intentionally create a circular reference: connect a signal handler
+    // on an element that captures a strong ref to the pipeline.
+    let pipeline_strong = manager.pipeline().clone();
+    let src = manager.pipeline().by_name("src").expect("src element");
+    src.connect_pad_added(move |_elem, _pad| {
+        // This closure captures pipeline_strong, creating:
+        // pipeline -> src element -> signal handler -> pipeline
+        let _ = &pipeline_strong;
+    });
+
+    manager.start().expect("Failed to start pipeline");
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    let pipeline_weak = manager.pipeline_weak();
+
+    manager.stop().expect("Failed to stop pipeline");
+    drop(manager);
+
+    // The pipeline SHOULD still be alive because of the circular reference.
+    // If it's not alive, our detection mechanism would miss real leaks.
+    assert!(
+        pipeline_weak.upgrade().is_some(),
+        "Pipeline was finalized despite circular reference — \
+         leak detection would miss real leaks!"
+    );
+}
