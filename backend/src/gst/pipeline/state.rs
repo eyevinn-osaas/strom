@@ -125,6 +125,19 @@ impl PipelineManager {
         &self.pipeline
     }
 
+    /// Get the flow name.
+    pub fn flow_name(&self) -> &str {
+        &self.flow_name
+    }
+
+    /// Get weak refs to all elements (for leak detection after drop).
+    pub fn element_weak_refs(&self) -> Vec<(String, gst::glib::WeakRef<gst::Element>)> {
+        self.elements
+            .iter()
+            .map(|(name, elem)| (name.clone(), elem.downgrade()))
+            .collect()
+    }
+
     /// Get the GStreamer element for a strom element_id (standalone elements only).
     pub fn find_gst_element(&self, element_id: &str) -> Option<&gst::Element> {
         self.elements.get(element_id)
