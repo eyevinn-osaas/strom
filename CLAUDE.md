@@ -21,6 +21,13 @@
 - EVENT_DOWNSTREAM probes (for caps detection, one-time setup) are fine — they fire infrequently.
 - When reviewing or adding a probe, always ask: "Does this fire per-buffer or per-event?" and treat per-buffer probes as performance-critical code.
 
+## GStreamer Object References in Closures
+- **NEVER capture a strong reference (`clone()`) to a `gst::Pipeline`, `gst::Element`, or `gst::Bin` inside a signal handler closure** (e.g. `connect_pad_added`, `connect_element_added`, `connect("deep-element-added", ...)`). Elements own their signal handlers — capturing the pipeline or sibling elements creates a circular reference that prevents GStreamer from ever finalizing the pipeline. All OS resources (UDP sockets, threads, file descriptors) will leak on every pipeline restart.
+- Use `WeakRef` (`ObjectExt::downgrade()`) instead, and `upgrade()` inside the closure. If upgrade returns `None`, the pipeline is already torn down — just return early.
+- This also applies to `HashMap<String, gst::Element>` maps — never clone and capture the map; build a `HashMap<String, WeakRef<gst::Element>>` instead.
+- The regression test `pipeline_lifecycle_test.rs` catches these leaks — it must always pass.
+- `stop_flow()` in `state.rs` logs `ERROR` at runtime if a pipeline survives after drop — treat these as P0 bugs.
+
 ## GStreamer Queues
 - Leave `queue`, `queue2`, and `multiqueue` elements with default property values unless there is a documented latency requirement that justifies overriding them.
 

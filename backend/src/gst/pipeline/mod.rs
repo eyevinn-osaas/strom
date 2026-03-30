@@ -225,12 +225,12 @@ impl Drop for PipelineManager {
         // Stop broadcast task and deactivate probes before pipeline goes to Null
         self.probe_manager.stop_broadcast_task();
         self.probe_manager.deactivate_all();
-        // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
-        // from within a runtime" panics when GStreamer elements (e.g. whipserversrc)
-        // internally call block_on() during cleanup.
+        self.stop_qos_broadcast_task();
+
+        // Ensure pipeline is in Null state before releasing references.
+        // If stop() was already called this is a no-op.
         let pipeline = self.pipeline.clone();
         let _ = std::thread::spawn(move || pipeline.set_state(gst::State::Null)).join();
-        self.stop_qos_broadcast_task();
     }
 }
 

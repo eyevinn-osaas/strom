@@ -1108,6 +1108,31 @@ impl AppState {
         // Stop the pipeline
         let state = manager.stop()?;
 
+        // Take weak refs to the pipeline and all its elements before dropping.
+        // After drop, all GStreamer objects should be finalized. Any that
+        // survive have a leaked strong reference (signal handler closure,
+        // probe, etc.) preventing cleanup of OS resources (sockets, threads).
+        let pipeline_weak = manager.pipeline_weak();
+        let element_weak_refs = manager.element_weak_refs();
+        let flow_name = manager.flow_name().to_string();
+
+        // Drop the manager — this releases all strong references to the
+        // pipeline and its elements, allowing GStreamer to finalize them.
+        drop(manager);
+
+        // Verify everything was actually finalized
+        if pipeline_weak.upgrade().is_some() {
+            error!(
+                "Pipeline '{}': GStreamer pipeline still alive after drop — OS resources will leak",
+                flow_name
+            );
+            for (name, weak) in &element_weak_refs {
+                if weak.upgrade().is_some() {
+                    error!("Pipeline '{}': leaked element '{}'", flow_name, name);
+                }
+            }
+        }
+
         // Deallocate CPU core assignment
         self.inner.affinity_manager.deallocate(id);
 

@@ -226,18 +226,23 @@ impl PipelineManager {
     /// Remove the bus message handlers.
     pub(super) fn remove_bus_watch(&mut self) {
         if !self.block_message_handlers.is_empty() {
+            let handler_count = self.block_message_handlers.len();
             debug!(
                 "Disconnecting {} message handler(s) for flow: {}",
-                self.block_message_handlers.len(),
-                self.flow_name
+                handler_count, self.flow_name
             );
             // Disconnect signal handlers from the bus
             if let Some(bus) = self.pipeline.bus() {
                 for handler_id in self.block_message_handlers.drain(..) {
                     bus.disconnect(handler_id);
                 }
-                // Remove the signal watch (ref-counted, so this balances the add_signal_watch calls)
-                bus.remove_signal_watch();
+                // remove_signal_watch is ref-counted — each add_signal_watch call
+                // needs a matching remove. handler_count matches the number of
+                // add_signal_watch calls: one per block connect_fn plus one in
+                // setup_bus_watch (which also adds the main handler to the list).
+                for _ in 0..handler_count {
+                    bus.remove_signal_watch();
+                }
             } else {
                 // Bus already gone, just clear the handlers
                 self.block_message_handlers.clear();
