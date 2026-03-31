@@ -18,8 +18,8 @@ use crate::gpu::video_convert_mode;
 use gstreamer as gst;
 use std::collections::HashMap;
 use strom_types::{
-    block::*, common_video_resolution_enum_values, element::ElementPadRef, EnumValue,
-    PropertyValue, *,
+    block::*, common_video_pixel_format_enum_values, common_video_resolution_enum_values,
+    element::ElementPadRef, PropertyValue, *,
 };
 use tracing::info;
 
@@ -221,27 +221,7 @@ fn videoformat_definition() -> BlockDefinition {
                 label: "Pixel Format".to_string(),
                 description: "Pixel format/color space - creates videoconvert element. Leave empty to pass through.".to_string(),
                 property_type: PropertyType::Enum {
-                    values: vec![
-                        EnumValue { value: "".to_string(), label: Some("-".to_string()) },
-                        EnumValue { value: "I420".to_string(), label: Some("I420 (YUV 4:2:0 planar)".to_string()) },
-                        EnumValue { value: "YV12".to_string(), label: Some("YV12 (YUV 4:2:0 planar)".to_string()) },
-                        EnumValue { value: "NV12".to_string(), label: Some("NV12 (YUV 4:2:0 semi-planar)".to_string()) },
-                        EnumValue { value: "NV21".to_string(), label: Some("NV21 (YUV 4:2:0 semi-planar)".to_string()) },
-                        EnumValue { value: "YUY2".to_string(), label: Some("YUY2 (YUV 4:2:2 packed)".to_string()) },
-                        EnumValue { value: "UYVY".to_string(), label: Some("UYVY (YUV 4:2:2 packed)".to_string()) },
-                        EnumValue { value: "v210".to_string(), label: Some("v210 (10-bit YUV 4:2:2)".to_string()) },
-                        EnumValue { value: "RGB".to_string(), label: Some("RGB".to_string()) },
-                        EnumValue { value: "BGR".to_string(), label: Some("BGR".to_string()) },
-                        EnumValue { value: "RGBA".to_string(), label: Some("RGBA".to_string()) },
-                        EnumValue { value: "BGRA".to_string(), label: Some("BGRA".to_string()) },
-                        EnumValue { value: "ARGB".to_string(), label: Some("ARGB".to_string()) },
-                        EnumValue { value: "ABGR".to_string(), label: Some("ABGR".to_string()) },
-                        EnumValue { value: "RGBx".to_string(), label: Some("RGBx".to_string()) },
-                        EnumValue { value: "BGRx".to_string(), label: Some("BGRx".to_string()) },
-                        EnumValue { value: "xRGB".to_string(), label: Some("xRGB".to_string()) },
-                        EnumValue { value: "xBGR".to_string(), label: Some("xBGR".to_string()) },
-                        EnumValue { value: "GRAY8".to_string(), label: Some("GRAY8 (8-bit grayscale)".to_string()) },
-                    ],
+                    values: common_video_pixel_format_enum_values(true),
                 },
                 default_value: Some(PropertyValue::String("".to_string())),
                 mapping: PropertyMapping {
