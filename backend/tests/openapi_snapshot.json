@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.2"
+    "version": "0.4.4"
   },
   "paths": {
     "/api/auth/status": {
@@ -1043,6 +1043,67 @@
           },
           "404": {
             "description": "Flow not running or block not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/overlay-alpha": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Set the multiview overlay alpha on a vision mixer block.",
+        "operationId": "set_overlay_alpha",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayAlphaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Overlay alpha set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverlayAlphaResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
             "content": {
               "application/json": {
                 "schema": {
@@ -2379,6 +2440,42 @@
           },
           "404": {
             "description": "Flow not running or latency not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{id}/pad-caps": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Get negotiated caps for all pads in a running flow's pipeline.",
+        "description": "Returns a JSON map of element_name → [(pad_name, direction, caps_string)].\nUseful for debugging caps negotiation failures.",
+        "operationId": "get_flow_pad_caps",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pad caps for all elements"
+          },
+          "404": {
+            "description": "Flow not running",
             "content": {
               "application/json": {
                 "schema": {
@@ -6062,6 +6159,37 @@
           }
         }
       },
+      "OverlayAlphaRequest": {
+        "type": "object",
+        "description": "Request to set the multiview overlay alpha on a vision mixer block.",
+        "required": [
+          "alpha"
+        ],
+        "properties": {
+          "alpha": {
+            "type": "number",
+            "format": "double",
+            "description": "Alpha value (0.0 = fully transparent, 1.0 = fully opaque)"
+          }
+        }
+      },
+      "OverlayAlphaResponse": {
+        "type": "object",
+        "description": "Response after setting the multiview overlay alpha.",
+        "required": [
+          "message",
+          "alpha"
+        ],
+        "properties": {
+          "alpha": {
+            "type": "number",
+            "format": "double"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "PadInfo": {
         "type": "object",
         "description": "Information about an element pad.",
@@ -8830,6 +8958,44 @@
                 "type": "string",
                 "enum": [
                   "VisionMixerDskChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer multiview overlay alpha changed",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer multiview overlay alpha changed",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "alpha"
+                ],
+                "properties": {
+                  "alpha": {
+                    "type": "number",
+                    "format": "double"
+                  },
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerOverlayAlphaChanged"
                 ]
               }
             }

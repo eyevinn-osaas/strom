@@ -137,25 +137,6 @@ pub fn make_queue(name: &str) -> Result<gst::Element, BlockBuildError> {
         .map_err(|e| BlockBuildError::ElementCreation(format!("queue: {}", e)))
 }
 
-/// Create a capsfilter with video/x-raw caps at the given resolution.
-pub fn make_capsfilter(
-    name: &str,
-    width: u32,
-    height: u32,
-) -> Result<gst::Element, BlockBuildError> {
-    let caps = gst::Caps::builder("video/x-raw")
-        .field("width", width as i32)
-        .field("height", height as i32)
-        .field("pixel-aspect-ratio", gst::Fraction::new(1, 1))
-        .build();
-
-    gst::ElementFactory::make("capsfilter")
-        .name(name)
-        .property("caps", &caps)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter: {}", e)))
-}
-
 /// Create a simple GStreamer element by factory name.
 pub fn make_element(factory: &str, name: &str) -> Result<gst::Element, BlockBuildError> {
     gst::ElementFactory::make(factory)

@@ -1310,6 +1310,18 @@ pub async fn get_flow_debug_info(
 ///
 /// Returns a JSON map of element_name → [(pad_name, direction, caps_string)].
 /// Useful for debugging caps negotiation failures.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/pad-caps",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Pad caps for all elements"),
+        (status = 404, description = "Flow not running", body = ErrorResponse)
+    )
+)]
 pub async fn get_flow_pad_caps(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,

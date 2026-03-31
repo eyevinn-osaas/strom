@@ -201,21 +201,35 @@ fn build_gpu_pipeline(
     // Compute multiview layout
     let mv_layout = layout::compute_layout(p.mv_w, p.mv_h, p.num_inputs);
 
-    // --- Distribution output chain: mixer → tee_pgm → gldownload → capsfilter ---
-    // tee_pgm splits the PGM output: one branch to distribution, one to multiview PGM display.
+    // --- Distribution output chain ---
+    // mixer → queue_post_dist → tee_pgm → gldownload → capsfilter → queue_dist_out
+    // queue_post_dist decouples the compositor from downstream processing.
+    let q_post_dist_id = p.id("queue_post_dist");
+    let queue_post_dist = elements::make_queue(&q_post_dist_id)?;
     let tee_pgm_id = p.id("tee_pgm");
     let tee_pgm = elements::make_tee(&tee_pgm_id)?;
     let dl_dist_id = p.id("gldownload_dist");
     let gldownload_dist = elements::make_element("gldownload", "gldownload_dist")?;
     gldownload_dist.set_property("name", &dl_dist_id);
     let cf_dist_id = p.id("capsfilter_dist");
-    let capsfilter_dist = elements::make_capsfilter("capsfilter_dist", p.pgm_w, p.pgm_h)?;
-    capsfilter_dist.set_property("name", &cf_dist_id);
+    let capsfilter_dist = gst::ElementFactory::make("capsfilter")
+        .name(&cf_dist_id)
+        .property("caps", p.output_caps(p.pgm_w, p.pgm_h))
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_dist: {}", e)))?;
+    let q_dist_out_id = p.id("queue_dist_out");
+    let queue_dist_out = elements::make_queue(&q_dist_out_id)?;
+    elems.push((q_post_dist_id.clone(), queue_post_dist));
     elems.push((tee_pgm_id.clone(), tee_pgm));
     elems.push((dl_dist_id.clone(), gldownload_dist));
     elems.push((cf_dist_id.clone(), capsfilter_dist));
+    elems.push((q_dist_out_id.clone(), queue_dist_out));
     links.push((
         ElementPadRef::pad(&mixer_id, "src"),
+        ElementPadRef::pad(&q_post_dist_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&q_post_dist_id, "src"),
         ElementPadRef::pad(&tee_pgm_id, "sink"),
     ));
     links.push((
@@ -225,6 +239,24 @@ fn build_gpu_pipeline(
     links.push((
         ElementPadRef::pad(&dl_dist_id, "src"),
         ElementPadRef::pad(&cf_dist_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&cf_dist_id, "src"),
+        ElementPadRef::pad(&q_dist_out_id, "sink"),
+    ));
+
+    // Fakesink on tee_pgm to ensure PGM pipeline always has a pulling sink
+    let fs_pgm_id = p.id("fakesink_pgm");
+    let fakesink_pgm = gst::ElementFactory::make("fakesink")
+        .name(&fs_pgm_id)
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_pgm: {}", e)))?;
+    elems.push((fs_pgm_id.clone(), fakesink_pgm));
+    links.push((
+        ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&fs_pgm_id, "sink"),
     ));
 
     // Queue to decouple tee_pgm from the multiview compositor (separate thread)
@@ -258,33 +290,64 @@ fn build_gpu_pipeline(
     }
 
     // --- Multiview output chain ---
-    // Simplified: mv_comp → queue → gldownload → capsfilter
-    // The overlay is composited by mv_comp via an appsrc overlay pad (see below).
-    let q_mv_out_id = p.id("queue_mv_out");
+    // mv_comp → queue_post_mv → gldownload → capsfilter → tee_mv → queue_mv_out
+    // queue_post_mv decouples the compositor from downstream processing.
+    let q_post_mv_id = p.id("queue_post_mv");
+    let queue_post_mv = elements::make_queue(&q_post_mv_id)?;
     let dl_id = p.id("gldownload_mv");
     let cf_mv_id = p.id("capsfilter_mv");
+    let tee_mv_id = p.id("tee_mv");
+    let q_mv_out_id = p.id("queue_mv_out");
 
-    let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
     let gldownload_mv = elements::make_element("gldownload", "gldownload_mv")?;
     gldownload_mv.set_property("name", &dl_id);
-    let capsfilter_mv = elements::make_capsfilter("capsfilter_mv", p.mv_w, p.mv_h)?;
-    capsfilter_mv.set_property("name", &cf_mv_id);
+    let capsfilter_mv = gst::ElementFactory::make("capsfilter")
+        .name(&cf_mv_id)
+        .property("caps", p.output_caps(p.mv_w, p.mv_h))
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_mv: {}", e)))?;
+    let tee_mv = elements::make_tee(&tee_mv_id)?;
+    let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
 
-    elems.push((q_mv_out_id.clone(), queue_mv_out));
+    elems.push((q_post_mv_id.clone(), queue_post_mv));
     elems.push((dl_id.clone(), gldownload_mv));
     elems.push((cf_mv_id.clone(), capsfilter_mv));
+    elems.push((tee_mv_id.clone(), tee_mv));
+    elems.push((q_mv_out_id.clone(), queue_mv_out));
 
     links.push((
         ElementPadRef::pad(&mv_comp_id, "src"),
-        ElementPadRef::pad(&q_mv_out_id, "sink"),
+        ElementPadRef::pad(&q_post_mv_id, "sink"),
     ));
     links.push((
-        ElementPadRef::pad(&q_mv_out_id, "src"),
+        ElementPadRef::pad(&q_post_mv_id, "src"),
         ElementPadRef::pad(&dl_id, "sink"),
     ));
     links.push((
         ElementPadRef::pad(&dl_id, "src"),
         ElementPadRef::pad(&cf_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&cf_mv_id, "src"),
+        ElementPadRef::pad(&tee_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&tee_mv_id, "src_0"),
+        ElementPadRef::pad(&q_mv_out_id, "sink"),
+    ));
+
+    // Fakesink on tee_mv to ensure MV pipeline always has a pulling sink
+    let fs_mv_id = p.id("fakesink_mv");
+    let fakesink_mv = gst::ElementFactory::make("fakesink")
+        .name(&fs_mv_id)
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_mv: {}", e)))?;
+    elems.push((fs_mv_id.clone(), fakesink_mv));
+    links.push((
+        ElementPadRef::pad(&tee_mv_id, "src_1"),
+        ElementPadRef::pad(&fs_mv_id, "sink"),
     ));
 
     // --- Overlay appsrc → glupload → mv_comp (composited in GPU at high zorder) ---
@@ -407,9 +470,10 @@ fn build_gpu_pipeline(
         ));
     }
 
-    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
+    // Multiview PGM big display: tee_pgm.src_2 → queue_pgm_mv → mv_comp.sink_N
+    // (src_1 is used by fakesink_pgm)
     links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&tee_pgm_id, "src_2"),
         ElementPadRef::pad(&q_pgm_mv_id, "sink"),
     ));
     links.push((

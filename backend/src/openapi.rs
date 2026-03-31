@@ -63,6 +63,7 @@ use utoipa::OpenApi;
         crate::api::flows::fade_to_black,
         crate::api::flows::animate_input,
         crate::api::flows::debug_graph,
+        crate::api::flows::get_flow_pad_caps,
         crate::api::flows::get_dynamic_pads,
         crate::api::flows::get_available_sources,
         crate::api::flows::get_block_sdp,
