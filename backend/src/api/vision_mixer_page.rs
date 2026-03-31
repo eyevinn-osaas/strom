@@ -84,6 +84,7 @@ pub async fn vision_mixer_page(
         })
         .unwrap_or_else(|| vec![true; num_dsk_inputs]);
     let background_input: Option<usize> = overlay.as_ref().and_then(|s| s.background_input());
+    let overlay_alpha = overlay.as_ref().map(|s| s.overlay_alpha()).unwrap_or(1.0);
 
     // Build a single JSON config object (safe injection via <script type="application/json">)
     let config = serde_json::json!({
@@ -100,6 +101,7 @@ pub async fn vision_mixer_page(
         "ftb_active": ftb_active,
         "dsk_states": dsk_states,
         "background_input": background_input,
+        "overlay_alpha": overlay_alpha,
     });
 
     let html = VISION_MIXER_HTML.replace("{{VM_CONFIG_JSON}}", &config.to_string());

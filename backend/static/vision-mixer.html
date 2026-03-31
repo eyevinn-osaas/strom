@@ -316,6 +316,38 @@
             border-color: #555;
             color: #888;
         }
+        .overlay-alpha-slider {
+            flex: 1;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: #444;
+            border-radius: 2px;
+            outline: none;
+            cursor: pointer;
+        }
+        .overlay-alpha-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #ddd;
+            cursor: pointer;
+        }
+        .overlay-alpha-slider::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #ddd;
+            border: none;
+            cursor: pointer;
+        }
+        .overlay-alpha-value {
+            font-size: 11px;
+            color: #999;
+            min-width: 32px;
+            text-align: right;
+        }
         .conn-indicators {
             display: flex;
             gap: 10px;
@@ -393,6 +425,13 @@
                     <button class="dsk-btn on" id="dsk3Btn" onclick="toggleDsk(3)" style="display:none;">DSK 4 ON</button>
                 </div>
             </div>
+            <div class="bus-row" id="overlayAlphaRow">
+                <span class="bus-label" style="color:#aaa;">OVL</span>
+                <div class="bus-buttons" style="align-items:center;">
+                    <input type="range" class="overlay-alpha-slider" id="overlayAlphaSlider" min="0" max="1" step="0.05" value="1.0" oninput="onOverlayAlphaInput(this.value)">
+                    <span class="overlay-alpha-value" id="overlayAlphaValue">1.0</span>
+                </div>
+            </div>
         </div>
 
         <!-- Transition controls -->
@@ -455,6 +494,7 @@
         let transitionDurationMs = 1000;
         let transitioning = false;
         let ftbActive = _cfg.ftb_active || false;
+        let overlayAlpha = _cfg.overlay_alpha != null ? _cfg.overlay_alpha : 1.0;
         let groupMode = false;  // true while G is held down
         let bgMode = false;     // true while B is held down
         let controlsMinimized = localStorage.getItem('vm-controls-minimized') === 'true';
@@ -617,6 +657,26 @@
                 }
                 updateDskButtons();
             }
+        }
+
+        // ---- Overlay alpha ----
+        let overlayAlphaTimeout = null;
+        function onOverlayAlphaInput(val) {
+            val = parseFloat(val);
+            overlayAlpha = val;
+            document.getElementById('overlayAlphaValue').textContent = val.toFixed(2);
+            // Debounce: send after 100ms of no further input
+            if (overlayAlphaTimeout) clearTimeout(overlayAlphaTimeout);
+            overlayAlphaTimeout = setTimeout(() => {
+                apiPost('/overlay-alpha', { alpha: overlayAlpha })
+                    .then(r => setStatus(r.message))
+                    .catch(e => setStatus('Overlay alpha error: ' + e.message));
+            }, 100);
+        }
+
+        function updateOverlayAlphaUi() {
+            document.getElementById('overlayAlphaSlider').value = overlayAlpha;
+            document.getElementById('overlayAlphaValue').textContent = overlayAlpha.toFixed(2);
         }
 
         // ---- Transition type & duration ----
@@ -847,9 +907,11 @@
                 currentBackground = cfg.background_input != null ? cfg.background_input : null;
                 ftbActive = cfg.ftb_active || false;
                 dskEnabled = cfg.dsk_states || [true, true, true, true];
+                overlayAlpha = cfg.overlay_alpha != null ? cfg.overlay_alpha : 1.0;
                 updateButtons();
                 updateFtbButton();
                 updateDskButtons();
+                updateOverlayAlphaUi();
                 setStatus('Reconnected - state synced');
             } catch (e) {
                 setStatus('Resync failed: ' + e.message);
@@ -888,6 +950,13 @@
                         if (d.block_id === BLOCK_ID) {
                             ftbActive = d.active;
                             updateFtbButton();
+                        }
+                    }
+                    if (event.type === 'VisionMixerOverlayAlphaChanged' && event.data) {
+                        const d = event.data;
+                        if (d.block_id === BLOCK_ID) {
+                            overlayAlpha = d.alpha;
+                            updateOverlayAlphaUi();
                         }
                     }
                     if (event.type === 'VisionMixerBackgroundChanged' && event.data) {

@@ -513,13 +513,37 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&q_dist_out_id, "sink"),
     ));
 
-    // Queue to decouple tee_pgm from the multiview compositor (separate thread).
-    // leaky=upstream drops old buffers while mv_comp is still negotiating caps.
+    // Fakesink on tee_pgm to ensure PGM pipeline always has a pulling sink
+    let fs_pgm_id = p.id("fakesink_pgm");
+    let fakesink_pgm = gst::ElementFactory::make("fakesink")
+        .name(&fs_pgm_id)
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_pgm: {}", e)))?;
+    elems.push((fs_pgm_id.clone(), fakesink_pgm));
+    links.push((
+        ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&fs_pgm_id, "sink"),
+    ));
+
+    // Queue + capsfilter to decouple tee_pgm from the multiview compositor.
+    // The capsfilter breaks the caps negotiation cycle: PGM compositor → tee →
+    // queue_pgm_mv → mv_comp → (feedback). Without it, tee forwards caps queries
+    // to mv_comp which deadlocks waiting for its own src to negotiate.
+    // leaky=upstream drops old buffers while mv_comp is still starting.
     let q_pgm_mv_id = p.id("queue_pgm_mv");
     let queue_pgm_mv = elements::make_queue(&q_pgm_mv_id)?;
     queue_pgm_mv.set_property_from_str("leaky", "upstream");
     queue_pgm_mv.set_property("max-size-buffers", 1u32);
+    let cf_pgm_mv_id = p.id("capsfilter_pgm_mv");
+    let capsfilter_pgm_mv = gst::ElementFactory::make("capsfilter")
+        .name(&cf_pgm_mv_id)
+        .property("caps", p.output_caps(p.pgm_w, p.pgm_h))
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_pgm_mv: {}", e)))?;
     elems.push((q_pgm_mv_id.clone(), queue_pgm_mv));
+    elems.push((cf_pgm_mv_id.clone(), capsfilter_pgm_mv));
 
     // DSK input element chains (links to mixer added later after video inputs)
     for i in 0..p.num_dsk_inputs {
@@ -547,10 +571,13 @@ fn build_cpu_pipeline(
         .property("caps", p.output_caps(p.mv_w, p.mv_h))
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_mv: {}", e)))?;
+    let tee_mv_id = p.id("tee_mv");
+    let tee_mv = elements::make_tee(&tee_mv_id)?;
     let q_mv_out_id = p.id("queue_mv_out");
     let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
 
     elems.push((cf_mv_id.clone(), capsfilter_mv));
+    elems.push((tee_mv_id.clone(), tee_mv));
     elems.push((q_mv_out_id.clone(), queue_mv_out));
 
     links.push((
@@ -559,7 +586,25 @@ fn build_cpu_pipeline(
     ));
     links.push((
         ElementPadRef::pad(&cf_mv_id, "src"),
+        ElementPadRef::pad(&tee_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&tee_mv_id, "src_0"),
         ElementPadRef::pad(&q_mv_out_id, "sink"),
+    ));
+
+    // Fakesink on tee_mv to ensure MV pipeline always has a pulling sink
+    let fs_mv_id = p.id("fakesink_mv");
+    let fakesink_mv = gst::ElementFactory::make("fakesink")
+        .name(&fs_mv_id)
+        .property("async", false)
+        .property("sync", false)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_mv: {}", e)))?;
+    elems.push((fs_mv_id.clone(), fakesink_mv));
+    links.push((
+        ElementPadRef::pad(&tee_mv_id, "src_1"),
+        ElementPadRef::pad(&fs_mv_id, "sink"),
     ));
 
     // --- Overlay appsrc → mv_comp (CPU compositor accepts raw BGRA directly) ---
@@ -754,13 +799,18 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", overlay_pad_idx)),
     ));
 
-    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
+    // Multiview PGM big display: tee_pgm.src_2 → queue_pgm_mv → capsfilter_pgm_mv → mv_comp.sink_N
+    // (src_1 is used by fakesink_pgm; capsfilter breaks caps query cycle back to PGM compositor)
     links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_1"),
+        ElementPadRef::pad(&tee_pgm_id, "src_2"),
         ElementPadRef::pad(&q_pgm_mv_id, "sink"),
     ));
     links.push((
         ElementPadRef::pad(&q_pgm_mv_id, "src"),
+        ElementPadRef::pad(&cf_pgm_mv_id, "sink"),
+    ));
+    links.push((
+        ElementPadRef::pad(&cf_pgm_mv_id, "src"),
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", p.num_inputs)),
     ));
 
@@ -798,7 +848,6 @@ fn build_pad_properties(
 
     let mixer_id = p.id("mixer");
     let mv_comp_id = p.id("mv_comp");
-    let is_gl = p.backend == CompositorBackend::OpenGL;
 
     // --- Distribution compositor pad properties ---
     // Each input fills the full PGM canvas; only the active PGM input is visible (alpha=1)
@@ -810,12 +859,10 @@ fn build_pad_properties(
         props.insert("alpha".to_string(), PropertyValue::Float(alpha));
         props.insert("width".to_string(), PropertyValue::Int(p.pgm_w as i64));
         props.insert("height".to_string(), PropertyValue::Int(p.pgm_h as i64));
-        if is_gl {
-            props.insert(
-                "sizing-policy".to_string(),
-                PropertyValue::String("keep-aspect-ratio".to_string()),
-            );
-        }
+        props.insert(
+            "sizing-policy".to_string(),
+            PropertyValue::String("keep-aspect-ratio".to_string()),
+        );
     }
 
     // --- DSK pads on dist compositor (high zorder, above video inputs) ---
@@ -829,12 +876,10 @@ fn build_pad_properties(
             "zorder".to_string(),
             PropertyValue::UInt(vision_mixer::DIST_DSK_BASE_ZORDER as u64 + i as u64),
         );
-        if is_gl {
-            props.insert(
-                "sizing-policy".to_string(),
-                PropertyValue::String("keep-aspect-ratio".to_string()),
-            );
-        }
+        props.insert(
+            "sizing-policy".to_string(),
+            PropertyValue::String("keep-aspect-ratio".to_string()),
+        );
     }
 
     // --- Multiview compositor pad properties ---
@@ -854,12 +899,10 @@ fn build_pad_properties(
             "zorder".to_string(),
             PropertyValue::UInt(vision_mixer::MV_THUMBNAIL_ZORDER as u64),
         );
-        if is_gl {
-            props.insert(
-                "sizing-policy".to_string(),
-                PropertyValue::String("keep-aspect-ratio".to_string()),
-            );
-        }
+        props.insert(
+            "sizing-policy".to_string(),
+            PropertyValue::String("keep-aspect-ratio".to_string()),
+        );
     }
 
     // PGM big display: sink_N (fed from tee_pgm, always visible at PGM position)
@@ -876,12 +919,10 @@ fn build_pad_properties(
             "zorder".to_string(),
             PropertyValue::UInt(vision_mixer::MV_BIG_DISPLAY_ZORDER as u64),
         );
-        if is_gl {
-            props.insert(
-                "sizing-policy".to_string(),
-                PropertyValue::String("keep-aspect-ratio".to_string()),
-            );
-        }
+        props.insert(
+            "sizing-policy".to_string(),
+            PropertyValue::String("keep-aspect-ratio".to_string()),
+        );
     }
 
     // PVW big display candidate pads: sink_{N+1}..sink_{2N}
@@ -905,12 +946,10 @@ fn build_pad_properties(
             "zorder".to_string(),
             PropertyValue::UInt(vision_mixer::MV_BIG_DISPLAY_ZORDER as u64),
         );
-        if is_gl {
-            props.insert(
-                "sizing-policy".to_string(),
-                PropertyValue::String("keep-aspect-ratio".to_string()),
-            );
-        }
+        props.insert(
+            "sizing-policy".to_string(),
+            PropertyValue::String("keep-aspect-ratio".to_string()),
+        );
     }
 
     // --- Overlay pad: fullscreen, highest zorder ---

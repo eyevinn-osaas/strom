@@ -6580,7 +6580,7 @@ dependencies = [
 
 [[package]]
 name = "strom"
-version = "0.4.3"
+version = "0.4.3-mv"
 dependencies = [
  "agua-gst",
  "anyhow",
@@ -6655,7 +6655,7 @@ dependencies = [
 
 [[package]]
 name = "strom-frontend"
-version = "0.4.3"
+version = "0.4.3-mv"
 dependencies = [
  "base64",
  "chrono",
@@ -6691,7 +6691,7 @@ dependencies = [
 
 [[package]]
 name = "strom-mcp-server"
-version = "0.4.3"
+version = "0.4.3-mv"
 dependencies = [
  "anyhow",
  "reqwest 0.13.2",
@@ -6705,7 +6705,7 @@ dependencies = [
 
 [[package]]
 name = "strom-types"
-version = "0.4.3"
+version = "0.4.3-mv"
 dependencies = [
  "garde",
  "serde",

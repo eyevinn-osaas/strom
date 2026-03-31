@@ -711,6 +711,41 @@ impl PipelineManager {
         }
     }
 
+    /// Set the multiview overlay alpha on a vision mixer block.
+    pub fn set_overlay_alpha(
+        &self,
+        block_instance_id: &str,
+        num_inputs: usize,
+        alpha: f64,
+    ) -> Result<(), PipelineError> {
+        let mv_comp_id = format!("{}:mv_comp", block_instance_id);
+        let mv_comp = self
+            .elements
+            .get(&mv_comp_id)
+            .ok_or_else(|| PipelineError::ElementNotFound(mv_comp_id.clone()))?;
+
+        // Overlay pad is the last pad: sink_{2*num_inputs + 1}
+        let pad_name = format!("sink_{}", 2 * num_inputs + 1);
+        if let Some(pad) = find_pad(mv_comp, &pad_name) {
+            pad.set_property("alpha", alpha);
+            if let Some(state) =
+                crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(block_instance_id)
+            {
+                state.set_overlay_alpha(alpha);
+            }
+            info!(
+                "Vision mixer {} overlay alpha set to {}",
+                block_instance_id, alpha
+            );
+            Ok(())
+        } else {
+            Err(PipelineError::PadNotFound {
+                element: mv_comp_id,
+                pad: pad_name,
+            })
+        }
+    }
+
     /// Toggle Fade to Black on a vision mixer block.
     ///
     /// Animates ALL mixer sink pads alpha to 0 (fade out) or restores them (fade in).

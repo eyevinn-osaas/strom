@@ -1306,6 +1306,42 @@ pub async fn get_flow_debug_info(
     Ok(Json(debug_info))
 }
 
+/// Get negotiated caps for all pads in a running flow's pipeline.
+///
+/// Returns a JSON map of element_name → [(pad_name, direction, caps_string)].
+/// Useful for debugging caps negotiation failures.
+pub async fn get_flow_pad_caps(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let caps = state.get_flow_pad_caps(&id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Flow not running")),
+        )
+    })?;
+
+    // Convert to JSON-friendly format
+    let json: serde_json::Map<String, serde_json::Value> = caps
+        .into_iter()
+        .map(|(elem, pads)| {
+            let pads_json: Vec<serde_json::Value> = pads
+                .into_iter()
+                .map(|(name, dir, caps_str)| {
+                    serde_json::json!({
+                        "pad": name,
+                        "direction": dir,
+                        "caps": caps_str,
+                    })
+                })
+                .collect();
+            (elem, serde_json::Value::Array(pads_json))
+        })
+        .collect();
+
+    Ok(Json(serde_json::Value::Object(json)))
+}
+
 /// Trigger a scene transition on a compositor block.
 ///
 /// Animates the transition between two inputs on a compositor/mixer block.
@@ -1467,6 +1503,48 @@ pub async fn set_background(
             None => "Background cleared".to_string(),
         },
         background_input: bg,
+    }))
+}
+
+/// Set the multiview overlay alpha on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/overlay-alpha",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::OverlayAlphaRequest,
+    responses(
+        (status = 200, description = "Overlay alpha set", body = strom_types::api::OverlayAlphaResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn set_overlay_alpha(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::OverlayAlphaRequest>,
+) -> Result<Json<strom_types::api::OverlayAlphaResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let alpha = req.alpha.clamp(0.0, 1.0);
+
+    state
+        .set_overlay_alpha(&flow_id, &block_id, alpha)
+        .await
+        .map_err(|e| {
+            error!("Failed to set overlay alpha: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to set overlay alpha",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::OverlayAlphaResponse {
+        message: format!("Overlay alpha set to {}", alpha),
+        alpha,
     }))
 }
 

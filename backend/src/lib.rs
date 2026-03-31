@@ -115,6 +115,7 @@ pub async fn create_app_with_config(
         .route("/flows/{id}/rtp-stats", get(api::flows::get_flow_rtp_stats))
         .route("/flows/{id}/debug", get(api::flows::get_flow_debug_info))
         .route("/flows/{id}/debug-graph", get(api::flows::debug_graph))
+        .route("/flows/{id}/pad-caps", get(api::flows::get_flow_pad_caps))
         .route(
             "/flows/{id}/dynamic-pads",
             get(api::flows::get_dynamic_pads),
@@ -162,6 +163,10 @@ pub async fn create_app_with_config(
         .route(
             "/flows/{flow_id}/blocks/{block_id}/preview",
             post(api::flows::select_preview),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/overlay-alpha",
+            post(api::flows::set_overlay_alpha),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/dsk",
