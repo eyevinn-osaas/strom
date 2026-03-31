@@ -428,7 +428,7 @@
             <div class="bus-row" id="overlayAlphaRow">
                 <span class="bus-label" style="color:#aaa;">OVL</span>
                 <div class="bus-buttons" style="align-items:center;">
-                    <input type="range" class="overlay-alpha-slider" id="overlayAlphaSlider" min="0" max="1" step="0.05" value="1.0" oninput="onOverlayAlphaInput(this.value)">
+                    <input type="range" class="overlay-alpha-slider" id="overlayAlphaSlider" min="0" max="1" step="0.01" value="1.0" oninput="onOverlayAlphaInput(this.value)">
                     <span class="overlay-alpha-value" id="overlayAlphaValue">1.0</span>
                 </div>
             </div>
@@ -661,17 +661,25 @@
 
         // ---- Overlay alpha ----
         let overlayAlphaTimeout = null;
+        let overlayAlphaDragging = false;
+        let overlayAlphaDragTimer = null;
         function onOverlayAlphaInput(val) {
             val = parseFloat(val);
             overlayAlpha = val;
+            overlayAlphaDragging = true;
             document.getElementById('overlayAlphaValue').textContent = val.toFixed(2);
-            // Debounce: send after 100ms of no further input
-            if (overlayAlphaTimeout) clearTimeout(overlayAlphaTimeout);
-            overlayAlphaTimeout = setTimeout(() => {
-                apiPost('/overlay-alpha', { alpha: overlayAlpha })
-                    .then(r => setStatus(r.message))
-                    .catch(e => setStatus('Overlay alpha error: ' + e.message));
-            }, 100);
+            // Clear drag flag shortly after last input (user released slider)
+            if (overlayAlphaDragTimer) clearTimeout(overlayAlphaDragTimer);
+            overlayAlphaDragTimer = setTimeout(() => { overlayAlphaDragging = false; }, 500);
+            // Throttle: send at most every 50ms, drop intermediate values
+            if (!overlayAlphaTimeout) {
+                overlayAlphaTimeout = setTimeout(() => {
+                    overlayAlphaTimeout = null;
+                    apiPost('/overlay-alpha', { alpha: overlayAlpha })
+                        .then(r => setStatus(r.message))
+                        .catch(e => setStatus('Overlay alpha error: ' + e.message));
+                }, 50);
+            }
         }
 
         function updateOverlayAlphaUi() {
@@ -954,7 +962,7 @@
                     }
                     if (event.type === 'VisionMixerOverlayAlphaChanged' && event.data) {
                         const d = event.data;
-                        if (d.block_id === BLOCK_ID) {
+                        if (d.block_id === BLOCK_ID && !overlayAlphaDragging) {
                             overlayAlpha = d.alpha;
                             updateOverlayAlphaUi();
                         }

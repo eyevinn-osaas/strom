@@ -560,6 +560,28 @@ fn build_cpu_pipeline(
             ElementPadRef::pad(&q_id, "src"),
             ElementPadRef::pad(&vc_id_dsk, "sink"),
         ));
+
+        // When output_format is specified, force DSK inputs to match — same as video inputs.
+        if let Some(ref fmt) = p.output_format {
+            let cf_dsk_id = p.id(&format!("capsfilter_dsk_{}", i));
+            let capsfilter_dsk = gst::ElementFactory::make("capsfilter")
+                .name(&cf_dsk_id)
+                .property(
+                    "caps",
+                    gst::Caps::builder("video/x-raw")
+                        .field("format", fmt.as_str())
+                        .build(),
+                )
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("capsfilter_dsk_{}: {}", i, e))
+                })?;
+            elems.push((cf_dsk_id.clone(), capsfilter_dsk));
+            links.push((
+                ElementPadRef::pad(&vc_id_dsk, "src"),
+                ElementPadRef::pad(&cf_dsk_id, "sink"),
+            ));
+        }
     }
 
     // --- Multiview output chain (no gldownload needed for CPU) ---
@@ -757,9 +779,13 @@ fn build_cpu_pipeline(
         ));
     }
     for i in 0..p.num_dsk_inputs {
-        let vc_id_dsk = p.id(&format!("videoconvert_dsk_{}", i));
+        let last_dsk_elem = if p.output_format.is_some() {
+            p.id(&format!("capsfilter_dsk_{}", i))
+        } else {
+            p.id(&format!("videoconvert_dsk_{}", i))
+        };
         links.push((
-            ElementPadRef::pad(&vc_id_dsk, "src"),
+            ElementPadRef::pad(&last_dsk_elem, "src"),
             ElementPadRef::pad(&mixer_id, format!("sink_{}", p.num_inputs + i)),
         ));
     }
