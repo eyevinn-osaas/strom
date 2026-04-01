@@ -10,6 +10,7 @@ pub mod thumbnail;
 pub mod thumbnail_tap;
 pub mod transitions;
 pub mod video_frame;
+pub mod whep_probe;
 
 pub use discovery::ElementDiscovery;
 pub use pipeline::{PipelineError, PipelineManager};

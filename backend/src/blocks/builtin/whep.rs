@@ -12,6 +12,7 @@
 use crate::blocks::{
     BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, WhepStreamMode,
 };
+use crate::gst::whep_probe::{self, WhepProbeRegistry};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -295,12 +296,16 @@ fn build_whepsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("output_audioresample: {}", e)))?;
 
+    // Set up WHEP diagnostic probes if enabled
+    let probe_registry = whep_probe::setup_whep_probes(&whepsrc, &instance_id_owned);
+
     // Counter for unique element naming
     let stream_counter = Arc::new(AtomicUsize::new(0));
 
     // Clone references for the pad-added callback
     let liveadder_weak = liveadder.downgrade();
     let stream_counter_clone = Arc::clone(&stream_counter);
+    let probe_registry_clone = probe_registry.clone();
 
     // Set up pad-added callback on whepsrc
     // whepsrc also creates dynamic src_%u pads like whepclientsrc
@@ -320,6 +325,7 @@ fn build_whepsrc(
                 &liveadder,
                 &instance_id_owned,
                 stream_num,
+                &probe_registry_clone,
             ) {
                 error!("Failed to setup stream with caps detection: {}", e);
             }
@@ -511,12 +517,16 @@ fn build_whepclientsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("output_audioresample: {}", e)))?;
 
+    // Set up WHEP diagnostic probes if enabled
+    let probe_registry = whep_probe::setup_whep_probes(&whepclientsrc, &instance_id_owned);
+
     // Counter for unique element naming
     let stream_counter = Arc::new(AtomicUsize::new(0));
 
     // Clone references for the pad-added callback
     let liveadder_weak = liveadder.downgrade();
     let stream_counter_clone = Arc::clone(&stream_counter);
+    let probe_registry_clone = probe_registry.clone();
 
     // Set up pad-added callback on whepclientsrc
     // This handles dynamic pads created when WebRTC streams are negotiated
@@ -541,6 +551,7 @@ fn build_whepclientsrc(
                 &liveadder,
                 &instance_id_owned,
                 stream_num,
+                &probe_registry_clone,
             ) {
                 error!("Failed to setup stream with caps detection: {}", e);
             }
@@ -1409,6 +1420,7 @@ fn setup_stream_with_caps_detection(
     liveadder: &gst::Element,
     instance_id: &str,
     stream_num: usize,
+    probe_registry: &Option<Arc<WhepProbeRegistry>>,
 ) -> Result<(), String> {
     // Get the pipeline
     let pipeline = get_pipeline_from_element(src)?;
@@ -1443,6 +1455,11 @@ fn setup_stream_with_caps_detection(
         stream_num
     );
 
+    // Install diagnostic probe on identity if enabled
+    if let Some(ref registry) = probe_registry {
+        whep_probe::probe_element_src(registry, &identity);
+    }
+
     // Get identity's src pad for the probe
     let identity_src = identity
         .static_pad("src")
@@ -1452,6 +1469,7 @@ fn setup_stream_with_caps_detection(
     let pipeline_weak = pipeline.downgrade();
     let liveadder_weak = liveadder.downgrade();
     let instance_id_owned = instance_id.to_string();
+    let probe_registry_clone = probe_registry.clone();
 
     // Flag to ensure we only handle this once
     let handled = Arc::new(AtomicBool::new(false));
@@ -1522,6 +1540,7 @@ fn setup_stream_with_caps_detection(
                                     &liveadder,
                                     &instance_id_owned,
                                     stream_num,
+                                    &probe_registry_clone,
                                 ) {
                                     error!("WHEP: Failed to setup audio decode chain: {}", e);
                                 }
@@ -1597,6 +1616,7 @@ fn setup_audio_decode_chain(
     liveadder: &gst::Element,
     instance_id: &str,
     stream_num: usize,
+    probe_registry: &Option<Arc<WhepProbeRegistry>>,
 ) -> Result<(), String> {
     // Create unique element names
     let decodebin_name = format!("{}:decodebin_{}", instance_id, stream_num);
@@ -1639,6 +1659,7 @@ fn setup_audio_decode_chain(
     let audioresample_weak = audioresample.downgrade();
     let liveadder_weak = liveadder.downgrade();
     let stream_num_clone = stream_num;
+    let probe_registry_clone = probe_registry.clone();
 
     // Set up decodebin's pad-added callback to link to audioconvert
     decodebin.connect_pad_added(move |_decodebin, pad| {
@@ -1717,6 +1738,13 @@ fn setup_audio_decode_chain(
                             "WHEP: Stream {} successfully linked audio stream to liveadder",
                             stream_num_clone
                         );
+
+                        // Install diagnostic probes on the decode chain
+                        if let Some(ref registry) = probe_registry_clone {
+                            whep_probe::probe_element_src(registry, &audioconvert);
+                            whep_probe::probe_element_src(registry, &audioresample);
+                            whep_probe::probe_pad(registry, &liveadder, &liveadder_sink);
+                        }
                     } else {
                         error!("Failed to request sink pad from liveadder");
                     }
