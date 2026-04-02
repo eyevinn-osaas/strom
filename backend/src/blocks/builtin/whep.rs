@@ -222,17 +222,33 @@ fn build_whepsrc(
     if let Ok(bin) = whepsrc.clone().downcast::<gst::Bin>() {
         // Set on already-existing children (webrtcbin and its internal rtpbin)
         for element in bin.iterate_recurse().into_iter().flatten() {
-            if element.name().starts_with("webrtcbin") && element.has_property("latency") {
+            let name = element.name();
+            if name.starts_with("webrtcbin") && element.has_property("latency") {
                 element.set_property("latency", jitterbuffer_latency_ms);
                 info!(
                     "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on existing {}",
-                    jitterbuffer_latency_ms,
-                    element.name()
+                    jitterbuffer_latency_ms, name
+                );
+            }
+            // Workaround for GStreamer rtpjitterbuffer packet_spacing bug:
+            // After a mute gap (no RTP packets), calculate_packet_spacing sees
+            // the large RTP timestamp jump as huge packet spacing. This corrupts
+            // lost timer scheduling, causing packets to be held for the duration
+            // of the mute gap instead of being output immediately.
+            // Setting drop-on-latency on rtpbin propagates to all its
+            // jitterbuffers, making them drop queued packets that exceed the
+            // configured latency — breaking the stall.
+            // Upstream: https://gitlab.freedesktop.org/gstreamer/gst-plugins-good/-/merge_requests/951
+            if name.starts_with("rtpbin") && element.has_property("drop-on-latency") {
+                element.set_property("drop-on-latency", true);
+                info!(
+                    "WHEP Input (whepsrc): Set drop-on-latency=true on existing {}",
+                    name
                 );
             }
         }
 
-        // Also catch any dynamically added webrtcbins and jitterbuffers
+        // Also catch any dynamically added webrtcbins, rtpbins and jitterbuffers
         bin.connect("deep-element-added", false, move |values| {
             let element = values[2].get::<gst::Element>().unwrap();
             let element_name = element.name();
@@ -572,6 +588,16 @@ fn build_whepclientsrc(
                 let _bin = values[0].get::<gst::Bin>().unwrap();
                 let element = values[2].get::<gst::Element>().unwrap();
                 let element_name = element.name();
+
+                // Workaround for GStreamer rtpjitterbuffer packet_spacing bug:
+                // see comment in build_whepsrc iterate_recurse for details.
+                if element_name.starts_with("rtpbin") && element.has_property("drop-on-latency") {
+                    element.set_property("drop-on-latency", true);
+                    info!(
+                        "WHEP Input (whepclientsrc): Set drop-on-latency=true on {}",
+                        element_name
+                    );
+                }
 
                 // Look for webrtcbin
                 if element_name.starts_with("webrtcbin") {
