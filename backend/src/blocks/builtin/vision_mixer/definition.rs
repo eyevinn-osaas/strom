@@ -2,7 +2,10 @@
 
 use strom_types::block::*;
 use strom_types::vision_mixer::*;
-use strom_types::{common_video_resolution_enum_values, MediaType, PropertyValue};
+use strom_types::{
+    common_video_pixel_format_enum_values, common_video_resolution_enum_values, MediaType,
+    PropertyValue,
+};
 
 /// Get block definitions for the vision mixer.
 pub fn get_blocks() -> Vec<BlockDefinition> {
@@ -187,6 +190,30 @@ fn vision_mixer_definition() -> BlockDefinition {
             },
             live: false,
         },
+        // Output pixel format
+        ExposedProperty {
+            name: "output_format".to_string(),
+            label: "Output Pixel Format".to_string(),
+            description: "Pixel format for compositor outputs. Auto lets GStreamer negotiate."
+                .to_string(),
+            property_type: PropertyType::Enum {
+                values: {
+                    let mut v = vec![EnumValue {
+                        value: String::new(),
+                        label: Some("Auto".to_string()),
+                    }];
+                    v.extend(common_video_pixel_format_enum_values(false));
+                    v
+                },
+            },
+            default_value: Some(PropertyValue::String("".to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "output_format".to_string(),
+                transform: None,
+            },
+            live: false,
+        },
         // Number of DSK inputs
         ExposedProperty {
             name: "num_dsk_inputs".to_string(),
@@ -281,14 +308,14 @@ fn vision_mixer_definition() -> BlockDefinition {
                     "pgm_out",
                     "PGM",
                     MediaType::Video,
-                    "capsfilter_dist",
+                    "queue_dist_out",
                     "src",
                 ),
                 ExternalPad::with_label(
                     "multiview_out",
                     "MV",
                     MediaType::Video,
-                    "capsfilter_mv",
+                    "queue_mv_out",
                     "src",
                 ),
             ],

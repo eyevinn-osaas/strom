@@ -1522,6 +1522,34 @@ impl AppState {
         Ok(())
     }
 
+    /// Set the multiview overlay alpha on a vision mixer block.
+    pub async fn set_overlay_alpha(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        alpha: f64,
+    ) -> Result<(), PipelineError> {
+        let num_inputs = self
+            .get_vision_mixer_num_inputs(flow_id, block_instance_id)
+            .await;
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.set_overlay_alpha(block_instance_id, num_inputs, alpha)?;
+        drop(pipelines);
+
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerOverlayAlphaChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                alpha,
+            });
+
+        Ok(())
+    }
+
     /// Toggle Fade to Black on a vision mixer block.
     pub async fn fade_to_black(
         &self,
@@ -1853,6 +1881,15 @@ impl AppState {
     ) -> Option<strom_types::api::FlowDebugInfo> {
         let pipelines = self.inner.pipelines.read().await;
         pipelines.get(flow_id).map(|p| p.get_debug_info())
+    }
+
+    /// Get negotiated caps for all pads in a running flow's pipeline.
+    pub async fn get_flow_pad_caps(
+        &self,
+        flow_id: &FlowId,
+    ) -> Option<std::collections::HashMap<String, Vec<(String, String, String)>>> {
+        let pipelines = self.inner.pipelines.read().await;
+        pipelines.get(flow_id).map(|p| p.get_all_pad_caps())
     }
 
     /// Get current system monitoring statistics (CPU and GPU).

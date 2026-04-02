@@ -138,6 +138,34 @@ impl PipelineManager {
             .collect()
     }
 
+    /// Get negotiated caps for all pads of all elements in the pipeline.
+    /// Returns a map of element_name → [(pad_name, direction, caps_string)].
+    pub fn get_all_pad_caps(&self) -> HashMap<String, Vec<(String, String, String)>> {
+        let mut result = HashMap::new();
+        for element in self.pipeline.iterate_recurse().into_iter().flatten() {
+            let elem_name = element.name().to_string();
+            let mut pads = Vec::new();
+            for pad in element.pads() {
+                let pad_name = pad.name().to_string();
+                let direction = match pad.direction() {
+                    gst::PadDirection::Src => "src",
+                    gst::PadDirection::Sink => "sink",
+                    _ => "unknown",
+                }
+                .to_string();
+                let caps = pad
+                    .current_caps()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "NOT NEGOTIATED".to_string());
+                pads.push((pad_name, direction, caps));
+            }
+            if !pads.is_empty() {
+                result.insert(elem_name, pads);
+            }
+        }
+        result
+    }
+
     /// Get the GStreamer element for a strom element_id (standalone elements only).
     pub fn find_gst_element(&self, element_id: &str) -> Option<&gst::Element> {
         self.elements.get(element_id)

@@ -897,6 +897,22 @@ pub struct SetBackgroundResponse {
     pub background_input: Option<usize>,
 }
 
+/// Request to set the multiview overlay alpha on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct OverlayAlphaRequest {
+    /// Alpha value (0.0 = fully transparent, 1.0 = fully opaque)
+    pub alpha: f64,
+}
+
+/// Response after setting the multiview overlay alpha.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct OverlayAlphaResponse {
+    pub message: String,
+    pub alpha: f64,
+}
+
 /// Request to toggle a DSK (Downstream Keyer) layer on a vision mixer block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]

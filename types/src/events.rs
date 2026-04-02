@@ -349,6 +349,13 @@ pub enum StromEvent {
         dsk: usize,
         enabled: bool,
     },
+    /// Vision mixer multiview overlay alpha changed
+    VisionMixerOverlayAlphaChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        alpha: f64,
+    },
     /// Vision mixer Fade to Black state changed
     VisionMixerFtbChanged {
         #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
@@ -766,6 +773,16 @@ impl StromEvent {
                     flow_id,
                     dsk,
                     if *enabled { "ON" } else { "OFF" }
+                )
+            }
+            StromEvent::VisionMixerOverlayAlphaChanged {
+                flow_id,
+                block_id,
+                alpha,
+            } => {
+                format!(
+                    "Vision mixer {} in flow {}: overlay alpha {}",
+                    block_id, flow_id, alpha
                 )
             }
             StromEvent::VisionMixerFtbChanged {

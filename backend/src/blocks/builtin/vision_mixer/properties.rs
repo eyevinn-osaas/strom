@@ -109,6 +109,14 @@ pub fn parse_bool(properties: &HashMap<String, PropertyValue>, key: &str, defaul
         .unwrap_or(default)
 }
 
+/// Parse the output pixel format. Returns None for "Auto" (empty string).
+pub fn parse_output_format(properties: &HashMap<String, PropertyValue>) -> Option<String> {
+    properties.get("output_format").and_then(|v| match v {
+        PropertyValue::String(s) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    })
+}
+
 /// Parse a u64 property with a default.
 pub fn parse_u64(properties: &HashMap<String, PropertyValue>, key: &str, default: u64) -> u64 {
     properties

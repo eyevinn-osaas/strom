@@ -57,6 +57,8 @@ pub struct VisionMixerOverlayState {
     pub num_inputs: usize,
     /// Whether Fade to Black is active.
     pub ftb_active: AtomicBool,
+    /// Multiview overlay alpha (0.0–1.0), stored as f64 bits.
+    overlay_alpha: AtomicU64,
     /// DSK enabled states (one per DSK input, max 4).
     pub dsk_enabled: Vec<AtomicBool>,
     /// Number of DSK inputs.
@@ -100,6 +102,7 @@ impl VisionMixerOverlayState {
             background_input: AtomicU64::new(vision_mixer::NO_BACKGROUND),
             num_inputs,
             ftb_active: AtomicBool::new(false),
+            overlay_alpha: AtomicU64::new(1.0f64.to_bits()),
             dsk_enabled: (0..num_dsk_inputs)
                 .map(|_| AtomicBool::new(false))
                 .collect(),
@@ -179,6 +182,16 @@ impl VisionMixerOverlayState {
         self.background_input.store(val, Ordering::Relaxed);
     }
 
+    /// Get the multiview overlay alpha (0.0–1.0).
+    pub fn overlay_alpha(&self) -> f64 {
+        f64::from_bits(self.overlay_alpha.load(Ordering::Relaxed))
+    }
+
+    /// Set the multiview overlay alpha (0.0–1.0).
+    pub fn set_overlay_alpha(&self, alpha: f64) {
+        self.overlay_alpha.store(alpha.to_bits(), Ordering::Relaxed);
+    }
+
     /// Get local wall-clock time as (hours, minutes, seconds) and timezone abbreviation.
     /// Uses Instant::now() (vDSO fast path) with a cached offset that refreshes every 60s.
     fn wall_clock_hms(&self) -> (u32, u32, u32) {
@@ -239,17 +252,17 @@ fn pack_tz_abbr(abbr: &str) -> u64 {
 // Colors are R↔B swapped: cairo stores BGRA in memory, but we output as RGBA
 // without byte-swapping. So we feed cairo (B,G,R) where we want (R,G,B) output.
 const PVW_R: f64 = 0.0; // actually fed to cairo B channel → outputs as R=0
-const PVW_G: f64 = 0.8;
+const PVW_G: f64 = 1.0;
 const PVW_B: f64 = 0.0; // actually fed to cairo R channel → outputs as B=0
 
-const PGM_R: f64 = 0.0; // want R=0.9 in output → feed to cairo B channel
+const PGM_R: f64 = 0.0; // want R=1.0 in output → feed to cairo B channel
 const PGM_G: f64 = 0.0;
-const PGM_B: f64 = 0.9; // want B=0 in output → feed to cairo R channel
+const PGM_B: f64 = 1.0; // want B=0 in output → feed to cairo R channel
 
-// Yellow for background indicator: want output R=0.9, G=0.7, B=0
+// Yellow for background indicator: want output R=1.0, G=0.8, B=0
 const BG_R: f64 = 0.0; // fed to cairo R channel → outputs as B=0
-const BG_G: f64 = 0.7;
-const BG_B: f64 = 0.9; // fed to cairo B channel → outputs as R=0.9
+const BG_G: f64 = 0.8;
+const BG_B: f64 = 1.0; // fed to cairo B channel → outputs as R=1.0
 
 const GRAY: f64 = 0.5;
 
@@ -614,7 +627,7 @@ fn render_overlay(
             cr.set_line_width(layout.thumb_border_width);
         } else {
             cr.set_source_rgb(GRAY, GRAY, GRAY);
-            cr.set_line_width((1.0 * layout.scale).max(1.0));
+            cr.set_line_width(layout.thumb_border_width);
         }
         cr.rectangle(r.x, r.y, r.w, r.h);
         let _ = cr.stroke();
