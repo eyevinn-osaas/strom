@@ -1720,6 +1720,7 @@ impl eframe::App for StromApp {
         match &self.app_mode {
             AppMode::Admin => {
                 self.render_toolbar(ui);
+                self.render_status_bar(ui);
 
                 // Render page-specific content
                 match self.current_page {
@@ -1816,7 +1817,6 @@ impl eframe::App for StromApp {
                     }
                 }
 
-                self.render_status_bar(ui);
                 self.render_system_monitor_window(ui);
             }
             AppMode::Live { flow_id, block_id } => {
