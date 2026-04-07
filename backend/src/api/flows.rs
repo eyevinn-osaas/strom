@@ -293,7 +293,7 @@ fn prepare_flow(flow: &mut Flow) {
 )]
 pub async fn create_flow(
     State(state): State<AppState>,
-    Json(mut flow): Json<Flow>,
+    JsonBody(mut flow): JsonBody<Flow>,
 ) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
     info!("Received create flow request: name='{}'", flow.name);
 
