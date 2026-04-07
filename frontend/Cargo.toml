@@ -48,7 +48,7 @@ base64 = "0.22"
 # Cross-platform time - needs wasm-bindgen feature for WASM
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 gloo-net.workspace = true
-gloo-timers = { version = "0.3", features = ["futures"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
 wasm-bindgen-futures = "0.4"
 console_error_panic_hook = "0.1"
 tracing-wasm = "0.2"
