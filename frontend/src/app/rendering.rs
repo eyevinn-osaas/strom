@@ -3,21 +3,21 @@ use crate::info_page::{
 };
 use crate::properties::PropertyInspector;
 use crate::state::AppMessage;
-use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
+use egui::{CentralPanel, Color32};
 use strom_types::Flow;
 
 use super::*;
 use super::{FocusTarget, ThemePreference};
 impl StromApp {
     /// Render the top toolbar.
-    pub(super) fn render_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_toolbar(&mut self, ui: &mut egui::Ui) {
         // First top bar: System-wide controls
-        TopBottomPanel::top("system_bar")
+        egui::Panel::top("system_bar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0; // Add some vertical spacing between wrapped rows
                                                            // Strom logo and heading as clickable link to GitHub
@@ -34,7 +34,8 @@ impl StromApp {
                         .on_hover_text("Visit Strom on GitHub")
                         .clicked()
                     {
-                        ctx.open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
                     }
                     if ui
                         .heading("Strom")
@@ -42,12 +43,13 @@ impl StromApp {
                         .on_hover_text("Visit Strom on GitHub")
                         .clicked()
                     {
-                        ctx.open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
                     }
 
                     // Zoom controls
                     ui.separator();
-                    let current_zoom = ctx.pixels_per_point();
+                    let current_zoom = ui.ctx().pixels_per_point();
                     let zoom_percent = (current_zoom * 100.0).round() as i32;
 
                     if ui
@@ -56,7 +58,7 @@ impl StromApp {
                         .clicked()
                     {
                         let new_zoom = (current_zoom / 1.1).max(0.5);
-                        ctx.set_pixels_per_point(new_zoom);
+                        ui.ctx().set_pixels_per_point(new_zoom);
                         self.settings.zoom = Some(new_zoom);
                     }
 
@@ -65,7 +67,7 @@ impl StromApp {
                         .on_hover_text("Reset zoom")
                         .clicked()
                     {
-                        ctx.set_pixels_per_point(self.native_pixels_per_point);
+                        ui.ctx().set_pixels_per_point(self.native_pixels_per_point);
                         self.settings.zoom = None; // Reset to system default
                     }
 
@@ -75,7 +77,7 @@ impl StromApp {
                         .clicked()
                     {
                         let new_zoom = (current_zoom * 1.1).min(5.0);
-                        ctx.set_pixels_per_point(new_zoom);
+                        ui.ctx().set_pixels_per_point(new_zoom);
                         self.settings.zoom = Some(new_zoom);
                     }
 
@@ -92,7 +94,7 @@ impl StromApp {
                         {
                             let scheme = if self.tls_enabled { "https" } else { "http" };
                             let url = format!("{}://localhost:{}", scheme, self.port);
-                            ctx.open_url(egui::OpenUrl::new_tab(&url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
                     }
 
@@ -200,7 +202,7 @@ impl StromApp {
                                     .clicked()
                                 {
                                     self.settings.theme = theme;
-                                    self.apply_theme(ctx.clone());
+                                    self.apply_theme(ui.ctx().clone());
                                 }
                             }
                         });
@@ -214,7 +216,7 @@ impl StromApp {
                                 .on_hover_text("Logout")
                                 .clicked()
                         {
-                            self.handle_logout(ctx.clone());
+                            self.handle_logout(ui.ctx().clone());
                         }
                     }
 
@@ -232,26 +234,26 @@ impl StromApp {
             });
 
         // Second top bar: Page-specific controls
-        self.render_page_toolbar(ctx);
+        self.render_page_toolbar(ui);
     }
 
     /// Render the page-specific toolbar (second row)
-    pub(super) fn render_page_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_page_toolbar(&mut self, ui: &mut egui::Ui) {
         match self.current_page {
-            AppPage::Flows => self.render_flows_toolbar(ctx),
-            AppPage::Discovery => self.render_discovery_toolbar(ctx),
-            AppPage::Clocks => self.render_clocks_toolbar(ctx),
-            AppPage::Media => self.render_media_toolbar(ctx),
-            AppPage::Info => self.render_info_toolbar(ctx),
-            AppPage::Links => self.render_links_toolbar(ctx),
+            AppPage::Flows => self.render_flows_toolbar(ui),
+            AppPage::Discovery => self.render_discovery_toolbar(ui),
+            AppPage::Clocks => self.render_clocks_toolbar(ui),
+            AppPage::Media => self.render_media_toolbar(ui),
+            AppPage::Info => self.render_info_toolbar(ui),
+            AppPage::Links => self.render_links_toolbar(ui),
         }
     }
 
     /// Render the flows page toolbar
-    pub(super) fn render_flows_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
-            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(8, 4)))
-            .show(ctx, |ui| {
+    pub(super) fn render_flows_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
+            .frame(egui::Frame::side_top_panel(&ui.ctx().global_style()).inner_margin(egui::Margin::symmetric(8, 4)))
+            .show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("Flows").heading());
                 ui.separator();
@@ -287,7 +289,7 @@ impl StromApp {
                     .on_hover_text(format!("Save current flow ({})", Self::format_shortcut("Ctrl+S")))
                     .clicked()
                 {
-                    self.save_current_flow(ctx);
+                    self.save_current_flow(ui.ctx());
                 }
 
                 // Flow controls - only show when a flow is selected
@@ -338,7 +340,7 @@ impl StromApp {
                             // For restart: stop first, then start
                             let api = self.api.clone();
                             let tx = self.channels.sender();
-                            let ctx_clone = ctx.clone();
+                            let ctx_clone = ui.ctx().clone();
 
                             self.status = "Restarting flow...".to_string();
 
@@ -370,7 +372,7 @@ impl StromApp {
                                 ctx_clone.request_repaint();
                             });
                         } else {
-                            self.start_flow(ctx);
+                            self.start_flow(ui.ctx());
                         }
                     }
 
@@ -379,7 +381,7 @@ impl StromApp {
                         .on_hover_text("Stop pipeline (Shift+F9)")
                         .clicked()
                     {
-                        self.stop_flow(ctx);
+                        self.stop_flow(ui.ctx());
                     }
 
                     if ui
@@ -391,7 +393,7 @@ impl StromApp {
                         .clicked()
                     {
                         let url = self.api.get_debug_graph_url(flow_id);
-                        ctx.open_url(egui::OpenUrl::new_tab(&url));
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                     }
 
                     // Show flow uptime on the right side (only for running flows)
@@ -423,22 +425,22 @@ impl StromApp {
     }
 
     /// Render the discovery page toolbar
-    pub(super) fn render_discovery_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_discovery_toolbar(&mut self, ui: &mut egui::Ui) {
         let is_loading = self.discovery_page.loading;
 
-        TopBottomPanel::top("page_toolbar")
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Discovery").heading());
                     ui.separator();
 
                     if ui.button("Refresh").clicked() {
                         self.discovery_page
-                            .refresh(&self.api, ctx, &self.channels.sender());
+                            .refresh(&self.api, ui.ctx(), &self.channels.sender());
                     }
                     if is_loading {
                         ui.spinner();
@@ -448,13 +450,13 @@ impl StromApp {
     }
 
     /// Render the clocks page toolbar
-    pub(super) fn render_clocks_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
+    pub(super) fn render_clocks_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Clocks").heading());
                     ui.separator();
@@ -464,22 +466,22 @@ impl StromApp {
     }
 
     /// Render the media page toolbar
-    pub(super) fn render_media_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_media_toolbar(&mut self, ui: &mut egui::Ui) {
         let is_loading = self.media_page.loading;
 
-        TopBottomPanel::top("page_toolbar")
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Media Files").heading());
                     ui.separator();
 
                     if ui.button("Refresh").clicked() {
                         self.media_page
-                            .refresh(&self.api, ctx, &self.channels.sender());
+                            .refresh(&self.api, ui.ctx(), &self.channels.sender());
                     }
                     if is_loading {
                         ui.spinner();
@@ -489,35 +491,35 @@ impl StromApp {
     }
 
     /// Render the info page toolbar
-    pub(super) fn render_info_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
+    pub(super) fn render_info_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("System Information").heading());
                     ui.separator();
 
                     if ui.button("Refresh").clicked() {
-                        self.load_version(ctx.clone());
+                        self.load_version(ui.ctx().clone());
                         // Force reload of network interfaces
                         self.network_interfaces_loaded = false;
-                        self.load_network_interfaces(ctx.clone());
+                        self.load_network_interfaces(ui.ctx().clone());
                     }
                 });
             });
     }
 
     /// Render the links page toolbar
-    pub(super) fn render_links_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
+    pub(super) fn render_links_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Links").heading());
                 });
@@ -525,18 +527,18 @@ impl StromApp {
     }
 
     /// Render the flow list sidebar.
-    pub(super) fn render_flow_list(&mut self, ctx: &Context) {
+    pub(super) fn render_flow_list(&mut self, ui: &mut egui::Ui) {
         if !self.show_flow_list_panel {
             return;
         }
         // Max width is 40% of screen width
         #[allow(deprecated)]
-        let max_width = ctx.screen_rect().width() * 0.4;
-        SidePanel::left("flow_list")
-            .default_width(200.0)
-            .max_width(max_width)
+        let max_width = ui.ctx().screen_rect().width() * 0.4;
+        egui::Panel::left("flow_list")
+            .default_size(200.0)
+            .max_size(max_width)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 // Filter input at top
                 ui.horizontal(|ui| {
                     ui.label("Filter:");
@@ -1169,18 +1171,18 @@ impl StromApp {
     }
 
     /// Render the element palette sidebar.
-    pub(super) fn render_palette(&mut self, ctx: &Context) {
+    pub(super) fn render_palette(&mut self, ui: &mut egui::Ui) {
         if !self.show_palette_panel {
             return;
         }
         // Max width is 40% of screen width
         #[allow(deprecated)]
-        let max_width = ctx.screen_rect().width() * 0.4;
-        SidePanel::right("palette")
-            .default_width(250.0)
-            .max_width(max_width)
+        let max_width = ui.ctx().screen_rect().width() * 0.4;
+        egui::Panel::right("palette")
+            .default_size(250.0)
+            .max_size(max_width)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
                 // Check if an element is selected and trigger property loading if needed
                 // Do this BEFORE getting mutable reference to avoid borrow checker issues
@@ -1195,7 +1197,7 @@ impl StromApp {
                             "Element '{}' selected but properties not cached, triggering lazy load",
                             selected_element_type
                         );
-                        self.load_element_properties(selected_element_type.clone(), ctx);
+                        self.load_element_properties(selected_element_type.clone(), ui.ctx());
                     }
 
                     // Trigger pad properties loading if on Input/Output Pads tabs
@@ -1207,7 +1209,7 @@ impl StromApp {
                             "Element '{}' showing pad tab but pad properties not cached, triggering lazy load",
                             selected_element_type
                         );
-                        self.load_element_pad_properties(selected_element_type.clone(), ctx);
+                        self.load_element_pad_properties(selected_element_type.clone(), ui.ctx());
                     }
                 }
 
@@ -1333,7 +1335,7 @@ impl StromApp {
                             )
                         });
                         if has_network_prop {
-                            self.load_network_interfaces(ctx.clone());
+                            self.load_network_interfaces(ui.ctx().clone());
                         }
 
                         // Load available channels if this is an InterInput block
@@ -1346,7 +1348,7 @@ impl StromApp {
                                     self.refresh_available_channels();
                                 }
                             }
-                            self.load_available_channels(ctx.clone());
+                            self.load_available_channels(ui.ctx().clone());
                         }
                     }
 
@@ -1398,14 +1400,14 @@ impl StromApp {
                         if result.browse_streams_requested {
                             self.show_stream_picker_for_block = Some(block_id.clone());
                             // Refresh discovered streams for the picker
-                            self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                            self.discovery_page.refresh(&self.api, ui.ctx(), &self.channels.tx);
                         }
 
                         // Handle browse NDI sources request (for NDI Input)
                         if result.browse_ndi_sources_requested {
                             self.show_ndi_picker_for_block = Some(block_id.clone());
                             // Refresh NDI sources for the picker
-                            self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                            self.discovery_page.refresh(&self.api, ui.ctx(), &self.channels.tx);
                         }
 
                         // Handle VLC playlist download request (for MPEG-TS/SRT Output)
@@ -1465,32 +1467,32 @@ impl StromApp {
                         // Handle WHEP player request (for WHEP Output)
                         if let Some(endpoint_id) = result.whep_player_url {
                             let player_url = self.api.get_whep_player_url(&endpoint_id);
-                            ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&player_url));
                         }
 
                         // Handle copy WHEP URL to clipboard
                         if let Some(endpoint_id) = result.copy_whep_url_requested {
                             let player_url = self.api.get_whep_player_url(&endpoint_id);
-                            crate::clipboard::copy_text_with_ctx(ctx, &player_url);
+                            crate::clipboard::copy_text_with_ctx(ui.ctx(), &player_url);
                             self.status = "Player URL copied to clipboard".to_string();
                         }
 
                         // Handle vision mixer control page request
                         if let Some(flow_id) = result.vision_mixer_url {
                             let url = self.api.get_vision_mixer_url(&flow_id);
-                            ctx.open_url(egui::OpenUrl::new_tab(&url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
 
                         // Handle WHIP ingest request (for WHIP Input)
                         if let Some(endpoint_id) = result.whip_ingest_url {
                             let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
-                            ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&ingest_url));
                         }
 
                         // Handle copy WHIP ingest URL to clipboard
                         if let Some(endpoint_id) = result.copy_whip_url_requested {
                             let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
-                            crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
+                            crate::clipboard::copy_text_with_ctx(ui.ctx(), &ingest_url);
                             self.status = "Ingest URL copied to clipboard".to_string();
                         }
 
@@ -1545,7 +1547,7 @@ impl StromApp {
                         // Handle recorder file download request
                         if let Some(relative_path) = result.recorder_download_requested {
                             let url = self.api.get_media_download_url(&relative_path);
-                            ctx.open_url(egui::OpenUrl::new_tab(&url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
 
                         // Handle live property updates (e.g., audiogain real-time control)
@@ -1563,7 +1565,7 @@ impl StromApp {
                             .values()
                             .any(|v| v.pending.is_some())
                         {
-                            ctx.request_repaint_after(std::time::Duration::from_millis(
+                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(
                                 crate::properties::LIVE_PROPERTY_DEBOUNCE_MS,
                             ));
                         }
@@ -1645,8 +1647,8 @@ impl StromApp {
     }
 
     /// Render the main canvas area.
-    pub(super) fn render_canvas(&mut self, ctx: &Context) {
-        CentralPanel::default().show(ctx, |ui| {
+    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui) {
+        CentralPanel::default().show_inside(ui, |ui| {
             // Panel toggle buttons at the edges (use clip_rect for full area including margins)
             let panel_rect = ui.clip_rect();
 
@@ -1655,7 +1657,7 @@ impl StromApp {
             egui::Area::new(egui::Id::new("left_panel_toggle"))
                 .fixed_pos(left_toggle_pos)
                 .order(egui::Order::Middle)
-                .show(ctx, |ui| {
+                .show(ui.ctx(), |ui| {
                     let icon = if self.show_flow_list_panel {
                         egui_phosphor::regular::CARET_LEFT
                     } else {
@@ -1688,7 +1690,7 @@ impl StromApp {
                 egui::Area::new(egui::Id::new("right_panel_toggle"))
                     .fixed_pos(right_toggle_pos)
                     .order(egui::Order::Middle)
-                    .show(ctx, |ui| {
+                    .show(ui.ctx(), |ui| {
                         let icon = if self.show_palette_panel {
                             egui_phosphor::regular::CARET_RIGHT
                         } else {
@@ -2049,7 +2051,7 @@ impl StromApp {
 
                     // Trigger pad info loading if not already cached
                     if !self.palette.has_pad_properties_cached(&element_type) {
-                        self.load_element_pad_properties(element_type, ctx);
+                        self.load_element_pad_properties(element_type, ui.ctx());
                     }
                 }
 
@@ -2085,7 +2087,7 @@ impl StromApp {
                 // Handle delete key for elements and links
                 // Only process delete if no text edit widget has focus
                 if ui.input(|i| i.key_pressed(egui::Key::Delete))
-                    && !ui.ctx().wants_keyboard_input()
+                    && !ui.ctx().egui_wants_keyboard_input()
                 {
                     self.graph.remove_selected(); // Remove selected element (if any)
                     self.graph.remove_selected_link(); // Remove selected link (if any)
@@ -2101,8 +2103,8 @@ impl StromApp {
     }
 
     /// Render the status bar.
-    pub(super) fn render_status_bar(&mut self, ctx: &Context) {
-        TopBottomPanel::bottom("status").show(ctx, |ui| {
+    pub(super) fn render_status_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
                 ui.separator();

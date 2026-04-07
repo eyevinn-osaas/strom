@@ -171,8 +171,8 @@ impl DiscoveryPage {
         }
 
         // Split view: stream list on left, details on right
-        egui::SidePanel::left("stream_list")
-            .default_width(400.0)
+        egui::Panel::left("stream_list")
+            .default_size(400.0)
             .resizable(true)
             .show_inside(ui, |ui| {
                 // Search filter at top of list

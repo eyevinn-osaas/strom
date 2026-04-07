@@ -3,19 +3,19 @@ use crate::mediaplayer::PlaylistEditor;
 use crate::state::AppMessage;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::state::ConnectionState;
-use egui::{CentralPanel, Context};
+use egui::CentralPanel;
 
 use super::APP_SETTINGS_KEY;
 use super::*;
 impl eframe::App for StromApp {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Check shutdown flag (Ctrl+C handler for native mode)
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref flag) = self.shutdown_flag {
             use std::sync::atomic::Ordering;
             if flag.load(Ordering::SeqCst) {
                 tracing::info!("Shutdown flag set, closing GUI...");
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
             }
         }
@@ -24,9 +24,9 @@ impl eframe::App for StromApp {
         // Apply settings in first update frame (iOS workaround - settings during construction may not persist)
         if self.needs_initial_settings_apply {
             self.needs_initial_settings_apply = false;
-            self.apply_theme(ctx.clone());
+            self.apply_theme(ui.ctx().clone());
             if let Some(zoom) = self.settings.zoom {
-                ctx.set_pixels_per_point(zoom);
+                ui.ctx().set_pixels_per_point(zoom);
             }
         }
 
@@ -34,7 +34,7 @@ impl eframe::App for StromApp {
         // This MUST happen before any UI is drawn to prevent "Focused ID not in node list" errors
         if let Some(flow_id) = self.pending_flow_selection.take() {
             // Clear any existing focus before changing graph structure
-            ctx.memory_mut(|mem| {
+            ui.ctx().memory_mut(|mem| {
                 if let Some(focused_id) = mem.focused() {
                     mem.surrender_focus(focused_id);
                 }
@@ -119,7 +119,7 @@ impl eframe::App for StromApp {
                                             && scale_f32 > 0.1
                                             && scale_f32 < 10.0
                                         {
-                                            ctx.set_pixels_per_point(scale_f32);
+                                            ui.ctx().set_pixels_per_point(scale_f32);
                                             self.settings.zoom = Some(scale_f32);
                                         }
                                     }
@@ -157,7 +157,7 @@ impl eframe::App for StromApp {
                             self.selected_flow_id = Some(pending_flow_id);
                             // Clear any existing focus before changing graph structure
                             // to prevent accesskit panic when focused node is removed
-                            ctx.memory_mut(|mem| {
+                            ui.ctx().memory_mut(|mem| {
                                 if let Some(focused_id) = mem.focused() {
                                     mem.surrender_focus(focused_id);
                                 }
@@ -286,7 +286,7 @@ impl eframe::App for StromApp {
                             // Fetch updated flow state
                             let api = self.api.clone();
                             let tx = self.channels.sender();
-                            let ctx = ctx.clone();
+                            let ctx = ui.ctx().clone();
 
                             spawn_task(async move {
                                 match api.get_flow(flow_id).await {
@@ -314,7 +314,7 @@ impl eframe::App for StromApp {
                             tracing::info!("Flow {} started, fetching updated flow", flow_id);
                             let api = self.api.clone();
                             let tx = self.channels.sender();
-                            let ctx = ctx.clone();
+                            let ctx = ui.ctx().clone();
 
                             spawn_task(async move {
                                 match api.get_flow(flow_id).await {
@@ -339,7 +339,7 @@ impl eframe::App for StromApp {
                             );
                             let api = self.api.clone();
                             let tx = self.channels.sender();
-                            let ctx = ctx.clone();
+                            let ctx = ui.ctx().clone();
 
                             spawn_task(async move {
                                 match api.get_flow(flow_id).await {
@@ -365,7 +365,7 @@ impl eframe::App for StromApp {
                             self.refresh_available_channels();
                             let api = self.api.clone();
                             let tx = self.channels.sender();
-                            let ctx = ctx.clone();
+                            let ctx = ui.ctx().clone();
 
                             spawn_task(async move {
                                 match api.get_flow(flow_id).await {
@@ -769,7 +769,7 @@ impl eframe::App for StromApp {
                                 block_id,
                                 flow_id
                             );
-                            self.stop_flow_by_id(flow_id, ctx);
+                            self.stop_flow_by_id(flow_id, ui.ctx());
                         }
                         StromEvent::BufferAgeWarning {
                             flow_id,
@@ -834,7 +834,7 @@ impl eframe::App for StromApp {
                         self.blocks_loaded = false;
 
                         // Check if backend has been rebuilt - this will trigger a reload if build_id changed
-                        self.load_version(ctx.clone());
+                        self.load_version(ui.ctx().clone());
                     }
 
                     self.connection_state = state;
@@ -983,8 +983,8 @@ impl eframe::App for StromApp {
 
                     // If authenticated or auth not required, set up connections
                     if !status.auth_required || status.authenticated {
-                        self.setup_websocket_connection(ctx.clone());
-                        self.load_version(ctx.clone());
+                        self.setup_websocket_connection(ui.ctx().clone());
+                        self.load_version(ui.ctx().clone());
                     }
                 }
                 AppMessage::LogoutComplete => {
@@ -1007,7 +1007,7 @@ impl eframe::App for StromApp {
                         self.flows.clear();
                         self.ws_client = None;
                         self.connection_state = ConnectionState::Disconnected;
-                        self.check_auth_status(ctx.clone());
+                        self.check_auth_status(ui.ctx().clone());
                     }
                 }
                 AppMessage::WebRtcStatsLoaded { flow_id, stats } => {
@@ -1082,7 +1082,7 @@ impl eframe::App for StromApp {
                     pipeline,
                     flow_name,
                 } => {
-                    crate::clipboard::copy_text_with_ctx(ctx, &pipeline);
+                    crate::clipboard::copy_text_with_ctx(ui.ctx(), &pipeline);
                     self.status =
                         format!("Flow '{}' exported to clipboard as gst-launch", flow_name);
                 }
@@ -1165,7 +1165,7 @@ impl eframe::App for StromApp {
                 AppMessage::MediaRefresh => {
                     tracing::debug!("Media refresh requested");
                     self.media_page
-                        .refresh(&self.api, ctx, &self.channels.sender());
+                        .refresh(&self.api, ui.ctx(), &self.channels.sender());
                 }
             }
         }
@@ -1174,7 +1174,7 @@ impl eframe::App for StromApp {
         if let Some((elements, links, flow_name)) = self.pending_gst_launch_export.take() {
             let api = self.api.clone();
             let tx = self.channels.sender();
-            let ctx = ctx.clone();
+            let ctx = ui.ctx().clone();
 
             spawn_task(async move {
                 match api.export_gst_launch(&elements, &links).await {
@@ -1196,7 +1196,8 @@ impl eframe::App for StromApp {
         // (thumbnails, recorder duration counter, etc.)
         let has_running_flow = self.flows.iter().any(|f| f.running);
         if has_running_flow || !self.recorder_start_times.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_secs(1));
         }
 
         // Check authentication - if required and not authenticated, don't render
@@ -1211,25 +1212,25 @@ impl eframe::App for StromApp {
 
         // Check if we're disconnected - if so, show blocking overlay and don't render normal UI
         if !self.connection_state.is_connected() {
-            self.render_disconnect_overlay(ctx);
+            self.render_disconnect_overlay(ui);
             return;
         }
 
         // Load elements on first frame
         if !self.elements_loaded {
-            self.load_elements(ctx);
+            self.load_elements(ui.ctx());
             self.elements_loaded = true;
         }
 
         // Load blocks on first frame
         if !self.blocks_loaded {
-            self.load_blocks(ctx);
+            self.load_blocks(ui.ctx());
             self.blocks_loaded = true;
         }
 
         // Load flows on first frame or when refresh is needed
         if self.needs_refresh {
-            self.load_flows(ctx);
+            self.load_flows(ui.ctx());
             self.needs_refresh = false;
         }
 
@@ -1239,7 +1240,7 @@ impl eframe::App for StromApp {
             {
                 let poll_interval = std::time::Duration::from_secs(1);
                 if self.last_webrtc_poll.elapsed() >= poll_interval {
-                    self.poll_webrtc_stats(ctx);
+                    self.poll_webrtc_stats(ui.ctx());
                     self.webrtc_stats
                         .evict_stale(std::time::Duration::from_secs(3));
                     self.last_webrtc_poll = instant::Instant::now();
@@ -1249,22 +1250,22 @@ impl eframe::App for StromApp {
             // Periodically fetch latency for selected flow (every 3 seconds)
             if self.last_latency_fetch.elapsed() > std::time::Duration::from_secs(3) {
                 self.last_latency_fetch = instant::Instant::now();
-                self.fetch_latency_for_running_flows(ctx);
+                self.fetch_latency_for_running_flows(ui.ctx());
             }
 
             // Periodically fetch RTP stats for selected flow (every second)
             if self.last_rtp_stats_fetch.elapsed() > std::time::Duration::from_secs(1) {
                 self.last_rtp_stats_fetch = instant::Instant::now();
-                self.fetch_rtp_stats_for_selected_flow(ctx);
+                self.fetch_rtp_stats_for_selected_flow(ui.ctx());
             }
 
             // Poll thumbnail blocks in running flows
-            self.poll_block_thumbnails(ctx);
-            self.check_block_thumbnails(ctx);
+            self.poll_block_thumbnails(ui.ctx());
+            self.check_block_thumbnails(ui.ctx());
         }
 
         // Handle keyboard shortcuts
-        self.handle_keyboard_shortcuts(ctx);
+        self.handle_keyboard_shortcuts(ui.ctx());
 
         // Check for compositor editor open signal - enters Live mode
         if let Some(block_id) = get_local_storage("open_compositor_editor") {
@@ -1275,7 +1276,7 @@ impl eframe::App for StromApp {
                 // Find the block
                 if let Some(_block) = flow.blocks.iter().find(|b| b.id == block_id) {
                     // Enter Live mode for this compositor
-                    self.enter_live_mode(flow.id, block_id, ctx);
+                    self.enter_live_mode(flow.id, block_id, ui.ctx());
                 }
             }
         }
@@ -1357,7 +1358,7 @@ impl eframe::App for StromApp {
 
                     if let Some(endpoint_id) = endpoint_id {
                         let player_url = self.api.get_whep_player_url(&endpoint_id);
-                        ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&player_url));
                     }
                 }
             }
@@ -1369,7 +1370,7 @@ impl eframe::App for StromApp {
 
             if let Some(flow) = self.current_flow() {
                 let url = self.api.get_vision_mixer_url(&flow.id);
-                ctx.open_url(egui::OpenUrl::new_tab(&url));
+                ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
             }
         }
 
@@ -1400,7 +1401,7 @@ impl eframe::App for StromApp {
 
                     if let Some(endpoint_id) = endpoint_id {
                         let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
-                        ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&ingest_url));
                     }
                 }
             }
@@ -1510,7 +1511,7 @@ impl eframe::App for StromApp {
                 editor.current_playing_index = Some(player_data.current_file_index);
             }
 
-            if let Some(playlist) = editor.show(ctx) {
+            if let Some(playlist) = editor.show(ui.ctx()) {
                 // User clicked Save - send playlist to API
                 let flow_id = editor.flow_id;
                 let block_id = editor.block_id.clone();
@@ -1569,7 +1570,7 @@ impl eframe::App for StromApp {
         // Show routing matrix editor if open
         let mut routing_save_pending: Option<(strom_types::FlowId, String, String)> = None;
         if let Some(ref mut editor) = self.routing_matrix_editor {
-            if let Some(routing_json) = editor.show(ctx) {
+            if let Some(routing_json) = editor.show(ui.ctx()) {
                 // Mark that we need to save
                 routing_save_pending =
                     Some((editor.flow_id, editor.block_id.clone(), routing_json));
@@ -1610,7 +1611,7 @@ impl eframe::App for StromApp {
             }
 
             // Save the flow
-            self.save_current_flow(ctx);
+            self.save_current_flow(ui.ctx());
         }
 
         // Check for player action signals (from compact UI controls)
@@ -1718,38 +1719,39 @@ impl eframe::App for StromApp {
         // Render based on app mode
         match &self.app_mode {
             AppMode::Admin => {
-                self.render_toolbar(ctx);
+                self.render_toolbar(ui);
 
                 // Render page-specific content
                 match self.current_page {
                     AppPage::Flows => {
-                        self.render_flow_list(ctx);
+                        self.render_flow_list(ui);
 
                         // Only show palette when a flow is selected
                         if self.current_flow().is_some() {
-                            self.render_palette(ctx);
+                            self.render_palette(ui);
                         }
 
-                        self.render_log_panel(ctx);
-                        self.render_canvas(ctx);
-                        self.render_new_flow_dialog(ctx);
-                        self.render_delete_confirmation_dialog(ctx);
-                        self.render_flow_properties_dialog(ctx);
-                        self.render_import_dialog(ctx);
-                        self.render_stream_picker_modal(ctx);
-                        self.render_ndi_picker_modal(ctx);
+                        self.render_log_panel(ui);
+                        self.render_canvas(ui);
+                        self.render_new_flow_dialog(ui);
+                        self.render_delete_confirmation_dialog(ui);
+                        self.render_flow_properties_dialog(ui);
+                        self.render_import_dialog(ui);
+                        self.render_stream_picker_modal(ui);
+                        self.render_ndi_picker_modal(ui);
                     }
                     AppPage::Discovery => {
-                        CentralPanel::default().show(ctx, |ui| {
+                        CentralPanel::default().show_inside(ui, |ui| {
+                            let ctx = ui.ctx().clone();
                             self.discovery_page
-                                .render(ui, &self.api, ctx, &self.channels.tx);
+                                .render(ui, &self.api, &ctx, &self.channels.tx);
                         });
 
                         // Handle pending create flow from discovery
                         if let Some((sdp, interface)) =
                             self.discovery_page.take_pending_create_flow()
                         {
-                            self.create_flow_from_sdp(sdp, interface, ctx);
+                            self.create_flow_from_sdp(sdp, interface, ui.ctx());
                         }
 
                         // Handle pending go to flow from discovery
@@ -1758,7 +1760,7 @@ impl eframe::App for StromApp {
                                 let flow_id = strom_types::FlowId::from(uuid);
                                 // Clear any existing focus before changing graph structure
                                 // to prevent accesskit panic when focused node is removed
-                                ctx.memory_mut(|mem| {
+                                ui.ctx().memory_mut(|mem| {
                                     if let Some(focused_id) = mem.focused() {
                                         mem.surrender_focus(focused_id);
                                     }
@@ -1769,24 +1771,25 @@ impl eframe::App for StromApp {
                         }
                     }
                     AppPage::Clocks => {
-                        CentralPanel::default().show(ctx, |ui| {
+                        CentralPanel::default().show_inside(ui, |ui| {
                             self.clocks_page.render(ui, &self.ptp_stats, &self.flows);
                         });
                     }
                     AppPage::Media => {
-                        CentralPanel::default().show(ctx, |ui| {
+                        CentralPanel::default().show_inside(ui, |ui| {
+                            let ctx = ui.ctx().clone();
                             self.media_page
-                                .render(ui, &self.api, ctx, &self.channels.sender());
+                                .render(ui, &self.api, &ctx, &self.channels.sender());
                         });
                     }
                     AppPage::Info => {
                         // Auto-load network interfaces when Info page is shown
                         if self.info_page.should_load_network() {
                             self.network_interfaces_loaded = false;
-                            self.load_network_interfaces(ctx.clone());
+                            self.load_network_interfaces(ui.ctx().clone());
                         }
 
-                        CentralPanel::default().show(ctx, |ui| {
+                        CentralPanel::default().show_inside(ui, |ui| {
                             self.info_page.render(
                                 ui,
                                 self.system_info.as_ref(),
@@ -1798,13 +1801,14 @@ impl eframe::App for StromApp {
                         });
                     }
                     AppPage::Links => {
-                        CentralPanel::default().show(ctx, |ui| {
+                        CentralPanel::default().show_inside(ui, |ui| {
+                            let ctx = ui.ctx().clone();
                             let server_hostname =
                                 self.system_info.as_ref().map(|s| s.hostname.as_str());
                             self.links_page.render(
                                 ui,
                                 &self.api,
-                                ctx,
+                                &ctx,
                                 &self.flows,
                                 server_hostname,
                             );
@@ -1812,24 +1816,24 @@ impl eframe::App for StromApp {
                     }
                 }
 
-                self.render_status_bar(ctx);
-                self.render_system_monitor_window(ctx);
+                self.render_status_bar(ui);
+                self.render_system_monitor_window(ui);
             }
             AppMode::Live { flow_id, block_id } => {
                 let flow_id = *flow_id;
                 let block_id = block_id.clone();
-                self.render_live_ui(ctx, flow_id, &block_id);
+                self.render_live_ui(ui, flow_id, &block_id);
             }
         }
 
         // Process pending flow copy (after render to avoid borrow checker issues)
         if let Some(flow) = self.flow_pending_copy.take() {
-            self.copy_flow(&flow, ctx);
+            self.copy_flow(&flow, ui);
         }
 
         // Render interactive overlay on top of everything when active
         if let Some(ref mut overlay) = self.interactive_overlay {
-            if overlay.update(ctx) {
+            if overlay.update(ui.ctx()) {
                 self.interactive_overlay = None;
             }
         }

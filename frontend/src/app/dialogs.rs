@@ -2,7 +2,7 @@ use crate::info_page::{
     current_time_millis, format_datetime_local, format_uptime, parse_iso8601_to_millis,
 };
 use crate::state::AppMessage;
-use egui::{Color32, Context, TopBottomPanel};
+use egui::Color32;
 
 use super::*;
 
@@ -18,7 +18,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 
 impl StromApp {
     /// Render the log panel showing errors, warnings, and info messages.
-    pub(super) fn render_log_panel(&mut self, ctx: &Context) {
+    pub(super) fn render_log_panel(&mut self, ui: &mut egui::Ui) {
         if !self.show_log_panel || self.log_entries.is_empty() {
             return;
         }
@@ -35,12 +35,12 @@ impl StromApp {
         let flow_names: std::collections::HashMap<strom_types::FlowId, String> =
             self.flows.iter().map(|f| (f.id, f.name.clone())).collect();
 
-        TopBottomPanel::bottom("log_panel")
+        egui::Panel::bottom("log_panel")
             .resizable(true)
-            .min_height(80.0)
-            .max_height(400.0)
-            .default_height(panel_height)
-            .show(ctx, |ui| {
+            .min_size(80.0)
+            .max_size(400.0)
+            .default_size(panel_height)
+            .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Pipeline Messages");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -201,7 +201,7 @@ impl StromApp {
 
         // Copy single entry
         if let Some(text) = copy_entry_text {
-            crate::clipboard::copy_text_with_ctx(ctx, &text);
+            crate::clipboard::copy_text_with_ctx(ui.ctx(), &text);
         }
 
         // Process deferred actions
@@ -224,7 +224,7 @@ impl StromApp {
 
             // Clear any existing focus before changing graph structure
             // to prevent accesskit panic when focused node is removed
-            ctx.memory_mut(|mem| {
+            ui.ctx().memory_mut(|mem| {
                 if let Some(focused_id) = mem.focused() {
                     mem.surrender_focus(focused_id);
                 }
@@ -249,7 +249,7 @@ impl StromApp {
     }
 
     /// Render the new flow dialog.
-    pub(super) fn render_new_flow_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_new_flow_dialog(&mut self, ui: &mut egui::Ui) {
         if !self.show_new_flow_dialog {
             return;
         }
@@ -257,7 +257,7 @@ impl StromApp {
         egui::Window::new("New Flow")
             .collapsible(false)
             .resizable(false)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut self.new_flow_name);
@@ -265,12 +265,12 @@ impl StromApp {
 
                 // Check for Enter key to create flow
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.new_flow_name.is_empty() {
-                    self.create_flow(ctx);
+                    self.create_flow(ui.ctx());
                 }
 
                 ui.horizontal(|ui| {
                     if ui.button("Create").clicked() {
-                        self.create_flow(ctx);
+                        self.create_flow(ui.ctx());
                     }
 
                     if ui.button("Cancel").clicked() {
@@ -282,7 +282,7 @@ impl StromApp {
     }
 
     /// Render the delete confirmation dialog.
-    pub(super) fn render_delete_confirmation_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_delete_confirmation_dialog(&mut self, ui: &mut egui::Ui) {
         if self.flow_pending_deletion.is_none() {
             return;
         }
@@ -293,7 +293,7 @@ impl StromApp {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.label("Are you sure you want to delete this flow?");
                 ui.add_space(5.0);
                 ui.colored_label(Color32::YELLOW, format!("Flow: {}", flow_name));
@@ -304,7 +304,7 @@ impl StromApp {
                         .button(format!("{} Delete", egui_phosphor::regular::TRASH))
                         .clicked()
                     {
-                        self.delete_flow(flow_id, ctx);
+                        self.delete_flow(flow_id, ui.ctx());
                         self.flow_pending_deletion = None;
                     }
 
@@ -316,7 +316,7 @@ impl StromApp {
     }
 
     /// Render the system monitor window.
-    pub(super) fn render_system_monitor_window(&mut self, ctx: &Context) {
+    pub(super) fn render_system_monitor_window(&mut self, ui: &mut egui::Ui) {
         if !self.show_system_monitor {
             return;
         }
@@ -327,7 +327,7 @@ impl StromApp {
             .default_width(700.0)
             .default_height(500.0)
             .open(&mut self.show_system_monitor)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 // Build flow_id -> name mapping
                 let flow_names: std::collections::HashMap<_, _> =
                     self.flows.iter().map(|f| (f.id, f.name.clone())).collect();
@@ -370,7 +370,7 @@ impl StromApp {
     }
 
     /// Render the flow properties dialog.
-    pub(super) fn render_flow_properties_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_flow_properties_dialog(&mut self, ui: &mut egui::Ui) {
         let flow_id = match self.editing_properties_flow_id {
             Some(id) => id,
             None => return,
@@ -392,7 +392,7 @@ impl StromApp {
             .default_width(400.0)
             .default_height(500.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 50.0) // Leave room for buttons
                     .show(ui, |ui| {
@@ -691,7 +691,7 @@ impl StromApp {
 
                             let flow_clone = flow.clone();
                             let api = self.api.clone();
-                            let ctx_clone = ctx.clone();
+                            let ctx_clone = ui.ctx().clone();
 
                             spawn_task(async move {
                                 match api.update_flow(&flow_clone).await {
@@ -716,7 +716,7 @@ impl StromApp {
     }
 
     /// Render the stream picker modal for selecting discovered streams.
-    pub(super) fn render_stream_picker_modal(&mut self, ctx: &Context) {
+    pub(super) fn render_stream_picker_modal(&mut self, ui: &mut egui::Ui) {
         let Some(block_id) = self.show_stream_picker_for_block.clone() else {
             return;
         };
@@ -731,7 +731,7 @@ impl StromApp {
             .default_width(500.0)
             .default_height(400.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.label("Select a stream to use its SDP:");
                 ui.add_space(8.0);
 
@@ -748,7 +748,7 @@ impl StromApp {
                     ui.label("Make sure SAP discovery is running and streams are being announced on the network.");
                     ui.add_space(8.0);
                     if ui.button(egui_phosphor::regular::ARROWS_CLOCKWISE).on_hover_text("Refresh").clicked() {
-                        self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                        self.discovery_page.refresh(&self.api, ui.ctx(), &self.channels.tx);
                     }
                 } else {
                     egui::ScrollArea::vertical()
@@ -781,7 +781,7 @@ impl StromApp {
                     let refresh_clicked = ui.button(egui_phosphor::regular::ARROWS_CLOCKWISE).on_hover_text("Refresh").clicked();
                     if refresh_clicked {
                         self.discovery_page
-                            .refresh(&self.api, ctx, &self.channels.tx);
+                            .refresh(&self.api, ui.ctx(), &self.channels.tx);
                     }
                 });
             });
@@ -798,7 +798,7 @@ impl StromApp {
             // Fetch the SDP and update the block
             let api = self.api.clone();
             let tx = self.channels.sender();
-            let ctx = ctx.clone();
+            let ctx = ui.ctx().clone();
 
             spawn_task(async move {
                 match api.get_stream_sdp(&stream_id).await {
@@ -824,7 +824,7 @@ impl StromApp {
     }
 
     /// Render the NDI picker modal for selecting discovered NDI sources.
-    pub(super) fn render_ndi_picker_modal(&mut self, ctx: &Context) {
+    pub(super) fn render_ndi_picker_modal(&mut self, ui: &mut egui::Ui) {
         let Some(block_id) = self.show_ndi_picker_for_block.clone() else {
             return;
         };
@@ -866,7 +866,7 @@ impl StromApp {
             .default_width(500.0)
             .default_height(400.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.label("Select an NDI source:");
                 ui.add_space(8.0);
 
@@ -894,7 +894,7 @@ impl StromApp {
                     ui.add_space(8.0);
                     if ui.button("Refresh").clicked() {
                         self.discovery_page
-                            .refresh(&self.api, ctx, &self.channels.tx);
+                            .refresh(&self.api, ui.ctx(), &self.channels.tx);
                     }
                 } else {
                     // Scroll area for the source list
@@ -928,7 +928,7 @@ impl StromApp {
                         let refresh_clicked = ui.button("Refresh").clicked();
                         if refresh_clicked {
                             self.discovery_page
-                                .refresh(&self.api, ctx, &self.channels.tx);
+                                .refresh(&self.api, ui.ctx(), &self.channels.tx);
                         }
                     }
                 });

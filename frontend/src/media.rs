@@ -115,8 +115,8 @@ impl MediaPage {
         }
 
         // Split view: file list on left, details on right
-        egui::SidePanel::left("media_file_list")
-            .default_width(400.0)
+        egui::Panel::left("media_file_list")
+            .default_size(400.0)
             .resizable(true)
             .show_inside(ui, |ui| {
                 self.render_toolbar(ui, api, ctx, tx);
