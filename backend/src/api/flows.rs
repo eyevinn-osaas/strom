@@ -295,6 +295,16 @@ pub async fn create_flow(
     State(state): State<AppState>,
     JsonBody(mut flow): JsonBody<Flow>,
 ) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let name_len = flow.name.trim().len();
+    if name_len == 0 || name_len > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "Flow name must be between 1 and 255 characters",
+            )),
+        ));
+    }
+
     info!("Received create flow request: name='{}'", flow.name);
 
     // Assign a new ID to avoid collisions with imported flows
