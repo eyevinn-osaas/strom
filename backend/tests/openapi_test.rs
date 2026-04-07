@@ -26,8 +26,9 @@ fn openapi_spec_snapshot() {
         .expect("Failed to serialize OpenAPI spec");
 
     let snapshot_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("openapi_snapshot.json");
+        .parent()
+        .expect("Failed to find workspace root")
+        .join("openapi.json");
 
     if !snapshot_path.exists() {
         std::fs::write(&snapshot_path, &json).expect("Failed to write snapshot");

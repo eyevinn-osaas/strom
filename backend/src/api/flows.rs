@@ -266,6 +266,24 @@ pub async fn update_flow(
 
     info!("Updating flow: {} ({})", flow.name, flow.id);
 
+    // Trim endpoint string properties to avoid whitespace-related issues
+    for block in &mut flow.blocks {
+        let prop_name = match block.block_definition_id.as_str() {
+            "builtin.whip_input" | "builtin.whep_output" => Some("endpoint_id"),
+            "builtin.whip_output" => Some("whip_endpoint"),
+            "builtin.whep_input" => Some("whep_endpoint"),
+            _ => None,
+        };
+        if let Some(name) = prop_name {
+            if let Some(strom_types::PropertyValue::String(s)) = block.properties.get_mut(name) {
+                let trimmed = s.trim().to_string();
+                if *s != trimmed {
+                    *s = trimmed;
+                }
+            }
+        }
+    }
+
     // Compute external pads for all block instances based on their properties
     for block in &mut flow.blocks {
         if let Some(builder) = crate::blocks::builtin::get_builder(&block.block_definition_id) {

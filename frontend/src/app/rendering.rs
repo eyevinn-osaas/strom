@@ -1357,6 +1357,43 @@ impl StromApp {
                         .map(|fid| fid.to_string())
                         .and_then(|fid| self.rtp_stats_cache.get(&fid));
 
+                    // Collect endpoint IDs used by other blocks (for duplicate detection).
+                    // WHIP and WHEP use separate registries so only same-protocol names conflict.
+                    let taken_endpoint_ids = {
+                        let selected_block_id = self.graph.get_selected_block()
+                            .map(|b| b.id.clone());
+                        let selected_def_id = self.graph.get_selected_block()
+                            .map(|b| b.block_definition_id.clone());
+                        let match_def = match selected_def_id.as_deref() {
+                            Some("builtin.whip_input") => Some("builtin.whip_input"),
+                            Some("builtin.whep_output") => Some("builtin.whep_output"),
+                            _ => None,
+                        };
+                        let mut ids = std::collections::HashSet::new();
+                        if let Some(target_def) = match_def {
+                            for flow in &self.flows {
+                                for b in &flow.blocks {
+                                    if selected_block_id.as_deref() == Some(&b.id)
+                                        && flow_id == Some(flow.id)
+                                    {
+                                        continue;
+                                    }
+                                    if b.block_definition_id == target_def {
+                                        if let Some(strom_types::PropertyValue::String(ep)) =
+                                            b.properties.get("endpoint_id")
+                                        {
+                                            let trimmed = ep.trim();
+                                            if !trimmed.is_empty() {
+                                                ids.insert(trimmed.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ids
+                    };
+
                     // Then get mutable reference to block
                     if let (Some(block), Some(def)) =
                         (self.graph.get_selected_block_mut(), definition_opt)
@@ -1389,6 +1426,7 @@ impl StromApp {
                             recorder_filename,
                             recorder_start_time,
                             block_thumbnail,
+                            &taken_endpoint_ids,
                         );
 
                         // Handle deletion request

@@ -480,7 +480,7 @@
         const FLOW_ID = _cfg.flow_id;
         const BLOCK_ID = _cfg.block_id;
         const NUM_INPUTS = _cfg.num_inputs;
-        const MULTIVIEW_ENDPOINT = _cfg.multiview_endpoint;
+        let MULTIVIEW_ENDPOINT = _cfg.multiview_endpoint;
         const INPUT_LABELS = _cfg.input_labels;
         const NUM_DSK_INPUTS = _cfg.num_dsk_inputs || 0;
 
@@ -852,7 +852,18 @@
             }, 2000);
         }
 
-        function connectMultiview() {
+        async function connectMultiview() {
+            // Fetch multiview endpoint from API (may change between restarts)
+            try {
+                const resp = await fetch(API_BASE + '/multiview-endpoint');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    MULTIVIEW_ENDPOINT = data.endpoint || '';
+                }
+            } catch (e) {
+                // Fall back to config value
+            }
+
             if (!MULTIVIEW_ENDPOINT) {
                 setStatus('No multiview endpoint configured');
                 setDot('whepDot', 'err');

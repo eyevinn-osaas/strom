@@ -181,6 +181,10 @@ pub async fn create_app_with_config(
             post(api::flows::fade_to_black),
         )
         .route(
+            "/flows/{flow_id}/blocks/{block_id}/multiview-endpoint",
+            get(api::vision_mixer_page::get_multiview_endpoint),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/animate",
             post(api::flows::animate_input),
         )

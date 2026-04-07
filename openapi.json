@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.4"
+    "version": "0.4.5"
   },
   "paths": {
     "/api/auth/status": {
@@ -1050,6 +1050,50 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/multiview-endpoint": {
+      "get": {
+        "tags": [
+          "vision-mixer"
+        ],
+        "summary": "Get the multiview WHEP endpoint for a vision mixer block.\nGET /api/flows/{flow_id}/blocks/{block_id}/multiview-endpoint",
+        "operationId": "get_multiview_endpoint",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Multiview endpoint info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultiviewEndpointResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Flow or block not found"
           }
         }
       }
@@ -6073,6 +6117,19 @@
           "Audio",
           "Video"
         ]
+      },
+      "MultiviewEndpointResponse": {
+        "type": "object",
+        "description": "Response for a vision mixer multiview endpoint query.",
+        "required": [
+          "endpoint"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "description": "WHEP endpoint path (e.g. \"/whep/my-endpoint\"), empty if not connected."
+          }
+        }
       },
       "NdiDiscoveryStatus": {
         "type": "object",

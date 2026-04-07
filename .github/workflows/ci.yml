@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -72,7 +72,7 @@ jobs:
     name: Check & Build (WASM)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust stable with WASM target
         uses: dtolnay/rust-toolchain@stable
@@ -126,15 +126,15 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Get base branch spec
-        run: git show origin/${{ github.base_ref }}:backend/tests/openapi_snapshot.json > openapi-base.json 2>/dev/null || echo '{}' > openapi-base.json
+        run: git show origin/${{ github.base_ref }}:openapi.json > openapi-base.json 2>/dev/null || git show origin/${{ github.base_ref }}:backend/tests/openapi_snapshot.json > openapi-base.json 2>/dev/null || echo '{}' > openapi-base.json
 
       - name: Get current spec
-        run: cp backend/tests/openapi_snapshot.json openapi-current.json
+        run: cp openapi.json openapi-current.json
 
       - name: Check for breaking changes
         uses: oasdiff/oasdiff-action/breaking@v0.0.32
@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from Cargo.toml
         id: version
@@ -236,7 +236,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from Cargo.toml
         id: version
@@ -318,7 +318,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from Cargo.toml
         id: version
@@ -414,7 +414,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from Cargo.toml
         id: version

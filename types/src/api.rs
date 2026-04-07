@@ -948,3 +948,11 @@ pub struct FadeToBlackResponse {
     pub message: String,
     pub active: bool,
 }
+
+/// Response for a vision mixer multiview endpoint query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct MultiviewEndpointResponse {
+    /// WHEP endpoint path (e.g. "/whep/my-endpoint"), empty if not connected.
+    pub endpoint: String,
+}

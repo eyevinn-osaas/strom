@@ -706,7 +706,7 @@ impl AppState {
 
         // Collect and register WHEP endpoints from blocks
         let whep_endpoints: Vec<(String, String)> = if let Some(manager) = pipelines_guard.get(id) {
-            let mut endpoints = Vec::new();
+            let mut endpoints: Vec<(String, String)> = Vec::new();
             for whep_info in manager.whep_endpoints() {
                 info!(
                     "Registering WHEP endpoint '{}' (block {}) on port {} mode={:?}",
@@ -715,14 +715,27 @@ impl AppState {
                     whep_info.internal_port,
                     whep_info.mode
                 );
-                self.inner
+                if let Err(e) = self
+                    .inner
                     .whep_registry
                     .register(
                         whep_info.endpoint_id.clone(),
                         whep_info.internal_port,
                         whep_info.mode,
                     )
-                    .await;
+                    .await
+                {
+                    error!("Endpoint conflict registering WHEP endpoint: {}", e);
+                    for (_, ep_id) in &endpoints {
+                        self.inner.whep_registry.unregister(ep_id).await;
+                    }
+                    drop(pipelines_guard);
+                    let mut pipelines = self.inner.pipelines.write().await;
+                    if let Some(mut mgr) = pipelines.remove(id) {
+                        let _ = mgr.stop();
+                    }
+                    return Err(PipelineError::EndpointConflict(e));
+                }
                 endpoints.push((whep_info.block_id.clone(), whep_info.endpoint_id.clone()));
             }
             endpoints
@@ -732,7 +745,7 @@ impl AppState {
 
         // Collect and register WHIP endpoints from blocks
         let whip_endpoints: Vec<(String, String)> = if let Some(manager) = pipelines_guard.get(id) {
-            let mut endpoints = Vec::new();
+            let mut endpoints: Vec<(String, String)> = Vec::new();
             for whip_info in manager.whip_endpoints() {
                 info!(
                     "Registering WHIP endpoint '{}' (block {}) mode={:?} (port assigned per-session)",
@@ -741,10 +754,26 @@ impl AppState {
                     whip_info.mode
                 );
                 // Register with port=0 placeholder; actual ports are per-session
-                self.inner
+                if let Err(e) = self
+                    .inner
                     .whip_registry
                     .register(whip_info.endpoint_id.clone(), 0, whip_info.mode)
-                    .await;
+                    .await
+                {
+                    error!("Endpoint conflict registering WHIP endpoint: {}", e);
+                    for (_, ep_id) in &endpoints {
+                        self.inner.whip_registry.unregister(ep_id).await;
+                    }
+                    for (_, ep_id) in &whep_endpoints {
+                        self.inner.whep_registry.unregister(ep_id).await;
+                    }
+                    drop(pipelines_guard);
+                    let mut pipelines = self.inner.pipelines.write().await;
+                    if let Some(mut mgr) = pipelines.remove(id) {
+                        let _ = mgr.stop();
+                    }
+                    return Err(PipelineError::EndpointConflict(e));
+                }
                 endpoints.push((whip_info.block_id.clone(), whip_info.endpoint_id.clone()));
             }
             endpoints
