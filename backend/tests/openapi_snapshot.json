@@ -4481,7 +4481,10 @@
             }
           }
         ],
-        "description": "Messages sent from client to server via WebSocket."
+        "description": "Messages sent from client to server via WebSocket.",
+        "discriminator": {
+          "propertyName": "type"
+        }
       },
       "ClockSyncStatus": {
         "type": "string",
@@ -7008,7 +7011,10 @@
             }
           }
         ],
-        "description": "Messages sent from server to client via WebSocket."
+        "description": "Messages sent from server to client via WebSocket.",
+        "discriminator": {
+          "propertyName": "type"
+        }
       },
       "SetBackgroundRequest": {
         "type": "object",
@@ -9079,7 +9085,10 @@
             }
           }
         ],
-        "description": "Event types that can be broadcast to all connected clients."
+        "description": "Event types that can be broadcast to all connected clients.",
+        "discriminator": {
+          "propertyName": "type"
+        }
       },
       "SystemInfo": {
         "type": "object",
