@@ -536,6 +536,16 @@ pub fn create_whipserversrc_for_session(
             let element = values[2].get::<gst::Element>().unwrap();
             let element_name = element.name();
 
+            // Workaround for GStreamer rtpjitterbuffer packet_spacing bug:
+            // see comment in whep.rs build_whepsrc iterate_recurse for details.
+            if element_name.starts_with("rtpbin") && element.has_property("drop-on-latency") {
+                element.set_property("drop-on-latency", true);
+                info!(
+                    "WHIP Input: Set drop-on-latency=true on {}",
+                    element_name
+                );
+            }
+
             if element_name.starts_with("webrtcbin") {
                 if element.has_property("ice-transport-policy") {
                     element
