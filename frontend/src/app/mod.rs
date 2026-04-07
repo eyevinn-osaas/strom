@@ -577,6 +577,8 @@ pub struct StromApp {
     properties_thread_priority_buffer: strom_types::flow::ThreadPriority,
     /// Temporary CPU affinity for properties dialog
     properties_cpu_affinity_buffer: strom_types::flow::CpuAffinity,
+    /// Temporary ephemeral flag for properties dialog
+    properties_ephemeral_buffer: bool,
     /// Shutdown flag for Ctrl+C handling (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,

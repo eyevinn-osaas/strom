@@ -71,20 +71,15 @@ impl ApiClient {
 
     /// Create a new flow.
     pub async fn create_flow(&self, flow: &Flow) -> ApiResult<Flow> {
-        use strom_types::api::{CreateFlowRequest, FlowResponse};
+        use strom_types::api::FlowResponse;
         use tracing::info;
 
         let url = format!("{}/flows", self.base_url);
         info!("Creating flow via API: POST {}", url);
         info!("Flow data: name='{}'", flow.name);
 
-        let request = CreateFlowRequest {
-            name: flow.name.clone(),
-            description: None,
-        };
-
         let response = self
-            .with_auth(self.client.post(&url).json(&request))
+            .with_auth(self.client.post(&url).json(flow))
             .send()
             .await
             .map_err(|e| {
