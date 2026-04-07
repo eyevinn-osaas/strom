@@ -4,9 +4,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use strom_types::{
     api::{
-        CreateFlowRequest, ElementPropertiesResponse, FlowListResponse, FlowResponse,
-        PadPropertiesResponse, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
-        UpdatePropertyRequest,
+        ElementPropertiesResponse, FlowListResponse, FlowResponse, PadPropertiesResponse,
+        UpdateFlowPropertiesRequest, UpdatePadPropertyRequest, UpdatePropertyRequest,
     },
     element::{ElementInfo, PropertyValue},
     flow::{Flow, FlowProperties},
@@ -76,10 +75,10 @@ impl StromClient {
     }
 
     /// Create a new flow
-    pub async fn create_flow(&self, request: CreateFlowRequest) -> Result<FlowResponse> {
+    pub async fn create_flow(&self, flow: Flow) -> Result<FlowResponse> {
         let url = format!("{}/api/flows", self.base_url);
         self.with_auth(self.client.post(&url))
-            .json(&request)
+            .json(&flow)
             .send()
             .await
             .context("Failed to send request")?

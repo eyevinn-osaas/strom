@@ -975,6 +975,8 @@ impl StromApp {
                                                     flow.properties.thread_priority;
                                                 self.properties_cpu_affinity_buffer =
                                                     flow.properties.cpu_affinity;
+                                                self.properties_ephemeral_buffer =
+                                                    flow.properties.ephemeral;
                                                 ui.close();
                                             }
 

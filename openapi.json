@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.5"
+    "version": "0.4.6"
   },
   "paths": {
     "/api/auth/status": {
@@ -722,7 +722,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateFlowRequest"
+                "$ref": "#/components/schemas/Flow"
               }
             }
           },
@@ -4641,25 +4641,6 @@
           }
         }
       },
-      "CreateFlowRequest": {
-        "type": "object",
-        "description": "Request to create a new flow.",
-        "required": [
-          "name"
-        ],
-        "properties": {
-          "description": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Optional description for the flow"
-          },
-          "name": {
-            "type": "string"
-          }
-        }
-      },
       "DeviceCategory": {
         "type": "string",
         "description": "Device category for filtering.",
@@ -5523,6 +5504,10 @@
               "null"
             ],
             "description": "Human-readable description (multiline text)"
+          },
+          "ephemeral": {
+            "type": "boolean",
+            "description": "When true, the flow is not persisted to storage. Useful for temporary or\nAPI-created flows that should not survive a server restart."
           },
           "last_modified": {
             "type": [

@@ -124,7 +124,6 @@ impl StromApp {
     }
 
     /// Import a flow from the JSON buffer.
-    /// Note: The backend's create_flow only takes a name, so we create first then update.
     pub(super) fn import_flow_from_json(&mut self, ui: &mut egui::Ui) {
         if self.import_json_buffer.trim().is_empty() {
             self.import_error = Some("Please paste flow JSON first".to_string());
@@ -148,47 +147,21 @@ impl StromApp {
                 self.import_error = None;
 
                 spawn_task(async move {
-                    // Step 1: Create an empty flow with the name
                     match api.create_flow(&flow).await {
                         Ok(created_flow) => {
                             tracing::info!(
-                                "Empty flow created: {} ({}), now updating with content...",
-                                created_flow.name,
+                                "Flow imported successfully: {} ({}) - WebSocket event will trigger refresh",
+                                flow_name,
                                 created_flow.id
                             );
-
-                            // Step 2: Update the created flow with the full content
-                            let mut full_flow = flow.clone();
-                            full_flow.id = created_flow.id;
-                            let flow_id = created_flow.id;
-
-                            match api.update_flow(&full_flow).await {
-                                Ok(_) => {
-                                    tracing::info!(
-                                        "Flow imported successfully: {} - WebSocket event will trigger refresh",
-                                        flow_name
-                                    );
-                                    let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
-                                        "Flow '{}' imported",
-                                        flow_name
-                                    )));
-                                    // Navigate to imported flow
-                                    let _ = tx.send(AppMessage::FlowCreated(flow_id));
-                                }
-                                Err(e) => {
-                                    tracing::error!(
-                                        "Failed to update imported flow with content: {}",
-                                        e
-                                    );
-                                    let _ = tx.send(AppMessage::FlowOperationError(format!(
-                                        "Failed to import flow: {}",
-                                        e
-                                    )));
-                                }
-                            }
+                            let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                                "Flow '{}' imported",
+                                flow_name
+                            )));
+                            let _ = tx.send(AppMessage::FlowCreated(created_flow.id));
                         }
                         Err(e) => {
-                            tracing::error!("Failed to create flow for import: {}", e);
+                            tracing::error!("Failed to import flow: {}", e);
                             let _ = tx.send(AppMessage::FlowOperationError(format!(
                                 "Failed to import flow: {}",
                                 e
@@ -264,40 +237,18 @@ impl StromApp {
                         pipeline
                     ));
 
-                    // Step 3: Create the flow via API
                     match api.create_flow(&new_flow).await {
                         Ok(created_flow) => {
                             tracing::info!(
-                                "Flow created from gst-launch: {} ({})",
-                                created_flow.name,
+                                "Flow imported from gst-launch successfully: {} ({})",
+                                flow_name,
                                 created_flow.id
                             );
-
-                            // Step 4: Update with the parsed content
-                            let mut full_flow = new_flow.clone();
-                            full_flow.id = created_flow.id;
-                            let flow_id = created_flow.id;
-
-                            match api.update_flow(&full_flow).await {
-                                Ok(_) => {
-                                    tracing::info!(
-                                        "Flow imported from gst-launch successfully: {}",
-                                        flow_name
-                                    );
-                                    let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
-                                        "Flow '{}' imported from gst-launch",
-                                        flow_name
-                                    )));
-                                    let _ = tx.send(AppMessage::FlowCreated(flow_id));
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to update imported flow: {}", e);
-                                    let _ = tx.send(AppMessage::FlowOperationError(format!(
-                                        "Failed to import flow: {}",
-                                        e
-                                    )));
-                                }
-                            }
+                            let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                                "Flow '{}' imported from gst-launch",
+                                flow_name
+                            )));
+                            let _ = tx.send(AppMessage::FlowCreated(created_flow.id));
                         }
                         Err(e) => {
                             tracing::error!("Failed to create flow from gst-launch: {}", e);
@@ -382,7 +333,6 @@ impl StromApp {
     }
 
     /// Copy a flow with regenerated IDs and create it on the backend.
-    /// Note: The backend's create_flow only takes a name, so we create first then update.
     pub(super) fn copy_flow(&mut self, flow: &Flow, ui: &mut egui::Ui) {
         let mut flow_copy = flow.clone();
 
@@ -400,45 +350,21 @@ impl StromApp {
         self.status = format!("Copying flow '{}'...", flow.name);
 
         spawn_task(async move {
-            // Step 1: Create an empty flow with the name
             match api.create_flow(&flow_copy).await {
                 Ok(created_flow) => {
                     tracing::info!(
-                        "Empty flow created: {} ({}), now updating with content...",
-                        created_flow.name,
+                        "Flow copied successfully: {} ({}) - WebSocket event will trigger refresh",
+                        flow_name,
                         created_flow.id
                     );
-
-                    // Step 2: Update the created flow with the full content
-                    // Use the ID from the created flow
-                    let mut full_flow = flow_copy.clone();
-                    full_flow.id = created_flow.id;
-                    let flow_id = created_flow.id;
-
-                    match api.update_flow(&full_flow).await {
-                        Ok(_) => {
-                            tracing::info!(
-                                "Flow copied successfully: {} - WebSocket event will trigger refresh",
-                                flow_name
-                            );
-                            let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
-                                "Flow '{}' created",
-                                flow_name
-                            )));
-                            // Navigate to copied flow
-                            let _ = tx.send(AppMessage::FlowCreated(flow_id));
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to update copied flow with content: {}", e);
-                            let _ = tx.send(AppMessage::FlowOperationError(format!(
-                                "Failed to copy flow: {}",
-                                e
-                            )));
-                        }
-                    }
+                    let _ = tx.send(AppMessage::FlowOperationSuccess(format!(
+                        "Flow '{}' created",
+                        flow_name
+                    )));
+                    let _ = tx.send(AppMessage::FlowCreated(created_flow.id));
                 }
                 Err(e) => {
-                    tracing::error!("Failed to create flow for copy: {}", e);
+                    tracing::error!("Failed to copy flow: {}", e);
                     let _ = tx.send(AppMessage::FlowOperationError(format!(
                         "Failed to copy flow: {}",
                         e

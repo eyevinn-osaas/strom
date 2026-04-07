@@ -13,19 +13,6 @@ use utoipa::ToSchema;
 // Flow API Types
 // ============================================================================
 
-/// Request to create a new flow.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-#[cfg_attr(feature = "validation", derive(garde::Validate))]
-pub struct CreateFlowRequest {
-    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
-    pub name: String,
-    /// Optional description for the flow
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "validation", garde(skip))]
-    pub description: Option<String>,
-}
-
 /// Request to update an existing flow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]

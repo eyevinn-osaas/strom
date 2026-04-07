@@ -261,6 +261,11 @@ pub struct FlowProperties {
     #[serde(default)]
     pub auto_restart: bool,
 
+    /// When true, the flow is not persisted to storage. Useful for temporary or
+    /// API-created flows that should not survive a server restart.
+    #[serde(default)]
+    pub ephemeral: bool,
+
     /// Timestamp when the flow was started (entered Playing state)
     /// ISO 8601 format with timezone (e.g., "2024-01-15T14:30:00+01:00")
     /// None if the flow has never been started or is currently stopped
