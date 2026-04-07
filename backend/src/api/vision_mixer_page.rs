@@ -42,19 +42,48 @@ pub async fn vision_mixer_page(
     let labels = vm_props::parse_input_labels(&vm_block.properties, num_inputs);
     let num_dsk_inputs = vm_props::parse_num_dsk_inputs(&vm_block.properties);
 
-    // Find the multiview WHEP endpoint
-    let multiview_endpoint = flow
+    // Find the multiview WHEP endpoint by following links from the vision
+    // mixer's multiview_out pad through intermediate blocks until we reach
+    // a WHEP output block.
+    let whep_block_ids: std::collections::HashSet<&str> = flow
         .blocks
         .iter()
         .filter(|b| b.block_definition_id == "builtin.whep_output")
-        .find_map(|b| {
-            b.runtime_data
-                .as_ref()
-                .and_then(|rd| rd.get("whep_endpoint_id"))
-                .filter(|eid| eid.contains("multiview"))
-                .map(|eid| format!("/whep/{}", eid))
-        })
-        .unwrap_or_default();
+        .map(|b| b.id.as_str())
+        .collect();
+    let multiview_endpoint = {
+        let mut current = format!("{}:multiview_out", block_id);
+        let mut result = String::new();
+        let mut visited = std::collections::HashSet::new();
+        while let Some(link) = flow.links.iter().find(|l| l.from == current) {
+            let target_block_id = link.to.split(':').next().unwrap_or("");
+            if !visited.insert(target_block_id.to_string()) {
+                break; // cycle guard
+            }
+            if whep_block_ids.contains(target_block_id) {
+                if let Some(eid) = flow
+                    .blocks
+                    .iter()
+                    .find(|b| b.id == target_block_id)
+                    .and_then(|b| b.runtime_data.as_ref())
+                    .and_then(|rd| rd.get("whep_endpoint_id"))
+                {
+                    result = format!("/whep/{}", eid);
+                }
+                break;
+            }
+            // Follow through: find the output pad of this intermediate block
+            match flow
+                .links
+                .iter()
+                .find(|l| l.from.starts_with(&format!("{}:", target_block_id)))
+            {
+                Some(next) => current = next.from.clone(),
+                None => break,
+            }
+        }
+        result
+    };
 
     // Get current state from live overlay state or fall back to defaults
     let overlay = overlay::get_overlay_state(block_id);
