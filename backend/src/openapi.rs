@@ -37,6 +37,8 @@ use strom_types::network::{
 };
 use strom_types::stats::{BlockStats, StatMetadata, StatValue, Statistic};
 use strom_types::whep::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
+use utoipa::openapi::schema::{Discriminator, Schema};
+use utoipa::openapi::RefOr;
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -286,5 +288,24 @@ pub struct ApiDoc;
 pub fn openapi_spec() -> utoipa::openapi::OpenApi {
     let mut spec = ApiDoc::openapi();
     spec.info.version = env!("CARGO_PKG_VERSION").to_string();
+
+    // Add discriminator hints for tagged enums so TypeScript generators
+    // produce proper discriminated union types.
+    add_discriminator(&mut spec, "StromEvent", "type");
+    add_discriminator(&mut spec, "ServerMessage", "type");
+    add_discriminator(&mut spec, "ClientMessage", "type");
+
     spec
+}
+
+/// Add an OpenAPI `discriminator` to a `oneOf` schema, enabling TypeScript
+/// generators to emit proper discriminated union types.
+fn add_discriminator(spec: &mut utoipa::openapi::OpenApi, schema_name: &str, property: &str) {
+    let Some(schemas) = spec.components.as_mut().map(|c| &mut c.schemas) else {
+        return;
+    };
+    let Some(RefOr::T(Schema::OneOf(one_of))) = schemas.get_mut(schema_name) else {
+        return;
+    };
+    one_of.discriminator = Some(Discriminator::new(property));
 }
