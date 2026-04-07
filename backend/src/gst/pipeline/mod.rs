@@ -149,6 +149,9 @@ pub enum PipelineError {
 
     #[error("Thumbnail capture error: {0}")]
     ThumbnailCapture(String),
+
+    #[error("Endpoint conflict: {0}")]
+    EndpointConflict(String),
 }
 
 /// Manages a single GStreamer pipeline for a flow.

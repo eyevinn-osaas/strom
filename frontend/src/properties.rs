@@ -460,6 +460,7 @@ impl PropertyInspector {
         recorder_filename: Option<&str>,
         recorder_start_time: Option<instant::Instant>,
         block_thumbnail: Option<&egui::TextureHandle>,
+        taken_endpoint_ids: &std::collections::HashSet<String>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -810,6 +811,7 @@ impl PropertyInspector {
                                     flow_id,
                                     network_interfaces,
                                     available_channels,
+                                    taken_endpoint_ids,
                                 );
 
                                 // For live properties, send updates directly to the pipeline
@@ -1358,6 +1360,7 @@ impl PropertyInspector {
                 flow_id,
                 network_interfaces,
                 available_channels,
+                &std::collections::HashSet::new(),
             );
         }
 
@@ -1377,6 +1380,7 @@ impl PropertyInspector {
                     flow_id,
                     network_interfaces,
                     available_channels,
+                    &std::collections::HashSet::new(),
                 );
             }
         }
@@ -1399,6 +1403,7 @@ impl PropertyInspector {
                 flow_id,
                 network_interfaces,
                 available_channels,
+                &std::collections::HashSet::new(),
             );
         }
 
@@ -1418,6 +1423,7 @@ impl PropertyInspector {
                     flow_id,
                     network_interfaces,
                     available_channels,
+                    &std::collections::HashSet::new(),
                 );
             }
         }
@@ -1427,6 +1433,7 @@ impl PropertyInspector {
     }
 
     /// Show an exposed property editor. Returns true if the value was changed.
+    #[allow(clippy::too_many_arguments)]
     fn show_exposed_property(
         ui: &mut Ui,
         block: &mut BlockInstance,
@@ -1435,6 +1442,7 @@ impl PropertyInspector {
         _flow_id: Option<strom_types::FlowId>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
+        taken_endpoint_ids: &std::collections::HashSet<String>,
     ) -> bool {
         let prop_name = &exposed_prop.name;
         let display_label = &exposed_prop.label;
@@ -1620,6 +1628,36 @@ impl PropertyInspector {
             ui.indent(prop_name, |ui| {
                 ui.small(&exposed_prop.description);
             });
+        }
+
+        // Show warning if endpoint_id is already taken by another block
+        if prop_name == "endpoint_id"
+            && (definition.id == "builtin.whip_input" || definition.id == "builtin.whep_output")
+        {
+            let trimmed = block.properties.get("endpoint_id").and_then(|v| match v {
+                PropertyValue::String(s) => {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                }
+                _ => None,
+            });
+            if let Some(val) = &trimmed {
+                if taken_endpoint_ids.contains(val) {
+                    ui.indent(prop_name, |ui| {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 180, 50),
+                            format!(
+                                "\u{26a0} Endpoint '{}' is already in use by another block",
+                                val
+                            ),
+                        );
+                    });
+                }
+            }
         }
 
         // Add spacing after each property

@@ -132,10 +132,11 @@ fn build_whepsrc(
         .get("whep_endpoint")
         .and_then(|v| {
             if let PropertyValue::String(s) = v {
-                if s.is_empty() {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
                     None
                 } else {
-                    Some(s.clone())
+                    Some(trimmed)
                 }
             } else {
                 None
@@ -400,10 +401,11 @@ fn build_whepclientsrc(
         .get("whep_endpoint")
         .and_then(|v| {
             if let PropertyValue::String(s) = v {
-                if s.is_empty() {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
                     None
                 } else {
-                    Some(s.clone())
+                    Some(trimmed)
                 }
             } else {
                 None
