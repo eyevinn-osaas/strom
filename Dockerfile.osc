@@ -90,7 +90,8 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
         libglib2.0-dev:arm64 \
         libgstreamer1.0-dev:arm64 \
         libgstreamer-plugins-base1.0-dev:arm64 \
-        libgstreamer-plugins-bad1.0-dev:arm64 && \
+        libgstreamer-plugins-bad1.0-dev:arm64 \
+        libcairo2-dev:arm64 && \
     rm -rf /var/lib/apt/lists/*; \
 else \
     echo "==> Native build for $TARGETPLATFORM - Installing native GStreamer libs"; \
@@ -98,7 +99,8 @@ else \
         libssl-dev \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
-        libgstreamer-plugins-bad1.0-dev && \
+        libgstreamer-plugins-bad1.0-dev \
+        libcairo2-dev && \
     rm -rf /var/lib/apt/lists/*; \
 fi
 
