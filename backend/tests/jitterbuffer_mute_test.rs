@@ -60,6 +60,7 @@ fn make_rtp_buffer(seqnum: u16, rtp_timestamp: u32, ssrc: u32, payload_size: usi
 /// (simulating network loss), then sends `post_loss_packets`.
 ///
 /// Returns total output buffer count.
+/// Returns total output buffer count.
 fn run_jitterbuffer_test(
     pre_mute_packets: u32,
     mute_duration_sec: f64,
