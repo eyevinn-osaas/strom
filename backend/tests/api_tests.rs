@@ -86,6 +86,56 @@ async fn test_create_flow() {
     let response_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     assert_eq!(response_json["flow"]["name"], "Test Flow");
+
+    // The backend must assign a new ID (not reuse the one from the request)
+    let returned_id = response_json["flow"]["id"].as_str().unwrap();
+    assert_ne!(returned_id, flow.id.to_string());
+
+    // Runtime state must be cleared
+    assert_eq!(response_json["flow"]["running"], false);
+    assert!(response_json["flow"]["gst_state"].is_null());
+}
+
+#[tokio::test]
+async fn test_create_flow_empty_name() {
+    let app = create_test_app().await;
+
+    let flow = Flow::new("".to_string());
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/flows")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&flow).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_create_flow_name_too_long() {
+    let app = create_test_app().await;
+
+    let flow = Flow::new("x".repeat(256));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/flows")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&flow).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
