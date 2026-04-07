@@ -17,7 +17,7 @@ jobs:
     name: Build Frontend (WASM)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust stable with WASM target
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +82,7 @@ jobs:
             target: aarch64-apple-darwin
             binary_ext: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from tag
         id: version
@@ -229,7 +229,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Extract version from tag
         id: version
@@ -275,7 +275,7 @@ jobs:
           ls -lh release-assets/
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: false
           prerelease: false
