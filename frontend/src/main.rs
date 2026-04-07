@@ -93,6 +93,8 @@ fn main() {
 
     // Configure WebOptions to allow browser handling of pinch-zoom and Ctrl+scroll
     let web_options = eframe::WebOptions {
+        // Use glow (WebGL2) for maximum browser compatibility (Firefox lacks WebGPU support)
+        renderer: eframe::Renderer::Glow,
         // Allow multi-touch events to propagate to browser for pinch-zoom
         should_stop_propagation: Box::new(|event| {
             // Don't stop propagation for touch events (let browser handle pinch-zoom)
