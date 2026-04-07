@@ -66,6 +66,7 @@ echo "Installing ARM64 GStreamer libraries..."
 # Install only library packages that don't have executables/scripts
 sudo apt-get install -y --no-install-recommends \
     libssl-dev:arm64 \
+    libcairo2-dev:arm64 \
     libglib2.0-dev:arm64 \
     libgstreamer1.0-dev:arm64 \
     libgstreamer-plugins-base1.0-dev:arm64 \

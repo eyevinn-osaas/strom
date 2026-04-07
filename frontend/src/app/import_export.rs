@@ -1,12 +1,12 @@
 use crate::state::{AppMessage, ConnectionState};
-use egui::{CentralPanel, Color32, Context};
+use egui::{CentralPanel, Color32};
 use strom_types::{Flow, PipelineState};
 
 use super::ImportFormat;
 use super::*;
 impl StromApp {
     /// Render the import flow dialog.
-    pub(super) fn render_import_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_import_dialog(&mut self, ui: &mut egui::Ui) {
         if !self.show_import_dialog {
             return;
         }
@@ -17,7 +17,7 @@ impl StromApp {
             .default_width(550.0)
             .default_height(450.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 // Format selection tabs
                 ui.horizontal(|ui| {
                     ui.label("Format:");
@@ -107,10 +107,10 @@ impl StromApp {
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    if ui.button("📥 Import").clicked() {
+                    if ui.button(format!("{} Import", egui_phosphor::regular::DOWNLOAD_SIMPLE)).clicked() {
                         match self.import_format {
-                            ImportFormat::Json => self.import_flow_from_json(ctx),
-                            ImportFormat::GstLaunch => self.import_flow_from_gst_launch(ctx),
+                            ImportFormat::Json => self.import_flow_from_json(ui),
+                            ImportFormat::GstLaunch => self.import_flow_from_gst_launch(ui),
                         }
                     }
 
@@ -125,7 +125,7 @@ impl StromApp {
 
     /// Import a flow from the JSON buffer.
     /// Note: The backend's create_flow only takes a name, so we create first then update.
-    pub(super) fn import_flow_from_json(&mut self, ctx: &Context) {
+    pub(super) fn import_flow_from_json(&mut self, ui: &mut egui::Ui) {
         if self.import_json_buffer.trim().is_empty() {
             self.import_error = Some("Please paste flow JSON first".to_string());
             return;
@@ -139,7 +139,7 @@ impl StromApp {
 
                 let api = self.api.clone();
                 let tx = self.channels.sender();
-                let ctx = ctx.clone();
+                let ctx = ui.ctx().clone();
                 let flow_name = flow.name.clone();
 
                 self.status = format!("Importing flow '{}'...", flow_name);
@@ -206,7 +206,7 @@ impl StromApp {
 
     /// Import a flow from gst-launch-1.0 syntax.
     /// Parses the pipeline using the backend's GStreamer parser and creates a new flow.
-    pub(super) fn import_flow_from_gst_launch(&mut self, ctx: &Context) {
+    pub(super) fn import_flow_from_gst_launch(&mut self, ui: &mut egui::Ui) {
         let pipeline = self.import_json_buffer.trim();
         if pipeline.is_empty() {
             self.import_error = Some("Please enter a gst-launch pipeline".to_string());
@@ -222,7 +222,7 @@ impl StromApp {
 
         let api = self.api.clone();
         let tx = self.channels.sender();
-        let ctx = ctx.clone();
+        let ctx = ui.ctx().clone();
 
         self.status = "Parsing gst-launch pipeline...".to_string();
         self.show_import_dialog = false;
@@ -329,7 +329,7 @@ impl StromApp {
         flow.id = uuid::Uuid::new_v4();
 
         // Reset state to Null
-        flow.state = Some(PipelineState::Null);
+        flow.set_gst_state(Some(PipelineState::Null));
 
         // Clear auto_restart flag
         flow.properties.auto_restart = false;
@@ -383,7 +383,7 @@ impl StromApp {
 
     /// Copy a flow with regenerated IDs and create it on the backend.
     /// Note: The backend's create_flow only takes a name, so we create first then update.
-    pub(super) fn copy_flow(&mut self, flow: &Flow, ctx: &Context) {
+    pub(super) fn copy_flow(&mut self, flow: &Flow, ui: &mut egui::Ui) {
         let mut flow_copy = flow.clone();
 
         // Add " (copy)" suffix to the name
@@ -394,7 +394,7 @@ impl StromApp {
 
         let api = self.api.clone();
         let tx = self.channels.sender();
-        let ctx = ctx.clone();
+        let ctx = ui.ctx().clone();
         let flow_name = flow_copy.name.clone();
 
         self.status = format!("Copying flow '{}'...", flow.name);
@@ -450,8 +450,8 @@ impl StromApp {
     }
 
     /// Render the full-screen disconnect overlay when WebSocket is not connected.
-    pub(super) fn render_disconnect_overlay(&mut self, ctx: &Context) {
-        CentralPanel::default().show(ctx, |ui| {
+    pub(super) fn render_disconnect_overlay(&mut self, ui: &mut egui::Ui) {
+        CentralPanel::default().show_inside(ui, |ui| {
             // Center everything vertically and horizontally
             ui.vertical_centered(|ui| {
                 // Add vertical spacing to center content
@@ -462,7 +462,7 @@ impl StromApp {
                 match self.connection_state {
                     ConnectionState::Disconnected => {
                         ui.heading(
-                            egui::RichText::new("⚠")
+                            egui::RichText::new(egui_phosphor::regular::WARNING)
                                 .size(80.0)
                                 .color(Color32::from_rgb(255, 165, 0))
                         );
@@ -486,7 +486,7 @@ impl StromApp {
                     ConnectionState::Connected => {
                         // Should not reach here, but just in case
                         ui.heading(
-                            egui::RichText::new("✓")
+                            egui::RichText::new(egui_phosphor::regular::CHECK)
                                 .size(80.0)
                                 .color(Color32::from_rgb(0, 200, 0))
                         );

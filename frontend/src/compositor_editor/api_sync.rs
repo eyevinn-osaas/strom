@@ -123,7 +123,7 @@ impl CompositorEditor {
 
             crate::app::spawn_task(async move {
                 match api
-                    .get_compositor_thumbnail(&flow_id.to_string(), &block_id, idx)
+                    .get_block_thumbnail(&flow_id.to_string(), &block_id, idx)
                     .await
                 {
                     Ok(jpeg_bytes) => {
@@ -141,7 +141,7 @@ impl CompositorEditor {
                         ctx.request_repaint();
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to fetch thumbnail for input {}: {}", idx, e);
+                        tracing::debug!("Failed to fetch thumbnail for input {}: {}", idx, e);
                         // Store error marker so the loading flag gets cleared
                         let key = format!("compositor_thumb_err_{}_{}", flow_id, idx);
                         crate::app::set_local_storage(&key, "error");
@@ -426,13 +426,21 @@ impl CompositorEditor {
                     let key = format!("transition_status_{}", block_id);
                     crate::app::set_local_storage(
                         &key,
-                        &format!("✓ {} → {}", from_input, to_input),
+                        &format!(
+                            "{} {} -> {}",
+                            egui_phosphor::regular::CHECK,
+                            from_input,
+                            to_input
+                        ),
                     );
                 }
                 Err(e) => {
                     tracing::error!("Transition failed: {}", e);
                     let key = format!("transition_status_{}", block_id);
-                    crate::app::set_local_storage(&key, &format!("✗ {}", e));
+                    crate::app::set_local_storage(
+                        &key,
+                        &format!("{} {}", egui_phosphor::regular::X, e),
+                    );
                 }
             }
             ctx.request_repaint();

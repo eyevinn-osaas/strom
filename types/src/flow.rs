@@ -12,6 +12,36 @@ use utoipa::ToSchema;
 /// Unique identifier for a flow.
 pub type FlowId = Uuid;
 
+/// CPU affinity strategy for GStreamer streaming threads.
+///
+/// Controls whether pipeline threads are pinned to a single CPU core
+/// for better cache locality and reduced context switches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum CpuAffinity {
+    /// No pinning, OS scheduler decides thread placement
+    #[default]
+    Off,
+    /// Pin all pipeline threads to a single core for maximum cache locality.
+    /// Core is assigned by the AffinityManager using least-loaded strategy.
+    SingleCore,
+}
+
+impl<'de> Deserialize<'de> for CpuAffinity {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "off" => Ok(CpuAffinity::Off),
+            "single_core" => Ok(CpuAffinity::SingleCore),
+            _ => Ok(CpuAffinity::default()),
+        }
+    }
+}
+
 /// Thread priority level for GStreamer streaming threads.
 ///
 /// Controls the scheduling priority of GStreamer's internal streaming threads.
@@ -217,6 +247,11 @@ pub struct FlowProperties {
     #[serde(default)]
     pub thread_priority: ThreadPriority,
 
+    /// CPU affinity for GStreamer streaming threads
+    /// SingleCore pins all threads to one core for better cache locality
+    #[serde(default)]
+    pub cpu_affinity: CpuAffinity,
+
     /// Status of thread priority configuration (updated by backend when pipeline starts)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_priority_status: Option<ThreadPriorityStatus>,
@@ -264,9 +299,18 @@ pub struct Flow {
     /// Links between element pads and/or block external pads
     #[serde(default)]
     pub links: Vec<Link>,
-    /// Current runtime state (persisted to storage for automatic restart)
+    /// Whether the pipeline is actively running (data flowing).
+    ///
+    /// This is the field most callers should use. It is `true` when the
+    /// GStreamer pipeline is in `Playing` *or* in `Paused` due to an
+    /// async element that has not yet completed its transition.
     #[serde(default)]
-    pub state: Option<PipelineState>,
+    pub running: bool,
+    /// Raw GStreamer pipeline state, exposed for diagnostics.
+    ///
+    /// Prefer [`running`](Self::running) for logic and display.
+    #[serde(default)]
+    pub gst_state: Option<PipelineState>,
     /// Flow configuration properties
     #[serde(default)]
     pub properties: FlowProperties,
@@ -281,7 +325,8 @@ impl Flow {
             elements: Vec::new(),
             blocks: Vec::new(),
             links: Vec::new(),
-            state: Some(PipelineState::Null),
+            running: false,
+            gst_state: Some(PipelineState::Null),
             properties: FlowProperties::default(),
         }
     }
@@ -294,8 +339,15 @@ impl Flow {
             elements: Vec::new(),
             blocks: Vec::new(),
             links: Vec::new(),
-            state: Some(PipelineState::Null),
+            running: false,
+            gst_state: Some(PipelineState::Null),
             properties: FlowProperties::default(),
         }
+    }
+
+    /// Set the GStreamer state and update `running` to match.
+    pub fn set_gst_state(&mut self, state: Option<PipelineState>) {
+        self.running = state.is_some_and(|s| s.is_active());
+        self.gst_state = state;
     }
 }

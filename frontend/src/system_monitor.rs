@@ -251,6 +251,7 @@ pub enum ThreadSortColumn {
     Block,
     Flow,
     ThreadId,
+    Core,
 }
 
 /// Sort direction.
@@ -271,8 +272,8 @@ impl SortDirection {
 
     fn arrow(&self) -> &'static str {
         match self {
-            SortDirection::Ascending => " ^",
-            SortDirection::Descending => " v",
+            SortDirection::Ascending => egui_phosphor::regular::CARET_UP,
+            SortDirection::Descending => egui_phosphor::regular::CARET_DOWN,
         }
     }
 }
@@ -352,7 +353,10 @@ impl<'a> DetailedSystemMonitor<'a> {
                         bg_color,
                         stroke_color,
                     );
-                    ui.label(format!("Current: {:.1}%", stats.cpu_usage));
+                    ui.label(format!(
+                        "{} cores, current: {:.1}%",
+                        stats.num_cores, stats.cpu_usage
+                    ));
                 });
 
                 ui.separator();
@@ -527,6 +531,16 @@ impl<'a> DetailedSystemMonitor<'a> {
                     }
                 });
             }
+            ThreadSortColumn::Core => {
+                threads.sort_by(|a, b| {
+                    let cmp = a.pinned_cpus.cmp(&b.pinned_cpus);
+                    if matches!(sort_dir, SortDirection::Descending) {
+                        cmp.reverse()
+                    } else {
+                        cmp
+                    }
+                });
+            }
         }
 
         let mut nav_action: Option<ThreadNavigationAction> = None;
@@ -536,12 +550,13 @@ impl<'a> DetailedSystemMonitor<'a> {
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 egui::Grid::new("thread_grid")
-                    .num_columns(5)
+                    .num_columns(6)
                     .spacing([20.0, 4.0])
                     .striped(true)
                     .show(ui, |ui| {
                         // Clickable headers for sorting
                         self.sortable_header(ui, "CPU %", ThreadSortColumn::Cpu);
+                        self.sortable_header(ui, "CPUs", ThreadSortColumn::Core);
                         self.sortable_header(ui, "Element", ThreadSortColumn::Element);
                         self.sortable_header(ui, "Block", ThreadSortColumn::Block);
                         self.sortable_header(ui, "Flow", ThreadSortColumn::Flow);
@@ -560,6 +575,13 @@ impl<'a> DetailedSystemMonitor<'a> {
                                 ui.visuals().text_color()
                             };
                             ui.colored_label(color, format!("{:.1}%", cpu));
+
+                            // Pinned core
+                            if let Some(ref cpus) = stats.pinned_cpus {
+                                ui.label(format_cpu_range(cpus));
+                            } else {
+                                ui.label("-");
+                            }
 
                             // Element name (clickable)
                             if ui.link(&stats.element_name).clicked() {
@@ -687,4 +709,13 @@ fn draw_large_graph(
         Stroke::new(1.0, stroke_color),
         egui::StrokeKind::Outside,
     );
+}
+
+/// Format a CPU set as a compact range string, e.g. [4, 5] → "4-5", [4] → "4".
+pub fn format_cpu_range(cpus: &[usize]) -> String {
+    match cpus {
+        [] => "-".to_string(),
+        [single] => format!("{}", single),
+        _ => format!("{}-{}", cpus[0], cpus[cpus.len() - 1]),
+    }
 }

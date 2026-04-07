@@ -45,12 +45,10 @@ Real-time adjustments for running pipelines with immediate visual feedback.
 
 Enable complex broadcast workflows by routing outputs between flows dynamically.
 
-**Current status:** ✅ Compositor block with 11 layout templates (multiview, PIP, side-by-side, grids, etc.) and visual editor.
+**Current status:** ✅ Compositor block with 11 layout templates (multiview, PIP, side-by-side, grids, etc.) and visual editor. ✅ Inter Input/Output blocks for cross-flow routing. ✅ Audio Router block with multi-input channel routing matrix. ✅ Audio Mixer block with 32 channels, aux sends, and groups.
 
 **Remaining features:**
-- Visual routing matrix (audio mixer patchbay style)
 - Tally/program/preview bus concept for live switching
-- Cross-flow element references
 - Global audio/video buses
 
 **Use cases:**
@@ -87,7 +85,7 @@ Comprehensive monitoring for production deployments.
 
 Leverage the existing MCP infrastructure to provide intelligent assistance.
 
-**Current status:** ✅ Basic MCP server implemented with flow management tools.
+**Current status:** ✅ MCP server with Streamable HTTP (`/api/mcp`) and stdio transports. Supports flow management, element discovery, and pipeline control. SSE events for real-time updates.
 
 **Future capabilities:**
 - Natural language pipeline creation: *"Create a pipeline that takes RTSP, adds a logo overlay, and outputs to SRT"*
@@ -138,11 +136,10 @@ Enable unattended operation and broadcast automation.
 
 Multi-viewer style monitoring for all running pipelines.
 
-**Current status:** ✅ Audio level meter block (`builtin.meter`) available for per-flow monitoring.
+**Current status:** ✅ Audio Meter block with RMS and peak level monitoring per channel. ✅ WHEP Output block with built-in browser player pages for live preview. ✅ Links page for quick access to WHEP player pages and stream URLs.
 
 **Remaining features:**
 - Thumbnail grid of all active pipelines
-- Audio level meters in overview dashboard
 - Customizable multiviewer layout builder
 - Full-screen preview on click
 - Source labeling and status indicators
@@ -256,13 +253,17 @@ Low effort improvements with noticeable impact.
 ### Phase 2: Professional Tools
 - [x] Live Parameter Tweaking (basic - properties editable on running pipelines)
 - [x] Compositor with layout templates
-- [ ] Multi-Flow Routing Matrix
+- [x] Inter Input/Output blocks for cross-flow routing
+- [x] Audio Mixer (32 channels, aux sends, groups, PFL)
+- [x] Audio Router (multi-input channel routing matrix)
+- [x] WHEP Output with built-in player pages
+- [ ] Multi-Flow Routing Matrix (visual patchbay)
 - [ ] Scheduled Operations
 - [ ] Source Preview Grid
 
 ### Phase 3: Intelligence & Safety
 - [ ] Flow Version Control
-- [x] Basic MCP server (AI assistant foundation)
+- [x] MCP server with Streamable HTTP and stdio transports
 - [ ] Enhanced AI Assistant (diagnostics, auto-optimization)
 - [ ] Advanced Alerting
 
@@ -315,4 +316,4 @@ Strom's unique position: **Professional broadcast capabilities with open-source 
 
 ---
 
-*Last updated: 2026-01-22*
+*Last updated: 2026-03-02*

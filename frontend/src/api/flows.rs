@@ -263,4 +263,46 @@ impl ApiClient {
 
         Ok(response.pads)
     }
+
+    /// Reset accumulated loudness measurements on an EBU R128 meter block.
+    pub async fn reset_loudness(&self, flow_id: &FlowId, block_id: &str) -> ApiResult<()> {
+        let url = format!(
+            "{}/flows/{}/blocks/{}/loudness/reset",
+            self.base_url, flow_id, block_id
+        );
+        let response = self
+            .with_auth(self.client.post(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        Ok(())
+    }
+
+    /// Trigger an immediate file split on a recorder block.
+    pub async fn recorder_split_now(&self, flow_id: &FlowId, block_id: &str) -> ApiResult<()> {
+        let url = format!(
+            "{}/flows/{}/blocks/{}/recorder/split",
+            self.base_url, flow_id, block_id
+        );
+        let response = self
+            .with_auth(self.client.post(&url))
+            .send()
+            .await
+            .map_err(|e| ApiError::Network(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let text = response.text().await.unwrap_or_default();
+            return Err(ApiError::Http(status, text));
+        }
+
+        Ok(())
+    }
 }

@@ -36,8 +36,6 @@ impl StromApp {
 
     /// Fetch latency for the currently selected flow (if running).
     pub(super) fn fetch_latency_for_running_flows(&self, ctx: &Context) {
-        use strom_types::PipelineState;
-
         // Only fetch for selected flow if it's running
         let flow_id = match self.selected_flow_id {
             Some(id) => id,
@@ -49,7 +47,7 @@ impl StromApp {
             .flows
             .iter()
             .find(|f| f.id == flow_id)
-            .map(|f| f.state == Some(PipelineState::Playing))
+            .map(|f| f.running)
             .unwrap_or(false);
 
         if !is_running {
@@ -81,8 +79,6 @@ impl StromApp {
     /// Fetch RTP statistics and dynamic pads for the currently selected flow (if running).
     /// RTP stats are only fetched if the flow has blocks that produce them (e.g., AES67 Input).
     pub(super) fn fetch_rtp_stats_for_selected_flow(&self, ctx: &Context) {
-        use strom_types::PipelineState;
-
         // Only fetch for selected flow if it's running
         let flow_id = match self.selected_flow_id {
             Some(id) => id,
@@ -91,9 +87,7 @@ impl StromApp {
 
         // Check if the selected flow is running
         let flow = self.flows.iter().find(|f| f.id == flow_id);
-        let is_running = flow
-            .map(|f| f.state == Some(PipelineState::Playing))
-            .unwrap_or(false);
+        let is_running = flow.map(|f| f.running).unwrap_or(false);
 
         if !is_running {
             return;
@@ -402,6 +396,32 @@ impl StromApp {
                 ctx.request_repaint();
             });
         }
+    }
+
+    /// Stop a specific flow by ID (used for auto-stop triggered by recorder or other blocks).
+    pub(super) fn stop_flow_by_id(&mut self, flow_id: strom_types::FlowId, ctx: &Context) {
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+        let ctx = ctx.clone();
+
+        self.status = "Stopping flow...".to_string();
+
+        spawn_task(async move {
+            match api.stop_flow(flow_id).await {
+                Ok(_) => {
+                    tracing::info!("Flow {} stopped by auto-stop", flow_id);
+                    let _ = tx.send(AppMessage::FlowOperationSuccess("Flow stopped".to_string()));
+                }
+                Err(e) => {
+                    tracing::error!("Failed to stop flow {}: {}", flow_id, e);
+                    let _ = tx.send(AppMessage::FlowOperationError(format!(
+                        "Failed to stop flow: {}",
+                        e
+                    )));
+                }
+            }
+            ctx.request_repaint();
+        });
     }
 
     /// Delete a flow.

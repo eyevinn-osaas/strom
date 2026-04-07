@@ -9,6 +9,7 @@ mod flows;
 mod gst_launch;
 mod media;
 mod player;
+mod probes;
 mod stats;
 
 pub use strom_types::api::{AuthStatusResponse, LatencyResponse, SystemInfo};

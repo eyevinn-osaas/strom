@@ -1,5 +1,6 @@
 //! Flow API handlers.
 
+use crate::json_rejection::{JsonBody, ValidatedJson};
 use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
@@ -7,19 +8,19 @@ use axum::{
     Json,
 };
 use chrono::Local;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::process::{Command, Stdio};
 use strom_types::{
     api::{
         AnimateInputRequest, AvailableOutput, AvailableSourcesResponse, CreateFlowRequest,
-        ElementPropertiesResponse, ErrorResponse, FlowDebugInfo, FlowListResponse, FlowResponse,
-        FlowStatsResponse, LatencyResponse, PadPropertiesResponse, SourceFlowInfo,
-        TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
+        DynamicPadsResponse, ElementPropertiesResponse, ErrorResponse, FlowDebugInfo,
+        FlowListResponse, FlowResponse, FlowStatsResponse, LatencyResponse, PadPropertiesResponse,
+        SourceFlowInfo, TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
         UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcStatsResponse,
     },
     Flow, FlowId,
 };
-use tracing::{error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::layout;
 use crate::state::AppState;
@@ -197,7 +198,7 @@ pub async fn get_flow(
 )]
 pub async fn create_flow(
     State(state): State<AppState>,
-    Json(req): Json<CreateFlowRequest>,
+    ValidatedJson(req): ValidatedJson<CreateFlowRequest>,
 ) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
     info!("Received create flow request: name='{}'", req.name);
 
@@ -247,7 +248,7 @@ pub async fn create_flow(
 pub async fn update_flow(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
-    Json(mut flow): Json<Flow>,
+    JsonBody(mut flow): JsonBody<Flow>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     // Ensure the ID in the path matches the flow
     if id != flow.id {
@@ -264,6 +265,24 @@ pub async fn update_flow(
     ))?;
 
     info!("Updating flow: {} ({})", flow.name, flow.id);
+
+    // Trim endpoint string properties to avoid whitespace-related issues
+    for block in &mut flow.blocks {
+        let prop_name = match block.block_definition_id.as_str() {
+            "builtin.whip_input" | "builtin.whep_output" => Some("endpoint_id"),
+            "builtin.whip_output" => Some("whip_endpoint"),
+            "builtin.whep_input" => Some("whep_endpoint"),
+            _ => None,
+        };
+        if let Some(name) = prop_name {
+            if let Some(strom_types::PropertyValue::String(s)) = block.properties.get_mut(name) {
+                let trimmed = s.trim().to_string();
+                if *s != trimmed {
+                    *s = trimmed;
+                }
+            }
+        }
+    }
 
     // Compute external pads for all block instances based on their properties
     for block in &mut flow.blocks {
@@ -347,7 +366,7 @@ pub async fn update_flow(
     }
 
     // Check if the flow is currently running
-    let is_running = old_flow.state == Some(strom_types::PipelineState::Playing);
+    let is_running = old_flow.running;
 
     if let Err(e) = state.upsert_flow(flow.clone()).await {
         return Err((
@@ -428,7 +447,7 @@ pub async fn update_flow(
 pub async fn update_flow_put(
     state: State<AppState>,
     id: Path<FlowId>,
-    flow: Json<Flow>,
+    flow: JsonBody<Flow>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     update_flow(state, id, flow).await
 }
@@ -548,6 +567,63 @@ pub async fn stop_flow(
     }
 }
 
+/// Run the graphviz `dot` command with the given arguments, feeding `dot_content` via stdin.
+///
+/// Graphviz often produces valid SVG output even when it reports layout warnings
+/// (e.g. "triangulation failed", "lost edge") on stderr. These warnings mean some
+/// edges couldn't be routed but the rest of the graph is fine. We accept the output
+/// as long as it looks like valid SVG, regardless of exit code or stderr content.
+fn run_dot(dot_content: &str, args: &[&str]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+
+    let mut child = Command::new("dot")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "Failed to execute 'dot': {}. Ensure Graphviz is installed.",
+                e
+            )
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(dot_content.as_bytes())
+            .map_err(|e| format!("Failed to write DOT content to stdin: {}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for 'dot' command: {}", e))?;
+
+    // Accept output if it looks like SVG, even if graphviz reported warnings.
+    // Complex GStreamer pipelines trigger graphviz layout warnings ("triangulation
+    // failed", "lost edge") but still produce usable SVG with some edges missing.
+    let stdout = &output.stdout;
+    let looks_like_svg =
+        stdout.len() > 50 && (stdout.starts_with(b"<?xml") || stdout.starts_with(b"<svg"));
+
+    if looks_like_svg {
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warn!(
+                "dot produced SVG despite warnings (exit code {:?}): {}",
+                output.status.code(),
+                stderr.chars().take(200).collect::<String>()
+            );
+        }
+        return Ok(output.stdout);
+    }
+
+    // No usable SVG output — report the error
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    error!("dot command failed with no SVG output: {}", stderr);
+    Err(stderr.to_string())
+}
+
 /// Generate a debug DOT/SVG graph for a flow's pipeline.
 ///
 /// This endpoint generates a GraphViz DOT graph of the GStreamer pipeline
@@ -584,60 +660,21 @@ pub async fn debug_graph(
 
     // Convert DOT to SVG using the 'dot' command via stdin
     // (avoids temp file permission issues on Windows corporate machines)
-    let mut child = Command::new("dot")
-        .arg("-Tsvg")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    //
+    // Try default splines first (curved, best looking). If graphviz fails
+    // (e.g. "triangulation failed" with very complex graphs), retry with
+    // polyline splines which bypass the triangulation algorithm entirely.
+    let svg_output = run_dot(&dot_content, &["-Tsvg"])
+        .or_else(|_| {
+            warn!("dot failed with default splines, retrying with polyline splines");
+            run_dot(&dot_content, &["-Tsvg", "-Gsplines=polyline"])
+        })
         .map_err(|e| {
-            error!("Failed to execute 'dot' command: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::with_details(
-                    "Failed to convert to SVG. Ensure Graphviz is installed.",
-                    e.to_string(),
-                )),
+                Json(ErrorResponse::with_details("SVG conversion failed", e)),
             )
         })?;
-
-    // Write DOT content to stdin
-    use std::io::Write;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(dot_content.as_bytes()).map_err(|e| {
-            error!("Failed to write DOT content to stdin: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::with_details(
-                    "Failed to write DOT content",
-                    e.to_string(),
-                )),
-            )
-        })?;
-    }
-
-    let svg_output = child.wait_with_output().map_err(|e| {
-        error!("Failed to wait for 'dot' command: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::with_details(
-                "Failed to complete SVG conversion",
-                e.to_string(),
-            )),
-        )
-    })?;
-
-    if !svg_output.status.success() {
-        let stderr = String::from_utf8_lossy(&svg_output.stderr);
-        error!("dot command failed: {}", stderr);
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::with_details(
-                "SVG conversion failed",
-                stderr.to_string(),
-            )),
-        ));
-    }
 
     info!("Successfully generated SVG debug graph for flow: {}", id);
 
@@ -645,7 +682,7 @@ pub async fn debug_graph(
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "image/svg+xml")],
-        svg_output.stdout,
+        svg_output,
     )
         .into_response())
 }
@@ -683,14 +720,6 @@ pub async fn get_dynamic_pads(
     })?;
 
     Ok(Json(DynamicPadsResponse { pads }))
-}
-
-/// Response containing runtime dynamic pads information.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct DynamicPadsResponse {
-    /// Map of element_id -> {pad_name -> tee_element_name}
-    /// These are pads that appeared at runtime without defined links.
-    pub pads: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 /// Generate SDP for a specific block in a flow.
@@ -905,7 +934,7 @@ pub async fn get_element_properties(
 pub async fn update_element_property(
     State(state): State<AppState>,
     Path((flow_id, element_id)): Path<(FlowId, String)>,
-    Json(req): Json<UpdatePropertyRequest>,
+    ValidatedJson(req): ValidatedJson<UpdatePropertyRequest>,
 ) -> Result<Json<ElementPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
         .update_element_property(&flow_id, &element_id, &req.property_name, req.value)
@@ -1022,7 +1051,7 @@ pub async fn get_pad_properties(
 pub async fn update_pad_property(
     State(state): State<AppState>,
     Path((flow_id, element_id, pad_name)): Path<(FlowId, String, String)>,
-    Json(req): Json<UpdatePadPropertyRequest>,
+    ValidatedJson(req): ValidatedJson<UpdatePadPropertyRequest>,
 ) -> Result<Json<PadPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Updating pad property {}:{}:{} in flow {}",
@@ -1092,7 +1121,7 @@ pub async fn update_pad_property(
 pub async fn update_flow_properties(
     State(state): State<AppState>,
     Path(id): Path<FlowId>,
-    Json(req): Json<UpdateFlowPropertiesRequest>,
+    JsonBody(req): JsonBody<UpdateFlowPropertiesRequest>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating properties for flow {}", id);
 
@@ -1295,6 +1324,54 @@ pub async fn get_flow_debug_info(
     Ok(Json(debug_info))
 }
 
+/// Get negotiated caps for all pads in a running flow's pipeline.
+///
+/// Returns a JSON map of element_name → [(pad_name, direction, caps_string)].
+/// Useful for debugging caps negotiation failures.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/pad-caps",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "Pad caps for all elements"),
+        (status = 404, description = "Flow not running", body = ErrorResponse)
+    )
+)]
+pub async fn get_flow_pad_caps(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let caps = state.get_flow_pad_caps(&id).await.ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("Flow not running")),
+        )
+    })?;
+
+    // Convert to JSON-friendly format
+    let json: serde_json::Map<String, serde_json::Value> = caps
+        .into_iter()
+        .map(|(elem, pads)| {
+            let pads_json: Vec<serde_json::Value> = pads
+                .into_iter()
+                .map(|(name, dir, caps_str)| {
+                    serde_json::json!({
+                        "pad": name,
+                        "direction": dir,
+                        "caps": caps_str,
+                    })
+                })
+                .collect();
+            (elem, serde_json::Value::Array(pads_json))
+        })
+        .collect();
+
+    Ok(Json(serde_json::Value::Object(json)))
+}
+
 /// Trigger a scene transition on a compositor block.
 ///
 /// Animates the transition between two inputs on a compositor/mixer block.
@@ -1324,9 +1401,9 @@ pub async fn get_flow_debug_info(
 pub async fn trigger_transition(
     State(state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<TriggerTransitionRequest>,
+    ValidatedJson(req): ValidatedJson<TriggerTransitionRequest>,
 ) -> Result<Json<TransitionResponse>, (StatusCode, Json<ErrorResponse>)> {
-    info!(
+    debug!(
         "Triggering {} transition on block {} in flow {} ({} -> {}, {}ms)",
         req.transition_type, block_id, flow_id, req.from_input, req.to_input, req.duration_ms
     );
@@ -1362,6 +1439,327 @@ pub async fn trigger_transition(
     }))
 }
 
+/// Select a preview source on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/preview",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::SelectPreviewRequest,
+    responses(
+        (status = 200, description = "Preview source selected", body = strom_types::api::SelectPreviewResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Flow or block not found", body = ErrorResponse),
+    )
+)]
+pub async fn select_preview(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::SelectPreviewRequest>,
+) -> Result<Json<strom_types::api::SelectPreviewResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Selecting preview input {} (multi={}) on vision mixer {} in flow {}",
+        req.input, req.multi, block_id, flow_id
+    );
+
+    let (pvw_group, pgm_group) = state
+        .select_vision_mixer_preview(&flow_id, &block_id, req.input, req.multi)
+        .await
+        .map_err(|e| {
+            error!("Failed to select preview: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to select preview",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::SelectPreviewResponse {
+        message: format!("Preview set to {:?}", pvw_group),
+        preview_input: pvw_group.first().copied().unwrap_or(0),
+        program_input: pgm_group.first().copied().unwrap_or(0),
+        preview_inputs: pvw_group,
+        program_inputs: pgm_group,
+    }))
+}
+
+/// Set or clear the background source on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/background",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::SetBackgroundRequest,
+    responses(
+        (status = 200, description = "Background source set/cleared", body = strom_types::api::SetBackgroundResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn set_background(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::SetBackgroundRequest>,
+) -> Result<Json<strom_types::api::SetBackgroundResponse>, (StatusCode, Json<ErrorResponse>)> {
+    info!(
+        "Setting background {:?} on vision mixer {} in flow {}",
+        req.input, block_id, flow_id
+    );
+
+    let bg = state
+        .set_vision_mixer_background(&flow_id, &block_id, req.input)
+        .await
+        .map_err(|e| {
+            error!("Failed to set background: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to set background",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::SetBackgroundResponse {
+        message: match bg {
+            Some(idx) => format!("Background set to input {}", idx),
+            None => "Background cleared".to_string(),
+        },
+        background_input: bg,
+    }))
+}
+
+/// Set the multiview overlay alpha on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/overlay-alpha",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::OverlayAlphaRequest,
+    responses(
+        (status = 200, description = "Overlay alpha set", body = strom_types::api::OverlayAlphaResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn set_overlay_alpha(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::OverlayAlphaRequest>,
+) -> Result<Json<strom_types::api::OverlayAlphaResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let alpha = req.alpha.clamp(0.0, 1.0);
+
+    state
+        .set_overlay_alpha(&flow_id, &block_id, alpha)
+        .await
+        .map_err(|e| {
+            error!("Failed to set overlay alpha: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to set overlay alpha",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::OverlayAlphaResponse {
+        message: format!("Overlay alpha set to {}", alpha),
+        alpha,
+    }))
+}
+
+/// Toggle a DSK (Downstream Keyer) layer on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/dsk",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::DskToggleRequest,
+    responses(
+        (status = 200, description = "DSK toggled", body = strom_types::api::DskToggleResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn toggle_dsk(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::DskToggleRequest>,
+) -> Result<Json<strom_types::api::DskToggleResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if req.dsk < 1 || req.dsk > strom_types::vision_mixer::MAX_DSK_INPUTS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::with_details(
+                "Invalid DSK number",
+                format!(
+                    "DSK must be 1-{}, got {}",
+                    strom_types::vision_mixer::MAX_DSK_INPUTS,
+                    req.dsk
+                ),
+            )),
+        ));
+    }
+
+    info!(
+        "Toggling DSK {} {} on vision mixer {} in flow {}",
+        req.dsk,
+        if req.enabled { "on" } else { "off" },
+        block_id,
+        flow_id
+    );
+
+    // Convert 1-based DSK number to 0-based internal index
+    let dsk_index = req.dsk - 1;
+
+    state
+        .set_dsk_enabled(&flow_id, &block_id, dsk_index, req.enabled)
+        .await
+        .map_err(|e| {
+            error!("Failed to toggle DSK: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to toggle DSK",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::DskToggleResponse {
+        message: format!(
+            "DSK {} {}",
+            req.dsk,
+            if req.enabled { "enabled" } else { "disabled" }
+        ),
+        dsk: req.dsk,
+        enabled: req.enabled,
+    }))
+}
+
+/// Toggle Fade to Black on a vision mixer block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/ftb",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::api::FadeToBlackRequest,
+    responses(
+        (status = 200, description = "FTB toggled", body = strom_types::api::FadeToBlackResponse),
+        (status = 400, description = "Invalid request", body = ErrorResponse),
+    )
+)]
+pub async fn fade_to_black(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::api::FadeToBlackRequest>,
+) -> Result<Json<strom_types::api::FadeToBlackResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let active = state
+        .fade_to_black(&flow_id, &block_id, req.duration_ms)
+        .await
+        .map_err(|e| {
+            error!("Failed to toggle FTB: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to toggle FTB",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::api::FadeToBlackResponse {
+        message: format!("FTB {}", if active { "activated" } else { "deactivated" }),
+        active,
+    }))
+}
+
+/// Reset accumulated loudness measurements on an EBU R128 meter block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/loudness/reset",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID")
+    ),
+    responses(
+        (status = 204, description = "Loudness measurements reset"),
+        (status = 400, description = "Failed to reset", body = ErrorResponse),
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse)
+    )
+)]
+pub async fn reset_loudness(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .reset_loudness(&flow_id, &block_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to reset loudness: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to reset loudness",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Force an immediate file split on a recorder block.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/recorder/split",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID")
+    ),
+    responses(
+        (status = 204, description = "File split triggered"),
+        (status = 400, description = "Failed to trigger split (e.g. ts_passthrough mode)", body = ErrorResponse),
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse)
+    )
+)]
+pub async fn recorder_split_now(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .recorder_split_now(&flow_id, &block_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to trigger recorder split: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to trigger recorder split",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Animate a single input's position and/or size.
 ///
 /// Smoothly animates the specified input from its current position/size
@@ -1384,7 +1782,7 @@ pub async fn trigger_transition(
 pub async fn animate_input(
     State(state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<AnimateInputRequest>,
+    ValidatedJson(req): ValidatedJson<AnimateInputRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     info!(
         "Animating input {} on block {} in flow {} to ({:?}, {:?}, {:?}, {:?}) over {}ms",
@@ -1420,75 +1818,59 @@ pub async fn animate_input(
     })))
 }
 
-/// Path parameters for compositor thumbnail endpoint.
+/// Path parameters for block thumbnail endpoint.
 #[derive(Debug, Deserialize)]
-pub struct CompositorThumbnailPath {
+pub struct BlockThumbnailPath {
     /// Flow ID (UUID)
     pub id: FlowId,
     /// Block instance ID (e.g., "b0")
     pub block_id: String,
-    /// Input index (0-based)
-    pub input_idx: usize,
 }
 
-/// Query parameters for compositor thumbnail endpoint.
+/// Query parameters for block thumbnail endpoint.
 #[derive(Debug, Deserialize)]
-pub struct CompositorThumbnailQuery {
-    /// Target width (default 320, max 640)
-    #[serde(default = "default_thumbnail_width")]
-    pub width: u32,
-    /// Target height (default 180, max 360)
-    #[serde(default = "default_thumbnail_height")]
-    pub height: u32,
+pub struct BlockThumbnailQuery {
+    /// Tap index (default 0). The meaning depends on the block type —
+    /// e.g. compositor input index, or 0 for a single-tee thumbnail block.
+    #[serde(default)]
+    pub index: usize,
 }
 
-fn default_thumbnail_width() -> u32 {
-    320
-}
-
-fn default_thumbnail_height() -> u32 {
-    180
-}
-
-/// Get a thumbnail image from a compositor input.
+/// Get a thumbnail image from a block's video tap.
 ///
-/// Captures a single frame from the specified compositor input, scales it
-/// to the requested dimensions, and returns it as a JPEG image.
+/// Works with any block that exposes thumbnail tee elements, including
+/// `builtin.thumbnail` (index 0) and compositor blocks (one per input).
+/// The first request activates the thumbnail branch; subsequent requests
+/// are served from cache.
 #[utoipa::path(
     get,
-    path = "/api/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}",
+    path = "/api/flows/{id}/blocks/{block_id}/thumbnail",
     tag = "flows",
     params(
         ("id" = String, Path, description = "Flow ID (UUID)"),
         ("block_id" = String, Path, description = "Block instance ID (e.g., 'b0')"),
-        ("input_idx" = usize, Path, description = "Input index (0-based)"),
-        ("width" = Option<u32>, Query, description = "Target width (default 320, max 640)"),
-        ("height" = Option<u32>, Query, description = "Target height (default 180, max 360)")
+        ("index" = Option<usize>, Query, description = "Tap index (default 0, e.g. compositor input index)")
     ),
     responses(
         (status = 200, description = "JPEG thumbnail image", content_type = "image/jpeg"),
-        (status = 404, description = "Flow not running or input not found", body = ErrorResponse),
-        (status = 504, description = "Frame capture timed out", body = ErrorResponse)
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse),
+        (status = 504, description = "Frame capture timed out (retry shortly)", body = ErrorResponse)
     )
 )]
-pub async fn get_compositor_thumbnail(
+pub async fn get_block_thumbnail(
     State(state): State<AppState>,
-    Path(path): Path<CompositorThumbnailPath>,
-    axum::extract::Query(query): axum::extract::Query<CompositorThumbnailQuery>,
+    Path(path): Path<BlockThumbnailPath>,
+    axum::extract::Query(query): axum::extract::Query<BlockThumbnailQuery>,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     trace!(
-        "Getting compositor thumbnail for flow {} block {} input {}",
+        "Getting block thumbnail for flow {} block {} index {}",
         path.id,
         path.block_id,
-        path.input_idx
+        query.index
     );
 
-    // Clamp dimensions to reasonable limits
-    let width = query.width.clamp(32, 640);
-    let height = query.height.clamp(18, 360);
-
     let jpeg_bytes = state
-        .capture_compositor_thumbnail(&path.id, &path.block_id, path.input_idx, width, height)
+        .capture_block_thumbnail(&path.id, &path.block_id, query.index)
         .await
         .map_err(|e| {
             let error_msg = e.to_string();
@@ -1504,7 +1886,7 @@ pub async fn get_compositor_thumbnail(
                 (
                     StatusCode::NOT_FOUND,
                     Json(ErrorResponse::with_details(
-                        "Flow not running or input not found",
+                        "Flow not running or block not found",
                         error_msg,
                     )),
                 )
@@ -1520,11 +1902,11 @@ pub async fn get_compositor_thumbnail(
         })?;
 
     trace!(
-        "Thumbnail captured: {} bytes for flow {} block {} input {}",
+        "Block thumbnail captured: {} bytes for flow {} block {} index {}",
         jpeg_bytes.len(),
         path.id,
         path.block_id,
-        path.input_idx
+        query.index
     );
 
     Ok((

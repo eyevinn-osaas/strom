@@ -19,6 +19,8 @@ pub struct ThreadInfo {
     pub flow_id: FlowId,
     /// Block ID if the element is inside a block
     pub block_id: Option<String>,
+    /// Logical CPUs this thread is pinned to (None if affinity is off)
+    pub pinned_cpus: Option<Vec<usize>>,
 }
 
 /// Registry for tracking active GStreamer streaming threads.
@@ -45,6 +47,7 @@ impl ThreadRegistry {
         element_name: String,
         flow_id: FlowId,
         block_id: Option<String>,
+        pinned_cpus: Option<Vec<usize>>,
     ) {
         tracing::debug!(
             "Registered thread {} for element '{}' in flow {}",
@@ -60,6 +63,7 @@ impl ThreadRegistry {
                 element_name,
                 flow_id,
                 block_id,
+                pinned_cpus,
             },
         );
     }
@@ -128,7 +132,7 @@ mod tests {
         let registry = ThreadRegistry::new();
         let flow_id = Uuid::new_v4();
 
-        registry.register(12345, "element0".to_string(), flow_id, None);
+        registry.register(12345, "element0".to_string(), flow_id, None, None);
         assert_eq!(registry.len(), 1);
 
         let threads = registry.get_all();
@@ -147,9 +151,9 @@ mod tests {
         let flow1 = Uuid::new_v4();
         let flow2 = Uuid::new_v4();
 
-        registry.register(1, "elem1".to_string(), flow1, None);
-        registry.register(2, "elem2".to_string(), flow1, None);
-        registry.register(3, "elem3".to_string(), flow2, None);
+        registry.register(1, "elem1".to_string(), flow1, None, None);
+        registry.register(2, "elem2".to_string(), flow1, None, None);
+        registry.register(3, "elem3".to_string(), flow2, None, None);
 
         assert_eq!(registry.len(), 3);
 

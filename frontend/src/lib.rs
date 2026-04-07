@@ -9,7 +9,9 @@
 
 mod api;
 mod app;
+mod audioanalyzer;
 mod audiorouter;
+pub(crate) mod buffer_age;
 mod clipboard;
 mod clocks;
 mod compositor_editor;
@@ -20,6 +22,7 @@ mod interactive_overlay;
 mod latency;
 mod links;
 mod list_navigator;
+mod loudness;
 mod media;
 mod mediaplayer;
 mod meter;
@@ -29,6 +32,7 @@ mod properties;
 mod ptp_monitor;
 mod qos_monitor;
 mod qr;
+mod spectrum;
 mod state;
 mod system_monitor;
 mod themes;

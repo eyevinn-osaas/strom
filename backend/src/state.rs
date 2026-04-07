@@ -1,5 +1,6 @@
 //! Application state management.
 
+use crate::affinity_manager::AffinityManager;
 use crate::blocks::BlockRegistry;
 use crate::discovery::DiscoveryService;
 use crate::events::EventBroadcaster;
@@ -11,6 +12,7 @@ use crate::system_monitor::{SystemMonitor, ThreadCpuSampler};
 use crate::thread_registry::ThreadRegistry;
 use crate::whep_registry::WhepRegistry;
 use crate::whip_registry::WhipRegistry;
+use crate::whip_session_manager::WhipSessionManager;
 use chrono::Local;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -45,6 +47,8 @@ struct AppStateInner {
     system_monitor: SystemMonitor,
     /// Thread registry for tracking GStreamer streaming threads
     thread_registry: ThreadRegistry,
+    /// CPU affinity manager for smart core allocation
+    affinity_manager: AffinityManager,
     /// Thread CPU sampler for measuring per-thread CPU usage
     thread_cpu_sampler: parking_lot::Mutex<ThreadCpuSampler>,
     /// Channel registry for inter-pipeline sharing
@@ -59,6 +63,8 @@ struct AppStateInner {
     whep_registry: WhepRegistry,
     /// WHIP endpoint registry (maps endpoint IDs to internal ports)
     whip_registry: WhipRegistry,
+    /// WHIP session manager (creates per-client whipserversrc elements)
+    whip_session_manager: Arc<WhipSessionManager>,
     /// ICE servers for WebRTC NAT traversal (STUN/TURN URLs)
     ice_servers: Vec<String>,
     /// ICE transport policy for WebRTC connections ("all" or "relay")
@@ -78,6 +84,8 @@ impl AppState {
         sap_multicast_addresses: Vec<String>,
     ) -> Self {
         let events = EventBroadcaster::default();
+        let affinity_manager = AffinityManager::new();
+        let num_cores = affinity_manager.num_cores();
         Self {
             inner: Arc::new(AppStateInner {
                 flows: RwLock::new(HashMap::new()),
@@ -87,8 +95,9 @@ impl AppState {
                 pipelines: RwLock::new(HashMap::new()),
                 events: events.clone(),
                 block_registry: BlockRegistry::new(blocks_path),
-                system_monitor: SystemMonitor::new(),
+                system_monitor: SystemMonitor::new(num_cores),
                 thread_registry: ThreadRegistry::new(),
+                affinity_manager,
                 thread_cpu_sampler: parking_lot::Mutex::new(ThreadCpuSampler::new()),
                 channel_registry: ChannelRegistry::new(),
                 discovery: DiscoveryService::new(events, sap_multicast_addresses.clone()),
@@ -96,6 +105,7 @@ impl AppState {
                 media_path: media_path.into(),
                 whep_registry: WhepRegistry::new(),
                 whip_registry: WhipRegistry::new(),
+                whip_session_manager: Arc::new(WhipSessionManager::new()),
                 ice_servers,
                 ice_transport_policy,
                 pending_saves: RwLock::new(HashSet::new()),
@@ -111,6 +121,11 @@ impl AppState {
     /// Get the WHIP endpoint registry.
     pub fn whip_registry(&self) -> &WhipRegistry {
         &self.inner.whip_registry
+    }
+
+    /// Get the WHIP session manager.
+    pub fn whip_session_manager(&self) -> &Arc<WhipSessionManager> {
+        &self.inner.whip_session_manager
     }
 
     /// Get the event broadcaster.
@@ -230,12 +245,12 @@ impl AppState {
                 // Reset all flow states to None on server restart since pipelines aren't running
                 // This prevents showing stale "Playing" states from before the server stopped
                 for flow in flows.values_mut() {
-                    if flow.state.is_some() {
+                    if flow.gst_state.is_some() {
                         debug!(
                             "Resetting state for flow '{}' from {:?} to None (server restart)",
-                            flow.name, flow.state
+                            flow.name, flow.gst_state
                         );
-                        flow.state = None;
+                        flow.set_gst_state(None);
                     }
                 }
 
@@ -283,6 +298,20 @@ impl AppState {
         let mut pending = self.inner.pending_saves.write().await;
         pending.insert(flow_id);
         trace!("Marked flow {} as dirty for save", flow_id);
+    }
+
+    /// Read-only access to active pipelines (for monitoring).
+    pub async fn pipelines_read(
+        &self,
+    ) -> tokio::sync::RwLockReadGuard<'_, HashMap<FlowId, PipelineManager>> {
+        self.inner.pipelines.read().await
+    }
+
+    /// Write access to active pipelines (for probe management).
+    pub async fn pipelines_write(
+        &self,
+    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<FlowId, PipelineManager>> {
+        self.inner.pipelines.write().await
     }
 
     /// Start the background task that periodically saves dirty flows.
@@ -371,7 +400,7 @@ impl AppState {
                 let mut flow = flow.clone();
                 // Update state, clock sync status, PTP info, and thread priority status for running pipelines
                 if let Some(pipeline) = pipelines.get(&flow.id) {
-                    flow.state = Some(pipeline.get_state());
+                    flow.set_gst_state(Some(pipeline.get_state()));
                     flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
                     // Get PTP info and check if restart is needed (configured domain differs from running)
                     if let Some(mut ptp_info) = pipeline.get_ptp_info() {
@@ -382,6 +411,7 @@ impl AppState {
                     flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
                 } else {
                     // Clear runtime-only status when no pipeline is running
+                    flow.set_gst_state(None);
                     flow.properties.thread_priority_status = None;
                     flow.properties.clock_sync_status = None;
                     flow.properties.ptp_info = None;
@@ -402,7 +432,7 @@ impl AppState {
             let mut flow = flow.clone();
             // Update state, clock sync status, PTP info, and thread priority status for running pipeline
             if let Some(pipeline) = pipelines.get(id) {
-                flow.state = Some(pipeline.get_state());
+                flow.set_gst_state(Some(pipeline.get_state()));
                 flow.properties.clock_sync_status = Some(pipeline.get_clock_sync_status());
                 // Get PTP info and check if restart is needed (configured domain differs from running)
                 if let Some(mut ptp_info) = pipeline.get_ptp_info() {
@@ -413,6 +443,7 @@ impl AppState {
                 flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
             } else {
                 // Clear runtime-only status when no pipeline is running
+                flow.set_gst_state(None);
                 flow.properties.thread_priority_status = None;
                 flow.properties.clock_sync_status = None;
                 flow.properties.ptp_info = None;
@@ -636,11 +667,21 @@ impl AppState {
             self.inner.ice_servers.clone(),
             self.inner.ice_transport_policy.clone(),
             Some(self.inner.whip_registry.clone()),
+            self.inner.media_path.clone(),
         )?;
         info!("PipelineManager created successfully");
 
         // Set thread registry for CPU monitoring
         manager.set_thread_registry(self.inner.thread_registry.clone());
+
+        // Allocate CPU core for SingleCore affinity
+        if matches!(
+            flow.properties.cpu_affinity,
+            strom_types::flow::CpuAffinity::SingleCore
+        ) {
+            let assigned_cpus = self.inner.affinity_manager.allocate(*id);
+            manager.set_assigned_cpus(assigned_cpus);
+        }
 
         // Start pipeline
         info!("Calling manager.start() (this may block)...");
@@ -665,7 +706,7 @@ impl AppState {
 
         // Collect and register WHEP endpoints from blocks
         let whep_endpoints: Vec<(String, String)> = if let Some(manager) = pipelines_guard.get(id) {
-            let mut endpoints = Vec::new();
+            let mut endpoints: Vec<(String, String)> = Vec::new();
             for whep_info in manager.whep_endpoints() {
                 info!(
                     "Registering WHEP endpoint '{}' (block {}) on port {} mode={:?}",
@@ -674,14 +715,27 @@ impl AppState {
                     whep_info.internal_port,
                     whep_info.mode
                 );
-                self.inner
+                if let Err(e) = self
+                    .inner
                     .whep_registry
                     .register(
                         whep_info.endpoint_id.clone(),
                         whep_info.internal_port,
                         whep_info.mode,
                     )
-                    .await;
+                    .await
+                {
+                    error!("Endpoint conflict registering WHEP endpoint: {}", e);
+                    for (_, ep_id) in &endpoints {
+                        self.inner.whep_registry.unregister(ep_id).await;
+                    }
+                    drop(pipelines_guard);
+                    let mut pipelines = self.inner.pipelines.write().await;
+                    if let Some(mut mgr) = pipelines.remove(id) {
+                        let _ = mgr.stop();
+                    }
+                    return Err(PipelineError::EndpointConflict(e));
+                }
                 endpoints.push((whep_info.block_id.clone(), whep_info.endpoint_id.clone()));
             }
             endpoints
@@ -691,23 +745,35 @@ impl AppState {
 
         // Collect and register WHIP endpoints from blocks
         let whip_endpoints: Vec<(String, String)> = if let Some(manager) = pipelines_guard.get(id) {
-            let mut endpoints = Vec::new();
+            let mut endpoints: Vec<(String, String)> = Vec::new();
             for whip_info in manager.whip_endpoints() {
                 info!(
-                    "Registering WHIP endpoint '{}' (block {}) on port {} mode={:?}",
+                    "Registering WHIP endpoint '{}' (block {}) mode={:?} (port assigned per-session)",
                     whip_info.endpoint_id,
                     whip_info.block_id,
-                    whip_info.internal_port,
                     whip_info.mode
                 );
-                self.inner
+                // Register with port=0 placeholder; actual ports are per-session
+                if let Err(e) = self
+                    .inner
                     .whip_registry
-                    .register(
-                        whip_info.endpoint_id.clone(),
-                        whip_info.internal_port,
-                        whip_info.mode,
-                    )
-                    .await;
+                    .register(whip_info.endpoint_id.clone(), 0, whip_info.mode)
+                    .await
+                {
+                    error!("Endpoint conflict registering WHIP endpoint: {}", e);
+                    for (_, ep_id) in &endpoints {
+                        self.inner.whip_registry.unregister(ep_id).await;
+                    }
+                    for (_, ep_id) in &whep_endpoints {
+                        self.inner.whep_registry.unregister(ep_id).await;
+                    }
+                    drop(pipelines_guard);
+                    let mut pipelines = self.inner.pipelines.write().await;
+                    if let Some(mut mgr) = pipelines.remove(id) {
+                        let _ = mgr.stop();
+                    }
+                    return Err(PipelineError::EndpointConflict(e));
+                }
                 endpoints.push((whip_info.block_id.clone(), whip_info.endpoint_id.clone()));
             }
             endpoints
@@ -715,9 +781,28 @@ impl AppState {
             Vec::new()
         };
 
-        // Drop the pipelines guard - we don't need it anymore
+        // Register WHIP endpoint configs with the session manager
+        // We need mutable access to take configs
         drop(pipelines_guard);
-
+        {
+            let mut pipelines = self.inner.pipelines.write().await;
+            if let Some(manager) = pipelines.get_mut(id) {
+                let configs = manager.take_whip_endpoint_configs();
+                if !configs.is_empty() {
+                    for (endpoint_id, mut config) in configs {
+                        config.pipeline_weak = manager.pipeline_weak();
+                        config.endpoint_id = endpoint_id.clone();
+                        info!(
+                            "Registering WHIP endpoint config '{}' with session manager",
+                            endpoint_id
+                        );
+                        self.inner
+                            .whip_session_manager
+                            .register_endpoint(endpoint_id, config);
+                    }
+                }
+            }
+        }
         // Generate SDP for AES67 output blocks and store in runtime_data
         for block in &mut flow.blocks {
             if block.block_definition_id == "builtin.aes67_output" {
@@ -942,7 +1027,7 @@ impl AppState {
         // Update flow state and persist
         // Note: runtime_data is marked with skip_serializing_if in BlockInstance,
         // so it won't be persisted to storage (which is correct - it's runtime-only data)
-        flow.state = Some(state);
+        flow.set_gst_state(Some(state));
         flow.properties.auto_restart = true; // Enable auto-restart when flow is started
         flow.properties.started_at = Some(Local::now().to_rfc3339()); // Record when flow started
         {
@@ -954,13 +1039,11 @@ impl AppState {
         }
 
         // Broadcast events
+        // Note: FlowStateChanged is now broadcast from the bus watch on actual GStreamer
+        // state transitions, so we don't need to broadcast it here.
         self.inner
             .events
             .broadcast(StromEvent::FlowStarted { flow_id: *id });
-        self.inner.events.broadcast(StromEvent::FlowStateChanged {
-            flow_id: *id,
-            state: format!("{:?}", state),
-        });
         // Broadcast FlowUpdated so frontend sees the new runtime_data with SDP
         self.inner
             .events
@@ -981,6 +1064,22 @@ impl AppState {
 
         let Some(mut manager) = manager else {
             warn!("No active pipeline for flow: {}", id);
+            // Clear persisted state so the flow no longer appears as running
+            let mut flows = self.inner.flows.write().await;
+            if let Some(flow) = flows.get_mut(id) {
+                flow.set_gst_state(Some(PipelineState::Null));
+                flow.properties.auto_restart = false;
+                flow.properties.started_at = None;
+                let flow_clone = flow.clone();
+                drop(flows);
+                if let Err(e) = self.inner.storage.save_flow(&flow_clone).await {
+                    error!("Failed to save flow state: {}", e);
+                }
+                self.inner.events.broadcast(StromEvent::FlowStateChanged {
+                    flow_id: *id,
+                    state: format!("{:?}", PipelineState::Null),
+                });
+            }
             return Ok(PipelineState::Null);
         };
 
@@ -996,12 +1095,39 @@ impl AppState {
                 .await;
         }
 
-        // Unregister WHIP endpoints before stopping
+        // Teardown all WHIP sessions and unregister endpoints before stopping
         for whip_info in manager.whip_endpoints() {
             info!(
-                "Unregistering WHIP endpoint '{}' (block {})",
+                "Tearing down WHIP sessions and unregistering endpoint '{}' (block {})",
                 whip_info.endpoint_id, whip_info.block_id
             );
+            // Remove all active sessions for this endpoint
+            let session_entries = self
+                .inner
+                .whip_session_manager
+                .remove_all_sessions(&whip_info.endpoint_id);
+            let count = session_entries.len();
+            if count > 0 {
+                // Teardown session pipelines on a blocking thread to avoid
+                // blocking the tokio runtime (set_state(Null) can take seconds).
+                let endpoint_id_log = whip_info.endpoint_id.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    for (pipeline, element) in session_entries {
+                        WhipSessionManager::teardown_session_pipeline(&pipeline);
+                        drop(element);
+                    }
+                    info!(
+                        "Torn down {} active WHIP session(s) for endpoint '{}'",
+                        count, endpoint_id_log
+                    );
+                })
+                .await;
+            }
+            // Unregister the endpoint config from session manager
+            self.inner
+                .whip_session_manager
+                .unregister_endpoint(&whip_info.endpoint_id);
+            // Unregister from the registry
             self.inner
                 .whip_registry
                 .unregister(&whip_info.endpoint_id)
@@ -1010,6 +1136,34 @@ impl AppState {
 
         // Stop the pipeline
         let state = manager.stop()?;
+
+        // Take weak refs to the pipeline and all its elements before dropping.
+        // After drop, all GStreamer objects should be finalized. Any that
+        // survive have a leaked strong reference (signal handler closure,
+        // probe, etc.) preventing cleanup of OS resources (sockets, threads).
+        let pipeline_weak = manager.pipeline_weak();
+        let element_weak_refs = manager.element_weak_refs();
+        let flow_name = manager.flow_name().to_string();
+
+        // Drop the manager — this releases all strong references to the
+        // pipeline and its elements, allowing GStreamer to finalize them.
+        drop(manager);
+
+        // Verify everything was actually finalized
+        if pipeline_weak.upgrade().is_some() {
+            error!(
+                "Pipeline '{}': GStreamer pipeline still alive after drop — OS resources will leak",
+                flow_name
+            );
+            for (name, weak) in &element_weak_refs {
+                if weak.upgrade().is_some() {
+                    error!("Pipeline '{}': leaked element '{}'", flow_name, name);
+                }
+            }
+        }
+
+        // Deallocate CPU core assignment
+        self.inner.affinity_manager.deallocate(id);
 
         // Clear runtime_data from all blocks (SDP is only valid while running)
         let flow = {
@@ -1026,7 +1180,7 @@ impl AppState {
                         block.runtime_data = None;
                     }
                 }
-                flow.state = Some(state);
+                flow.set_gst_state(Some(state));
                 flow.properties.auto_restart = false; // Disable auto-restart when manually stopped
                 flow.properties.started_at = None; // Clear started_at when stopped
                 Some(flow.clone())
@@ -1069,17 +1223,22 @@ impl AppState {
                         .remove_announcement(*id, &block.id)
                         .await;
                 }
+
+                // Clean up vision mixer overlay state
+                if block.block_definition_id == "builtin.vision_mixer" {
+                    crate::blocks::builtin::vision_mixer::overlay::unregister_overlay_state(
+                        &block.id,
+                    );
+                }
             }
         }
 
         // Broadcast events
+        // Note: FlowStateChanged is now broadcast from the bus watch on actual GStreamer
+        // state transitions, so we don't need to broadcast it here.
         self.inner
             .events
             .broadcast(StromEvent::FlowStopped { flow_id: *id });
-        self.inner.events.broadcast(StromEvent::FlowStateChanged {
-            flow_id: *id,
-            state: format!("{:?}", state),
-        });
         // Broadcast FlowUpdated so frontend sees the cleared runtime_data
         self.inner
             .events
@@ -1153,7 +1312,7 @@ impl AppState {
         transition_type: &str,
         duration_ms: u64,
     ) -> Result<(), PipelineError> {
-        info!(
+        debug!(
             "Triggering {} transition on block {} in flow {} ({} -> {}, {}ms)",
             transition_type, block_instance_id, flow_id, from_input, to_input, duration_ms
         );
@@ -1164,7 +1323,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        manager.trigger_transition(
+        let (ftb_cancelled, old_pgm_group, new_pgm_group) = manager.trigger_transition(
             block_instance_id,
             from_input,
             to_input,
@@ -1174,24 +1333,42 @@ impl AppState {
 
         drop(pipelines);
 
+        // Broadcast FTB cancelled event so clients update their UI
+        if ftb_cancelled {
+            self.inner
+                .events
+                .broadcast(StromEvent::VisionMixerFtbChanged {
+                    flow_id: *flow_id,
+                    block_id: block_instance_id.to_string(),
+                    active: false,
+                });
+        }
+
         // Sync final alpha values back to flow definition for persistence
-        // After transition: from_input alpha=0.0, to_input alpha=1.0
+        // Clear ALL input alphas to 0.0, then set active group inputs to 1.0
         if let Some(block_id) = block_instance_id.split(':').next() {
             let mut flows = self.inner.flows.write().await;
             if let Some(flow) = flows.get_mut(flow_id) {
                 if let Some(block) = flow.blocks.iter_mut().find(|b| b.id == block_id) {
-                    block.properties.insert(
-                        format!("input_{}_alpha", from_input),
-                        PropertyValue::Float(0.0),
-                    );
-                    block.properties.insert(
-                        format!("input_{}_alpha", to_input),
-                        PropertyValue::Float(1.0),
-                    );
+                    // Clear all existing alpha properties
+                    let alpha_keys: Vec<String> = block
+                        .properties
+                        .keys()
+                        .filter(|k| k.starts_with("input_") && k.ends_with("_alpha"))
+                        .cloned()
+                        .collect();
+                    for key in alpha_keys {
+                        block.properties.insert(key, PropertyValue::Float(0.0));
+                    }
+                    // Set the active inputs (new PGM group)
+                    for &idx in &new_pgm_group {
+                        block
+                            .properties
+                            .insert(format!("input_{}_alpha", idx), PropertyValue::Float(1.0));
+                    }
                     trace!(
-                        "Synced transition alpha values: input {} -> 0.0, input {} -> 1.0",
-                        from_input,
-                        to_input
+                        "Synced transition alpha values: all -> 0.0, inputs {:?} -> 1.0",
+                        new_pgm_group
                     );
                 }
             }
@@ -1199,6 +1376,49 @@ impl AppState {
 
             // Mark flow for debounced save
             self.mark_flow_dirty(*flow_id).await;
+        }
+
+        // Check if this is a vision mixer block and update multiview accordingly
+        // After take: new PGM = old PVW group, new PVW = old PGM group (swap)
+        if let Some(block_id) = block_instance_id.split(':').next() {
+            let flows = self.inner.flows.read().await;
+            let is_vision_mixer = flows
+                .get(flow_id)
+                .and_then(|flow| flow.blocks.iter().find(|b| b.id == block_id))
+                .map(|b| b.block_definition_id == "builtin.vision_mixer")
+                .unwrap_or(false);
+            drop(flows);
+
+            if is_vision_mixer {
+                let num_inputs = self.get_vision_mixer_num_inputs(flow_id, block_id).await;
+                let new_pvw_group = old_pgm_group.clone();
+                let pipelines = self.inner.pipelines.read().await;
+                if let Some(manager) = pipelines.get(flow_id) {
+                    let _ = manager.update_vision_mixer_after_take(
+                        block_id,
+                        &new_pgm_group,
+                        &new_pvw_group,
+                        num_inputs,
+                    );
+                }
+                drop(pipelines);
+
+                // Broadcast vision mixer state change
+                self.inner
+                    .events
+                    .broadcast(StromEvent::VisionMixerStateChanged {
+                        flow_id: *flow_id,
+                        block_id: block_id.to_string(),
+                        preview_input: strom_types::vision_mixer::group_first(
+                            strom_types::vision_mixer::pack_source_group(&new_pvw_group),
+                        ),
+                        program_input: strom_types::vision_mixer::group_first(
+                            strom_types::vision_mixer::pack_source_group(&new_pgm_group),
+                        ),
+                        preview_inputs: new_pvw_group,
+                        program_inputs: new_pgm_group.clone(),
+                    });
+            }
         }
 
         // Broadcast transition event
@@ -1212,6 +1432,207 @@ impl AppState {
                 transition_type: transition_type.to_string(),
                 duration_ms,
             });
+
+        Ok(())
+    }
+
+    /// Select a preview input on a vision mixer block.
+    ///
+    /// If `multi` is false, replaces PVW group with a single source.
+    /// If `multi` is true, toggles the input in/out of the PVW group.
+    ///
+    /// Returns (pvw_group, pgm_group).
+    pub async fn select_vision_mixer_preview(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        input: usize,
+        multi: bool,
+    ) -> Result<(Vec<usize>, Vec<usize>), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        // Get num_inputs from block properties
+        let num_inputs = self
+            .get_vision_mixer_num_inputs(flow_id, block_instance_id)
+            .await;
+
+        let (pvw_group, pgm_group) =
+            manager.select_vision_mixer_preview(block_instance_id, input, num_inputs, multi)?;
+
+        drop(pipelines);
+
+        // Broadcast state change event
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerStateChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                preview_input: pvw_group.first().copied().unwrap_or(0),
+                program_input: pgm_group.first().copied().unwrap_or(0),
+                preview_inputs: pvw_group.clone(),
+                program_inputs: pgm_group.clone(),
+            });
+
+        Ok((pvw_group, pgm_group))
+    }
+
+    /// Get num_inputs for a vision mixer block from the flow definition.
+    async fn get_vision_mixer_num_inputs(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+    ) -> usize {
+        use crate::blocks::builtin::vision_mixer::properties as vm_props;
+        let flows = self.inner.flows.read().await;
+        flows
+            .get(flow_id)
+            .and_then(|flow| flow.blocks.iter().find(|b| b.id == block_instance_id))
+            .map(|block| vm_props::parse_num_inputs(&block.properties))
+            .unwrap_or(4)
+    }
+
+    /// Set or clear the background source on a vision mixer block.
+    pub async fn set_vision_mixer_background(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        input: Option<usize>,
+    ) -> Result<Option<usize>, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.set_vision_mixer_background(block_instance_id, input)?;
+        drop(pipelines);
+
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerBackgroundChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                background_input: input,
+            });
+
+        Ok(input)
+    }
+
+    /// Toggle a DSK (Downstream Keyer) layer on a vision mixer block.
+    pub async fn set_dsk_enabled(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        dsk_index: usize,
+        enabled: bool,
+    ) -> Result<(), PipelineError> {
+        let num_inputs = self
+            .get_vision_mixer_num_inputs(flow_id, block_instance_id)
+            .await;
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.set_dsk_enabled(block_instance_id, dsk_index, num_inputs, enabled)?;
+        drop(pipelines);
+
+        // Broadcast DSK state change (1-based dsk number)
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerDskChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                dsk: dsk_index + 1,
+                enabled,
+            });
+
+        Ok(())
+    }
+
+    /// Set the multiview overlay alpha on a vision mixer block.
+    pub async fn set_overlay_alpha(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        alpha: f64,
+    ) -> Result<(), PipelineError> {
+        let num_inputs = self
+            .get_vision_mixer_num_inputs(flow_id, block_instance_id)
+            .await;
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.set_overlay_alpha(block_instance_id, num_inputs, alpha)?;
+        drop(pipelines);
+
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerOverlayAlphaChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                alpha,
+            });
+
+        Ok(())
+    }
+
+    /// Toggle Fade to Black on a vision mixer block.
+    pub async fn fade_to_black(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        duration_ms: u64,
+    ) -> Result<bool, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        let active = manager.fade_to_black(block_instance_id, duration_ms)?;
+        drop(pipelines);
+
+        self.inner
+            .events
+            .broadcast(StromEvent::VisionMixerFtbChanged {
+                flow_id: *flow_id,
+                block_id: block_instance_id.to_string(),
+                active,
+            });
+
+        Ok(active)
+    }
+
+    /// Reset accumulated loudness measurements on an EBU R128 meter block.
+    pub async fn reset_loudness(
+        &self,
+        flow_id: &FlowId,
+        block_id: &str,
+    ) -> Result<(), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.reset_loudness(block_id)?;
+
+        Ok(())
+    }
+
+    pub async fn recorder_split_now(
+        &self,
+        flow_id: &FlowId,
+        block_id: &str,
+    ) -> Result<(), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        manager.recorder_split_now(block_id)?;
 
         Ok(())
     }
@@ -1436,6 +1857,9 @@ impl AppState {
     }
 
     /// Get WebRTC statistics from a running flow's pipeline.
+    ///
+    /// Uses block_in_place so the synchronous GStreamer promise.wait() calls
+    /// don't prevent tokio from scheduling other tasks on other threads.
     pub async fn get_webrtc_stats(
         &self,
         flow_id: &FlowId,
@@ -1446,7 +1870,8 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        Ok(manager.get_webrtc_stats())
+        let stats = tokio::task::block_in_place(|| manager.get_webrtc_stats());
+        Ok(stats)
     }
 
     /// Query the latency of a running pipeline.
@@ -1487,6 +1912,15 @@ impl AppState {
         pipelines.get(flow_id).map(|p| p.get_debug_info())
     }
 
+    /// Get negotiated caps for all pads in a running flow's pipeline.
+    pub async fn get_flow_pad_caps(
+        &self,
+        flow_id: &FlowId,
+    ) -> Option<std::collections::HashMap<String, Vec<(String, String, String)>>> {
+        let pipelines = self.inner.pipelines.read().await;
+        pipelines.get(flow_id).map(|p| p.get_all_pad_caps())
+    }
+
     /// Get current system monitoring statistics (CPU and GPU).
     pub async fn get_system_stats(&self) -> strom_types::SystemStats {
         self.inner.system_monitor.collect_stats().await
@@ -1501,16 +1935,15 @@ impl AppState {
         self.inner.ptp_monitor.get_stats_events()
     }
 
-    /// Capture a thumbnail from a compositor input.
+    /// Capture a thumbnail from a block's tee element at the given index.
     ///
-    /// Returns JPEG-encoded image bytes for the specified compositor input.
-    pub async fn capture_compositor_thumbnail(
+    /// Works with any block that exposes thumbnail tee elements, including
+    /// `builtin.thumbnail` (index 0) and compositor blocks (one per input).
+    pub async fn capture_block_thumbnail(
         &self,
         flow_id: &FlowId,
         block_id: &str,
-        input_idx: usize,
-        width: u32,
-        height: u32,
+        index: usize,
     ) -> Result<Vec<u8>, PipelineError> {
         let pipelines = self.inner.pipelines.read().await;
 
@@ -1518,7 +1951,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        manager.capture_compositor_input_thumbnail(block_id, input_idx, width, height)
+        manager.capture_block_thumbnail(block_id, index)
     }
 }
 

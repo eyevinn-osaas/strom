@@ -360,24 +360,14 @@ impl ElementPalette {
         let description = element.description.clone();
 
         ui.push_id(&name, |ui| {
-            // Main horizontal layout for element item
-            ui.horizontal(|ui| {
-                // Element name label with truncation
-                let available_width = ui.available_width() - 70.0; // Reserve space for button
-                ui.allocate_ui_with_layout(
-                    egui::vec2(available_width, ui.spacing().interact_size.y),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.add(egui::Label::new(&name).truncate())
-                            .on_hover_text(&description);
-                    },
-                );
-
-                // Add button on the right
-                if ui.button("+ Add").on_hover_text("Add to canvas").clicked() {
-                    self.dragging_element = Some(name.clone());
-                }
-            });
+            // Clickable name — adds element to canvas
+            if ui
+                .button(&name)
+                .on_hover_text(format!("Add {} to canvas\n\n{}", name, description))
+                .clicked()
+            {
+                self.dragging_element = Some(name.clone());
+            }
 
             // Show category and description below (wrapped)
             ui.horizontal_wrapped(|ui| {
@@ -397,29 +387,19 @@ impl ElementPalette {
         let built_in = block.built_in;
 
         ui.push_id(&id, |ui| {
-            // Main horizontal layout for block item
-            ui.horizontal(|ui| {
-                // Block name label with truncation
-                let available_width = ui.available_width() - 70.0; // Reserve space for button
-                ui.allocate_ui_with_layout(
-                    egui::vec2(available_width, ui.spacing().interact_size.y),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        let label_text = if built_in {
-                            format!("📦 {}", name)
-                        } else {
-                            format!("⚙️ {}", name)
-                        };
-                        ui.add(egui::Label::new(&label_text).truncate())
-                            .on_hover_text(&description);
-                    },
-                );
-
-                // Add button on the right
-                if ui.button("+ Add").on_hover_text("Add to canvas").clicked() {
-                    self.dragging_block = Some(id.clone());
-                }
-            });
+            // Clickable name — adds block to canvas
+            let label_text = if built_in {
+                format!("{} {}", egui_phosphor::regular::PACKAGE, name)
+            } else {
+                format!("{} {}", egui_phosphor::regular::GEAR, name)
+            };
+            if ui
+                .button(label_text)
+                .on_hover_text(format!("Add {} to canvas\n\n{}", name, description))
+                .clicked()
+            {
+                self.dragging_block = Some(id.clone());
+            }
 
             // Show category and description below (wrapped)
             ui.horizontal_wrapped(|ui| {

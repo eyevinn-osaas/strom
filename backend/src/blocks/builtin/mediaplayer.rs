@@ -18,41 +18,45 @@ use uuid::Uuid;
 
 /// Normalize a file path to a proper URI.
 ///
-/// Converts relative paths to absolute file:// URIs.
+/// Converts relative paths to absolute file:// URIs resolved against `media_path`.
 /// Passes through URIs that already have a scheme (file://, http://, https://).
-fn normalize_uri(path: &str) -> String {
+///
+/// Relative paths are resolved relative to `media_path` (the configured media directory).
+/// Legacy paths starting with `./media/` have that prefix stripped before resolution.
+fn normalize_uri(path: &str, media_path: &std::path::Path) -> String {
     if path.starts_with("file://") || path.starts_with("http://") || path.starts_with("https://") {
-        path.to_string()
+        return path.to_string();
+    }
+
+    // Strip legacy "./media/" prefix (stored before media_path was configurable)
+    let relative = if let Some(stripped) = path.strip_prefix("./media/") {
+        stripped
+    } else if std::path::Path::new(path).is_absolute() {
+        // Already absolute path without scheme
+        return format!("file://{}", path);
     } else {
-        // Convert to absolute path
-        let file_path = std::path::Path::new(path);
+        path
+    };
 
-        // Try canonicalize first (requires file to exist)
-        if let Ok(abs_path) = file_path.canonicalize() {
-            return format!("file://{}", abs_path.display());
-        }
+    // Resolve relative path against the configured media_path
+    let abs_path = media_path.join(relative);
 
-        // If canonicalize fails, construct absolute path manually
-        if file_path.is_relative() {
-            if let Ok(cwd) = std::env::current_dir() {
-                let abs_path = cwd.join(file_path);
-                // Try to canonicalize parent directory at least
-                if let Some(parent) = abs_path.parent() {
-                    if let Ok(canonical_parent) = parent.canonicalize() {
-                        if let Some(filename) = abs_path.file_name() {
-                            let final_path = canonical_parent.join(filename);
-                            return format!("file://{}", final_path.display());
-                        }
-                    }
-                }
-                // Fallback: just use joined path
-                return format!("file://{}", abs_path.display());
+    // Try to canonicalize (requires the file to exist)
+    if let Ok(canonical) = abs_path.canonicalize() {
+        return format!("file://{}", canonical.display());
+    }
+
+    // If canonicalize fails (file not yet written), construct path manually
+    if let Some(parent) = abs_path.parent() {
+        if let Ok(canonical_parent) = parent.canonicalize() {
+            if let Some(filename) = abs_path.file_name() {
+                return format!("file://{}", canonical_parent.join(filename).display());
             }
         }
-
-        // Last resort: assume it's already absolute
-        format!("file://{}", path)
     }
+
+    // Fallback: just use the joined path
+    format!("file://{}", abs_path.display())
 }
 
 /// Global registry of media player instances for API access.
@@ -92,6 +96,8 @@ pub struct MediaPlayerState {
     pub audio_linked: AtomicBool,
     /// Whether to decode streams (true) or pass through encoded (false)
     pub decode: bool,
+    /// Configured media files directory (for resolving relative playlist paths)
+    pub media_path: std::path::PathBuf,
 }
 
 impl MediaPlayerState {
@@ -182,7 +188,7 @@ impl MediaPlayerState {
             .upgrade()
             .ok_or("Source element no longer exists")?;
 
-        let uri = normalize_uri(&file_path);
+        let uri = normalize_uri(&file_path, &self.media_path);
         info!("Loading file: {}", uri);
 
         // Get the pipeline to flush and restart
@@ -453,6 +459,15 @@ impl BlockBuilder for MediaPlayerBuilder {
             }
         );
 
+        // Get configured media path (injected by expand_blocks)
+        let media_path: std::path::PathBuf = properties
+            .get("_media_path")
+            .and_then(|v| match v {
+                PropertyValue::String(s) => Some(std::path::PathBuf::from(s)),
+                _ => None,
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from("./media"));
+
         // Read playlist from properties (stored as JSON string)
         let initial_playlist: Vec<String> = properties
             .get("playlist")
@@ -481,6 +496,7 @@ impl BlockBuilder for MediaPlayerBuilder {
                 decode,
                 position_update_interval_ms,
                 initial_playlist,
+                media_path,
             )
         } else {
             // PASSTHROUGH MODE: urisourcebin → parsebin → encoded output
@@ -492,6 +508,7 @@ impl BlockBuilder for MediaPlayerBuilder {
                 decode,
                 position_update_interval_ms,
                 initial_playlist,
+                media_path,
             )
         }
     }
@@ -502,6 +519,7 @@ impl MediaPlayerBuilder {
     ///
     /// Uses uridecodebin which decodes to raw video/audio.
     /// Output goes through identity elements for consistent pad naming.
+    #[allow(clippy::too_many_arguments)]
     fn build_decode_mode(
         instance_id: &str,
         block_id: &str,
@@ -510,6 +528,7 @@ impl MediaPlayerBuilder {
         decode: bool,
         position_update_interval_ms: u64,
         initial_playlist: Vec<String>,
+        media_path: std::path::PathBuf,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         // Create element IDs - use consistent names for external pad references
         let uridecodebin_id = format!("{}:uridecodebin", instance_id);
@@ -550,12 +569,13 @@ impl MediaPlayerBuilder {
             video_linked: AtomicBool::new(false),
             audio_linked: AtomicBool::new(false),
             decode,
+            media_path: media_path.clone(),
         });
 
         // If we have an initial playlist, set the first URI
         if !initial_playlist.is_empty() {
             if let Some(first_file) = initial_playlist.first() {
-                let uri = normalize_uri(first_file);
+                let uri = normalize_uri(first_file, &media_path);
                 info!("Media Player {}: Setting initial URI: {}", instance_id, uri);
                 uridecodebin.set_property("uri", &uri);
             }
@@ -670,6 +690,7 @@ impl MediaPlayerBuilder {
     ///
     /// Both video and audio outputs use identity - downstream blocks handle any
     /// required parsing (e.g., MPEGTSSRT block dynamically inserts appropriate parsers).
+    #[allow(clippy::too_many_arguments)]
     fn build_passthrough_mode(
         instance_id: &str,
         block_id: &str,
@@ -678,6 +699,7 @@ impl MediaPlayerBuilder {
         decode: bool,
         position_update_interval_ms: u64,
         initial_playlist: Vec<String>,
+        media_path: std::path::PathBuf,
     ) -> Result<BlockBuildResult, BlockBuildError> {
         // Create element IDs - use consistent names for external pad references
         let urisourcebin_id = format!("{}:urisourcebin", instance_id);
@@ -723,12 +745,13 @@ impl MediaPlayerBuilder {
             video_linked: AtomicBool::new(false),
             audio_linked: AtomicBool::new(false),
             decode,
+            media_path: media_path.clone(),
         });
 
         // If we have an initial playlist, set the first URI
         if !initial_playlist.is_empty() {
             if let Some(first_file) = initial_playlist.first() {
-                let uri = normalize_uri(first_file);
+                let uri = normalize_uri(first_file, &media_path);
                 info!("Media Player {}: Setting initial URI: {}", instance_id, uri);
                 urisourcebin.set_property("uri", &uri);
             }
@@ -1129,6 +1152,7 @@ fn media_player_definition() -> BlockDefinition {
                     property_name: "decode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "loop_playlist".to_string(),
@@ -1142,6 +1166,7 @@ fn media_player_definition() -> BlockDefinition {
                     property_name: "loop_playlist".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "position_update_interval".to_string(),
@@ -1155,6 +1180,7 @@ fn media_player_definition() -> BlockDefinition {
                     property_name: "position_update_interval".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -1193,29 +1219,33 @@ mod tests {
     #[test]
     fn test_normalize_uri_file_scheme() {
         // URIs with file:// scheme should pass through unchanged
+        let media_path = std::path::Path::new("/media");
         let uri = "file:///path/to/video.mp4";
-        assert_eq!(normalize_uri(uri), uri);
+        assert_eq!(normalize_uri(uri, media_path), uri);
     }
 
     #[test]
     fn test_normalize_uri_http_scheme() {
         // HTTP URIs should pass through unchanged
+        let media_path = std::path::Path::new("/media");
         let uri = "http://example.com/video.mp4";
-        assert_eq!(normalize_uri(uri), uri);
+        assert_eq!(normalize_uri(uri, media_path), uri);
     }
 
     #[test]
     fn test_normalize_uri_https_scheme() {
         // HTTPS URIs should pass through unchanged
+        let media_path = std::path::Path::new("/media");
         let uri = "https://example.com/video.mp4";
-        assert_eq!(normalize_uri(uri), uri);
+        assert_eq!(normalize_uri(uri, media_path), uri);
     }
 
     #[test]
     fn test_normalize_uri_relative_path() {
-        // Relative paths should get file:// prefix
+        // Relative paths should be resolved against media_path
+        let media_path = std::path::Path::new("/media");
         let path = "video.mp4";
-        let result = normalize_uri(path);
+        let result = normalize_uri(path, media_path);
         assert!(result.starts_with("file://"), "Should have file:// prefix");
         assert!(result.ends_with("video.mp4"), "Should end with filename");
     }
@@ -1223,16 +1253,17 @@ mod tests {
     #[test]
     fn test_normalize_uri_absolute_path() {
         // Absolute paths that don't start with file:// should get the prefix
+        let media_path = std::path::Path::new("/media");
         #[cfg(not(target_os = "windows"))]
         {
             let path = "/tmp/video.mp4";
-            let result = normalize_uri(path);
+            let result = normalize_uri(path, media_path);
             assert_eq!(result, "file:///tmp/video.mp4");
         }
         #[cfg(target_os = "windows")]
         {
             let path = "C:\\temp\\video.mp4";
-            let result = normalize_uri(path);
+            let result = normalize_uri(path, media_path);
             assert!(
                 result.starts_with("file:///"),
                 "Windows path should get file:/// prefix"
@@ -1269,6 +1300,7 @@ mod tests {
             video_linked: AtomicBool::new(false),
             audio_linked: AtomicBool::new(false),
             decode: false,
+            media_path: std::path::PathBuf::from("/media"),
         });
 
         // Register and verify
@@ -1298,6 +1330,7 @@ mod tests {
             video_linked: AtomicBool::new(false),
             audio_linked: AtomicBool::new(false),
             decode: false,
+            media_path: std::path::PathBuf::from("/media"),
         };
 
         // Initially empty
@@ -1330,6 +1363,7 @@ mod tests {
             video_linked: AtomicBool::new(false),
             audio_linked: AtomicBool::new(false),
             decode: false,
+            media_path: std::path::PathBuf::from("/media"),
         };
 
         // Empty playlist = stopped

@@ -44,10 +44,10 @@ jobs:
             arch: arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Extract CEF short version
         id: cef
@@ -96,7 +96,7 @@ jobs:
 
       - name: Upload to GitHub Release
         if: inputs.upload_to_release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release_tag }}
           name: "gstcefsrc Dependencies"

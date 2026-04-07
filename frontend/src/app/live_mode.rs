@@ -1,6 +1,6 @@
 use crate::compositor_editor::CompositorEditor;
 use crate::state::ConnectionState;
-use egui::{CentralPanel, Color32, Context, TopBottomPanel};
+use egui::{CentralPanel, Color32};
 
 use super::ThemePreference;
 use super::*;
@@ -10,7 +10,7 @@ impl StromApp {
         &mut self,
         flow_id: strom_types::FlowId,
         block_id: String,
-        ctx: &Context,
+        ctx: &egui::Context,
     ) {
         // Find the flow and block to get compositor parameters
         if let Some(flow) = self.flows.iter().find(|f| f.id == flow_id) {
@@ -74,38 +74,39 @@ impl StromApp {
     /// Render the Live UI (minimal top bar + full-screen compositor editor).
     pub(super) fn render_live_ui(
         &mut self,
-        ctx: &Context,
+        ui: &mut egui::Ui,
         flow_id: strom_types::FlowId,
         block_id: &str,
     ) {
         // Ensure editor exists (compositor or mixer)
         if self.compositor_editor.is_none() && self.mixer_editor.is_none() {
-            self.enter_live_mode(flow_id, block_id.to_string(), ctx);
+            self.enter_live_mode(flow_id, block_id.to_string(), ui.ctx());
         }
 
         // Determine view type for title
         let is_mixer = self.mixer_editor.is_some();
 
         // Get flow and block names for display
-        let flow_name = self
-            .flows
-            .iter()
-            .find(|f| f.id == flow_id)
+        let flow = self.flows.iter().find(|f| f.id == flow_id);
+        let flow_name = flow
             .map(|f| f.name.clone())
             .unwrap_or_else(|| "Unknown Flow".to_string());
+        let block_label = flow
+            .and_then(|f| f.blocks.iter().find(|b| b.id == block_id))
+            .and_then(|b| b.name.clone());
 
         // Top bar with back button and info
-        TopBottomPanel::top("live_bar")
+        egui::Panel::top("live_bar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Back button (only show if we didn't start in live mode via URL)
                     if !self.started_in_live_mode {
                         if ui
-                            .button("Back")
+                            .button(format!("{} Back", egui_phosphor::regular::ARROW_LEFT))
                             .on_hover_text("Return to admin interface")
                             .clicked()
                         {
@@ -122,8 +123,10 @@ impl StromApp {
 
                     // Flow and block info
                     ui.label(&flow_name);
-                    ui.label("›");
-                    ui.label(block_id);
+                    if let Some(ref label) = block_label {
+                        ui.label(egui_phosphor::regular::CARET_RIGHT);
+                        ui.label(label);
+                    }
 
                     // Right side: connection status, theme picker, and copy URL button
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -131,7 +134,7 @@ impl StromApp {
                         #[cfg(target_arch = "wasm32")]
                         {
                             if ui
-                                .button("📋 Copy URL")
+                                .button(egui_phosphor::regular::COPY)
                                 .on_hover_text("Copy live URL to clipboard")
                                 .clicked()
                             {
@@ -181,7 +184,7 @@ impl StromApp {
                                         .clicked()
                                     {
                                         self.settings.theme = theme;
-                                        self.apply_theme(ctx.clone());
+                                        self.apply_theme(ui.ctx().clone());
                                     }
                                 }
                             });
@@ -203,8 +206,9 @@ impl StromApp {
 
         // Full-screen editor (compositor or mixer)
         if let Some(ref mut editor) = self.compositor_editor {
-            CentralPanel::default().show(ctx, |ui| {
-                editor.show_fullscreen(ui, ctx);
+            CentralPanel::default().show_inside(ui, |ui| {
+                let ctx = ui.ctx().clone();
+                editor.show_fullscreen(ui, &ctx);
             });
         } else if let Some(ref mut editor) = self.mixer_editor {
             // Update pipeline running state so the editor skips API calls when stopped
@@ -212,13 +216,13 @@ impl StromApp {
                 .flows
                 .iter()
                 .find(|f| f.id == flow_id)
-                .and_then(|f| f.state)
-                .map(|s| s == strom_types::PipelineState::Playing)
+                .map(|f| f.running)
                 .unwrap_or(false);
             editor.set_pipeline_running(running);
 
-            CentralPanel::default().show(ctx, |ui| {
-                editor.show_fullscreen(ui, ctx, &self.meter_data);
+            CentralPanel::default().show_inside(ui, |ui| {
+                let ctx = ui.ctx().clone();
+                editor.show_fullscreen(ui, &ctx, &self.meter_data);
             });
 
             // Handle mixer save request
@@ -238,7 +242,7 @@ impl StromApp {
                     }
                     let flow_clone = flow.clone();
                     let api = self.api.clone();
-                    let ctx_clone = ctx.clone();
+                    let ctx_clone = ui.ctx().clone();
                     spawn_task(async move {
                         match api.update_flow(&flow_clone).await {
                             Ok(_) => {
@@ -256,7 +260,7 @@ impl StromApp {
             }
         } else {
             // Show loading state
-            CentralPanel::default().show(ctx, |ui| {
+            CentralPanel::default().show_inside(ui, |ui| {
                 ui.centered_and_justified(|ui| {
                     ui.spinner();
                     ui.label("Loading...");

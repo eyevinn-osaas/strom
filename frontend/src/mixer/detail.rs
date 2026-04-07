@@ -80,7 +80,11 @@ impl MixerEditor {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(header).strong());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
+                        if ui
+                            .button(egui_phosphor::regular::X)
+                            .on_hover_text("Close")
+                            .clicked()
+                        {
                             self.selection = None;
                         }
                     });
@@ -115,7 +119,11 @@ impl MixerEditor {
                             .color(Color32::from_rgb(200, 200, 255)),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
+                        if ui
+                            .button(egui_phosphor::regular::X)
+                            .on_hover_text("Close")
+                            .clicked()
+                        {
                             self.selection = None;
                         }
                     });
@@ -244,7 +252,11 @@ impl MixerEditor {
                     });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.main_comp_enabled = false;
                     self.main_comp_threshold = DEFAULT_COMP_THRESHOLD;
                     self.main_comp_ratio = DEFAULT_COMP_RATIO;
@@ -342,7 +354,11 @@ impl MixerEditor {
                 });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.main_eq_enabled = false;
                     self.main_eq_bands = DEFAULT_EQ_BANDS;
                     self.bypass_throttle();
@@ -394,7 +410,11 @@ impl MixerEditor {
                 });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.main_limiter_enabled = false;
                     self.main_limiter_threshold = DEFAULT_LIMITER_THRESHOLD;
                     self.bypass_throttle();
@@ -438,7 +458,11 @@ impl MixerEditor {
                 });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.channels[index].gain = DEFAULT_GAIN;
                     self.update_channel_property(ctx, index, "gain");
                 }
@@ -480,7 +504,11 @@ impl MixerEditor {
                 });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.channels[index].hpf_enabled = false;
                     self.channels[index].hpf_freq = DEFAULT_HPF_FREQ;
                     self.update_processing_param(ctx, index, "hpf", "enabled");
@@ -555,7 +583,11 @@ impl MixerEditor {
                 });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.channels[index].gate_enabled = false;
                     self.channels[index].gate_threshold = DEFAULT_GATE_THRESHOLD;
                     self.channels[index].gate_attack = DEFAULT_GATE_ATTACK;
@@ -680,7 +712,11 @@ impl MixerEditor {
                     });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.channels[index].comp_enabled = false;
                     self.channels[index].comp_threshold = DEFAULT_COMP_THRESHOLD;
                     self.channels[index].comp_ratio = DEFAULT_COMP_RATIO;
@@ -784,7 +820,11 @@ impl MixerEditor {
                 });
 
                 ui.add_space(4.0);
-                if ui.small_button("Reset").clicked() {
+                if ui
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                    .on_hover_text("Reset")
+                    .clicked()
+                {
                     self.channels[index].eq_enabled = false;
                     self.channels[index].eq_bands = DEFAULT_EQ_BANDS;
                     self.bypass_throttle();

@@ -2,6 +2,7 @@
 
 use crate::events::EventBroadcaster;
 use crate::whip_registry::WhipRegistry;
+use crate::whip_session_manager::WhipEndpointConfig;
 use gstreamer as gst;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -46,6 +47,12 @@ pub type BusMessageConnectFn = Box<
 /// Legacy type alias for backward compatibility
 #[deprecated(note = "Use BusMessageConnectFn instead")]
 pub type BusWatchSetupFn = BusMessageConnectFn;
+
+/// Function type for setting up block-specific GLib element signal handlers.
+///
+/// Called at pipeline start with the flow ID and event broadcaster.
+/// The GStreamer element(s) to connect signals on are captured in the closure during build time.
+pub type ElementSetupFn = Box<dyn FnOnce(FlowId, EventBroadcaster) + Send + Sync>;
 
 /// Stream mode for WHEP endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -122,6 +129,8 @@ pub struct BlockBuildContext {
     whep_endpoints: RefCell<Vec<WhepEndpointInfo>>,
     /// WHIP endpoints queued for registration
     whip_endpoints: RefCell<Vec<WhipEndpointInfo>>,
+    /// WHIP endpoint configs queued for session manager registration
+    whip_endpoint_configs: RefCell<Vec<(String, WhipEndpointConfig)>>,
     /// ICE servers for WebRTC NAT traversal (STUN/TURN URLs)
     ice_servers: Vec<String>,
     /// ICE transport policy ("all" or "relay")
@@ -131,6 +140,8 @@ pub struct BlockBuildContext {
     dynamic_webrtcbins: DynamicWebrtcbinStore,
     /// WHIP endpoint registry (optional, only set when WHIP blocks need it for element recreation)
     whip_registry: Option<WhipRegistry>,
+    /// Element signal setup functions queued for connection at pipeline start
+    element_setups: RefCell<Vec<ElementSetupFn>>,
 }
 
 impl BlockBuildContext {
@@ -139,10 +150,12 @@ impl BlockBuildContext {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
             whip_endpoints: RefCell::new(Vec::new()),
+            whip_endpoint_configs: RefCell::new(Vec::new()),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins: Arc::new(Mutex::new(HashMap::new())),
             whip_registry: None,
+            element_setups: RefCell::new(Vec::new()),
         }
     }
 
@@ -156,10 +169,12 @@ impl BlockBuildContext {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
             whip_endpoints: RefCell::new(Vec::new()),
+            whip_endpoint_configs: RefCell::new(Vec::new()),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,
             whip_registry,
+            element_setups: RefCell::new(Vec::new()),
         }
     }
 
@@ -288,6 +303,39 @@ impl BlockBuildContext {
     /// Called after block expansion to process the registrations.
     pub fn take_whip_endpoints(&self) -> Vec<WhipEndpointInfo> {
         self.whip_endpoints.borrow_mut().drain(..).collect()
+    }
+
+    /// Register a WHIP endpoint configuration for the session manager.
+    ///
+    /// Called by WHIP Input blocks during build to store the config needed
+    /// for per-session whipserversrc creation.
+    pub fn register_whip_endpoint_config(&self, endpoint_id: String, config: WhipEndpointConfig) {
+        self.whip_endpoint_configs
+            .borrow_mut()
+            .push((endpoint_id, config));
+    }
+
+    /// Take all queued WHIP endpoint configs.
+    ///
+    /// Called after block expansion to register configs with the session manager.
+    pub fn take_whip_endpoint_configs(&self) -> Vec<(String, WhipEndpointConfig)> {
+        self.whip_endpoint_configs.borrow_mut().drain(..).collect()
+    }
+
+    /// Register an element signal setup function to be called at pipeline start.
+    ///
+    /// Use this to connect GLib signals on elements that need the event broadcaster
+    /// (e.g., splitmuxsink's format-location signal for recording status).
+    /// The GStreamer element(s) should be captured in the closure during build time.
+    pub fn register_element_setup(&self, setup: ElementSetupFn) {
+        self.element_setups.borrow_mut().push(setup);
+    }
+
+    /// Take all queued element signal setup functions.
+    ///
+    /// Called after block expansion to process the setups.
+    pub fn take_element_setups(&self) -> Vec<ElementSetupFn> {
+        self.element_setups.borrow_mut().drain(..).collect()
     }
 }
 

@@ -13,7 +13,7 @@ use parking_lot::RwLock;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
 use crate::thread_registry::ThreadRegistry;
-use strom_types::{GpuStats, SystemStats, ThreadCpuStats, ThreadStats};
+use strom_types::{GlRendererInfo, GpuStats, SystemStats, ThreadCpuStats, ThreadStats};
 
 #[cfg(feature = "nvidia")]
 use std::process::Command;
@@ -34,12 +34,14 @@ pub struct SystemMonitor {
 
 impl SystemMonitor {
     /// Create a new system monitor with background stats collection.
-    pub fn new() -> Self {
+    pub fn new(num_cores: usize) -> Self {
         let cached_stats = Arc::new(RwLock::new(SystemStats {
             cpu_usage: 0.0,
+            num_cores,
             total_memory: 0,
             used_memory: 0,
             gpu_stats: Vec::new(),
+            gl_renderer: None,
             timestamp: 0,
         }));
 
@@ -49,7 +51,7 @@ impl SystemMonitor {
 
         // Spawn background thread for stats collection
         let collector_handle = thread::spawn(move || {
-            Self::collector_loop(stats_clone, shutdown_clone);
+            Self::collector_loop(stats_clone, shutdown_clone, num_cores);
         });
 
         Self {
@@ -60,7 +62,11 @@ impl SystemMonitor {
     }
 
     /// Background loop that collects stats periodically.
-    fn collector_loop(cached_stats: Arc<RwLock<SystemStats>>, shutdown: Arc<AtomicBool>) {
+    fn collector_loop(
+        cached_stats: Arc<RwLock<SystemStats>>,
+        shutdown: Arc<AtomicBool>,
+        num_cores: usize,
+    ) {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::everything())
@@ -97,6 +103,9 @@ impl SystemMonitor {
         #[cfg(not(feature = "nvidia"))]
         let (nvml, use_nvidia_smi_fallback): (Option<()>, bool) = (None, false);
 
+        // Fetch GL renderer info once (already probed at startup)
+        let gl_renderer: Option<GlRendererInfo> = crate::gpu::gl_renderer_info();
+
         while !shutdown.load(Ordering::Relaxed) {
             // Refresh system information
             system.refresh_cpu_all();
@@ -131,9 +140,11 @@ impl SystemMonitor {
                 let mut stats = cached_stats.write();
                 *stats = SystemStats {
                     cpu_usage,
+                    num_cores,
                     total_memory,
                     used_memory,
                     gpu_stats,
+                    gl_renderer: gl_renderer.clone(),
                     timestamp,
                 };
             }
@@ -275,7 +286,10 @@ impl SystemMonitor {
 
 impl Default for SystemMonitor {
     fn default() -> Self {
-        Self::new()
+        let num_cores = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        Self::new(num_cores)
     }
 }
 
@@ -415,6 +429,7 @@ impl ThreadCpuSampler {
                 element_name: thread.element_name.clone(),
                 flow_id: thread.flow_id,
                 block_id: thread.block_id.clone(),
+                pinned_cpus: thread.pinned_cpus.clone(),
             });
         }
 
@@ -488,6 +503,7 @@ impl ThreadCpuSampler {
                 element_name: thread.element_name.clone(),
                 flow_id: thread.flow_id,
                 block_id: thread.block_id.clone(),
+                pinned_cpus: thread.pinned_cpus.clone(),
             })
             .collect()
     }

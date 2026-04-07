@@ -1,5 +1,6 @@
 //! Main application structure.
 
+mod block_thumbnails;
 mod constructors;
 mod data_loading;
 mod dialogs;
@@ -8,6 +9,7 @@ mod flow_selection;
 mod import_export;
 mod keyboard;
 mod live_mode;
+mod probe_ui;
 mod rendering;
 mod update;
 
@@ -15,14 +17,18 @@ use egui::Color32;
 use strom_types::Flow;
 
 use crate::api::{ApiClient, AuthStatusResponse};
+use crate::audioanalyzer::AudioAnalyzerDataStore;
 use crate::audiorouter::RoutingMatrixEditor;
+use crate::buffer_age::BufferAgeStore;
 use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
+use crate::loudness::LoudnessDataStore;
 use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
 use crate::meter::MeterDataStore;
 use crate::mixer::MixerEditor;
 use crate::palette::ElementPalette;
+use crate::spectrum::SpectrumDataStore;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
 use crate::thread_monitor::ThreadMonitorStore;
@@ -496,15 +502,6 @@ impl LogEntry {
             LogLevel::Error => Color32::from_rgb(255, 80, 80),
         }
     }
-
-    /// Get the icon/prefix for this log level
-    pub fn prefix(&self) -> &'static str {
-        match self.level {
-            LogLevel::Info => "ℹ",
-            LogLevel::Warning => "⚠",
-            LogLevel::Error => "✖",
-        }
-    }
 }
 
 // Cross-platform task spawning
@@ -578,6 +575,8 @@ pub struct StromApp {
     properties_ptp_domain_buffer: String,
     /// Temporary thread priority for properties dialog
     properties_thread_priority_buffer: strom_types::flow::ThreadPriority,
+    /// Temporary CPU affinity for properties dialog
+    properties_cpu_affinity_buffer: strom_types::flow::CpuAffinity,
     /// Shutdown flag for Ctrl+C handling (native mode only)
     #[cfg(not(target_arch = "wasm32"))]
     shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -600,8 +599,14 @@ pub struct StromApp {
     available_channels_loaded: bool,
     /// Last InterInput block ID we refreshed channels for (to avoid repeated refreshes)
     last_inter_input_refresh: Option<String>,
+    /// Audio analyzer data storage for all audio analyzer blocks
+    audioanalyzer_data: AudioAnalyzerDataStore,
     /// Meter data storage for all audio level meters
     meter_data: MeterDataStore,
+    /// Spectrum data storage for all spectrum analyzer blocks
+    spectrum_data: SpectrumDataStore,
+    /// Loudness data storage for all EBU R128 loudness meters
+    loudness_data: LoudnessDataStore,
     /// Latency data storage for all audio latency measurements
     latency_data: LatencyDataStore,
     /// Media player data storage for all media player blocks
@@ -616,6 +621,8 @@ pub struct StromApp {
     ptp_stats: crate::ptp_monitor::PtpStatsStore,
     /// QoS (buffer drop) statistics per flow/element
     qos_stats: crate::qos_monitor::QoSStore,
+    /// Buffer age warnings and probe data
+    buffer_age_data: BufferAgeStore,
     /// Track when flows started (for QoS grace period)
     flow_start_times: std::collections::HashMap<strom_types::FlowId, instant::Instant>,
     /// Whether to show the detailed system monitor window
@@ -716,8 +723,24 @@ pub struct StromApp {
     key_sequence_buffer: Vec<egui::Key>,
     /// Interactive overlay state (activated by key sequence)
     interactive_overlay: Option<crate::interactive_overlay::OverlayState>,
+    /// Thumbnail textures for thumbnail blocks (flow_id, block_id) -> texture
+    block_thumbnails: std::collections::HashMap<(strom_types::FlowId, String), egui::TextureHandle>,
+    /// Last thumbnail fetch time per block
+    block_thumbnail_fetch_times:
+        std::collections::HashMap<(strom_types::FlowId, String), instant::Instant>,
+    /// Blocks currently loading thumbnails
+    block_thumbnail_loading: std::collections::HashSet<(strom_types::FlowId, String)>,
     /// Block ID and URL to show as inline QR code in the properties panel
     qr_inline: Option<(String, String)>,
     /// QR code texture cache (for properties popup)
     qr_cache: crate::qr::QrCache,
+    /// Current recording filename per recorder block (flow_id, block_id) -> filename
+    recorder_filenames: std::collections::HashMap<(strom_types::FlowId, String), String>,
+    /// Recording start time per recorder block (flow_id, block_id) -> Instant
+    recorder_start_times:
+        std::collections::HashMap<(strom_types::FlowId, String), instant::Instant>,
+    /// Debounce state for live property updates: tracks last-sent time and any pending update
+    /// Key: (element_id, property_name)
+    live_property_debounce:
+        std::collections::HashMap<(String, String), crate::properties::LivePropertyDebounce>,
 }

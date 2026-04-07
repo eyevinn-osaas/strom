@@ -96,6 +96,8 @@ pub struct GraphEditor {
     pub focused_pad: Option<String>,
     /// QoS health status per element (for rendering indicators)
     qos_health_map: HashMap<String, crate::qos_monitor::QoSHealth>,
+    /// Buffer age health status per element (for rendering clock indicators)
+    buffer_age_health_map: HashMap<String, crate::buffer_age::BufferAgeHealth>,
     /// Last known canvas rect (for centering calculations)
     last_canvas_rect: Option<egui::Rect>,
     /// Flag indicating a QoS marker was clicked (to signal log panel should open)
@@ -103,6 +105,8 @@ pub struct GraphEditor {
     qos_marker_clicked: std::cell::Cell<bool>,
     /// Flag indicating user double-clicked on background (to signal palette should open)
     request_open_palette: std::cell::Cell<bool>,
+    /// Flag indicating user clicked background while nothing was selected (toggle right pane)
+    request_toggle_right_pane: std::cell::Cell<bool>,
     /// Clipboard for copy/paste operations
     clipboard: Option<ClipboardContent>,
 }
@@ -170,9 +174,11 @@ impl Default for GraphEditor {
             active_property_tab: PropertyTab::Element,
             focused_pad: None,
             qos_health_map: HashMap::new(),
+            buffer_age_health_map: HashMap::new(),
             last_canvas_rect: None,
             qos_marker_clicked: std::cell::Cell::new(false),
             request_open_palette: std::cell::Cell::new(false),
+            request_toggle_right_pane: std::cell::Cell::new(false),
             clipboard: None,
         }
     }
@@ -190,6 +196,14 @@ impl GraphEditor {
         health_map: HashMap<String, crate::qos_monitor::QoSHealth>,
     ) {
         self.qos_health_map = health_map;
+    }
+
+    /// Set the buffer age health map for rendering clock indicators on nodes
+    pub fn set_buffer_age_health_map(
+        &mut self,
+        health_map: HashMap<String, crate::buffer_age::BufferAgeHealth>,
+    ) {
+        self.buffer_age_health_map = health_map;
     }
 
     /// Calculate the vertical offset for a pad given its index and total count.

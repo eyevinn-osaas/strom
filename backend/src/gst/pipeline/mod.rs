@@ -16,7 +16,7 @@ use gstreamer::prelude::*;
 use gstreamer_net as gst_net;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use strom_types::{FlowId, Link, PipelineState, PropertyValue};
+use strom_types::{BlockDefinition, BlockInstance, FlowId, Link, PipelineState, PropertyValue};
 use thiserror::Error;
 use tracing::debug;
 
@@ -149,6 +149,9 @@ pub enum PipelineError {
 
     #[error("Thumbnail capture error: {0}")]
     ThumbnailCapture(String),
+
+    #[error("Endpoint conflict: {0}")]
+    EndpointConflict(String),
 }
 
 /// Manages a single GStreamer pipeline for a flow.
@@ -168,10 +171,15 @@ pub struct PipelineManager {
     block_message_handlers: Vec<gst::glib::SignalHandlerId>,
     /// Bus message handler connection functions from blocks (called when pipeline starts)
     block_message_connect_fns: Vec<crate::blocks::BusMessageConnectFn>,
+    /// Element signal setup functions from blocks (called when pipeline starts)
+    element_setup_fns: Vec<crate::blocks::ElementSetupFn>,
     /// Thread priority state tracker (tracks whether priority was successfully set)
     thread_priority_state: Option<ThreadPriorityState>,
     /// Thread registry for tracking streaming threads (optional, for CPU monitoring)
     thread_registry: Option<crate::thread_registry::ThreadRegistry>,
+    /// CPU set assigned by AffinityManager for SingleCore affinity (None for Off).
+    /// Contains all logical CPUs (hyperthreads) of the allocated physical core.
+    assigned_cpus: Option<Vec<usize>>,
     /// Cached pipeline state to avoid querying async sinks during initialization
     cached_state: std::sync::Arc<std::sync::RwLock<PipelineState>>,
     /// QoS statistics aggregator (collects and periodically broadcasts QoS events)
@@ -193,20 +201,63 @@ pub struct PipelineManager {
     whep_endpoints: Vec<crate::blocks::WhepEndpointInfo>,
     /// WHIP endpoints registered by blocks
     whip_endpoints: Vec<crate::blocks::WhipEndpointInfo>,
+    /// WHIP endpoint configs for session manager (collected from block expansion)
+    whip_endpoint_configs: Vec<(String, crate::whip_session_manager::WhipEndpointConfig)>,
     /// Dynamically created webrtcbins (from webrtcsink/whepserversink consumer-added callbacks).
     /// Maps block_id to list of (consumer_id, webrtcbin) pairs.
     dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore,
+    /// Thumbnail taps for compositor inputs (block_id → per-input taps)
+    thumbnail_taps: crate::gst::ThumbnailTapStore,
+    /// Handle for the periodic thumbnail deactivation task
+    thumbnail_deactivation_task: Option<tokio::task::JoinHandle<()>>,
+    /// Buffer age probe manager for on-demand pad probing
+    probe_manager: crate::gst::buffer_age_probe::ProbeManager,
+    /// Block instances from the flow (needed for automatic probe attachment at start)
+    blocks: Vec<BlockInstance>,
+    /// Block definitions for blocks used in this flow (resolved at construction time)
+    block_definitions: HashMap<String, BlockDefinition>,
 }
 
 impl Drop for PipelineManager {
     fn drop(&mut self) {
         debug!("Dropping pipeline for flow: {}", self.flow_name);
-        // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
-        // from within a runtime" panics when GStreamer elements (e.g. whipserversrc)
-        // internally call block_on() during cleanup.
+        // Stop thumbnail deactivation task
+        if let Some(task) = self.thumbnail_deactivation_task.take() {
+            task.abort();
+        }
+        // Stop broadcast task and deactivate probes before pipeline goes to Null
+        self.probe_manager.stop_broadcast_task();
+        self.probe_manager.deactivate_all();
+        self.stop_qos_broadcast_task();
+
+        // Ensure pipeline is in Null state before releasing references.
+        // If stop() was already called this is a no-op.
         let pipeline = self.pipeline.clone();
         let _ = std::thread::spawn(move || pipeline.set_state(gst::State::Null)).join();
-        self.stop_qos_broadcast_task();
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use std::time::{Duration, Instant};
+
+    /// Poll `condition` every `interval` until it returns `true` or `timeout` expires.
+    /// Panics with `msg` on timeout. Tests that pass complete as fast as the
+    /// condition is met instead of sleeping a fixed duration.
+    pub fn poll_until(
+        condition: impl Fn() -> bool,
+        interval: Duration,
+        timeout: Duration,
+        msg: &str,
+    ) {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if condition() {
+                return;
+            }
+            std::thread::sleep(interval);
+        }
+        panic!("timed out after {:?}: {}", timeout, msg);
     }
 }
 
@@ -258,6 +309,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         );
         assert!(manager.is_ok());
     }
@@ -275,17 +327,20 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         )
         .unwrap();
 
         // Start pipeline
         let state = manager.start();
         assert!(state.is_ok());
-        assert_eq!(state.unwrap(), PipelineState::Playing);
+        assert!(
+            state.unwrap().is_active(),
+            "expected active state after start()"
+        );
 
-        // Check state
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        assert_eq!(manager.get_state(), PipelineState::Playing);
+        // Verify ongoing state
+        assert!(manager.get_state().is_active());
 
         // Stop pipeline
         let state = manager.stop();
@@ -308,6 +363,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         );
         assert!(manager.is_err());
     }
@@ -361,6 +417,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         );
         assert!(manager.is_ok());
 
@@ -386,6 +443,7 @@ mod tests {
             default_test_ice_servers(),
             "all".to_string(),
             None,
+            std::path::PathBuf::from("./media"),
         )
         .unwrap();
 

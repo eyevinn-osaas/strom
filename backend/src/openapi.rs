@@ -1,26 +1,44 @@
 //! OpenAPI documentation configuration.
 
-use crate::api::flows::DynamicPadsResponse;
-use crate::api::whep_player::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
-use crate::auth::{LoginRequest, LoginResponse};
 use crate::mcp::handler::JsonRpcRequest;
-use strom_types::api::{AuthStatusResponse, SystemInfo};
 use strom_types::api::{
-    CreateDirectoryRequest, CreateFlowRequest, ElementInfoResponse, ElementListResponse,
-    ElementPropertiesResponse, ErrorResponse, ExportGstLaunchRequest, ExportGstLaunchResponse,
-    FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse, ListMediaResponse,
-    MediaFileEntry, MediaOperationResponse, ParseGstLaunchRequest, ParseGstLaunchResponse,
-    RenameMediaRequest, UpdateFlowPropertiesRequest, UpdatePropertyRequest,
+    ActivateProbeRequest, ActiveProbesResponse, AnimateInputRequest, AuthStatusResponse,
+    AvailableOutput, AvailableSourcesResponse, ClientMessage, CodecStats, CreateDirectoryRequest,
+    CreateFlowRequest, DskToggleRequest, DskToggleResponse, DynamicPadsResponse,
+    ElementInfoResponse, ElementListResponse, ElementPropertiesResponse, ErrorResponse,
+    ExportGstLaunchRequest, ExportGstLaunchResponse, FadeToBlackRequest, FadeToBlackResponse,
+    FlowDebugInfo, FlowListResponse, FlowResponse, FlowStatsResponse, IceCandidateStats,
+    LatencyResponse, ListMediaResponse, MediaFileEntry, MediaOperationResponse,
+    OverlayAlphaRequest, OverlayAlphaResponse, PadPropertiesResponse, ParseGstLaunchRequest,
+    ParseGstLaunchResponse, ProbeInfo, ProbeResponse, RenameMediaRequest, RtpStreamStats,
+    SelectPreviewRequest, SelectPreviewResponse, ServerMessage, SetBackgroundRequest,
+    SetBackgroundResponse, SourceFlowInfo, SystemInfo, TransitionResponse, TransportStats,
+    TriggerTransitionRequest, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
+    UpdatePropertyRequest, VisionMixerState, WebRtcConnectionStats, WebRtcStats,
+    WebRtcStatsResponse,
 };
+use strom_types::auth::{LoginRequest, LoginResponse};
 use strom_types::block::{
     BlockCategoriesResponse, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
     CreateBlockRequest, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping, PropertyType,
 };
+use strom_types::discovery::{
+    AnnouncedStreamResponse, DeviceCategory, DeviceCountByCategory, DeviceDiscoveryStatus,
+    DeviceResponse, DiscoveredStreamResponse, NdiDiscoveryStatus,
+};
+use strom_types::events::StromEvent;
 use strom_types::flow::{FlowProperties, GStreamerClockType};
+use strom_types::mediaplayer::{
+    GotoRequest, PlayerAction, PlayerControlRequest, PlayerStateResponse, SeekRequest,
+    SetPlaylistRequest,
+};
 use strom_types::network::{
     Ipv4AddressInfo, Ipv6AddressInfo, NetworkInterfaceInfo, NetworkInterfacesResponse,
 };
 use strom_types::stats::{BlockStats, StatMetadata, StatValue, Statistic};
+use strom_types::whep::{IceServer, IceServersResponse, WhepStreamInfo, WhepStreamsResponse};
+use utoipa::openapi::schema::{Discriminator, Schema};
+use utoipa::openapi::RefOr;
 use utoipa::OpenApi;
 
 #[derive(OpenApi)]
@@ -40,9 +58,25 @@ use utoipa::OpenApi;
         crate::api::flows::get_element_properties,
         crate::api::flows::update_element_property,
         crate::api::flows::trigger_transition,
+        crate::api::flows::select_preview,
+        crate::api::flows::set_overlay_alpha,
+        crate::api::flows::toggle_dsk,
+        crate::api::flows::set_background,
+        crate::api::flows::fade_to_black,
+        crate::api::vision_mixer_page::get_multiview_endpoint,
         crate::api::flows::animate_input,
         crate::api::flows::debug_graph,
+        crate::api::flows::get_flow_pad_caps,
         crate::api::flows::get_dynamic_pads,
+        crate::api::flows::get_available_sources,
+        crate::api::flows::get_block_sdp,
+        crate::api::flows::get_flow_latency,
+        crate::api::flows::get_webrtc_stats,
+        crate::api::flows::get_pad_properties,
+        crate::api::flows::update_pad_property,
+        crate::api::flows::reset_loudness,
+        crate::api::flows::recorder_split_now,
+        crate::api::flows::get_block_thumbnail,
         crate::api::elements::list_elements,
         crate::api::elements::get_element_info,
         crate::api::elements::get_element_pad_properties,
@@ -70,10 +104,45 @@ use utoipa::OpenApi;
         // WHEP endpoints
         crate::api::whep_player::list_whep_streams,
         crate::api::whep_player::get_ice_servers,
+        crate::api::whep_player::whep_endpoint_proxy,
+        crate::api::whep_player::whep_endpoint_proxy_options,
+        crate::api::whep_player::whep_resource_proxy_patch,
+        crate::api::whep_player::whep_resource_proxy_delete,
+        crate::api::whep_player::whep_resource_proxy_options,
+        // WHIP endpoints
+        crate::api::whip_ingest::list_whip_endpoints,
+        crate::api::whip_ingest::client_log,
+        crate::api::whip_ingest::whip_post,
+        crate::api::whip_ingest::whip_options,
+        crate::api::whip_ingest::whip_resource_patch,
+        crate::api::whip_ingest::whip_resource_delete,
+        crate::api::whip_ingest::whip_resource_options,
         // MCP endpoints
         crate::api::mcp::mcp_post,
         crate::api::mcp::mcp_get,
         crate::api::mcp::mcp_delete,
+        // Discovery endpoints
+        crate::api::discovery::list_streams,
+        crate::api::discovery::get_stream,
+        crate::api::discovery::get_stream_sdp,
+        crate::api::discovery::list_announced,
+        crate::api::discovery::device_status,
+        crate::api::discovery::list_devices,
+        crate::api::discovery::get_device,
+        crate::api::discovery::refresh_devices,
+        crate::api::discovery::ndi_status,
+        crate::api::discovery::list_ndi_sources,
+        crate::api::discovery::refresh_ndi_sources,
+        // Media player endpoints
+        crate::api::mediaplayer::get_player_state,
+        crate::api::mediaplayer::set_playlist,
+        crate::api::mediaplayer::control_player,
+        crate::api::mediaplayer::seek_player,
+        crate::api::mediaplayer::goto_file,
+        // Probe endpoints
+        crate::api::probes::activate_probe,
+        crate::api::probes::list_probes,
+        crate::api::probes::deactivate_probe,
         // WebSocket endpoint
         crate::api::websocket::websocket_handler,
     ),
@@ -123,6 +192,51 @@ use utoipa::OpenApi;
             MediaOperationResponse,
             // Flow dynamic pads
             DynamicPadsResponse,
+            // Flow additional types
+            AvailableSourcesResponse,
+            AvailableOutput,
+            SourceFlowInfo,
+            LatencyResponse,
+            WebRtcStatsResponse,
+            WebRtcStats,
+            WebRtcConnectionStats,
+            RtpStreamStats,
+            IceCandidateStats,
+            TransportStats,
+            CodecStats,
+            UpdatePadPropertyRequest,
+            PadPropertiesResponse,
+            TriggerTransitionRequest,
+            TransitionResponse,
+            AnimateInputRequest,
+            // Vision mixer types
+            SelectPreviewRequest,
+            SelectPreviewResponse,
+            VisionMixerState,
+            strom_types::api::MultiviewEndpointResponse,
+            OverlayAlphaRequest,
+            OverlayAlphaResponse,
+            DskToggleRequest,
+            DskToggleResponse,
+            SetBackgroundRequest,
+            SetBackgroundResponse,
+            FadeToBlackRequest,
+            FadeToBlackResponse,
+            // Discovery types
+            DiscoveredStreamResponse,
+            DeviceResponse,
+            DeviceCategory,
+            AnnouncedStreamResponse,
+            DeviceDiscoveryStatus,
+            DeviceCountByCategory,
+            NdiDiscoveryStatus,
+            // Media player types
+            PlayerAction,
+            PlayerControlRequest,
+            SetPlaylistRequest,
+            SeekRequest,
+            GotoRequest,
+            PlayerStateResponse,
             // Auth types
             LoginRequest,
             LoginResponse,
@@ -132,8 +246,17 @@ use utoipa::OpenApi;
             WhepStreamsResponse,
             IceServersResponse,
             IceServer,
+            // Probe types
+            ActivateProbeRequest,
+            ProbeResponse,
+            ProbeInfo,
+            ActiveProbesResponse,
             // MCP types
             JsonRpcRequest,
+            // WebSocket event types
+            StromEvent,
+            ServerMessage,
+            ClientMessage,
         )
     ),
     tags(
@@ -146,16 +269,45 @@ use utoipa::OpenApi;
         (name = "Media", description = "Media file management endpoints"),
         (name = "auth", description = "Authentication endpoints"),
         (name = "whep", description = "WHEP WebRTC playback endpoints"),
+        (name = "whip", description = "WHIP WebRTC ingest endpoints"),
         (name = "mcp", description = "Model Context Protocol (MCP) endpoints"),
+        (name = "discovery", description = "AES67 stream and device discovery endpoints"),
+        (name = "media_player", description = "Media player control endpoints"),
+        (name = "probes", description = "Buffer age probe endpoints"),
         (name = "websocket", description = "WebSocket real-time communication")
     ),
     info(
-        title = "Strom GStreamer Flow Engine API",
-        version = "0.1.0",
-        description = "REST API for managing GStreamer pipelines through a visual flow interface",
+        title = "Strom API",
+        description = "REST and WebSocket API for the Strom pipeline engine",
         license(
             name = "MIT OR Apache-2.0"
         )
     )
 )]
 pub struct ApiDoc;
+
+/// Build the OpenAPI spec with the version from Cargo.toml.
+pub fn openapi_spec() -> utoipa::openapi::OpenApi {
+    let mut spec = ApiDoc::openapi();
+    spec.info.version = env!("CARGO_PKG_VERSION").to_string();
+
+    // Add discriminator hints for tagged enums so TypeScript generators
+    // produce proper discriminated union types.
+    add_discriminator(&mut spec, "StromEvent", "type");
+    add_discriminator(&mut spec, "ServerMessage", "type");
+    add_discriminator(&mut spec, "ClientMessage", "type");
+
+    spec
+}
+
+/// Add an OpenAPI `discriminator` to a `oneOf` schema, enabling TypeScript
+/// generators to emit proper discriminated union types.
+fn add_discriminator(spec: &mut utoipa::openapi::OpenApi, schema_name: &str, property: &str) {
+    let Some(schemas) = spec.components.as_mut().map(|c| &mut c.schemas) else {
+        return;
+    };
+    let Some(RefOr::T(Schema::OneOf(one_of))) = schemas.get_mut(schema_name) else {
+        return;
+    };
+    one_of.discriminator = Some(Discriminator::new(property));
+}

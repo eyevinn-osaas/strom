@@ -12,6 +12,7 @@
 use crate::blocks::{
     BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, WhepStreamMode,
 };
+use crate::gst::whep_probe::{self, WhepProbeRegistry};
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -54,20 +55,6 @@ impl BlockBuilder for WHEPOutputBuilder {
 
         let mut inputs = Vec::new();
 
-        if mode.has_audio() {
-            inputs.push(ExternalPad {
-                label: if mode.has_video() {
-                    Some("A0".to_string())
-                } else {
-                    None
-                },
-                name: "audio_in".to_string(),
-                media_type: MediaType::Audio,
-                internal_element_id: "audioconvert".to_string(),
-                internal_pad_name: "sink".to_string(),
-            });
-        }
-
         if mode.has_video() {
             inputs.push(ExternalPad {
                 label: if mode.has_audio() {
@@ -78,6 +65,20 @@ impl BlockBuilder for WHEPOutputBuilder {
                 name: "video_in".to_string(),
                 media_type: MediaType::Video,
                 internal_element_id: "video_queue".to_string(),
+                internal_pad_name: "sink".to_string(),
+            });
+        }
+
+        if mode.has_audio() {
+            inputs.push(ExternalPad {
+                label: if mode.has_video() {
+                    Some("A0".to_string())
+                } else {
+                    None
+                },
+                name: "audio_in".to_string(),
+                media_type: MediaType::Audio,
+                internal_element_id: "audio_queue".to_string(),
                 internal_pad_name: "sink".to_string(),
             });
         }
@@ -131,10 +132,11 @@ fn build_whepsrc(
         .get("whep_endpoint")
         .and_then(|v| {
             if let PropertyValue::String(s) = v {
-                if s.is_empty() {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
                     None
                 } else {
-                    Some(s.clone())
+                    Some(trimmed)
                 }
             } else {
                 None
@@ -219,19 +221,35 @@ fn build_whepsrc(
     // webrtcbin is created during whepsrc construction, so we must iterate
     // existing children. We also install deep-element-added for any future additions.
     if let Ok(bin) = whepsrc.clone().downcast::<gst::Bin>() {
-        // Set on already-existing webrtcbin children
+        // Set on already-existing children (webrtcbin and its internal rtpbin)
         for element in bin.iterate_recurse().into_iter().flatten() {
-            if element.name().starts_with("webrtcbin") && element.has_property("latency") {
+            let name = element.name();
+            if name.starts_with("webrtcbin") && element.has_property("latency") {
                 element.set_property("latency", jitterbuffer_latency_ms);
                 info!(
                     "WHEP Input (whepsrc): Set jitterbuffer latency={}ms on existing {}",
-                    jitterbuffer_latency_ms,
-                    element.name()
+                    jitterbuffer_latency_ms, name
+                );
+            }
+            // Workaround for GStreamer rtpjitterbuffer packet_spacing bug:
+            // After a mute gap (no RTP packets), calculate_packet_spacing sees
+            // the large RTP timestamp jump as huge packet spacing. This corrupts
+            // lost timer scheduling, causing packets to be held for the duration
+            // of the mute gap instead of being output immediately.
+            // Setting drop-on-latency on rtpbin propagates to all its
+            // jitterbuffers, making them drop queued packets that exceed the
+            // configured latency — breaking the stall.
+            // Upstream: https://gitlab.freedesktop.org/gstreamer/gst-plugins-good/-/merge_requests/951
+            if name.starts_with("rtpbin") && element.has_property("drop-on-latency") {
+                element.set_property("drop-on-latency", true);
+                info!(
+                    "WHEP Input (whepsrc): Set drop-on-latency=true on existing {}",
+                    name
                 );
             }
         }
 
-        // Also catch any dynamically added webrtcbins
+        // Also catch any dynamically added webrtcbins, rtpbins and jitterbuffers
         bin.connect("deep-element-added", false, move |values| {
             let element = values[2].get::<gst::Element>().unwrap();
             let element_name = element.name();
@@ -260,6 +278,19 @@ fn build_whepsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("liveadder: {}", e)))?;
 
+    // Set min-upstream-latency so liveadder accounts for jitterbuffer buffering delay
+    if liveadder.find_property("min-upstream-latency").is_some() {
+        let min_upstream_ns = jitterbuffer_latency_ms as u64 * 1_000_000;
+        liveadder.set_property(
+            "min-upstream-latency",
+            min_upstream_ns * gst::ClockTime::NSECOND,
+        );
+        info!(
+            "WHEP Input (whepsrc): Set min-upstream-latency={}ms on liveadder",
+            jitterbuffer_latency_ms
+        );
+    }
+
     // Create capsfilter to enforce 48kHz stereo audio after liveadder
     let caps = gst::Caps::builder("audio/x-raw")
         .field("rate", 48000i32)
@@ -282,12 +313,16 @@ fn build_whepsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("output_audioresample: {}", e)))?;
 
+    // Set up WHEP diagnostic probes if enabled
+    let probe_registry = whep_probe::setup_whep_probes(&whepsrc, &instance_id_owned);
+
     // Counter for unique element naming
     let stream_counter = Arc::new(AtomicUsize::new(0));
 
     // Clone references for the pad-added callback
     let liveadder_weak = liveadder.downgrade();
     let stream_counter_clone = Arc::clone(&stream_counter);
+    let probe_registry_clone = probe_registry.clone();
 
     // Set up pad-added callback on whepsrc
     // whepsrc also creates dynamic src_%u pads like whepclientsrc
@@ -307,6 +342,7 @@ fn build_whepsrc(
                 &liveadder,
                 &instance_id_owned,
                 stream_num,
+                &probe_registry_clone,
             ) {
                 error!("Failed to setup stream with caps detection: {}", e);
             }
@@ -365,10 +401,11 @@ fn build_whepclientsrc(
         .get("whep_endpoint")
         .and_then(|v| {
             if let PropertyValue::String(s) = v {
-                if s.is_empty() {
+                let trimmed = s.trim().to_string();
+                if trimmed.is_empty() {
                     None
                 } else {
-                    Some(s.clone())
+                    Some(trimmed)
                 }
             } else {
                 None
@@ -463,6 +500,19 @@ fn build_whepclientsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("liveadder: {}", e)))?;
 
+    // Set min-upstream-latency so liveadder accounts for jitterbuffer buffering delay
+    if liveadder.find_property("min-upstream-latency").is_some() {
+        let min_upstream_ns = jitterbuffer_latency_ms as u64 * 1_000_000;
+        liveadder.set_property(
+            "min-upstream-latency",
+            min_upstream_ns * gst::ClockTime::NSECOND,
+        );
+        info!(
+            "WHEP Input (whepclientsrc): Set min-upstream-latency={}ms on liveadder",
+            jitterbuffer_latency_ms
+        );
+    }
+
     // Create capsfilter to enforce 48kHz stereo audio after liveadder
     let caps = gst::Caps::builder("audio/x-raw")
         .field("rate", 48000i32)
@@ -485,12 +535,16 @@ fn build_whepclientsrc(
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("output_audioresample: {}", e)))?;
 
+    // Set up WHEP diagnostic probes if enabled
+    let probe_registry = whep_probe::setup_whep_probes(&whepclientsrc, &instance_id_owned);
+
     // Counter for unique element naming
     let stream_counter = Arc::new(AtomicUsize::new(0));
 
     // Clone references for the pad-added callback
     let liveadder_weak = liveadder.downgrade();
     let stream_counter_clone = Arc::clone(&stream_counter);
+    let probe_registry_clone = probe_registry.clone();
 
     // Set up pad-added callback on whepclientsrc
     // This handles dynamic pads created when WebRTC streams are negotiated
@@ -515,6 +569,7 @@ fn build_whepclientsrc(
                 &liveadder,
                 &instance_id_owned,
                 stream_num,
+                &probe_registry_clone,
             ) {
                 error!("Failed to setup stream with caps detection: {}", e);
             }
@@ -535,6 +590,16 @@ fn build_whepclientsrc(
                 let _bin = values[0].get::<gst::Bin>().unwrap();
                 let element = values[2].get::<gst::Element>().unwrap();
                 let element_name = element.name();
+
+                // Workaround for GStreamer rtpjitterbuffer packet_spacing bug:
+                // see comment in build_whepsrc iterate_recurse for details.
+                if element_name.starts_with("rtpbin") && element.has_property("drop-on-latency") {
+                    element.set_property("drop-on-latency", true);
+                    info!(
+                        "WHEP Input (whepclientsrc): Set drop-on-latency=true on {}",
+                        element_name
+                    );
+                }
 
                 // Look for webrtcbin
                 if element_name.starts_with("webrtcbin") {
@@ -1129,33 +1194,86 @@ fn build_whepserversink(
     let mut elements: Vec<(String, gst::Element)> = Vec::new();
     let mut internal_links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
 
-    // Create audio processing elements if mode includes audio
+    // Create audio processing elements if mode includes audio.
+    // Uses a queue as entry point (same pattern as video) linked directly to
+    // whepserversink. A caps probe detects the audio format and sets audio-caps:
+    // - Encoded audio (opus etc.): whepserversink passes through directly
+    // - Raw audio: whepserversink runs codec discovery and encodes internally
     if mode.has_audio() {
-        let audioconvert_id = format!("{}:audioconvert", instance_id);
-        let audioresample_id = format!("{}:audioresample", instance_id);
-
-        let audioconvert = gst::ElementFactory::make("audioconvert")
-            .name(&audioconvert_id)
+        let audio_queue_id = format!("{}:audio_queue", instance_id);
+        let audio_queue = gst::ElementFactory::make("queue")
+            .name(&audio_queue_id)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("audioconvert: {}", e)))?;
+            .map_err(|e| BlockBuildError::ElementCreation(format!("audio_queue: {}", e)))?;
 
-        let audioresample = gst::ElementFactory::make("audioresample")
-            .name(&audioresample_id)
-            .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("audioresample: {}", e)))?;
+        // Dynamic audio caps detection (same pattern as video caps probe)
+        let whepserversink_weak = whepserversink.downgrade();
+        let audio_caps_set = Arc::new(AtomicBool::new(false));
+        let audio_caps_set_clone = audio_caps_set.clone();
+        let instance_id_owned = instance_id.to_string();
 
-        // Audio links: audioconvert -> audioresample -> whepserversink (audio_0 request pad)
+        let audio_queue_sink = audio_queue.static_pad("sink").expect("queue has sink pad");
+        audio_queue_sink.add_probe(
+            gst::PadProbeType::EVENT_DOWNSTREAM,
+            move |_pad, info| {
+                if audio_caps_set_clone.load(Ordering::SeqCst) {
+                    return gst::PadProbeReturn::Pass;
+                }
+
+                if let Some(gst::PadProbeData::Event(ref event)) = info.data {
+                    if event.type_() == gst::EventType::Caps {
+                        if let gst::EventView::Caps(caps_event) = event.view() {
+                            let caps = caps_event.caps();
+                            if let Some(structure) = caps.structure(0) {
+                                let caps_name = structure.name().as_str();
+
+                                let audio_caps: Option<gst::Caps> = match caps_name {
+                                    "audio/x-opus" => {
+                                        debug!(
+                                            "WHEP Output {}: Detected Opus input, setting audio-caps",
+                                            instance_id_owned
+                                        );
+                                        Some(gst::Caps::builder("audio/x-opus").build())
+                                    }
+                                    "audio/x-raw" => {
+                                        debug!(
+                                            "WHEP Output {}: Detected raw audio, using default audio-caps",
+                                            instance_id_owned
+                                        );
+                                        None
+                                    }
+                                    _ => {
+                                        warn!(
+                                            "WHEP Output {}: Unknown audio format '{}', using default",
+                                            instance_id_owned, caps_name
+                                        );
+                                        None
+                                    }
+                                };
+
+                                if let Some(caps) = audio_caps {
+                                    if let Some(whepserversink) = whepserversink_weak.upgrade() {
+                                        whepserversink.set_property("audio-caps", &caps);
+                                    }
+                                }
+                                audio_caps_set_clone.store(true, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Pass
+            },
+        );
+
+        // Audio link: queue -> whepserversink (audio_0 request pad)
+        // whepserversink handles both raw audio (encodes internally) and
+        // pre-encoded audio (passes through) based on audio-caps.
         internal_links.push((
-            ElementPadRef::pad(&audioconvert_id, "src"),
-            ElementPadRef::pad(&audioresample_id, "sink"),
-        ));
-        internal_links.push((
-            ElementPadRef::pad(&audioresample_id, "src"),
+            ElementPadRef::pad(&audio_queue_id, "src"),
             ElementPadRef::pad(&whepserversink_id, "audio_0"),
         ));
 
-        elements.push((audioconvert_id, audioconvert));
-        elements.push((audioresample_id, audioresample));
+        elements.push((audio_queue_id, audio_queue));
     }
 
     // Create video queue and link to whepserversink if mode includes video
@@ -1209,11 +1327,19 @@ fn build_whepserversink(
                                     Some(gst::Caps::builder("video/x-av1").build())
                                 }
                                 "video/x-raw" => {
-                                    // Raw video - let webrtcsink encode with default codecs
+                                    // Raw video - offer modern codecs (H.264 preferred), exclude VP8
                                     info!(
-                                        "WHEP Output: Detected raw video input, using default video-caps"
+                                        "WHEP Output: Detected raw video input, setting video-caps to H.264/H.265/VP9/AV1"
                                     );
-                                    None
+                                    let mut caps = gst::Caps::new_empty();
+                                    {
+                                        let caps_mut = caps.get_mut().unwrap();
+                                        caps_mut.append(gst::Caps::builder("video/x-h264").build());
+                                        caps_mut.append(gst::Caps::builder("video/x-h265").build());
+                                        caps_mut.append(gst::Caps::builder("video/x-vp9").build());
+                                        caps_mut.append(gst::Caps::builder("video/x-av1").build());
+                                    }
+                                    Some(caps)
                                 }
                                 _ => {
                                     warn!(
@@ -1322,6 +1448,7 @@ fn setup_stream_with_caps_detection(
     liveadder: &gst::Element,
     instance_id: &str,
     stream_num: usize,
+    probe_registry: &Option<Arc<WhepProbeRegistry>>,
 ) -> Result<(), String> {
     // Get the pipeline
     let pipeline = get_pipeline_from_element(src)?;
@@ -1356,6 +1483,11 @@ fn setup_stream_with_caps_detection(
         stream_num
     );
 
+    // Install diagnostic probe on identity if enabled
+    if let Some(ref registry) = probe_registry {
+        whep_probe::probe_element_src(registry, &identity);
+    }
+
     // Get identity's src pad for the probe
     let identity_src = identity
         .static_pad("src")
@@ -1365,6 +1497,7 @@ fn setup_stream_with_caps_detection(
     let pipeline_weak = pipeline.downgrade();
     let liveadder_weak = liveadder.downgrade();
     let instance_id_owned = instance_id.to_string();
+    let probe_registry_clone = probe_registry.clone();
 
     // Flag to ensure we only handle this once
     let handled = Arc::new(AtomicBool::new(false));
@@ -1435,6 +1568,7 @@ fn setup_stream_with_caps_detection(
                                     &liveadder,
                                     &instance_id_owned,
                                     stream_num,
+                                    &probe_registry_clone,
                                 ) {
                                     error!("WHEP: Failed to setup audio decode chain: {}", e);
                                 }
@@ -1510,6 +1644,7 @@ fn setup_audio_decode_chain(
     liveadder: &gst::Element,
     instance_id: &str,
     stream_num: usize,
+    probe_registry: &Option<Arc<WhepProbeRegistry>>,
 ) -> Result<(), String> {
     // Create unique element names
     let decodebin_name = format!("{}:decodebin_{}", instance_id, stream_num);
@@ -1552,6 +1687,7 @@ fn setup_audio_decode_chain(
     let audioresample_weak = audioresample.downgrade();
     let liveadder_weak = liveadder.downgrade();
     let stream_num_clone = stream_num;
+    let probe_registry_clone = probe_registry.clone();
 
     // Set up decodebin's pad-added callback to link to audioconvert
     decodebin.connect_pad_added(move |_decodebin, pad| {
@@ -1630,6 +1766,13 @@ fn setup_audio_decode_chain(
                             "WHEP: Stream {} successfully linked audio stream to liveadder",
                             stream_num_clone
                         );
+
+                        // Install diagnostic probes on the decode chain
+                        if let Some(ref registry) = probe_registry_clone {
+                            whep_probe::probe_element_src(registry, &audioconvert);
+                            whep_probe::probe_element_src(registry, &audioresample);
+                            whep_probe::probe_pad(registry, &liveadder, &liveadder_sink);
+                        }
                     } else {
                         error!("Failed to request sink pad from liveadder");
                     }
@@ -1740,6 +1883,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "implementation".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "whep_endpoint".to_string(),
@@ -1753,6 +1897,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "whep_endpoint".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "auth_token".to_string(),
@@ -1765,6 +1910,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "auth_token".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "mixer_latency_ms".to_string(),
@@ -1777,6 +1923,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "mixer_latency_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "jitterbuffer_latency_ms".to_string(),
@@ -1789,6 +1936,7 @@ fn whep_input_definition() -> BlockDefinition {
                     property_name: "jitterbuffer_latency_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -1845,6 +1993,7 @@ fn whep_output_definition() -> BlockDefinition {
                     property_name: "mode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "endpoint_id".to_string(),
@@ -1857,6 +2006,7 @@ fn whep_output_definition() -> BlockDefinition {
                     property_name: "endpoint_id".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         // Note: external_pads here are the static defaults for audio_video mode.
@@ -1864,17 +2014,17 @@ fn whep_output_definition() -> BlockDefinition {
         external_pads: ExternalPads {
             inputs: vec![
                 ExternalPad {
-                    label: Some("A0".to_string()),
-                    name: "audio_in".to_string(),
-                    media_type: MediaType::Audio,
-                    internal_element_id: "audioconvert".to_string(),
-                    internal_pad_name: "sink".to_string(),
-                },
-                ExternalPad {
                     label: Some("V0".to_string()),
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "video_queue".to_string(),
+                    internal_pad_name: "sink".to_string(),
+                },
+                ExternalPad {
+                    label: Some("A0".to_string()),
+                    name: "audio_in".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "audio_queue".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
             ],

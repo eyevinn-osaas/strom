@@ -33,18 +33,24 @@ Current built-in blocks in `backend/src/blocks/builtin/`:
 | Block | File | Description |
 |-------|------|-------------|
 | AES67 Input/Output | `aes67.rs` | RTP audio over IP with PTP sync |
-| WHIP Output | `whip.rs` | WebRTC ingestion client |
-| WHEP Output | `whep.rs` | WebRTC egress server with built-in player |
+| WHIP Input/Output | `whip.rs` | WebRTC ingestion (WHIP server and client) |
+| WHEP Input/Output | `whep.rs` | WebRTC egress (WHEP client and server with built-in player) |
 | Audio/Video Meter | `meter.rs` | Level monitoring with visualization |
 | Audio Format | `audioformat.rs` | Sample rate, channels, format conversion |
 | Video Format | `videoformat.rs` | Resolution, framerate, pixel format conversion |
 | Video Encoder | `videoenc.rs` | Auto hardware encoder selection (H.264/H.265/AV1/VP9) |
+| MPEG-TS/SRT Input | `mpegtssrt_input.rs` | MPEG-TS demuxing from SRT with decode/passthrough |
 | MPEG-TS/SRT Output | `mpegtssrt.rs` | MPEG-TS muxing with SRT transport |
 | Video Compositor | `compositor.rs` | OpenGL video mixing with layout editor |
 | DeckLink Input/Output | `decklink.rs` | Blackmagic SDI/HDMI capture and playback |
 | NDI Input/Output | `ndi.rs` | NewTek NDI video over IP |
 | Media Player | `mediaplayer.rs` | File playback with playlist support |
-| Audio Mixer | `mixer.rs` | Stereo mixer with per-channel processing, aux sends, subgroups |
+| Audio Mixer | `mixer/` | Stereo mixer with per-channel processing, aux sends, subgroups |
+| Audio Router | `audiorouter.rs` | Multi-stream channel routing matrix with mixing and fan-out |
+| Loudness Meter | `loudness.rs` | EBU R128 real-time loudness measurement with reset |
+| Spectrum Analyzer | `spectrum.rs` | Real-time audio spectrum visualization |
+| Audio Analyzer | `audioanalyzer.rs` | Real-time waveform and vectorscope visualization |
+| Recorder | `recorder.rs` | Write audio/video streams to file with splitmuxsink |
 
 See [MIXER_BLOCK.md](MIXER_BLOCK.md), [VIDEO_ENCODER_BLOCK.md](VIDEO_ENCODER_BLOCK.md) and [WHEP_OUTPUT_BLOCK.md](WHEP_OUTPUT_BLOCK.md) for detailed documentation.
 

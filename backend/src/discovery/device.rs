@@ -5,54 +5,14 @@
 
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
-use utoipa::ToSchema;
 
-/// Device category for filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum DeviceCategory {
-    /// Audio input devices (microphones, line-in).
-    AudioSource,
-    /// Audio output devices (speakers, headphones).
-    AudioSink,
-    /// Video input devices (cameras, capture cards).
-    VideoSource,
-    /// Network sources (NDI, etc.).
-    NetworkSource,
-    /// Other/unknown device types.
-    Other,
-}
-
-impl DeviceCategory {
-    /// Parse device category from GStreamer device class string.
-    pub fn from_device_class(class: &str) -> Self {
-        match class {
-            "Audio/Source" => Self::AudioSource,
-            "Audio/Sink" => Self::AudioSink,
-            "Video/Source" => Self::VideoSource,
-            "Source/Network" => Self::NetworkSource,
-            _ => Self::Other,
-        }
-    }
-
-    /// Get GStreamer device class filter string.
-    pub fn to_filter_string(&self) -> Option<&'static str> {
-        match self {
-            Self::AudioSource => Some("Audio/Source"),
-            Self::AudioSink => Some("Audio/Sink"),
-            Self::VideoSource => Some("Video/Source"),
-            Self::NetworkSource => Some("Source/Network"),
-            Self::Other => None,
-        }
-    }
-}
+pub use strom_types::discovery::{DeviceCategory, DeviceResponse};
 
 /// Discovered device from GStreamer DeviceMonitor.
 #[derive(Debug, Clone)]
@@ -105,27 +65,6 @@ impl DiscoveredDevice {
         // Check provider name or NDI-specific property
         self.provider.contains("ndi") || self.properties.contains_key("ndi-name")
     }
-}
-
-/// API response for a discovered device.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct DeviceResponse {
-    /// Unique ID for this device.
-    pub id: String,
-    /// Display name of the device.
-    pub name: String,
-    /// Device class (e.g., "Audio/Source", "Video/Source", "Source/Network").
-    pub device_class: String,
-    /// Device category.
-    pub category: DeviceCategory,
-    /// Provider that discovered this device.
-    pub provider: String,
-    /// Additional properties from the device.
-    pub properties: HashMap<String, String>,
-    /// Seconds since first discovery.
-    pub first_seen_secs_ago: u64,
-    /// Seconds since last seen.
-    pub last_seen_secs_ago: u64,
 }
 
 /// Device discovery service using GStreamer DeviceMonitor.

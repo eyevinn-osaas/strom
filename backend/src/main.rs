@@ -377,8 +377,11 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
         gstrsinter::plugin_register_static().expect("Could not register inter plugins");
         gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
+        gstrsaudiofx::plugin_register_static().expect("Could not register audiofx plugins");
         gst_plugins_lsp::plugin_register_static().expect("Could not register lsp-dsp-rs plugins");
         agua_gst::plugin_register_static().expect("Could not register agua watermark plugins");
+        #[cfg(feature = "efp")]
+        gst_plugin_efp::plugin_register_static().expect("Could not register efp mux/demux plugins");
 
         // Detect GPU capabilities for video conversion mode selection
         // This tests CUDA-GL interop to determine if autovideoconvert works
@@ -427,6 +430,12 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         // Start debounced flow save task (batches rapid changes to avoid disk thrashing)
         state.start_debounced_save_task();
 
+        // Start pipeline monitor (queue levels, buffer age warnings)
+        strom::gst::pipeline_monitor::start(state.clone());
+
+        // Start WHIP session auto-cleanup (handles dead ICE connections, pipeline errors)
+        state.whip_session_manager().start_cleanup_task();
+
         // GStreamer elements are discovered lazily on first /api/elements request
 
         // Create the HTTP app BEFORE auto-restart
@@ -462,7 +471,6 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
         let handle_for_signal = handle.clone();
         tokio::spawn(async move {
             wait_for_shutdown_signal().await;
-            strom::blocks::builtin::whip::shutdown_whip_servers();
             info!("Signaling GUI to close...");
             shutdown_flag.store(true, Ordering::SeqCst);
             handle_for_signal.graceful_shutdown(Some(Duration::from_secs(10)));
@@ -513,8 +521,11 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     gstrswebrtc::plugin_register_static().expect("Could not register webrtc plugins");
     gstrsinter::plugin_register_static().expect("Could not register inter plugins");
     gstrsrtp::plugin_register_static().expect("Could not register rtp plugins");
+    gstrsaudiofx::plugin_register_static().expect("Could not register audiofx plugins");
     gst_plugins_lsp::plugin_register_static().expect("Could not register lsp-dsp-rs plugins");
     agua_gst::plugin_register_static().expect("Could not register agua watermark plugins");
+    #[cfg(feature = "efp")]
+    gst_plugin_efp::plugin_register_static().expect("Could not register efp mux/demux plugins");
 
     // Detect GPU capabilities for video conversion mode selection
     // This tests CUDA-GL interop to determine if autovideoconvert works
@@ -557,6 +568,12 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     // Start debounced flow save task (batches rapid changes to avoid disk thrashing)
     state.start_debounced_save_task();
 
+    // Start pipeline monitor (queue levels, buffer age warnings)
+    strom::gst::pipeline_monitor::start(state.clone());
+
+    // Start WHIP session auto-cleanup (handles dead ICE connections, pipeline errors)
+    state.whip_session_manager().start_cleanup_task();
+
     // GStreamer elements are discovered lazily on first /api/elements request
 
     // Create the HTTP app BEFORE auto-restart, then bind AFTER
@@ -589,7 +606,6 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
     let handle_for_signal = handle.clone();
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
-        strom::blocks::builtin::whip::shutdown_whip_servers();
         info!("Server shutting down");
         handle_for_signal.graceful_shutdown(Some(Duration::from_secs(10)));
     });

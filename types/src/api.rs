@@ -16,10 +16,13 @@ use utoipa::ToSchema;
 /// Request to create a new flow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct CreateFlowRequest {
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub name: String,
     /// Optional description for the flow
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub description: Option<String>,
 }
 
@@ -85,26 +88,34 @@ pub struct ElementInfoResponse {
 /// Request to update a property on a running pipeline element.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct UpdatePropertyRequest {
     /// The name of the property to update
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub property_name: String,
     /// The new value for the property
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub value: PropertyValue,
 }
 
 /// Request to trigger a transition on a compositor block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct TriggerTransitionRequest {
     /// Index of the currently active input (0-based)
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub from_input: usize,
     /// Index of the input to transition to (0-based)
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub to_input: usize,
     /// Type of transition: "cut", "fade", "slide_left", "slide_right", "slide_up", "slide_down"
     #[serde(default = "default_transition_type")]
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 50)))]
     pub transition_type: String,
     /// Duration of the transition in milliseconds (ignored for "cut")
     #[serde(default = "default_transition_duration")]
+    #[cfg_attr(feature = "validation", garde(range(max = 60000)))]
     pub duration_ms: u64,
 }
 
@@ -131,23 +142,30 @@ pub struct TransitionResponse {
 /// Request to animate a single input's position/size.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct AnimateInputRequest {
     /// Input index (0-based)
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub input: usize,
     /// Target X position (optional, keeps current if not specified)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub xpos: Option<i32>,
     /// Target Y position (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub ypos: Option<i32>,
     /// Target width (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub width: Option<i32>,
     /// Target height (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub height: Option<i32>,
     /// Animation duration in milliseconds
     #[serde(default = "default_transition_duration")]
+    #[cfg_attr(feature = "validation", garde(range(max = 60000)))]
     pub duration_ms: u64,
 }
 
@@ -164,10 +182,13 @@ pub struct ElementPropertiesResponse {
 /// Request to update a property on a pad in a running pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct UpdatePadPropertyRequest {
     /// The name of the property to update
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub property_name: String,
     /// The new value for the property
+    #[cfg_attr(feature = "validation", garde(skip))]
     pub value: PropertyValue,
 }
 
@@ -237,20 +258,24 @@ impl LatencyResponse {
 
 /// Messages sent from server to client via WebSocket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// Pipeline state has changed
     StateChange {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         state: PipelineState,
     },
     /// An error occurred
     Error {
+        #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
         flow_id: Option<FlowId>,
         message: String,
     },
     /// A warning message
     Warning {
+        #[cfg_attr(feature = "openapi", schema(value_type = Option<String>))]
         flow_id: Option<FlowId>,
         message: String,
     },
@@ -260,12 +285,19 @@ pub enum ServerMessage {
 
 /// Messages sent from client to server via WebSocket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
     /// Subscribe to updates for a specific flow
-    Subscribe { flow_id: FlowId },
+    Subscribe {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// Unsubscribe from updates for a specific flow
-    Unsubscribe { flow_id: FlowId },
+    Unsubscribe {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+    },
     /// Ping to keep connection alive
     Ping,
 }
@@ -461,9 +493,11 @@ pub struct FlowDebugInfo {
 /// Request to parse a gst-launch-1.0 pipeline string.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct ParseGstLaunchRequest {
     /// The gst-launch-1.0 pipeline string to parse
     /// Example: "videotestsrc pattern=ball ! videoconvert ! autovideosink"
+    #[cfg_attr(feature = "validation", garde(length(min = 1)))]
     pub pipeline: String,
 }
 
@@ -656,6 +690,19 @@ pub struct AvailableSourcesResponse {
 }
 
 // ============================================================================
+// Dynamic Pads API Types
+// ============================================================================
+
+/// Response containing runtime dynamic pads information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DynamicPadsResponse {
+    /// Map of element_id -> {pad_name -> tee_element_name}
+    /// These are pads that appeared at runtime without defined links.
+    pub pads: HashMap<String, HashMap<String, String>>,
+}
+
+// ============================================================================
 // Media File API Types
 // ============================================================================
 
@@ -694,18 +741,23 @@ pub struct ListMediaResponse {
 /// Request to rename a file or directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct RenameMediaRequest {
     /// Current path (relative to media root)
+    #[cfg_attr(feature = "validation", garde(length(min = 1)))]
     pub old_path: String,
     /// New name (just the filename, not full path)
+    #[cfg_attr(feature = "validation", garde(length(min = 1, max = 255)))]
     pub new_name: String,
 }
 
 /// Request to create a directory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
 pub struct CreateDirectoryRequest {
     /// Path for new directory (relative to media root)
+    #[cfg_attr(feature = "validation", garde(length(min = 1)))]
     pub path: String,
 }
 
@@ -719,6 +771,62 @@ pub struct MediaOperationResponse {
     pub message: String,
 }
 
+// ============================================================================
+// Buffer Age Probe API Types
+// ============================================================================
+
+/// Request to activate a buffer age probe on a pad.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActivateProbeRequest {
+    /// Element ID to probe (standalone element or block ID)
+    pub element_id: String,
+    /// Measure every Nth buffer (default 1)
+    #[serde(default = "default_sample_interval")]
+    pub sample_interval: Option<u32>,
+    /// Auto-remove after this many seconds (default 60)
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: Option<u32>,
+}
+
+fn default_sample_interval() -> Option<u32> {
+    Some(1)
+}
+
+fn default_timeout_secs() -> Option<u32> {
+    Some(60)
+}
+
+/// Response after activating a probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ProbeResponse {
+    /// Unique probe ID
+    pub probe_id: String,
+}
+
+/// Information about an active probe.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ProbeInfo {
+    /// Unique probe ID
+    pub probe_id: String,
+    /// Element ID being probed
+    pub element_id: String,
+    /// Pad name being probed
+    pub pad_name: String,
+    /// Number of samples collected so far
+    pub sample_count: u64,
+}
+
+/// Response listing active probes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ActiveProbesResponse {
+    /// List of active probes
+    pub probes: Vec<ProbeInfo>,
+}
+
 impl MediaOperationResponse {
     /// Create a success response.
     pub fn success(message: impl Into<String>) -> Self {
@@ -727,13 +835,124 @@ impl MediaOperationResponse {
             message: message.into(),
         }
     }
+}
 
-    /// Create an error response.
-    #[allow(dead_code)]
-    pub fn error(message: impl Into<String>) -> Self {
-        Self {
-            success: false,
-            message: message.into(),
-        }
-    }
+// ============================================================================
+// Vision Mixer API Types
+// ============================================================================
+
+/// Request to select a preview source on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SelectPreviewRequest {
+    /// Index of the input to set as preview (0-based)
+    pub input: usize,
+    /// If true, toggle the input in/out of the current PVW group (shift+click).
+    /// If false (default), replace the PVW group with just this input.
+    #[serde(default)]
+    pub multi: bool,
+}
+
+/// Response after selecting a preview source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SelectPreviewResponse {
+    pub message: String,
+    /// First source in the PVW group (backward compat).
+    pub preview_input: usize,
+    /// First source in the PGM group (backward compat).
+    pub program_input: usize,
+    /// Full ordered PVW source group.
+    pub preview_inputs: Vec<usize>,
+    /// Full ordered PGM source group.
+    pub program_inputs: Vec<usize>,
+}
+
+/// Current state of a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct VisionMixerState {
+    pub preview_input: usize,
+    pub program_input: usize,
+    pub preview_inputs: Vec<usize>,
+    pub program_inputs: Vec<usize>,
+    pub num_inputs: usize,
+    pub input_labels: Vec<String>,
+}
+
+/// Request to set or clear the background source on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetBackgroundRequest {
+    /// Source index to use as background (0-based), or null to clear.
+    pub input: Option<usize>,
+}
+
+/// Response after setting/clearing the background source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetBackgroundResponse {
+    pub message: String,
+    /// Current background source index, or null if none.
+    pub background_input: Option<usize>,
+}
+
+/// Request to set the multiview overlay alpha on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct OverlayAlphaRequest {
+    /// Alpha value (0.0 = fully transparent, 1.0 = fully opaque)
+    pub alpha: f64,
+}
+
+/// Response after setting the multiview overlay alpha.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct OverlayAlphaResponse {
+    pub message: String,
+    pub alpha: f64,
+}
+
+/// Request to toggle a DSK (Downstream Keyer) layer on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DskToggleRequest {
+    /// DSK layer number (1 or 2, 1-based)
+    pub dsk: usize,
+    /// Enable or disable the DSK layer
+    pub enabled: bool,
+}
+
+/// Response after toggling a DSK layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct DskToggleResponse {
+    pub message: String,
+    /// DSK layer number (1-based)
+    pub dsk: usize,
+    pub enabled: bool,
+}
+
+/// Request to toggle Fade to Black on a vision mixer block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FadeToBlackRequest {
+    /// Duration in milliseconds (0 = instant)
+    pub duration_ms: u64,
+}
+
+/// Response after toggling Fade to Black.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct FadeToBlackResponse {
+    pub message: String,
+    pub active: bool,
+}
+
+/// Response for a vision mixer multiview endpoint query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct MultiviewEndpointResponse {
+    /// WHEP endpoint path (e.g. "/whep/my-endpoint"), empty if not connected.
+    pub endpoint: String,
 }

@@ -10,10 +10,12 @@ default-run = "strom"
 default = ["nvidia"]
 no-gui = []
 nvidia = ["dep:nvml-wrapper"]
+efp = ["dep:gst-plugin-efp"]
 
 [dependencies]
 # Internal
-strom-types = { path = "../types", features = ["openapi"] }
+strom-types = { path = "../types", features = ["openapi", "validation"] }
+garde.workspace = true
 
 # Web framework
 axum.workspace = true
@@ -44,17 +46,24 @@ utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
 
 # GStreamer
+cairo-rs.workspace = true
 gstreamer.workspace = true
 gstreamer-app.workspace = true
 gstreamer-controller.workspace = true
 gstreamer-net.workspace = true
+gstreamer-gl.workspace = true
 gstreamer-video.workspace = true
+gst-plugin-audiofx.workspace = true
 gst-plugin-webrtc.workspace = true
 gst-plugin-webrtchttp.workspace = true
 gst-plugin-inter.workspace = true
 gst-plugin-rtp.workspace = true
 gst-plugins-lsp = { git = "https://github.com/srperens/lsp-plugins-rs", tag = "v1.3.1", package = "gst-plugins-lsp" }
 agua-gst = { git = "https://github.com/srperens/agua", tag = "v0.2.4", package = "agua-gst" }
+gst-plugin-efp = { git = "https://github.com/Eyevinn/efp", tag = "v0.2.5", package = "gst-plugin-efp", optional = true }
+
+# Encoding
+base64 = "0.22"
 
 # Error handling
 anyhow = "1.0"
@@ -74,11 +83,11 @@ rustls = { version = "0.23", features = ["ring"] }
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # Authentication
-bcrypt = "0.18.0"
+bcrypt = "0.19.0"
 tower-sessions = "0.15"
 
 # CLI argument parsing
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 
 # Configuration management
 figment = { version = "0.10", features = ["toml", "env"] }
@@ -87,7 +96,7 @@ figment = { version = "0.10", features = ["toml", "env"] }
 directories = "6.0"
 
 # Temporary files for DOT/SVG conversion
-tempfile = "3.8"
+tempfile = "3.27"
 uuid.workspace = true
 
 # MIME type detection for static assets
@@ -125,13 +134,13 @@ eframe = { workspace = true }
 
 [build-dependencies]
 chrono = "0.4"
-uuid = { version = "1.21", features = ["v4"] }
+uuid = { version = "1.23", features = ["v4"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
 [dev-dependencies]
-tempfile = "3.8"
+tempfile = "3.27"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 serial_test = "3.3"

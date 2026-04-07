@@ -3,21 +3,21 @@ use crate::info_page::{
 };
 use crate::properties::PropertyInspector;
 use crate::state::AppMessage;
-use egui::{CentralPanel, Color32, Context, SidePanel, TopBottomPanel};
-use strom_types::{Flow, PipelineState};
+use egui::{CentralPanel, Color32};
+use strom_types::Flow;
 
 use super::*;
 use super::{FocusTarget, ThemePreference};
 impl StromApp {
     /// Render the top toolbar.
-    pub(super) fn render_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_toolbar(&mut self, ui: &mut egui::Ui) {
         // First top bar: System-wide controls
-        TopBottomPanel::top("system_bar")
+        egui::Panel::top("system_bar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0; // Add some vertical spacing between wrapped rows
                                                            // Strom logo and heading as clickable link to GitHub
@@ -34,7 +34,8 @@ impl StromApp {
                         .on_hover_text("Visit Strom on GitHub")
                         .clicked()
                     {
-                        ctx.open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
                     }
                     if ui
                         .heading("Strom")
@@ -42,17 +43,22 @@ impl StromApp {
                         .on_hover_text("Visit Strom on GitHub")
                         .clicked()
                     {
-                        ctx.open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
+                        ui.ctx()
+                            .open_url(egui::OpenUrl::new_tab("https://github.com/Eyevinn/strom"));
                     }
 
                     // Zoom controls
                     ui.separator();
-                    let current_zoom = ctx.pixels_per_point();
+                    let current_zoom = ui.ctx().pixels_per_point();
                     let zoom_percent = (current_zoom * 100.0).round() as i32;
 
-                    if ui.small_button("-").on_hover_text("Zoom out").clicked() {
+                    if ui
+                        .small_button(egui_phosphor::regular::MAGNIFYING_GLASS_MINUS)
+                        .on_hover_text("Zoom out")
+                        .clicked()
+                    {
                         let new_zoom = (current_zoom / 1.1).max(0.5);
-                        ctx.set_pixels_per_point(new_zoom);
+                        ui.ctx().set_pixels_per_point(new_zoom);
                         self.settings.zoom = Some(new_zoom);
                     }
 
@@ -61,13 +67,17 @@ impl StromApp {
                         .on_hover_text("Reset zoom")
                         .clicked()
                     {
-                        ctx.set_pixels_per_point(self.native_pixels_per_point);
+                        ui.ctx().set_pixels_per_point(self.native_pixels_per_point);
                         self.settings.zoom = None; // Reset to system default
                     }
 
-                    if ui.small_button("+").on_hover_text("Zoom in").clicked() {
+                    if ui
+                        .small_button(egui_phosphor::regular::MAGNIFYING_GLASS_PLUS)
+                        .on_hover_text("Zoom in")
+                        .clicked()
+                    {
                         let new_zoom = (current_zoom * 1.1).min(5.0);
-                        ctx.set_pixels_per_point(new_zoom);
+                        ui.ctx().set_pixels_per_point(new_zoom);
                         self.settings.zoom = Some(new_zoom);
                     }
 
@@ -75,13 +85,16 @@ impl StromApp {
                     #[cfg(not(target_arch = "wasm32"))]
                     {
                         if ui
-                            .button("Open Web GUI")
+                            .button(format!(
+                                "{} Web GUI",
+                                egui_phosphor::regular::ARROW_SQUARE_OUT
+                            ))
                             .on_hover_text("Open the web interface in your browser")
                             .clicked()
                         {
                             let scheme = if self.tls_enabled { "https" } else { "http" };
                             let url = format!("{}://localhost:{}", scheme, self.port);
-                            ctx.open_url(egui::OpenUrl::new_tab(&url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
                     }
 
@@ -189,7 +202,7 @@ impl StromApp {
                                     .clicked()
                                 {
                                     self.settings.theme = theme;
-                                    self.apply_theme(ctx.clone());
+                                    self.apply_theme(ui.ctx().clone());
                                 }
                             }
                         });
@@ -198,9 +211,12 @@ impl StromApp {
                     if let Some(ref status) = self.auth_status {
                         if status.auth_required
                             && status.authenticated
-                            && ui.button("🚪").on_hover_text("Logout").clicked()
+                            && ui
+                                .button(egui_phosphor::regular::SIGN_OUT)
+                                .on_hover_text("Logout")
+                                .clicked()
                         {
-                            self.handle_logout(ctx.clone());
+                            self.handle_logout(ui.ctx().clone());
                         }
                     }
 
@@ -218,32 +234,32 @@ impl StromApp {
             });
 
         // Second top bar: Page-specific controls
-        self.render_page_toolbar(ctx);
+        self.render_page_toolbar(ui);
     }
 
     /// Render the page-specific toolbar (second row)
-    pub(super) fn render_page_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_page_toolbar(&mut self, ui: &mut egui::Ui) {
         match self.current_page {
-            AppPage::Flows => self.render_flows_toolbar(ctx),
-            AppPage::Discovery => self.render_discovery_toolbar(ctx),
-            AppPage::Clocks => self.render_clocks_toolbar(ctx),
-            AppPage::Media => self.render_media_toolbar(ctx),
-            AppPage::Info => self.render_info_toolbar(ctx),
-            AppPage::Links => self.render_links_toolbar(ctx),
+            AppPage::Flows => self.render_flows_toolbar(ui),
+            AppPage::Discovery => self.render_discovery_toolbar(ui),
+            AppPage::Clocks => self.render_clocks_toolbar(ui),
+            AppPage::Media => self.render_media_toolbar(ui),
+            AppPage::Info => self.render_info_toolbar(ui),
+            AppPage::Links => self.render_links_toolbar(ui),
         }
     }
 
     /// Render the flows page toolbar
-    pub(super) fn render_flows_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
-            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(8, 4)))
-            .show(ctx, |ui| {
+    pub(super) fn render_flows_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
+            .frame(egui::Frame::side_top_panel(&ui.ctx().global_style()).inner_margin(egui::Margin::symmetric(8, 4)))
+            .show_inside(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(egui::RichText::new("Flows").heading());
                 ui.separator();
 
                 if ui
-                    .button("New Flow")
+                    .button(format!("{} New Flow", egui_phosphor::regular::PLUS))
                     .on_hover_text(format!("Create a new flow ({})", Self::format_shortcut("Ctrl+N")))
                     .clicked()
                 {
@@ -251,7 +267,7 @@ impl StromApp {
                 }
 
                 if ui
-                    .button("Import")
+                    .button(format!("{} Import", egui_phosphor::regular::DOWNLOAD_SIMPLE))
                     .on_hover_text(format!("Import flow from JSON ({})", Self::format_shortcut("Ctrl+O")))
                     .clicked()
                 {
@@ -261,7 +277,7 @@ impl StromApp {
                 }
 
                 if ui
-                    .button("Refresh")
+                    .button(format!("{} Refresh", egui_phosphor::regular::ARROWS_CLOCKWISE))
                     .on_hover_text("Reload flows from server (F5 or Ctrl+R)")
                     .clicked()
                 {
@@ -269,61 +285,62 @@ impl StromApp {
                 }
 
                 if ui
-                    .button("Save")
+                    .button(format!("{} Save", egui_phosphor::regular::FLOPPY_DISK))
                     .on_hover_text(format!("Save current flow ({})", Self::format_shortcut("Ctrl+S")))
                     .clicked()
                 {
-                    self.save_current_flow(ctx);
+                    self.save_current_flow(ui.ctx());
                 }
 
                 // Flow controls - only show when a flow is selected
-                let flow_info = self.current_flow().map(|f| (f.id, f.state));
+                let flow_info = self.current_flow().map(|f| (f.id, f.running));
 
-                if let Some((flow_id, state)) = flow_info {
+                if let Some((flow_id, running)) = flow_info {
                     ui.separator();
 
-                    let state = state.unwrap_or(PipelineState::Null);
-
-                    // Map internal states to user-friendly names
-                    let (state_text, state_color) = match state {
-                        PipelineState::Null | PipelineState::Ready => ("Stopped", Color32::GRAY),
-                        PipelineState::Paused => ("Paused", Color32::from_rgb(255, 165, 0)),
-                        PipelineState::Playing => ("Started", Color32::GREEN),
+                    let (state_text, state_color) = if running {
+                        ("Started", Color32::GREEN)
+                    } else {
+                        ("Stopped", Color32::GRAY)
                     };
 
                     ui.colored_label(state_color, format!("State: {}", state_text));
 
-                    // Show latency for running flows
-                    let is_running = matches!(state, PipelineState::Playing);
-                    if is_running {
+                    // Show minimum pipeline latency for running live flows
+                    if running {
                         if let Some(latency) = self.latency_cache.get(&flow_id.to_string()) {
-                            ui.label(format!("Latency: {}", latency.min_latency_formatted));
+                            if latency.live {
+                                ui.label(format!(
+                                    "Min latency: {}",
+                                    latency.min_latency_formatted
+                                ));
+                            }
                         }
                     }
 
                     ui.separator();
 
                     // Show Start or Restart button depending on state
-                    let button_text = if is_running {
-                        "🔄 Restart"
+                    let button_text = if running {
+                        format!("{} Restart", egui_phosphor::regular::ARROWS_CLOCKWISE)
                     } else {
-                        "▶ Start"
+                        "▶ Start".to_string()
                     };
 
                     if ui
                         .button(button_text)
-                        .on_hover_text(if is_running {
+                        .on_hover_text(if running {
                             "Restart pipeline (F9)"
                         } else {
                             "Start pipeline (F9)"
                         })
                         .clicked()
                     {
-                        if is_running {
+                        if running {
                             // For restart: stop first, then start
                             let api = self.api.clone();
                             let tx = self.channels.sender();
-                            let ctx_clone = ctx.clone();
+                            let ctx_clone = ui.ctx().clone();
 
                             self.status = "Restarting flow...".to_string();
 
@@ -355,20 +372,20 @@ impl StromApp {
                                 ctx_clone.request_repaint();
                             });
                         } else {
-                            self.start_flow(ctx);
+                            self.start_flow(ui.ctx());
                         }
                     }
 
                     if ui
-                        .button("⏹ Stop")
+                        .button("■ Stop")
                         .on_hover_text("Stop pipeline (Shift+F9)")
                         .clicked()
                     {
-                        self.stop_flow(ctx);
+                        self.stop_flow(ui.ctx());
                     }
 
                     if ui
-                        .button("🔍 Debug Graph")
+                        .button(format!("{} Debug Graph", egui_phosphor::regular::GRAPH))
                         .on_hover_text(format!(
                             "View pipeline debug graph ({})",
                             Self::format_shortcut("Ctrl+D")
@@ -376,7 +393,7 @@ impl StromApp {
                         .clicked()
                     {
                         let url = self.api.get_debug_graph_url(flow_id);
-                        ctx.open_url(egui::OpenUrl::new_tab(&url));
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                     }
 
                     // Show flow uptime on the right side (only for running flows)
@@ -408,22 +425,22 @@ impl StromApp {
     }
 
     /// Render the discovery page toolbar
-    pub(super) fn render_discovery_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_discovery_toolbar(&mut self, ui: &mut egui::Ui) {
         let is_loading = self.discovery_page.loading;
 
-        TopBottomPanel::top("page_toolbar")
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Discovery").heading());
                     ui.separator();
 
                     if ui.button("Refresh").clicked() {
                         self.discovery_page
-                            .refresh(&self.api, ctx, &self.channels.sender());
+                            .refresh(&self.api, ui.ctx(), &self.channels.sender());
                     }
                     if is_loading {
                         ui.spinner();
@@ -433,13 +450,13 @@ impl StromApp {
     }
 
     /// Render the clocks page toolbar
-    pub(super) fn render_clocks_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
+    pub(super) fn render_clocks_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Clocks").heading());
                     ui.separator();
@@ -449,22 +466,22 @@ impl StromApp {
     }
 
     /// Render the media page toolbar
-    pub(super) fn render_media_toolbar(&mut self, ctx: &Context) {
+    pub(super) fn render_media_toolbar(&mut self, ui: &mut egui::Ui) {
         let is_loading = self.media_page.loading;
 
-        TopBottomPanel::top("page_toolbar")
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Media Files").heading());
                     ui.separator();
 
                     if ui.button("Refresh").clicked() {
                         self.media_page
-                            .refresh(&self.api, ctx, &self.channels.sender());
+                            .refresh(&self.api, ui.ctx(), &self.channels.sender());
                     }
                     if is_loading {
                         ui.spinner();
@@ -474,35 +491,35 @@ impl StromApp {
     }
 
     /// Render the info page toolbar
-    pub(super) fn render_info_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
+    pub(super) fn render_info_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("System Information").heading());
                     ui.separator();
 
                     if ui.button("Refresh").clicked() {
-                        self.load_version(ctx.clone());
+                        self.load_version(ui.ctx().clone());
                         // Force reload of network interfaces
                         self.network_interfaces_loaded = false;
-                        self.load_network_interfaces(ctx.clone());
+                        self.load_network_interfaces(ui.ctx().clone());
                     }
                 });
             });
     }
 
     /// Render the links page toolbar
-    pub(super) fn render_links_toolbar(&mut self, ctx: &Context) {
-        TopBottomPanel::top("page_toolbar")
+    pub(super) fn render_links_toolbar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("page_toolbar")
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
+                egui::Frame::side_top_panel(&ui.ctx().global_style())
                     .inner_margin(egui::Margin::symmetric(8, 4)),
             )
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Links").heading());
                 });
@@ -510,18 +527,18 @@ impl StromApp {
     }
 
     /// Render the flow list sidebar.
-    pub(super) fn render_flow_list(&mut self, ctx: &Context) {
+    pub(super) fn render_flow_list(&mut self, ui: &mut egui::Ui) {
         if !self.show_flow_list_panel {
             return;
         }
         // Max width is 40% of screen width
         #[allow(deprecated)]
-        let max_width = ctx.screen_rect().width() * 0.4;
-        SidePanel::left("flow_list")
-            .default_width(200.0)
-            .max_width(max_width)
+        let max_width = ui.ctx().screen_rect().width() * 0.4;
+        egui::Panel::left("flow_list")
+            .default_size(200.0)
+            .max_size(max_width)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 // Filter input at top
                 ui.horizontal(|ui| {
                     ui.label("Filter:");
@@ -535,7 +552,9 @@ impl StromApp {
                         self.focus_flow_filter_requested = false;
                         response.request_focus();
                     }
-                    if !self.flow_filter.is_empty() && ui.small_button("x").clicked() {
+                    if !self.flow_filter.is_empty()
+                        && ui.small_button(egui_phosphor::regular::X).on_hover_text("Clear search").clicked()
+                    {
                         self.flow_filter.clear();
                     }
                 });
@@ -719,6 +738,13 @@ impl StromApp {
                                     right_side_width += 18.0;
                                 }
 
+                                // CPU affinity indicator
+                                if flow.properties.cpu_affinity
+                                    != strom_types::flow::CpuAffinity::default()
+                                {
+                                    right_side_width += 18.0;
+                                }
+
                                 // Left side: state icon (always) + QoS indicator (conditional)
                                 let mut left_icons_width = 20.0; // state icon + spacing
                                 let has_qos_issues = self
@@ -740,19 +766,11 @@ impl StromApp {
                                 child_ui.add_space(4.0);
 
                                 // Show running state icon
-                                let state_icon = match flow.state {
-                                    Some(PipelineState::Playing) => "▶",
-                                    Some(PipelineState::Paused) => "⏸",
-                                    Some(PipelineState::Ready)
-                                    | Some(PipelineState::Null)
-                                    | None => "⏹",
-                                };
-                                let state_color = match flow.state {
-                                    Some(PipelineState::Playing) => Color32::from_rgb(0, 200, 0),
-                                    Some(PipelineState::Paused) => Color32::from_rgb(255, 165, 0),
-                                    Some(PipelineState::Ready)
-                                    | Some(PipelineState::Null)
-                                    | None => Color32::GRAY,
+                                let state_icon = if flow.running { "▶" } else { "■" };
+                                let state_color = if flow.running {
+                                    Color32::from_rgb(0, 200, 0)
+                                } else {
+                                    Color32::GRAY
                                 };
                                 child_ui.colored_label(state_color, state_icon);
 
@@ -861,13 +879,22 @@ impl StromApp {
                                         }
                                     }
 
+                                    // Show pinned CPUs if available from thread monitor
+                                    let pinned_cpus = self.thread_monitor
+                                        .get_sorted_threads()
+                                        .iter()
+                                        .filter_map(|h| h.latest.as_ref())
+                                        .find(|s| s.flow_id == flow.id)
+                                        .and_then(|s| s.pinned_cpus.clone());
+                                    if let Some(ref cpus) = pinned_cpus {
+                                        ui.label(format!("Pinned to CPUs: {}", crate::system_monitor::format_cpu_range(cpus)));
+                                    }
+
                                     ui.add_space(5.0);
-                                    let state_text = match flow.state {
-                                        Some(PipelineState::Playing) => "Running",
-                                        Some(PipelineState::Paused) => "Paused",
-                                        Some(PipelineState::Ready)
-                                        | Some(PipelineState::Null)
-                                        | None => "Stopped",
+                                    let state_text = if flow.running {
+                                        "Running"
+                                    } else {
+                                        "Stopped"
                                     };
                                     ui.label(format!("State: {}", state_text));
 
@@ -919,11 +946,17 @@ impl StromApp {
                                         ui.add_space(4.0);
 
                                         // Single menu button with dropdown
-                                        ui.menu_button("...", |ui| {
+                                        ui.menu_button(egui_phosphor::regular::DOTS_THREE_VERTICAL, |ui| {
                                             ui.set_min_width(150.0);
 
                                             // Properties
-                                            if ui.button("⚙  Properties").clicked() {
+                                            if ui
+                                                .button(format!(
+                                                    "{} Properties",
+                                                    egui_phosphor::regular::GEAR
+                                                ))
+                                                .clicked()
+                                            {
                                                 self.editing_properties_flow_id = Some(flow.id);
                                                 self.properties_name_buffer = flow.name.clone();
                                                 self.properties_description_buffer = flow
@@ -940,13 +973,21 @@ impl StromApp {
                                                     .unwrap_or_else(|| "0".to_string());
                                                 self.properties_thread_priority_buffer =
                                                     flow.properties.thread_priority;
+                                                self.properties_cpu_affinity_buffer =
+                                                    flow.properties.cpu_affinity;
                                                 ui.close();
                                             }
 
                                             ui.separator();
 
                                             // Export as JSON
-                                            if ui.button("📤  Export as JSON").clicked() {
+                                            if ui
+                                                .button(format!(
+                                                    "{} Export as JSON",
+                                                    egui_phosphor::regular::UPLOAD_SIMPLE
+                                                ))
+                                                .clicked()
+                                            {
                                                 match serde_json::to_string_pretty(flow) {
                                                     Ok(json) => {
                                                         crate::clipboard::copy_text_with_ctx(
@@ -979,7 +1020,7 @@ impl StromApp {
                                             if ui
                                                 .add_enabled(
                                                     has_only_elements,
-                                                    egui::Button::new("🖥  Export as gst-launch"),
+                                                    egui::Button::new(format!("{} Export as gst-launch", egui_phosphor::regular::TERMINAL)),
                                                 )
                                                 .on_hover_text(tooltip)
                                                 .clicked()
@@ -996,20 +1037,32 @@ impl StromApp {
                                             ui.separator();
 
                                             // Copy flow
-                                            if ui.button("📋  Copy").clicked() {
+                                            if ui
+                                                .button(format!(
+                                                    "{} Copy",
+                                                    egui_phosphor::regular::COPY
+                                                ))
+                                                .clicked()
+                                            {
                                                 self.flow_pending_copy = Some(flow.clone());
                                                 ui.close();
                                             }
 
                                             // Delete flow
-                                            if ui.button("🗑  Delete").clicked() {
+                                            if ui
+                                                .button(format!(
+                                                    "{} Delete",
+                                                    egui_phosphor::regular::TRASH
+                                                ))
+                                                .clicked()
+                                            {
                                                 self.flow_pending_deletion =
                                                     Some((flow.id, flow.name.clone()));
                                                 ui.close();
                                             }
                                         });
 
-                                        // Show clock sync indicator for PTP/NTP (small colored dot)
+                                        // Show clock sync indicator for PTP/NTP
                                         use strom_types::flow::{
                                             ClockSyncStatus, GStreamerClockType,
                                         };
@@ -1042,10 +1095,11 @@ impl StromApp {
                                                     ),
                                                 };
 
-                                            // Small colored dot indicator
                                             ui.add_space(4.0);
                                             ui.add(egui::Label::new(
-                                                egui::RichText::new("*")
+                                                egui::RichText::new(
+                                                    egui_phosphor::regular::CLOCK_CLOCKWISE,
+                                                )
                                                     .size(12.0)
                                                     .color(text_color),
                                             ))
@@ -1071,7 +1125,9 @@ impl StromApp {
                                                 ui.add_space(2.0);
                                                 ui.add(
                                                     egui::Label::new(
-                                                        egui::RichText::new("⚠")
+                                                        egui::RichText::new(
+                                                            egui_phosphor::regular::WARNING,
+                                                        )
                                                             .size(12.0)
                                                             .color(warning_color),
                                                     )
@@ -1079,6 +1135,32 @@ impl StromApp {
                                                 )
                                                 .on_hover_text(tooltip);
                                             }
+                                        }
+
+                                        // Show CPU icon when affinity is not the default (Off)
+                                        if flow.properties.cpu_affinity
+                                            != strom_types::flow::CpuAffinity::default()
+                                        {
+                                            let tooltip = match flow.properties.cpu_affinity {
+                                                strom_types::flow::CpuAffinity::SingleCore => {
+                                                    "CPU affinity: Single Core"
+                                                }
+                                                strom_types::flow::CpuAffinity::Off => {
+                                                    unreachable!()
+                                                }
+                                            };
+                                            ui.add_space(2.0);
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(
+                                                        egui_phosphor::regular::CPU,
+                                                    )
+                                                    .size(12.0)
+                                                    .color(Color32::GRAY),
+                                                )
+                                                .sense(egui::Sense::hover()),
+                                            )
+                                            .on_hover_text(tooltip);
                                         }
                                     },
                                 );
@@ -1089,18 +1171,18 @@ impl StromApp {
     }
 
     /// Render the element palette sidebar.
-    pub(super) fn render_palette(&mut self, ctx: &Context) {
+    pub(super) fn render_palette(&mut self, ui: &mut egui::Ui) {
         if !self.show_palette_panel {
             return;
         }
         // Max width is 40% of screen width
         #[allow(deprecated)]
-        let max_width = ctx.screen_rect().width() * 0.4;
-        SidePanel::right("palette")
-            .default_width(250.0)
-            .max_width(max_width)
+        let max_width = ui.ctx().screen_rect().width() * 0.4;
+        egui::Panel::right("palette")
+            .default_size(250.0)
+            .max_size(max_width)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
             egui::ScrollArea::both().show(ui, |ui| {
                 // Check if an element is selected and trigger property loading if needed
                 // Do this BEFORE getting mutable reference to avoid borrow checker issues
@@ -1115,7 +1197,7 @@ impl StromApp {
                             "Element '{}' selected but properties not cached, triggering lazy load",
                             selected_element_type
                         );
-                        self.load_element_properties(selected_element_type.clone(), ctx);
+                        self.load_element_properties(selected_element_type.clone(), ui.ctx());
                     }
 
                     // Trigger pad properties loading if on Input/Output Pads tabs
@@ -1127,11 +1209,13 @@ impl StromApp {
                             "Element '{}' showing pad tab but pad properties not cached, triggering lazy load",
                             selected_element_type
                         );
-                        self.load_element_pad_properties(selected_element_type.clone(), ctx);
+                        self.load_element_pad_properties(selected_element_type.clone(), ui.ctx());
                     }
                 }
 
                 // Show either the palette or the property inspector, not both
+                // Clone selected ID before any borrows for probe section
+                let selected_id_for_probe = self.graph.selected.clone();
                 // Collect data BEFORE getting mutable reference to avoid borrow checker issues
                 let selected_element_data = self.graph.get_selected_element().map(|element| {
                     let active_tab = self.graph.active_property_tab;
@@ -1139,9 +1223,9 @@ impl StromApp {
                     // Use pad properties if showing pad tabs, otherwise regular properties
                     use crate::graph::PropertyTab;
                     let element_info = if matches!(active_tab, PropertyTab::InputPads | PropertyTab::OutputPads) {
-                        self.palette.get_element_info_with_pads(&element.element_type)
+                        self.palette.get_element_info_with_pads(&element.element_type).cloned()
                     } else {
-                        self.palette.get_element_info(&element.element_type)
+                        self.palette.get_element_info(&element.element_type).cloned()
                     };
 
                     let element_id = element.id.clone();
@@ -1153,26 +1237,49 @@ impl StromApp {
 
                 if let Some((element_info, active_tab, focused_pad, input_pads, output_pads)) = selected_element_data {
                     // Element selected: show ONLY property inspector
-                    ui.heading("Properties");
+                    let mut delete_element = false;
+                    ui.horizontal(|ui| {
+                        ui.heading("Properties");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button(format!(
+                                    "{} Delete",
+                                    egui_phosphor::regular::TRASH
+                                ))
+                                .on_hover_text("Delete element")
+                                .clicked()
+                            {
+                                delete_element = true;
+                            }
+                        });
+                    });
                     ui.separator();
 
-                    // Split borrow: get mutable access to graph fields separately
-                    let graph = &mut self.graph;
-                    if let Some(element) = graph.get_selected_element_mut() {
-                        let (new_tab, delete_requested) = PropertyInspector::show(
-                            ui,
-                            element,
-                            element_info,
-                            active_tab,
-                            focused_pad,
-                            input_pads,
-                            output_pads,
-                        );
-                        graph.active_property_tab = new_tab;
+                    // Probe section
+                    if let Some(ref eid) = selected_id_for_probe {
+                        self.render_probe_button(ui, eid);
+                        // render_probe_details adds its own separator when active
+                        if !self.render_probe_details(ui, eid) {
+                            ui.separator();
+                        }
+                    }
 
-                        // Handle deletion request
-                        if delete_requested {
-                            graph.remove_selected();
+                    if delete_element {
+                        self.graph.remove_selected();
+                    } else {
+                        // Split borrow: get mutable access to graph fields separately
+                        let graph = &mut self.graph;
+                        if let Some(element) = graph.get_selected_element_mut() {
+                            let (new_tab, _) = PropertyInspector::show(
+                                ui,
+                                element,
+                                element_info.as_ref(),
+                                active_tab,
+                                focused_pad,
+                                input_pads,
+                                output_pads,
+                            );
+                            graph.active_property_tab = new_tab;
                         }
                     }
                 } else if let Some(block_def_id) = self
@@ -1181,8 +1288,36 @@ impl StromApp {
                     .map(|b| b.block_definition_id.clone())
                 {
                     // Block selected: show block property inspector
-                    ui.heading("Block Properties");
+                    let mut delete_block = false;
+                    ui.horizontal(|ui| {
+                        ui.heading("Block Properties");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button(format!(
+                                    "{} Delete",
+                                    egui_phosphor::regular::TRASH
+                                ))
+                                .on_hover_text("Delete block")
+                                .clicked()
+                            {
+                                delete_block = true;
+                            }
+                        });
+                    });
                     ui.separator();
+
+                    // Probe section
+                    if let Some(ref eid) = selected_id_for_probe {
+                        self.render_probe_button(ui, eid);
+                        // render_probe_details adds its own separator when active
+                        if !self.render_probe_details(ui, eid) {
+                            ui.separator();
+                        }
+                    }
+
+                    if delete_block {
+                        self.graph.remove_selected();
+                    }
 
                     // Clone definition to avoid borrow checker issues
                     let definition_opt = self
@@ -1200,7 +1335,7 @@ impl StromApp {
                             )
                         });
                         if has_network_prop {
-                            self.load_network_interfaces(ctx.clone());
+                            self.load_network_interfaces(ui.ctx().clone());
                         }
 
                         // Load available channels if this is an InterInput block
@@ -1213,7 +1348,7 @@ impl StromApp {
                                     self.refresh_available_channels();
                                 }
                             }
-                            self.load_available_channels(ctx.clone());
+                            self.load_available_channels(ui.ctx().clone());
                         }
                     }
 
@@ -1222,17 +1357,65 @@ impl StromApp {
                         .map(|fid| fid.to_string())
                         .and_then(|fid| self.rtp_stats_cache.get(&fid));
 
+                    // Collect endpoint IDs used by other blocks (for duplicate detection).
+                    // WHIP and WHEP use separate registries so only same-protocol names conflict.
+                    let taken_endpoint_ids = {
+                        let selected_block_id = self.graph.get_selected_block()
+                            .map(|b| b.id.clone());
+                        let selected_def_id = self.graph.get_selected_block()
+                            .map(|b| b.block_definition_id.clone());
+                        let match_def = match selected_def_id.as_deref() {
+                            Some("builtin.whip_input") => Some("builtin.whip_input"),
+                            Some("builtin.whep_output") => Some("builtin.whep_output"),
+                            _ => None,
+                        };
+                        let mut ids = std::collections::HashSet::new();
+                        if let Some(target_def) = match_def {
+                            for flow in &self.flows {
+                                for b in &flow.blocks {
+                                    if selected_block_id.as_deref() == Some(&b.id)
+                                        && flow_id == Some(flow.id)
+                                    {
+                                        continue;
+                                    }
+                                    if b.block_definition_id == target_def {
+                                        if let Some(strom_types::PropertyValue::String(ep)) =
+                                            b.properties.get("endpoint_id")
+                                        {
+                                            let trimmed = ep.trim();
+                                            if !trimmed.is_empty() {
+                                                ids.insert(trimmed.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ids
+                    };
+
                     // Then get mutable reference to block
                     if let (Some(block), Some(def)) =
                         (self.graph.get_selected_block_mut(), definition_opt)
                     {
                         let block_id = block.id.clone();
+                        let recorder_filename = flow_id
+                            .and_then(|fid| self.recorder_filenames.get(&(fid, block_id.clone())))
+                            .map(|s| s.as_str());
+                        let recorder_start_time = flow_id
+                            .and_then(|fid| self.recorder_start_times.get(&(fid, block_id.clone())))
+                            .copied();
+                        let block_thumbnail = flow_id
+                            .and_then(|fid| self.block_thumbnails.get(&(fid, block.id.clone())));
                         let result = PropertyInspector::show_block(
                             ui,
                             block,
                             &def,
                             flow_id,
+                            &self.audioanalyzer_data,
                             &self.meter_data,
+                            &self.spectrum_data,
+                            &self.loudness_data,
                             &self.latency_data,
                             &self.webrtc_stats,
                             rtp_stats,
@@ -1240,6 +1423,10 @@ impl StromApp {
                             &self.available_channels,
                             &mut self.qr_inline,
                             &mut self.qr_cache,
+                            recorder_filename,
+                            recorder_start_time,
+                            block_thumbnail,
+                            &taken_endpoint_ids,
                         );
 
                         // Handle deletion request
@@ -1251,14 +1438,14 @@ impl StromApp {
                         if result.browse_streams_requested {
                             self.show_stream_picker_for_block = Some(block_id.clone());
                             // Refresh discovered streams for the picker
-                            self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                            self.discovery_page.refresh(&self.api, ui.ctx(), &self.channels.tx);
                         }
 
                         // Handle browse NDI sources request (for NDI Input)
                         if result.browse_ndi_sources_requested {
                             self.show_ndi_picker_for_block = Some(block_id.clone());
                             // Refresh NDI sources for the picker
-                            self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                            self.discovery_page.refresh(&self.api, ui.ctx(), &self.channels.tx);
                         }
 
                         // Handle VLC playlist download request (for MPEG-TS/SRT Output)
@@ -1318,26 +1505,32 @@ impl StromApp {
                         // Handle WHEP player request (for WHEP Output)
                         if let Some(endpoint_id) = result.whep_player_url {
                             let player_url = self.api.get_whep_player_url(&endpoint_id);
-                            ctx.open_url(egui::OpenUrl::new_tab(&player_url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&player_url));
                         }
 
                         // Handle copy WHEP URL to clipboard
                         if let Some(endpoint_id) = result.copy_whep_url_requested {
                             let player_url = self.api.get_whep_player_url(&endpoint_id);
-                            crate::clipboard::copy_text_with_ctx(ctx, &player_url);
+                            crate::clipboard::copy_text_with_ctx(ui.ctx(), &player_url);
                             self.status = "Player URL copied to clipboard".to_string();
+                        }
+
+                        // Handle vision mixer control page request
+                        if let Some(flow_id) = result.vision_mixer_url {
+                            let url = self.api.get_vision_mixer_url(&flow_id);
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
 
                         // Handle WHIP ingest request (for WHIP Input)
                         if let Some(endpoint_id) = result.whip_ingest_url {
                             let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
-                            ctx.open_url(egui::OpenUrl::new_tab(&ingest_url));
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&ingest_url));
                         }
 
                         // Handle copy WHIP ingest URL to clipboard
                         if let Some(endpoint_id) = result.copy_whip_url_requested {
                             let ingest_url = self.api.get_whip_ingest_url(&endpoint_id);
-                            crate::clipboard::copy_text_with_ctx(ctx, &ingest_url);
+                            crate::clipboard::copy_text_with_ctx(ui.ctx(), &ingest_url);
                             self.status = "Ingest URL copied to clipboard".to_string();
                         }
 
@@ -1368,11 +1561,123 @@ impl StromApp {
                                 self.qr_inline = Some((block_id.clone(), ingest_url));
                             }
                         }
+
+                        // Handle loudness reset request
+                        if let Some((flow_id, block_id)) = result.loudness_reset_requested {
+                            let api = self.api.clone();
+                            spawn_task(async move {
+                                if let Err(e) = api.reset_loudness(&flow_id, &block_id).await {
+                                    tracing::warn!("Failed to reset loudness: {}", e);
+                                }
+                            });
+                        }
+
+                        // Handle recorder split-now request
+                        if let Some((flow_id, block_id)) = result.recorder_split_requested {
+                            let api = self.api.clone();
+                            spawn_task(async move {
+                                if let Err(e) = api.recorder_split_now(&flow_id, &block_id).await {
+                                    tracing::warn!("Failed to trigger recorder split: {}", e);
+                                }
+                            });
+                        }
+
+                        // Handle recorder file download request
+                        if let Some(relative_path) = result.recorder_download_requested {
+                            let url = self.api.get_media_download_url(&relative_path);
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                        }
+
+                        // Handle live property updates (e.g., audiogain real-time control)
+                        // Debounce: avoid flooding the backend on every slider drag frame.
+                        // drain_live_updates also flushes expired pending values so the
+                        // final slider position is always delivered.
+                        let updates_to_send = crate::properties::drain_live_updates(
+                            &mut self.live_property_debounce,
+                            result.live_property_updates,
+                        );
+                        // If there are still pending updates in the debounce map, schedule
+                        // a repaint so they get flushed once the interval expires.
+                        if self
+                            .live_property_debounce
+                            .values()
+                            .any(|v| v.pending.is_some())
+                        {
+                            ui.ctx().request_repaint_after(std::time::Duration::from_millis(
+                                crate::properties::LIVE_PROPERTY_DEBOUNCE_MS,
+                            ));
+                        }
+                        for update in updates_to_send {
+                            let api = self.api.clone();
+                            spawn_task(async move {
+                                if let Err(e) = api
+                                    .update_element_property(
+                                        &update.flow_id,
+                                        &update.element_id,
+                                        &update.property_name,
+                                        update.value,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!("Live property update failed: {}", e);
+                                }
+                            });
+                        }
                     } else {
                         ui.label("Block definition not found");
                     }
+
+                } else if let Some(link) = self.graph.get_selected_link().cloned() {
+                    // Link selected: show connection info
+                    let mut delete_link = false;
+                    let (from_ref, to_ref) = link.to_pad_refs();
+
+                    ui.horizontal(|ui| {
+                        ui.heading("Connection");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button(format!(
+                                    "{} Delete",
+                                    egui_phosphor::regular::TRASH
+                                ))
+                                .on_hover_text("Delete connection")
+                                .clicked()
+                            {
+                                delete_link = true;
+                            }
+                        });
+                    });
+                    ui.separator();
+
+                    let from_label = self.graph.node_label(&from_ref.element_id);
+                    let to_label = self.graph.node_label(&to_ref.element_id);
+
+                    egui::Grid::new("connection_info")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.strong("From:");
+                            if let Some(ref pad) = from_ref.pad_name {
+                                ui.label(format!("{} ({})", from_label, pad));
+                            } else {
+                                ui.label(&from_label);
+                            }
+                            ui.end_row();
+
+                            ui.strong("To:");
+                            if let Some(ref pad) = to_ref.pad_name {
+                                ui.label(format!("{} ({})", to_label, pad));
+                            } else {
+                                ui.label(&to_label);
+                            }
+                            ui.end_row();
+                        });
+
+                    if delete_link {
+                        self.graph.remove_selected_link();
+                    }
                 } else {
-                    // No element or block selected: show ONLY the palette
+                    // No element, block, or link selected: show ONLY the palette
                     self.palette.show(ui);
                 }
             }); // ScrollArea
@@ -1380,8 +1685,8 @@ impl StromApp {
     }
 
     /// Render the main canvas area.
-    pub(super) fn render_canvas(&mut self, ctx: &Context) {
-        CentralPanel::default().show(ctx, |ui| {
+    pub(super) fn render_canvas(&mut self, ui: &mut egui::Ui) {
+        CentralPanel::default().show_inside(ui, |ui| {
             // Panel toggle buttons at the edges (use clip_rect for full area including margins)
             let panel_rect = ui.clip_rect();
 
@@ -1390,11 +1695,11 @@ impl StromApp {
             egui::Area::new(egui::Id::new("left_panel_toggle"))
                 .fixed_pos(left_toggle_pos)
                 .order(egui::Order::Middle)
-                .show(ctx, |ui| {
+                .show(ui.ctx(), |ui| {
                     let icon = if self.show_flow_list_panel {
-                        "◀"
+                        egui_phosphor::regular::CARET_LEFT
                     } else {
-                        "▶"
+                        egui_phosphor::regular::CARET_RIGHT
                     };
                     let tooltip = if self.show_flow_list_panel {
                         "Hide flow list"
@@ -1423,11 +1728,11 @@ impl StromApp {
                 egui::Area::new(egui::Id::new("right_panel_toggle"))
                     .fixed_pos(right_toggle_pos)
                     .order(egui::Order::Middle)
-                    .show(ctx, |ui| {
+                    .show(ui.ctx(), |ui| {
                         let icon = if self.show_palette_panel {
-                            "▶"
+                            egui_phosphor::regular::CARET_RIGHT
                         } else {
-                            "◀"
+                            egui_phosphor::regular::CARET_LEFT
                         };
                         let tooltip = if self.show_palette_panel {
                             "Hide palette"
@@ -1481,6 +1786,97 @@ impl StromApp {
                                     additional_height,
                                     render_callback: Some(Box::new(move |ui, _rect| {
                                         crate::meter::show_compact(ui, &meter_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
+                    // Setup dynamic content for spectrum blocks
+                    let spectrum_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.spectrum")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in spectrum_blocks {
+                        if let Some(spectrum_data) = self.spectrum_data.get(&flow_id, &block_id) {
+                            let channel_count = spectrum_data.magnitudes.len();
+                            let spectrum_data_clone = spectrum_data.clone();
+
+                            // Single channel fits in the base block height.
+                            // Multi-channel: add 30px per extra channel.
+                            let additional_height = if channel_count <= 1 {
+                                0.0
+                            } else {
+                                (channel_count - 1) as f32 * 30.0
+                            };
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::spectrum::show_compact(ui, &spectrum_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
+                    // Setup dynamic content for loudness blocks
+                    let loudness_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.loudness")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in loudness_blocks {
+                        if let Some(loudness_data) = self.loudness_data.get(&flow_id, &block_id) {
+                            let loudness_data_clone = loudness_data.clone();
+                            let height = crate::loudness::calculate_compact_height();
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: height + 10.0,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::loudness::show_compact(ui, &loudness_data_clone);
+                                    })),
+                                },
+                            );
+                        }
+                    }
+
+                    // Setup dynamic content for audio analyzer blocks
+                    let analyzer_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.audioanalyzer")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in analyzer_blocks {
+                        if let Some(analyzer_data) =
+                            self.audioanalyzer_data.get(&flow_id, &block_id)
+                        {
+                            let analyzer_data_clone = analyzer_data.clone();
+                            let height = crate::audioanalyzer::calculate_compact_height();
+
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: height + 10.0,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        crate::audioanalyzer::show_compact(
+                                            ui,
+                                            &analyzer_data_clone,
+                                        );
                                     })),
                                 },
                             );
@@ -1583,7 +1979,20 @@ impl StromApp {
                             block_id,
                             crate::graph::BlockContentInfo {
                                 additional_height: height + 10.0,
-                                render_callback: Some(Box::new(move |ui, _rect| {
+                                render_callback: Some(Box::new(move |ui, rect| {
+                                    // Double-click anywhere on the media player node opens the playlist
+                                    let interact_id = egui::Id::new("media_player_dblclick")
+                                        .with(&block_id_for_action);
+                                    if ui
+                                        .interact(rect, interact_id, egui::Sense::click())
+                                        .double_clicked()
+                                    {
+                                        set_local_storage(
+                                            "player_action",
+                                            &format!("{}:playlist", block_id_for_action),
+                                        );
+                                    }
+
                                     if let Some((action, seek_pos)) =
                                         crate::mediaplayer::show_compact(ui, &player_data_clone)
                                     {
@@ -1600,12 +2009,49 @@ impl StromApp {
                             },
                         );
                     }
+
+                    // Setup dynamic content for thumbnail blocks
+                    let thumbnail_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| b.block_definition_id == "builtin.thumbnail")
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in thumbnail_blocks {
+                        if let Some(texture) =
+                            self.block_thumbnails.get(&(flow_id, block_id.clone()))
+                        {
+                            let texture_id = texture.id();
+                            let tex_size = texture.size_vec2();
+                            let aspect = tex_size.y / tex_size.x;
+                            // Inline thumbnail: fit within block width (~120px)
+                            let thumb_h = 120.0 * aspect;
+                            self.graph.set_block_content(
+                                block_id,
+                                crate::graph::BlockContentInfo {
+                                    additional_height: thumb_h,
+                                    render_callback: Some(Box::new(move |ui, _rect| {
+                                        let w = ui.available_width();
+                                        let h = w * aspect;
+                                        ui.image(egui::load::SizedTexture::new(
+                                            texture_id,
+                                            egui::vec2(w, h),
+                                        ));
+                                    })),
+                                },
+                            );
+                        }
+                    }
                 }
 
-                // Update QoS health map for the current flow before rendering
+                // Update QoS and buffer age health maps for the current flow before rendering
                 if let Some(flow_id) = self.selected_flow_id {
                     let qos_health_map = self.qos_stats.get_element_health_map(&flow_id);
                     self.graph.set_qos_health_map(qos_health_map);
+                    let ba_health_map = self.buffer_age_data.get_element_health_map(&flow_id);
+                    self.graph.set_buffer_age_health_map(ba_health_map);
                 }
 
                 // Show graph editor
@@ -1627,6 +2073,11 @@ impl StromApp {
                     self.palette.focus_search();
                 }
 
+                // Toggle right pane when clicking background while nothing is selected
+                if self.graph.take_toggle_right_pane_request() {
+                    self.show_palette_panel = !self.show_palette_panel;
+                }
+
                 // Handle adding elements from palette
                 if let Some(element_type) = self.palette.take_dragging_element() {
                     // Add element at center of visible area
@@ -1638,7 +2089,7 @@ impl StromApp {
 
                     // Trigger pad info loading if not already cached
                     if !self.palette.has_pad_properties_cached(&element_type) {
-                        self.load_element_pad_properties(element_type, ctx);
+                        self.load_element_pad_properties(element_type, ui.ctx());
                     }
                 }
 
@@ -1674,7 +2125,7 @@ impl StromApp {
                 // Handle delete key for elements and links
                 // Only process delete if no text edit widget has focus
                 if ui.input(|i| i.key_pressed(egui::Key::Delete))
-                    && !ui.ctx().wants_keyboard_input()
+                    && !ui.ctx().egui_wants_keyboard_input()
                 {
                     self.graph.remove_selected(); // Remove selected element (if any)
                     self.graph.remove_selected_link(); // Remove selected link (if any)
@@ -1690,8 +2141,8 @@ impl StromApp {
     }
 
     /// Render the status bar.
-    pub(super) fn render_status_bar(&mut self, ctx: &Context) {
-        TopBottomPanel::bottom("status").show(ctx, |ui| {
+    pub(super) fn render_status_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("status").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(&self.status);
                 ui.separator();
@@ -1729,7 +2180,7 @@ impl StromApp {
                     #[cfg(target_arch = "wasm32")]
                     {
                         if ui
-                            .small_button("🐛")
+                            .small_button(egui_phosphor::regular::BUG)
                             .on_hover_text("Toggle debug console")
                             .clicked()
                         {

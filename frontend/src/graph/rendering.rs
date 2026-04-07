@@ -96,7 +96,13 @@ impl GraphEditor {
             .get(&block.id)
             .map(|info| info.additional_height)
             .unwrap_or(0.0);
-        (base_height + content_height).min(400.0)
+        // Custom name label takes an extra 20px, pushing content down
+        let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+            20.0
+        } else {
+            0.0
+        };
+        (base_height + content_height + name_extra).min(400.0)
     }
 
     /// Calculate the bounding box of all elements and blocks in world coordinates.
@@ -222,7 +228,7 @@ impl GraphEditor {
             let pointer_in_canvas = pointer_pos
                 .map(|p| response.rect.contains(p))
                 .unwrap_or(false);
-            let window_hovered = ui.ctx().wants_pointer_input();
+            let window_hovered = ui.ctx().egui_wants_pointer_input();
 
             if pointer_in_canvas && !window_hovered {
                 let hover_pos = pointer_pos.unwrap();
@@ -387,7 +393,14 @@ impl GraphEditor {
                     .map(|info| info.additional_height)
                     .unwrap_or(0.0);
 
-                let node_height = (base_height + content_height).min(400.0);
+                // Custom name label takes an extra 20px, pushing content down
+                let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+                    20.0
+                } else {
+                    0.0
+                };
+
+                let node_height = (base_height + content_height + name_extra).min(400.0);
 
                 let node_rect = Rect::from_min_size(
                     screen_pos,
@@ -476,6 +489,13 @@ impl GraphEditor {
                     set_local_storage("open_whip_ingest", &block.id);
                 }
 
+                // Handle double-click to open vision mixer control page
+                if node_response.double_clicked()
+                    && block.block_definition_id == "builtin.vision_mixer"
+                {
+                    set_local_storage("open_vision_mixer", &block.id);
+                }
+
                 // Handle double-click to open routing matrix for Audio Router blocks
                 if node_response.double_clicked()
                     && block.block_definition_id == "builtin.audiorouter"
@@ -536,6 +556,10 @@ impl GraphEditor {
 
             // Deselect when clicking on empty space (not a link, not a node)
             if response.clicked() && self.hovered_link.is_none() && self.hovered_element.is_none() {
+                if !self.has_selection() && !response.double_clicked() {
+                    // Already deselected and not a double-click — signal to toggle right pane
+                    self.request_toggle_right_pane.set(true);
+                }
                 self.selected = None;
                 self.selected_link = None;
             }
@@ -881,6 +905,28 @@ impl GraphEditor {
                     qos_health.icon(),
                     FontId::proportional(14.0 * self.zoom),
                     qos_health.color(),
+                );
+            }
+        }
+
+        // Draw buffer age indicator if there are issues (clock icon, offset from QoS icon)
+        if let Some(ba_health) = self.buffer_age_health_map.get(&element.id.to_string()) {
+            if *ba_health != crate::buffer_age::BufferAgeHealth::Ok {
+                // Position to the left of the QoS indicator
+                let has_qos = self
+                    .qos_health_map
+                    .get(&element.id.to_string())
+                    .map(|h| *h != crate::qos_monitor::QoSHealth::Ok)
+                    .unwrap_or(false);
+                let x_offset = if has_qos { -38.0 } else { -20.0 };
+                let ba_icon_pos = rect.right_top() + vec2(x_offset * self.zoom, 8.0 * self.zoom);
+
+                painter.text(
+                    ba_icon_pos,
+                    egui::Align2::CENTER_TOP,
+                    ba_health.icon(),
+                    FontId::proportional(14.0 * self.zoom),
+                    ba_health.color(),
                 );
             }
         }
@@ -1401,6 +1447,27 @@ impl GraphEditor {
             }
         }
 
+        // Draw buffer age indicator if there are issues (clock icon, offset from QoS icon)
+        if let Some(ba_health) = self.buffer_age_health_map.get(&block.id) {
+            if *ba_health != crate::buffer_age::BufferAgeHealth::Ok {
+                let has_qos = self
+                    .qos_health_map
+                    .get(&block.id)
+                    .map(|h| *h != crate::qos_monitor::QoSHealth::Ok)
+                    .unwrap_or(false);
+                let x_offset = if has_qos { -38.0 } else { -20.0 };
+                let ba_icon_pos = rect.right_top() + vec2(x_offset * self.zoom, 8.0 * self.zoom);
+
+                painter.text(
+                    ba_icon_pos,
+                    egui::Align2::CENTER_TOP,
+                    ba_health.icon(),
+                    FontId::proportional(14.0 * self.zoom),
+                    ba_health.color(),
+                );
+            }
+        }
+
         // Render any dynamic content (e.g., meter visualization)
         if let Some(content_info) = self.block_content_map.get(&block.id) {
             if let Some(ref render_callback) = content_info.render_callback {
@@ -1409,11 +1476,17 @@ impl GraphEditor {
                 // Use at least 20px (scaled by zoom) so callbacks with
                 // additional_height=0 (e.g. 1-2 channel meters) still
                 // have space to render within the base block area.
-                let max_content_height = (rect.height() - 35.0 * self.zoom).max(0.0);
+                let has_custom_name = block.name.as_ref().is_some_and(|n| !n.is_empty());
+                let content_top = if has_custom_name {
+                    55.0 * self.zoom
+                } else {
+                    35.0 * self.zoom
+                };
+                let max_content_height = (rect.height() - content_top).max(0.0);
                 let render_height =
                     (content_info.additional_height * self.zoom).max(20.0 * self.zoom);
                 let content_area = Rect::from_min_size(
-                    rect.min + vec2(10.0 * self.zoom, 35.0 * self.zoom),
+                    rect.min + vec2(10.0 * self.zoom, content_top),
                     vec2(180.0 * self.zoom, render_height.min(max_content_height)),
                 );
 
@@ -1442,7 +1515,12 @@ impl GraphEditor {
                 .get(&block.id)
                 .map(|info| info.additional_height)
                 .unwrap_or(0.0);
-            let node_height = (base_height + content_height).min(400.0);
+            let name_extra = if block.name.as_ref().is_some_and(|n| !n.is_empty()) {
+                20.0
+            } else {
+                0.0
+            };
+            let node_height = (base_height + content_height + name_extra).min(400.0);
 
             // Draw input pads on the left
             let input_count = external_pads.inputs.len();

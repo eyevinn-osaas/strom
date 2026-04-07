@@ -1,9 +1,12 @@
 use crate::api::ApiClient;
+use crate::audioanalyzer::AudioAnalyzerDataStore;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
+use crate::loudness::LoudnessDataStore;
 use crate::mediaplayer::MediaPlayerDataStore;
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
+use crate::spectrum::SpectrumDataStore;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
 use crate::thread_monitor::ThreadMonitorStore;
@@ -69,6 +72,11 @@ impl StromApp {
         // Install image loaders for egui (required for Image::from_bytes)
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Load Phosphor icon fonts
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        cc.egui_ctx.set_fonts(fonts);
+
         let renderer_info = crate::info_page::detect_renderer(cc);
 
         // Create channels for async communication
@@ -101,7 +109,11 @@ impl StromApp {
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
+            properties_cpu_affinity_buffer: strom_types::flow::CpuAffinity::default(),
+            audioanalyzer_data: AudioAnalyzerDataStore::new(),
             meter_data: MeterDataStore::new(),
+            spectrum_data: SpectrumDataStore::new(),
+            loudness_data: LoudnessDataStore::new(),
             latency_data: LatencyDataStore::new(),
             mediaplayer_data: MediaPlayerDataStore::new(),
             webrtc_stats: WebRtcStatsStore::new(),
@@ -109,6 +121,7 @@ impl StromApp {
             thread_monitor: ThreadMonitorStore::new(),
             ptp_stats: crate::ptp_monitor::PtpStatsStore::new(),
             qos_stats: crate::qos_monitor::QoSStore::new(),
+            buffer_age_data: BufferAgeStore::new(),
             flow_start_times: std::collections::HashMap::new(),
             show_system_monitor: false,
             system_monitor_tab: crate::system_monitor::SystemMonitorTab::default(),
@@ -166,8 +179,14 @@ impl StromApp {
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
             key_sequence_buffer: Vec::new(),
             interactive_overlay: None,
+            block_thumbnails: std::collections::HashMap::new(),
+            block_thumbnail_fetch_times: std::collections::HashMap::new(),
+            block_thumbnail_loading: std::collections::HashSet::new(),
             qr_inline: None,
             qr_cache: crate::qr::QrCache::new(),
+            recorder_filenames: std::collections::HashMap::new(),
+            recorder_start_times: std::collections::HashMap::new(),
+            live_property_debounce: std::collections::HashMap::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility
@@ -211,6 +230,11 @@ impl StromApp {
         // Install image loaders for egui (required for Image::from_bytes)
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Load Phosphor icon fonts
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        cc.egui_ctx.set_fonts(fonts);
+
         let renderer_info = crate::info_page::detect_renderer(cc);
 
         // Create channels for async communication
@@ -243,11 +267,15 @@ impl StromApp {
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
+            properties_cpu_affinity_buffer: strom_types::flow::CpuAffinity::default(),
             shutdown_flag,
             port,
             tls_enabled,
             auth_token,
+            audioanalyzer_data: AudioAnalyzerDataStore::new(),
             meter_data: MeterDataStore::new(),
+            spectrum_data: SpectrumDataStore::new(),
+            loudness_data: LoudnessDataStore::new(),
             latency_data: LatencyDataStore::new(),
             mediaplayer_data: MediaPlayerDataStore::new(),
             webrtc_stats: WebRtcStatsStore::new(),
@@ -255,6 +283,7 @@ impl StromApp {
             thread_monitor: ThreadMonitorStore::new(),
             ptp_stats: crate::ptp_monitor::PtpStatsStore::new(),
             qos_stats: crate::qos_monitor::QoSStore::new(),
+            buffer_age_data: BufferAgeStore::new(),
             flow_start_times: std::collections::HashMap::new(),
             show_system_monitor: false,
             system_monitor_tab: crate::system_monitor::SystemMonitorTab::default(),
@@ -312,8 +341,14 @@ impl StromApp {
             native_pixels_per_point: cc.egui_ctx.pixels_per_point(),
             key_sequence_buffer: Vec::new(),
             interactive_overlay: None,
+            block_thumbnails: std::collections::HashMap::new(),
+            block_thumbnail_fetch_times: std::collections::HashMap::new(),
+            block_thumbnail_loading: std::collections::HashSet::new(),
             qr_inline: None,
             qr_cache: crate::qr::QrCache::new(),
+            recorder_filenames: std::collections::HashMap::new(),
+            recorder_start_times: std::collections::HashMap::new(),
+            live_property_debounce: std::collections::HashMap::new(),
         };
 
         // Note: Settings (theme, zoom) are applied in first update() frame for iOS compatibility

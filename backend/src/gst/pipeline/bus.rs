@@ -44,6 +44,13 @@ impl PipelineManager {
             self.block_message_handlers.push(handler_id);
         }
 
+        // Call element signal setup functions (FnOnce closures that connect GLib signals)
+        let element_setups = std::mem::take(&mut self.element_setup_fns);
+        for setup_fn in element_setups {
+            setup_fn(flow_id, events_for_blocks.clone());
+            debug!("Successfully called element signal setup");
+        }
+
         // Enable signal watch on the bus (ref-counted, safe to call multiple times)
         // This allows using connect_message for multiple handlers
         bus.add_signal_watch();
@@ -62,10 +69,17 @@ impl PipelineManager {
 
             match msg.view() {
                 MessageView::Error(err) => {
-                    // Drop errors from whipserversrc internals (nicesrc, dtlssrtpdec, etc).
-                    // When a WHIP client disconnects, these elements post errors that would
-                    // otherwise transition the pipeline to ERROR state, preventing reconnection.
+                    // Drop errors from WHIP session elements (whipserversrc internals
+                    // and appsrc/appsink bridge elements). These post errors when clients
+                    // disconnect or during session setup that would otherwise transition
+                    // the pipeline to ERROR state, preventing reconnection.
                     let is_whipsrc_internal = err.src().is_some_and(|s| {
+                        let name = s.name();
+                        // appsrc/appsink elements created for WHIP sessions have
+                        // "whipserversrc" in their name
+                        if name.as_str().contains("whipserversrc") {
+                            return true;
+                        }
                         let mut parent = s.parent();
                         while let Some(p) = parent {
                             if p.name().as_str().contains("whipserversrc") {
@@ -160,6 +174,12 @@ impl PipelineManager {
                                 _ => PipelineState::Null,
                             };
                             *cached_state.write().unwrap() = pipeline_state;
+
+                            // Broadcast state change so the frontend can update immediately
+                            events.broadcast(StromEvent::FlowStateChanged {
+                                flow_id,
+                                state: format!("{:?}", pipeline_state),
+                            });
                         } else {
                             // Log element state changes at debug level to avoid log spam
                             debug!(
@@ -206,18 +226,23 @@ impl PipelineManager {
     /// Remove the bus message handlers.
     pub(super) fn remove_bus_watch(&mut self) {
         if !self.block_message_handlers.is_empty() {
+            let handler_count = self.block_message_handlers.len();
             debug!(
                 "Disconnecting {} message handler(s) for flow: {}",
-                self.block_message_handlers.len(),
-                self.flow_name
+                handler_count, self.flow_name
             );
             // Disconnect signal handlers from the bus
             if let Some(bus) = self.pipeline.bus() {
                 for handler_id in self.block_message_handlers.drain(..) {
                     bus.disconnect(handler_id);
                 }
-                // Remove the signal watch (ref-counted, so this balances the add_signal_watch calls)
-                bus.remove_signal_watch();
+                // remove_signal_watch is ref-counted — each add_signal_watch call
+                // needs a matching remove. handler_count matches the number of
+                // add_signal_watch calls: one per block connect_fn plus one in
+                // setup_bus_watch (which also adds the main handler to the list).
+                for _ in 0..handler_count {
+                    bus.remove_signal_watch();
+                }
             } else {
                 // Bus already gone, just clear the handlers
                 self.block_message_handlers.clear();

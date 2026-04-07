@@ -8,6 +8,7 @@
 //! - `GET /api/mcp` - Open SSE stream for server-initiated messages
 //! - `DELETE /api/mcp` - Terminate a session
 
+use crate::json_rejection::JsonBody;
 use axum::{
     extract::State,
     http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
@@ -136,7 +137,7 @@ pub async fn mcp_post(
     Extension(sessions): Extension<McpSessionManager>,
     Extension(auth_config): Extension<Arc<AuthConfig>>,
     headers: HeaderMap,
-    Json(request): Json<JsonRpcRequest>,
+    JsonBody(request): JsonBody<JsonRpcRequest>,
 ) -> Response {
     // Validate authentication
     if let Err(response) = validate_mcp_auth(&auth_config, &headers) {

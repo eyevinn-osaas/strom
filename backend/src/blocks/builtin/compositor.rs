@@ -14,8 +14,8 @@
 //! - Multiple background types (black, white, transparent)
 //! - Automatic fallback from GPU to CPU when OpenGL is unavailable
 //!
-//! GPU backend chain: queue -> glupload -> glcolorconvert -> glvideomixerelement -> gldownload -> capsfilter
-//! CPU backend chain: queue -> videoconvert -> compositor -> capsfilter
+//! GPU backend chain: queue -> glupload -> glcolorconvert -> [thumb_tee] -> glvideomixerelement -> gldownload -> capsfilter
+//! CPU backend chain: queue -> videoconvert -> [thumb_tee] -> compositor -> capsfilter
 
 use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
 use gstreamer as gst;
@@ -189,7 +189,7 @@ fn select_compositor(
     match preference {
         CompositorPreference::GPUOnly => {
             if has_gl {
-                info!("Using GPU (OpenGL) compositor as requested");
+                debug!("Using GPU (OpenGL) compositor as requested");
                 Ok(CompositorBackend::OpenGL)
             } else {
                 Err(BlockBuildError::InvalidConfiguration(
@@ -199,7 +199,7 @@ fn select_compositor(
         }
         CompositorPreference::CPUOnly => {
             if has_software {
-                info!("Using CPU (software) compositor as requested");
+                debug!("Using CPU (software) compositor as requested");
                 Ok(CompositorBackend::Software)
             } else {
                 Err(BlockBuildError::InvalidConfiguration(
@@ -358,12 +358,22 @@ fn build_opengl_compositor(
         elements.push((colorconvert_id.clone(), colorconvert));
         let mixer_pad_name = sink_pad.name().to_string();
 
+        // Create thumbnail tee AFTER glcolorconvert — frames are already RGBA
+        // so the thumbnail branch only needs to scale (no format conversion).
+        let thumb_tee_id = format!("{}:thumb_tee_{}", instance_id, i);
+        let thumb_tee = gst::ElementFactory::make("tee")
+            .name(&thumb_tee_id)
+            .property("allow-not-linked", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("thumb_tee_{}: {}", i, e)))?;
+        elements.push((thumb_tee_id.clone(), thumb_tee));
+
         if use_queues {
             let queue_id = format!("{}:queue_{}", instance_id, i);
             let queue = create_input_queue(&queue_id, i)?;
             elements.push((queue_id.clone(), queue));
 
-            // Link: queue -> glupload -> glcolorconvert -> mixer
+            // Link: queue -> glupload -> glcolorconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&queue_id, "src"),
                 ElementPadRef::pad(&upload_id, "sink"),
@@ -374,16 +384,24 @@ fn build_opengl_compositor(
             ));
             internal_links.push((
                 ElementPadRef::pad(&colorconvert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         } else {
-            // Link: glupload -> glcolorconvert -> mixer directly
+            // Link: glupload -> glcolorconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&upload_id, "src"),
                 ElementPadRef::pad(&colorconvert_id, "sink"),
             ));
             internal_links.push((
                 ElementPadRef::pad(&colorconvert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         }
@@ -511,24 +529,42 @@ fn build_software_compositor(
         elements.push((convert_id.clone(), convert));
         let mixer_pad_name = sink_pad.name().to_string();
 
+        // Create thumbnail tee AFTER videoconvert — frames are already in
+        // compositor-compatible format so the thumbnail branch only needs to scale.
+        let thumb_tee_id = format!("{}:thumb_tee_{}", instance_id, i);
+        let thumb_tee = gst::ElementFactory::make("tee")
+            .name(&thumb_tee_id)
+            .property("allow-not-linked", true)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("thumb_tee_{}: {}", i, e)))?;
+        elements.push((thumb_tee_id.clone(), thumb_tee));
+
         if use_queues {
             let queue_id = format!("{}:queue_{}", instance_id, i);
             let queue = create_input_queue(&queue_id, i)?;
             elements.push((queue_id.clone(), queue));
 
-            // Link: queue -> videoconvert -> mixer
+            // Link: queue -> videoconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&queue_id, "src"),
                 ElementPadRef::pad(&convert_id, "sink"),
             ));
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         } else {
-            // Link: videoconvert -> mixer directly
+            // Link: videoconvert -> [thumb_tee] -> mixer
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
+                ElementPadRef::pad(&thumb_tee_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&thumb_tee_id, "src_0"),
                 ElementPadRef::pad(&mixer_id, &mixer_pad_name),
             ));
         }
@@ -558,9 +594,6 @@ fn build_software_compositor(
 fn create_input_queue(queue_id: &str, index: usize) -> Result<gst::Element, BlockBuildError> {
     gst::ElementFactory::make("queue")
         .name(queue_id)
-        //.property("max-size-buffers", 3u32)
-        //.property("max-size-bytes", 0u32)
-        //.property("max-size-time", 0u64)
         .property("flush-on-eos", true)
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("queue_{}: {}", index, e)))
@@ -862,6 +895,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "compositor_preference".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Number of inputs
         ExposedProperty {
@@ -875,6 +909,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "num_inputs".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Output resolution
         ExposedProperty {
@@ -890,6 +925,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "output_resolution".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Background
         ExposedProperty {
@@ -918,6 +954,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "background".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Latency
         ExposedProperty {
@@ -931,6 +968,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "latency".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Min upstream latency
         ExposedProperty {
@@ -944,6 +982,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "min_upstream_latency".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Force live mode
         ExposedProperty {
@@ -957,6 +996,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "force_live".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // Use queues
         ExposedProperty {
@@ -970,6 +1010,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "use_queues".to_string(),
                 transform: None,
             },
+            live: false,
         },
         // GL output (GPU only)
         ExposedProperty {
@@ -983,6 +1024,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: "gl_output".to_string(),
                 transform: None,
             },
+            live: false,
         },
     ];
 
@@ -1003,6 +1045,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_xpos", i),
                 transform: None,
             },
+            live: false,
         });
 
         // YPos
@@ -1017,6 +1060,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_ypos", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Width
@@ -1031,6 +1075,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_width", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Height
@@ -1045,6 +1090,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_height", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Alpha
@@ -1059,6 +1105,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_alpha", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Z-Order
@@ -1073,6 +1120,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_zorder", i),
                 transform: None,
             },
+            live: false,
         });
 
         // Sizing Policy (GPU only)
@@ -1101,6 +1149,7 @@ fn compositor_definition() -> BlockDefinition {
                 property_name: format!("input_{}_sizing_policy", i),
                 transform: None,
             },
+            live: false,
         });
     }
 

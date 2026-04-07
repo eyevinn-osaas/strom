@@ -5,8 +5,95 @@ use egui::{Color32, ScrollArea, Ui};
 use strom_types::{
     block::{EnumValue, ExposedProperty, DEFAULT_SRT_OUTPUT_URI},
     element::{ElementInfo, PropertyInfo, PropertyType},
-    BlockDefinition, BlockInstance, Element, PropertyValue,
+    BlockDefinition, BlockInstance, Element, FlowId, PropertyValue,
 };
+
+/// A live property update to send to a running pipeline element.
+pub struct LivePropertyUpdate {
+    pub flow_id: FlowId,
+    /// Full element ID: "{block_id}:{element_suffix}"
+    pub element_id: String,
+    pub property_name: String,
+    pub value: PropertyValue,
+}
+
+/// Minimum interval between live property API calls for the same element+property.
+pub const LIVE_PROPERTY_DEBOUNCE_MS: u64 = 80;
+
+/// Debounce state for a single element+property combination.
+/// Tracks when the last API call was sent and stores any pending update
+/// that was suppressed by the debounce interval (so the final value is
+/// always delivered).
+pub struct LivePropertyDebounce {
+    pub last_sent: instant::Instant,
+    pub pending: Option<LivePropertyUpdate>,
+}
+
+/// Drain live property updates through the debounce filter.
+///
+/// For each incoming update, if enough time has elapsed since the last send
+/// for that (element_id, property_name) pair, the update is returned
+/// immediately. Otherwise it is stored as a pending update.
+///
+/// Additionally, any previously-pending updates whose debounce interval has
+/// now expired are flushed — this ensures the final slider value is always
+/// delivered even if no new `changed` event arrives.
+pub fn drain_live_updates(
+    debounce_map: &mut std::collections::HashMap<(String, String), LivePropertyDebounce>,
+    incoming: Vec<LivePropertyUpdate>,
+) -> Vec<LivePropertyUpdate> {
+    let now = instant::Instant::now();
+    let interval = std::time::Duration::from_millis(LIVE_PROPERTY_DEBOUNCE_MS);
+    let mut to_send: Vec<LivePropertyUpdate> = Vec::new();
+
+    // Keys that received a fresh incoming update this frame
+    let mut touched_keys: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
+    // Process incoming updates
+    for update in incoming {
+        let key = (update.element_id.clone(), update.property_name.clone());
+        touched_keys.insert(key.clone());
+
+        let entry = debounce_map
+            .entry(key)
+            .or_insert_with(|| LivePropertyDebounce {
+                // Set last_sent far enough in the past so the first update always goes through
+                last_sent: now - interval,
+                pending: None,
+            });
+
+        if now.duration_since(entry.last_sent) >= interval {
+            // Enough time has passed — send immediately
+            entry.last_sent = now;
+            entry.pending = None;
+            to_send.push(update);
+        } else {
+            // Too soon — store as pending (overwrites any previous pending value)
+            entry.pending = Some(update);
+        }
+    }
+
+    // Flush any previously-pending updates whose interval has expired
+    // (but skip keys we already handled above to avoid double-sends)
+    let expired_keys: Vec<(String, String)> = debounce_map
+        .iter()
+        .filter(|(k, v)| v.pending.is_some() && !touched_keys.contains(*k))
+        .filter(|(_, v)| now.duration_since(v.last_sent) >= interval)
+        .map(|(k, _)| k.clone())
+        .collect();
+
+    for key in expired_keys {
+        if let Some(entry) = debounce_map.get_mut(&key) {
+            if let Some(update) = entry.pending.take() {
+                entry.last_sent = now;
+                to_send.push(update);
+            }
+        }
+    }
+
+    to_send
+}
 
 /// Result from showing the block property inspector.
 #[derive(Default)]
@@ -34,6 +121,16 @@ pub struct BlockInspectorResult {
     pub show_qr_whep: Option<String>,
     /// Show QR code for WHIP ingest URL - contains endpoint_id
     pub show_qr_whip: Option<String>,
+    /// Loudness reset requested - contains (flow_id, block_id)
+    pub loudness_reset_requested: Option<(FlowId, String)>,
+    /// Recorder split-now requested - contains (flow_id, block_id)
+    pub recorder_split_requested: Option<(FlowId, String)>,
+    /// Recorder file download requested - contains relative path
+    pub recorder_download_requested: Option<String>,
+    /// Vision mixer control page requested - contains flow_id
+    pub vision_mixer_url: Option<FlowId>,
+    /// Live property updates to send to running pipeline elements
+    pub live_property_updates: Vec<LivePropertyUpdate>,
 }
 
 /// Property inspector panel.
@@ -86,7 +183,7 @@ impl PropertyInspector {
     ) -> (PropertyTab, bool) {
         let element_id = element.id.clone();
         let mut new_tab = active_tab;
-        let mut delete_requested = false;
+        let delete_requested = false;
 
         ui.push_id(&element_id, |ui| {
             // Outer scroll area for entire inspector
@@ -94,12 +191,6 @@ impl PropertyInspector {
                 .id_salt("property_inspector_outer_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    // Delete button at top
-                    if ui.button("🗑 Delete Element").clicked() {
-                        delete_requested = true;
-                    }
-                    ui.separator();
-
                     // Element info in collapsible section
                     egui::CollapsingHeader::new(&element.element_type)
                         .default_open(false)
@@ -234,7 +325,11 @@ impl PropertyInspector {
                     if is_focused {
                         ui.colored_label(
                             Color32::from_rgb(255, 200, 100),
-                            format!("▶ Input Pad: {}", pad_name),
+                            format!(
+                                "{} Input Pad: {}",
+                                egui_phosphor::regular::CARET_RIGHT,
+                                pad_name
+                            ),
                         );
                     } else {
                         ui.label(format!("Input Pad: {}", pad_name));
@@ -299,7 +394,11 @@ impl PropertyInspector {
                     if is_focused {
                         ui.colored_label(
                             Color32::from_rgb(255, 200, 100),
-                            format!("▶ Output Pad: {}", pad_name),
+                            format!(
+                                "{} Output Pad: {}",
+                                egui_phosphor::regular::CARET_RIGHT,
+                                pad_name
+                            ),
                         );
                     } else {
                         ui.label(format!("Output Pad: {}", pad_name));
@@ -347,7 +446,10 @@ impl PropertyInspector {
         block: &mut BlockInstance,
         definition: &BlockDefinition,
         flow_id: Option<strom_types::FlowId>,
+        audioanalyzer_data_store: &crate::audioanalyzer::AudioAnalyzerDataStore,
         meter_data_store: &crate::meter::MeterDataStore,
+        spectrum_data_store: &crate::spectrum::SpectrumDataStore,
+        loudness_data_store: &crate::loudness::LoudnessDataStore,
         latency_data_store: &crate::latency::LatencyDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
@@ -355,6 +457,10 @@ impl PropertyInspector {
         available_channels: &[strom_types::api::AvailableOutput],
         qr_inline: &mut Option<(String, String)>,
         qr_cache: &mut crate::qr::QrCache,
+        recorder_filename: Option<&str>,
+        recorder_start_time: Option<instant::Instant>,
+        block_thumbnail: Option<&egui::TextureHandle>,
+        taken_endpoint_ids: &std::collections::HashSet<String>,
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
@@ -365,12 +471,6 @@ impl PropertyInspector {
                 .id_salt("block_inspector_outer_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-            // Delete button at top, away from action buttons
-            if ui.button("🗑 Delete Block").clicked() {
-                result.delete_requested = true;
-            }
-            ui.separator();
-
             // Block info in collapsible section
             egui::CollapsingHeader::new(&definition.name)
                 .default_open(false)
@@ -403,7 +503,7 @@ impl PropertyInspector {
                     };
                 }
                 if block.name.is_some()
-                    && ui.small_button("x").on_hover_text("Clear name").clicked()
+                    && ui.small_button(egui_phosphor::regular::X).on_hover_text("Clear name").clicked()
                 {
                     block.name = None;
                 }
@@ -418,8 +518,10 @@ impl PropertyInspector {
                     | "builtin.compositor"
                     | "builtin.media_player"
                     | "builtin.mpegtssrt_output"
+                    | "builtin.vision_mixer"
                     | "builtin.whep_output"
                     | "builtin.whip_input"
+                    | "builtin.thumbnail"
             );
 
             // Only show separator before action buttons if there are any
@@ -431,7 +533,7 @@ impl PropertyInspector {
             // Browse Streams button for AES67 Input blocks
             if definition.id == "builtin.aes67_input"
                 && ui
-                    .button("🔍 Browse Streams")
+                    .button(format!("{} Streams", egui_phosphor::regular::BROADCAST))
                     .on_hover_text("Select from discovered SAP streams")
                     .clicked()
             {
@@ -441,7 +543,7 @@ impl PropertyInspector {
             // Browse NDI Sources button for NDI Input blocks
             if definition.id == "builtin.ndi_input"
                 && ui
-                    .button("🔍 Browse NDI Sources")
+                    .button(format!("{} NDI Sources", egui_phosphor::regular::BROADCAST))
                     .on_hover_text("Select from discovered NDI sources")
                     .clicked()
             {
@@ -450,28 +552,28 @@ impl PropertyInspector {
 
             // Open Mixer button for mixer blocks
             if definition.id == "builtin.mixer"
-                && ui.button("🎤 Open Mixer").clicked()
+                && ui.button(format!("{} Mixer", egui_phosphor::regular::SLIDERS)).clicked()
             {
                 crate::app::set_local_storage("open_mixer_editor", &block.id);
             }
 
             // Edit Layout button for compositor blocks
             if (definition.id == "builtin.glcompositor" || definition.id == "builtin.compositor")
-                && ui.button("✏ Edit Layout").clicked()
+                && ui.button(format!("{} Layout", egui_phosphor::regular::PENCIL_SIMPLE)).clicked()
             {
                 crate::app::set_local_storage("open_compositor_editor", &block.id);
             }
 
             // Edit Playlist button for media player blocks
             if definition.id == "builtin.media_player"
-                && ui.button("🎵 Edit Playlist").clicked()
+                && ui.button(format!("{} Playlist", egui_phosphor::regular::PLAYLIST)).clicked()
             {
                 crate::app::set_local_storage("open_playlist_editor", &block.id);
             }
 
             // Edit Routing Matrix button for Audio Router blocks
             if definition.id == "builtin.audiorouter"
-                && ui.button("🔀 Edit Routing Matrix").clicked()
+                && ui.button(format!("{} Routing", egui_phosphor::regular::GRAPH)).clicked()
             {
                 crate::app::set_local_storage("open_routing_editor", &block.id);
             }
@@ -498,7 +600,7 @@ impl PropertyInspector {
                     ui.horizontal(|ui| {
                         // Open in VLC button (saves and opens automatically in native mode)
                         if ui
-                            .button("📺 Open in VLC")
+                            .button(format!("{} Open in VLC", egui_phosphor::regular::PLAY))
                             .on_hover_text("Download XSPF playlist and open in VLC")
                             .clicked()
                         {
@@ -509,7 +611,7 @@ impl PropertyInspector {
                         // Download-only button (native mode only - lets user save to specific location)
                         #[cfg(not(target_arch = "wasm32"))]
                         if ui
-                            .button("💾 Download")
+                            .button(format!("{} Download", egui_phosphor::regular::DOWNLOAD_SIMPLE))
                             .on_hover_text("Download XSPF playlist file")
                             .clicked()
                         {
@@ -536,26 +638,23 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
-                    let is_qr_for_this_block = qr_inline
-                        .as_ref()
-                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
                         if ui
-                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
+                            .button(egui_phosphor::regular::QR_CODE)
                             .on_hover_text("Toggle QR code for mobile access")
                             .clicked()
                         {
                             result.show_qr_whep = Some(endpoint_id.clone());
                         }
                         if ui
-                            .button("▶ Open Player")
+                            .button(format!("{} Player", egui_phosphor::regular::ARROW_SQUARE_OUT))
                             .on_hover_text("Open WHEP player in browser")
                             .clicked()
                         {
                             result.whep_player_url = Some(endpoint_id.clone());
                         }
                         if ui
-                            .button("📋 Copy URL")
+                            .button(egui_phosphor::regular::COPY)
                             .on_hover_text("Copy player URL to clipboard")
                             .clicked()
                         {
@@ -577,10 +676,26 @@ impl PropertyInspector {
                 } else {
                     // Flow not running, show disabled button with tooltip
                     ui.add_enabled_ui(false, |ui| {
-                        ui.button("▶ Open Player")
+                        ui.button(format!("{} Player", egui_phosphor::regular::ARROW_SQUARE_OUT))
                             .on_hover_text("Start the flow to enable player")
                             .on_disabled_hover_text("Start the flow to enable player");
                     });
+                }
+            }
+
+            // Open Vision Mixer control page
+            if definition.id == "builtin.vision_mixer" {
+                if let Some(fid) = flow_id {
+                    if ui
+                        .button(format!(
+                            "{} Vision Mixer",
+                            egui_phosphor::regular::ARROW_SQUARE_OUT
+                        ))
+                        .on_hover_text("Open vision mixer control page in browser")
+                        .clicked()
+                    {
+                        result.vision_mixer_url = Some(fid);
+                    }
                 }
             }
 
@@ -598,26 +713,23 @@ impl PropertyInspector {
                     });
 
                 if let Some(endpoint_id) = endpoint_id {
-                    let is_qr_for_this_block = qr_inline
-                        .as_ref()
-                        .is_some_and(|(bid, _)| bid == &block_id);
                     ui.horizontal(|ui| {
                         if ui
-                            .button(if is_qr_for_this_block { "Hide QR" } else { "QR" })
+                            .button(egui_phosphor::regular::QR_CODE)
                             .on_hover_text("Toggle QR code for mobile access")
                             .clicked()
                         {
                             result.show_qr_whip = Some(endpoint_id.clone());
                         }
                         if ui
-                            .button("▶ Open Ingest Page")
+                            .button(format!("{} Ingest", egui_phosphor::regular::ARROW_SQUARE_OUT))
                             .on_hover_text("Open WHIP ingest page in browser")
                             .clicked()
                         {
                             result.whip_ingest_url = Some(endpoint_id.clone());
                         }
                         if ui
-                            .button("📋 Copy URL")
+                            .button(egui_phosphor::regular::COPY)
                             .on_hover_text("Copy ingest URL to clipboard")
                             .clicked()
                         {
@@ -638,10 +750,21 @@ impl PropertyInspector {
                     }
                 } else {
                     ui.add_enabled_ui(false, |ui| {
-                        ui.button("▶ Open Ingest Page")
+                        ui.button(format!("{} Ingest", egui_phosphor::regular::ARROW_SQUARE_OUT))
                             .on_hover_text("Start the flow to enable ingest page")
                             .on_disabled_hover_text("Start the flow to enable ingest page");
                     });
+                }
+            }
+
+            // Thumbnail preview for thumbnail blocks
+            if definition.id == "builtin.thumbnail" {
+                if let Some(texture) = block_thumbnail {
+                    ui.separator();
+                    let available_width = ui.available_width();
+                    let aspect = texture.size()[1] as f32 / texture.size()[0] as f32;
+                    let size = egui::vec2(available_width, available_width * aspect);
+                    ui.image(egui::load::SizedTexture::new(texture.id(), size));
                 }
             }
 
@@ -666,8 +789,21 @@ impl PropertyInspector {
                                 available_channels,
                             );
                         } else {
+                            // Build skip-set for mixer blocks: skip properties for
+                            // channels/aux/groups beyond the configured count.
+                            let mixer_skip = if definition.id == "builtin.mixer" {
+                                Some(Self::mixer_skip_set(block))
+                            } else {
+                                None
+                            };
+
                             for exposed_prop in &definition.exposed_properties {
-                                Self::show_exposed_property(
+                                if let Some(ref skip) = mixer_skip {
+                                    if skip.contains(exposed_prop.name.as_str()) {
+                                        continue;
+                                    }
+                                }
+                                let changed = Self::show_exposed_property(
                                     ui,
                                     block,
                                     exposed_prop,
@@ -675,17 +811,71 @@ impl PropertyInspector {
                                     flow_id,
                                     network_interfaces,
                                     available_channels,
+                                    taken_endpoint_ids,
                                 );
+
+                                // For live properties, send updates directly to the pipeline
+                                if changed && exposed_prop.live {
+                                    if let Some(fid) = flow_id {
+                                        let element_id = format!(
+                                            "{}:{}",
+                                            block.id, exposed_prop.mapping.element_id
+                                        );
+                                        // Use the current value (or default) for the update
+                                        let value = block
+                                            .properties
+                                            .get(&exposed_prop.name)
+                                            .or(exposed_prop.default_value.as_ref())
+                                            .cloned();
+                                        if let Some(value) = value {
+                                            result.live_property_updates.push(
+                                                LivePropertyUpdate {
+                                                    flow_id: fid,
+                                                    element_id,
+                                                    property_name: exposed_prop
+                                                        .mapping
+                                                        .property_name
+                                                        .clone(),
+                                                    value,
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
                             }
                         }
                     } else {
                         ui.label("This block has no configurable properties");
                     }
 
+                    // Show audio analyzer visualization for audio analyzer blocks
+                    if definition.id == "builtin.audioanalyzer" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if let Some(analyzer_data) =
+                                audioanalyzer_data_store.get(&flow_id, &block.id)
+                            {
+                                crate::audioanalyzer::show_full(ui, analyzer_data);
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No audio analyzer data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Waveform and vectorscope will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "No flow selected",
+                            );
+                        }
+                    }
+
                     // Show meter visualization for meter blocks
                     if definition.id == "builtin.meter" {
                         ui.separator();
-                        tracing::debug!("Checking for meter data: flow_id={:?}, block_id={}", flow_id, block.id);
+
                         if let Some(flow_id) = flow_id {
                             if let Some(meter_data) = meter_data_store.get(&flow_id, &block.id) {
                                 tracing::debug!("Found meter data, calling show_full");
@@ -705,6 +895,95 @@ impl PropertyInspector {
                                 Color32::from_rgb(200, 200, 100),
                                 "⚠ No flow selected",
                             );
+                        }
+                    }
+
+                    // Show spectrum visualization for spectrum blocks
+                    if definition.id == "builtin.spectrum" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if let Some(spectrum_data) = spectrum_data_store.get(&flow_id, &block.id) {
+                                crate::spectrum::show_full(ui, spectrum_data);
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No spectrum data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Spectrum data will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "No flow selected",
+                            );
+                        }
+                    }
+
+                    // Show loudness visualization for loudness blocks
+                    if definition.id == "builtin.loudness" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if ui.button("Reset Measurements").clicked() {
+                                result.loudness_reset_requested =
+                                    Some((flow_id, block.id.clone()));
+                            }
+                            if let Some(loudness_data) = loudness_data_store.get(&flow_id, &block.id) {
+                                crate::loudness::show_full(ui, loudness_data);
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No loudness data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Loudness data will appear when audio is flowing through this block.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "No flow selected",
+                            );
+                        }
+                    }
+
+                    // Show recording status, duration counter, and split button for recorder blocks
+                    if definition.id == "builtin.recorder" {
+                        ui.separator();
+                        if let Some(start) = recorder_start_time {
+                            let elapsed = start.elapsed();
+                            let total_secs = elapsed.as_secs();
+                            let h = total_secs / 3600;
+                            let m = (total_secs % 3600) / 60;
+                            let s = total_secs % 60;
+                            ui.horizontal(|ui| {
+                                ui.label("Recording:");
+                                ui.monospace(format!("{:02}:{:02}:{:02}", h, m, s));
+                            });
+                        }
+                        if let Some(filename) = recorder_filename {
+                            let short_name = std::path::Path::new(filename)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(filename);
+                            ui.horizontal(|ui| {
+                                ui.monospace(short_name).on_hover_text(filename);
+                                if ui
+                                    .button(egui_phosphor::regular::DOWNLOAD_SIMPLE)
+                                    .on_hover_text("Download recording")
+                                    .clicked()
+                                {
+                                    result.recorder_download_requested =
+                                        Some(filename.to_string());
+                                }
+                            });
+                        }
+                        if let Some(flow_id) = flow_id {
+                            if ui.button("Split Now").clicked() {
+                                result.recorder_split_requested =
+                                    Some((flow_id, block.id.clone()));
+                            }
+                        } else {
+                            ui.add_enabled(false, egui::Button::new("Split Now"));
                         }
                     }
 
@@ -748,7 +1027,14 @@ impl PropertyInspector {
                             .map(|s| s.as_str());
 
                         if let Some(mut sdp_text) = sdp {
-                            ui.label("Copy this SDP to configure receivers:");
+                            ui.horizontal(|ui| {
+                                ui.label("Copy this SDP to configure receivers:");
+                                if ui.button(egui_phosphor::regular::COPY)
+                                    .on_hover_text("Copy SDP to clipboard")
+                                    .clicked() {
+                                    crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp_text);
+                                }
+                            });
                             ui.add_space(4.0);
 
                             // Display SDP in a code-style text box
@@ -759,13 +1045,6 @@ impl PropertyInspector {
                                     .code_editor()
                                     .interactive(false),
                             );
-
-                            ui.add_space(4.0);
-
-                            // Copy button
-                            if ui.button("📋 Copy to Clipboard").clicked() {
-                                crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp_text);
-                            }
                         } else {
                             ui.colored_label(
                                 Color32::from_rgb(200, 200, 100),
@@ -933,6 +1212,102 @@ impl PropertyInspector {
         result
     }
 
+    /// Build a set of mixer property names to skip based on current config.
+    ///
+    /// Properties for channels beyond `num_channels`, aux buses beyond
+    /// `num_aux_buses`, and groups beyond `num_groups` are excluded.
+    fn mixer_skip_set(block: &BlockInstance) -> std::collections::HashSet<String> {
+        use strom_types::mixer::{MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS};
+
+        let get_uint = |key: &str, default: usize| -> usize {
+            block
+                .properties
+                .get(key)
+                .and_then(|v| match v {
+                    PropertyValue::String(s) => s.parse().ok(),
+                    PropertyValue::UInt(n) => Some(*n as usize),
+                    PropertyValue::Int(n) => Some(*n as usize),
+                    _ => None,
+                })
+                .unwrap_or(default)
+        };
+
+        let num_ch = get_uint("num_channels", 8);
+        let num_aux = get_uint("num_aux_buses", 0);
+        let num_grp = get_uint("num_groups", 0);
+
+        let mut skip = std::collections::HashSet::new();
+
+        for ch in (num_ch + 1)..=MAX_CHANNELS {
+            for name in [
+                format!("ch{}_label", ch),
+                format!("ch{}_gain", ch),
+                format!("ch{}_pan", ch),
+                format!("ch{}_fader", ch),
+                format!("ch{}_mute", ch),
+                format!("ch{}_pfl", ch),
+                format!("ch{}_to_main", ch),
+                format!("ch{}_hpf_enabled", ch),
+                format!("ch{}_hpf_freq", ch),
+                format!("ch{}_gate_enabled", ch),
+                format!("ch{}_gate_threshold", ch),
+                format!("ch{}_gate_attack", ch),
+                format!("ch{}_gate_release", ch),
+                format!("ch{}_comp_enabled", ch),
+                format!("ch{}_comp_threshold", ch),
+                format!("ch{}_comp_ratio", ch),
+                format!("ch{}_comp_attack", ch),
+                format!("ch{}_comp_release", ch),
+                format!("ch{}_comp_makeup", ch),
+                format!("ch{}_comp_knee", ch),
+                format!("ch{}_eq_enabled", ch),
+            ] {
+                skip.insert(name);
+            }
+            for band in 1..=4 {
+                for suffix in ["freq", "gain", "q"] {
+                    skip.insert(format!("ch{}_eq{}_{}", ch, band, suffix));
+                }
+            }
+            for aux in 1..=MAX_AUX_BUSES {
+                skip.insert(format!("ch{}_aux{}_level", ch, aux));
+                skip.insert(format!("ch{}_aux{}_pre", ch, aux));
+            }
+            for grp in 1..=MAX_GROUPS {
+                skip.insert(format!("ch{}_to_grp{}", ch, grp));
+            }
+        }
+
+        // Skip aux bus master properties beyond configured count
+        for aux in (num_aux + 1)..=MAX_AUX_BUSES {
+            skip.insert(format!("aux{}_fader", aux));
+            skip.insert(format!("aux{}_mute", aux));
+        }
+
+        // Skip per-channel aux send properties for unconfigured aux buses
+        for ch in 1..=num_ch {
+            for aux in (num_aux + 1)..=MAX_AUX_BUSES {
+                skip.insert(format!("ch{}_aux{}_level", ch, aux));
+                skip.insert(format!("ch{}_aux{}_pre", ch, aux));
+            }
+        }
+
+        // Skip group properties beyond configured count
+        for grp in (num_grp + 1)..=MAX_GROUPS {
+            skip.insert(format!("group{}_fader", grp));
+            skip.insert(format!("group{}_mute", grp));
+        }
+
+        // Skip per-channel group routing for unconfigured groups
+        for ch in 1..=num_ch {
+            for grp in (num_grp + 1)..=MAX_GROUPS {
+                skip.insert(format!("ch{}_to_grp{}", ch, grp));
+            }
+        }
+
+        skip
+    }
+
     /// Show Audio Router properties with filtered view.
     fn show_audiorouter_properties(
         ui: &mut Ui,
@@ -985,6 +1360,7 @@ impl PropertyInspector {
                 flow_id,
                 network_interfaces,
                 available_channels,
+                &std::collections::HashSet::new(),
             );
         }
 
@@ -1004,6 +1380,7 @@ impl PropertyInspector {
                     flow_id,
                     network_interfaces,
                     available_channels,
+                    &std::collections::HashSet::new(),
                 );
             }
         }
@@ -1026,6 +1403,7 @@ impl PropertyInspector {
                 flow_id,
                 network_interfaces,
                 available_channels,
+                &std::collections::HashSet::new(),
             );
         }
 
@@ -1045,6 +1423,7 @@ impl PropertyInspector {
                     flow_id,
                     network_interfaces,
                     available_channels,
+                    &std::collections::HashSet::new(),
                 );
             }
         }
@@ -1053,6 +1432,8 @@ impl PropertyInspector {
         // The modal routing editor handles all routing configuration
     }
 
+    /// Show an exposed property editor. Returns true if the value was changed.
+    #[allow(clippy::too_many_arguments)]
     fn show_exposed_property(
         ui: &mut Ui,
         block: &mut BlockInstance,
@@ -1061,7 +1442,8 @@ impl PropertyInspector {
         _flow_id: Option<strom_types::FlowId>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
-    ) {
+        taken_endpoint_ids: &std::collections::HashSet<String>,
+    ) -> bool {
         let prop_name = &exposed_prop.name;
         let display_label = &exposed_prop.label;
         let default_value = exposed_prop.default_value.as_ref();
@@ -1085,6 +1467,9 @@ impl PropertyInspector {
             }
         }
 
+        let mut property_changed = false;
+        let is_live = exposed_prop.live;
+
         // For multiline, use vertical layout
         if is_multiline {
             // Property label with indicator
@@ -1101,7 +1486,7 @@ impl PropertyInspector {
                 // Reset button if modified
                 if has_custom_value
                     && ui
-                        .small_button("↺")
+                        .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                         .on_hover_text("Reset to default")
                         .clicked()
                 {
@@ -1123,6 +1508,7 @@ impl PropertyInspector {
             );
 
             if response.changed() {
+                property_changed = true;
                 // Only save if different from default
                 if let Some(PropertyValue::String(default)) = default_value {
                     if text != *default {
@@ -1142,7 +1528,7 @@ impl PropertyInspector {
             }
         } else {
             // For non-multiline, use horizontal layout
-            ui.horizontal(|ui| {
+            let changed_in_row = ui.horizontal(|ui| {
                 // Show property label with indicator if modified
                 if has_custom_value {
                     ui.colored_label(
@@ -1153,13 +1539,32 @@ impl PropertyInspector {
                     ui.label(format!("{}:", display_label));
                 }
 
+                // Show LIVE badge for real-time properties
+                if is_live {
+                    let badge = ui.colored_label(
+                        Color32::from_rgb(50, 200, 50),
+                        "LIVE",
+                    );
+                    badge.on_hover_text(
+                        "This property updates the audio pipeline in real-time.\nSave the flow to persist changes across restarts.",
+                    );
+                }
+
+                let mut changed = false;
+
                 if let Some(mut value) = current_value {
                     // Special handling for InterInput channel property - show dropdown with available channels
                     let is_inter_input_channel =
                         definition.id == "builtin.inter_input" && prop_name == "channel";
 
-                    let changed = if is_inter_input_channel {
+                    // Special handling for AudioGain gain property - show dB slider
+                    let is_audiogain_gain =
+                        definition.id == "builtin.audiogain" && prop_name == "gain";
+
+                    changed = if is_inter_input_channel {
                         Self::show_inter_channel_editor(ui, &mut value, available_channels)
+                    } else if is_audiogain_gain {
+                        Self::show_db_gain_editor(ui, &mut value)
                     } else {
                         // Check property type for special handling
                         match &exposed_prop.property_type {
@@ -1205,13 +1610,17 @@ impl PropertyInspector {
                 // Reset button if modified
                 if has_custom_value
                     && ui
-                        .small_button("↺")
+                        .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                         .on_hover_text("Reset to default")
                         .clicked()
                 {
                     block.properties.remove(prop_name);
+                    changed = true;
                 }
+
+                changed
             });
+            property_changed = changed_in_row.inner;
         }
 
         // Show description
@@ -1221,8 +1630,40 @@ impl PropertyInspector {
             });
         }
 
+        // Show warning if endpoint_id is already taken by another block
+        if prop_name == "endpoint_id"
+            && (definition.id == "builtin.whip_input" || definition.id == "builtin.whep_output")
+        {
+            let trimmed = block.properties.get("endpoint_id").and_then(|v| match v {
+                PropertyValue::String(s) => {
+                    let t = s.trim();
+                    if t.is_empty() {
+                        None
+                    } else {
+                        Some(t.to_string())
+                    }
+                }
+                _ => None,
+            });
+            if let Some(val) = &trimmed {
+                if taken_endpoint_ids.contains(val) {
+                    ui.indent(prop_name, |ui| {
+                        ui.colored_label(
+                            Color32::from_rgb(255, 180, 50),
+                            format!(
+                                "\u{26a0} Endpoint '{}' is already in use by another block",
+                                val
+                            ),
+                        );
+                    });
+                }
+            }
+        }
+
         // Add spacing after each property
         ui.add_space(8.0);
+
+        property_changed
     }
 
     fn show_pad_property_from_info(
@@ -1314,7 +1755,7 @@ impl PropertyInspector {
             if has_custom_value
                 && prop_info.writable
                 && ui
-                    .small_button("↺")
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                     .on_hover_text("Reset to default")
                     .clicked()
             {
@@ -1424,7 +1865,7 @@ impl PropertyInspector {
             if has_custom_value
                 && prop_info.writable
                 && ui
-                    .small_button("↺")
+                    .small_button(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
                     .on_hover_text("Reset to default")
                     .clicked()
             {
@@ -1581,6 +2022,21 @@ impl PropertyInspector {
         }
     }
 
+    /// Show a dB gain slider for the AudioGain block.
+    /// The value is stored directly in dB — no conversion needed here.
+    fn show_db_gain_editor(ui: &mut Ui, value: &mut PropertyValue) -> bool {
+        if let PropertyValue::Float(db) = value {
+            ui.add(
+                egui::Slider::new(db, -60.0..=20.0)
+                    .suffix(" dB")
+                    .fixed_decimals(1),
+            )
+            .changed()
+        } else {
+            false
+        }
+    }
+
     /// Show channel selector for InterInput blocks.
     /// Shows a dropdown with available channels (from all flows with InterOutput blocks).
     fn show_inter_channel_editor(
@@ -1599,7 +2055,11 @@ impl PropertyInspector {
                     .filter(|d| !d.is_empty())
                     .map(|d| d.as_str())
                     .unwrap_or(&ch.name);
-                let status = if ch.is_active { "▶" } else { "■" };
+                let status = if ch.is_active {
+                    egui_phosphor::regular::PLAY
+                } else {
+                    egui_phosphor::regular::STOP
+                };
                 format!("{} {} / {}", status, ch.flow_name, name_part)
             };
 

@@ -1,20 +1,21 @@
 //! WHIP ingest proxy and page handlers.
 //!
-//! Proxies WHIP POST/PATCH/DELETE requests from external clients to internal
-//! whipserversrc instances, similar to how whep_player.rs proxies for WHEP.
-//!
-//! Also serves the WHIP ingest HTML page for browser-based camera/mic sending.
+//! Each WHIP POST creates a new whipserversrc element (one per client session).
+//! PATCH/DELETE requests are routed to the correct session's port via the
+//! WhipSessionManager resource_id lookup.
 
 use crate::api::sdp_transform::{
     add_goog_remb, fix_video_bitrate_hints, strip_cvo_extension, strip_redundancy_codecs,
 };
+use crate::blocks::builtin::whip::create_whipserversrc_for_session;
+use crate::json_rejection::JsonBody;
 use crate::state::AppState;
+use crate::whip_session_manager::WhipSessionManager;
 use axum::{
     body::Body,
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
-    Json,
 };
 use tracing::{debug, error, info, warn};
 
@@ -33,6 +34,14 @@ pub async fn whip_ingest_page(State(state): State<AppState>) -> impl IntoRespons
 }
 
 /// List active WHIP endpoints (public API, no auth required).
+#[utoipa::path(
+    get,
+    path = "/api/whip-endpoints",
+    tag = "whip",
+    responses(
+        (status = 200, description = "List of active WHIP endpoints")
+    )
+)]
 pub async fn list_whip_endpoints(State(state): State<AppState>) -> impl IntoResponse {
     let endpoints = state.whip_registry().list_all().await;
     let list: Vec<serde_json::Value> = endpoints
@@ -51,7 +60,15 @@ pub async fn list_whip_endpoints(State(state): State<AppState>) -> impl IntoResp
 ///
 /// Accepts a JSON array of log entries and writes them to the server log
 /// prefixed with `[WHIP-CLIENT]` so they can be correlated with server-side events.
-pub async fn client_log(Json(entries): Json<Vec<ClientLogEntry>>) -> impl IntoResponse {
+#[utoipa::path(
+    post,
+    path = "/api/client-log",
+    tag = "whip",
+    responses(
+        (status = 204, description = "Log entries accepted")
+    )
+)]
+pub async fn client_log(JsonBody(entries): JsonBody<Vec<ClientLogEntry>>) -> impl IntoResponse {
     for entry in &entries {
         match entry.level.as_deref().unwrap_or("info") {
             "error" => error!("[WHIP-CLIENT] {}", entry.msg),
@@ -63,57 +80,112 @@ pub async fn client_log(Json(entries): Json<Vec<ClientLogEntry>>) -> impl IntoRe
     StatusCode::NO_CONTENT
 }
 
-#[derive(serde::Deserialize)]
-pub struct ClientLogEntry {
-    pub msg: String,
-    pub level: Option<String>,
-}
+pub use strom_types::whip::ClientLogEntry;
 
 /// Handle WHIP POST request (SDP offer from client).
 ///
-/// Proxies the SDP offer to the internal whipserversrc HTTP server and returns
-/// the SDP answer, rewriting the Location header to use the proxy path.
-///
-/// If the internal server returns 500 or times out (stale session), we recreate
-/// the whipserversrc element in the background and return the error immediately.
-/// The client's own retry logic will resend the offer to the fresh element.
+/// Creates a new whipserversrc element for this session, proxies the SDP offer
+/// to it, and registers the session with the WhipSessionManager.
+#[utoipa::path(
+    post,
+    path = "/whip/{endpoint_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier")
+    ),
+    responses(
+        (status = 201, description = "WHIP session created, SDP answer returned", content_type = "application/sdp"),
+        (status = 404, description = "WHIP endpoint not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHIP server"),
+        (status = 503, description = "WHIP element busy, retry in a moment")
+    )
+)]
 pub async fn whip_post(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
     headers: HeaderMap,
     body: Body,
 ) -> impl IntoResponse {
-    debug!("WHIP POST for endpoint: {}", endpoint_id);
+    // Check that this endpoint is registered
+    if !state.whip_registry().contains(&endpoint_id).await {
+        warn!("WHIP endpoint not found: {}", endpoint_id);
+        return (StatusCode::NOT_FOUND, "WHIP endpoint not found").into_response();
+    }
 
-    let port = match state.whip_registry().get_port(&endpoint_id).await {
-        Some(port) => port,
+    // Get the endpoint config from the session manager
+    let config = match state
+        .whip_session_manager()
+        .get_endpoint_config(&endpoint_id)
+    {
+        Some(c) => c,
         None => {
-            warn!("WHIP endpoint not found: {}", endpoint_id);
-            return (StatusCode::NOT_FOUND, "WHIP endpoint not found").into_response();
+            warn!(
+                "WHIP endpoint config not found for '{}' in session manager",
+                endpoint_id
+            );
+            return (StatusCode::NOT_FOUND, "WHIP endpoint not configured").into_response();
         }
     };
 
-    // Forward the request to the internal whipserversrc
-    let internal_url = format!("http://127.0.0.1:{}/whip/endpoint", port);
+    // Allocate a slot for this session (pre-allocate with a temporary resource_id,
+    // will be updated when we learn the real resource_id from the Location header)
+    let temp_resource_id = uuid::Uuid::new_v4().to_string();
+    let slot = match config.allocate_slot(&temp_resource_id) {
+        Some(s) => s,
+        None => {
+            warn!(
+                "WHIP endpoint '{}': all {} slots occupied, rejecting client",
+                endpoint_id, config.max_sessions
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "All session slots are occupied",
+            )
+                .into_response();
+        }
+    };
 
-    // 5s timeout: a healthy whipserversrc responds in <1s. If it takes longer,
-    // the element is stuck (zombie session) and needs recreation.
-    let client = match reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
+    // Create a new whipserversrc for this session in an isolated pipeline
+    let config_for_session = config.clone();
+    let cleanup_tx = state.whip_session_manager().cleanup_sender();
+    let (element, session_pipeline, port) = match tokio::task::spawn_blocking(move || {
+        create_whipserversrc_for_session(&config_for_session, slot, cleanup_tx)
+    })
+    .await
     {
-        Ok(c) => c,
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            error!("Failed to create whipserversrc for session: {}", e);
+            config.release_slot(slot);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create session: {}", e),
+            )
+                .into_response();
+        }
         Err(e) => {
-            error!("Failed to create HTTP client: {}", e);
+            error!("spawn_blocking panicked: {}", e);
+            config.release_slot(slot);
             return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     };
 
+    info!(
+        "WHIP POST for endpoint '{}': created whipserversrc on port {} (slot {})",
+        endpoint_id, port, slot
+    );
+
+    // Read the request body
     let body_bytes = match axum::body::to_bytes(body, 1024 * 1024).await {
         Ok(b) => b,
         Err(e) => {
             error!("Failed to read request body: {}", e);
+            // Teardown the element we just created and release slot
+            config.release_slot(slot);
+            let session_pipeline_clone = session_pipeline.clone();
+            tokio::task::spawn_blocking(move || {
+                WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
+            });
             return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
         }
     };
@@ -144,76 +216,161 @@ pub async fn whip_post(
 
     let auth_header = headers.get(header::AUTHORIZATION).cloned();
 
-    let result = forward_whip_post(
-        &client,
-        &internal_url,
-        content_type,
-        &body_bytes,
-        &auth_header,
-    )
-    .await;
+    // Retry-loop proxy POST to the new whipserversrc (handles HTTP server startup delay)
+    let internal_url = format!("http://127.0.0.1:{}/whip/endpoint", port);
 
-    // Handle proxy errors (timeout, connection refused, etc.)
-    let (status, resp_headers, resp_body) = match result {
-        Ok(tuple) => tuple,
-        Err(_) => {
-            // Proxy failed (likely timeout) - recreate element in background so it's
-            // ready when the client retries, then return error immediately.
-            warn!(
-                "WHIP: Proxy request to whipserversrc timed out for endpoint '{}' -- triggering recreation",
-                endpoint_id
-            );
-            let eid = endpoint_id.clone();
-            tokio::task::spawn(async move {
-                match tokio::task::spawn_blocking(move || {
-                    crate::blocks::builtin::whip::recreate_whipserversrc(&eid)
-                })
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => warn!("WHIP: Failed to recreate element: {}", e),
-                    Err(e) => error!("WHIP: Recreation task panicked: {:?}", e),
-                }
+    let client = match reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to create HTTP client: {}", e);
+            config.release_slot(slot);
+            let session_pipeline_clone = session_pipeline.clone();
+            tokio::task::spawn_blocking(move || {
+                WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
             });
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "WHIP element busy, retry in a moment",
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
         }
     };
 
-    // If internal server returned 500, the element has a stale session.
-    // Recreate in background and return error so the client retries against
-    // the fresh element (no server-side retry to avoid creating zombie sessions).
-    if status.is_server_error() {
-        let body_str = std::str::from_utf8(&resp_body).unwrap_or("<non-utf8>");
-        warn!(
-            "WHIP: Internal server returned {} for endpoint '{}': {} -- triggering recreation",
-            status, endpoint_id, body_str
-        );
-
-        let eid = endpoint_id.clone();
-        tokio::task::spawn(async move {
-            match tokio::task::spawn_blocking(move || {
-                crate::blocks::builtin::whip::recreate_whipserversrc(&eid)
-            })
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => warn!("WHIP: Failed to recreate element: {}", e),
-                Err(e) => error!("WHIP: Recreation task panicked: {:?}", e),
+    // Retry up to 10 times with 200ms backoff (whipserversrc HTTP server needs ~500ms+ to start)
+    let max_attempts = 10;
+    let mut result = None;
+    for attempt in 0..max_attempts {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+        match forward_whip_post(
+            &client,
+            &internal_url,
+            content_type,
+            &body_bytes,
+            &auth_header,
+        )
+        .await
+        {
+            Ok(tuple) => {
+                if attempt > 0 {
+                    info!(
+                        "WHIP POST proxy succeeded on attempt {} for port {}",
+                        attempt + 1,
+                        port
+                    );
+                }
+                result = Some(tuple);
+                break;
             }
-        });
-    } else if status.is_client_error() {
+            Err(resp) => {
+                debug!(
+                    "WHIP POST proxy attempt {} failed for port {}, retrying...",
+                    attempt + 1,
+                    port
+                );
+                if attempt == max_attempts - 1 {
+                    config.release_slot(slot);
+                    let session_pipeline_clone = session_pipeline.clone();
+                    tokio::task::spawn_blocking(move || {
+                        WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
+                    });
+                    warn!(
+                        "WHIP: All {} proxy attempts failed for endpoint '{}'",
+                        max_attempts, endpoint_id
+                    );
+                    return resp.into_response();
+                }
+            }
+        }
+    }
+
+    let (status, resp_headers, resp_body) = match result {
+        Some(tuple) => tuple,
+        None => {
+            config.release_slot(slot);
+            let session_pipeline_clone = session_pipeline.clone();
+            tokio::task::spawn_blocking(move || {
+                WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
+            });
+            return (StatusCode::SERVICE_UNAVAILABLE, "WHIP element not ready").into_response();
+        }
+    };
+
+    if status.is_server_error() || status.is_client_error() {
         let body_str = std::str::from_utf8(&resp_body).unwrap_or("<non-utf8>");
         warn!(
             "WHIP: Internal server returned {} for endpoint '{}': {}",
             status, endpoint_id, body_str
         );
+        // Teardown element and release slot on any error response — the session
+        // cannot be used and would otherwise occupy the slot until the inactivity
+        // watchdog fires.
+        config.release_slot(slot);
+        let session_pipeline_clone = session_pipeline.clone();
+        tokio::task::spawn_blocking(move || {
+            WhipSessionManager::teardown_session_pipeline(&session_pipeline_clone);
+        });
+        return build_whip_post_response(
+            &endpoint_id,
+            status,
+            &resp_headers,
+            resp_body,
+            Some(config.max_video_bitrate_kbps),
+        )
+        .into_response();
     }
 
-    build_whip_post_response(&endpoint_id, status, &resp_headers, resp_body).into_response()
+    // Extract resource_id from Location header to register the session
+    if let Some(location) = resp_headers.get(header::LOCATION) {
+        if let Ok(loc_str) = location.to_str() {
+            // Location format: /whip/resource/{resource_id}
+            if let Some(resource_id) = loc_str.strip_prefix("/whip/resource/") {
+                // Update slot assignment from temp_resource_id to real resource_id
+                {
+                    let mut slots = config.slot_assignments.write().unwrap();
+                    if let Some(entry) = slots.get_mut(slot) {
+                        *entry = Some(resource_id.to_string());
+                    }
+                }
+
+                info!(
+                    "WHIP: Registering session resource_id='{}' on port {} for endpoint '{}' (slot {})",
+                    resource_id, port, endpoint_id, slot
+                );
+                let registered = state.whip_session_manager().register_session(
+                    resource_id.to_string(),
+                    port,
+                    element,
+                    session_pipeline,
+                    endpoint_id.clone(),
+                    slot,
+                );
+                if !registered {
+                    warn!(
+                        "WHIP: Session '{}' was cleaned up before registration (ICE failed early)",
+                        resource_id
+                    );
+                }
+            } else {
+                warn!(
+                    "WHIP: Unexpected Location header format: '{}', session not registered",
+                    loc_str
+                );
+            }
+        }
+    } else if status.is_success() {
+        warn!("WHIP: No Location header in successful POST response, session not registered");
+    }
+
+    build_whip_post_response(
+        &endpoint_id,
+        status,
+        &resp_headers,
+        resp_body,
+        Some(config.max_video_bitrate_kbps),
+    )
+    .into_response()
 }
 
 /// Forward a WHIP POST request to the internal whipserversrc.
@@ -271,6 +428,7 @@ fn build_whip_post_response(
     status: reqwest::StatusCode,
     resp_headers: &reqwest::header::HeaderMap,
     resp_body: axum::body::Bytes,
+    max_video_bitrate_kbps: Option<u32>,
 ) -> Response {
     // Patch the SDP answer for better Chrome bandwidth estimation:
     // 1. Add goog-remb as fallback bandwidth estimation
@@ -283,7 +441,7 @@ fn build_whip_post_response(
     // webrtcbin assigns its own extmap IDs internally.
     let resp_body = if let Ok(answer_str) = std::str::from_utf8(&resp_body) {
         let patched = add_goog_remb(answer_str);
-        let patched = fix_video_bitrate_hints(&patched);
+        let patched = fix_video_bitrate_hints(&patched, max_video_bitrate_kbps);
         let patched = strip_cvo_extension(&patched);
         debug!("WHIP: SDP answer:\n{}", patched);
         axum::body::Bytes::from(patched)
@@ -348,6 +506,22 @@ fn build_whip_post_response(
 }
 
 /// Handle WHIP PATCH request (ICE trickle from client).
+///
+/// Looks up the session's port by resource_id and proxies the PATCH.
+#[utoipa::path(
+    patch,
+    path = "/whip/{endpoint_id}/resource/{resource_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHIP resource/session identifier")
+    ),
+    responses(
+        (status = 204, description = "ICE candidates accepted"),
+        (status = 404, description = "WHIP endpoint or session not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHIP server")
+    )
+)]
 pub async fn whip_resource_patch(
     State(state): State<AppState>,
     Path((endpoint_id, resource_id)): Path<(String, String)>,
@@ -359,10 +533,15 @@ pub async fn whip_resource_patch(
         endpoint_id, resource_id
     );
 
-    let port = match state.whip_registry().get_port(&endpoint_id).await {
+    // Look up the session's port by resource_id
+    let port = match state.whip_session_manager().get_session_port(&resource_id) {
         Some(port) => port,
         None => {
-            return (StatusCode::NOT_FOUND, "WHIP endpoint not found").into_response();
+            // Fall back to endpoint-level check for better error messages
+            if !state.whip_registry().contains(&endpoint_id).await {
+                return (StatusCode::NOT_FOUND, "WHIP endpoint not found").into_response();
+            }
+            return (StatusCode::NOT_FOUND, "WHIP session not found").into_response();
         }
     };
 
@@ -427,11 +606,22 @@ pub async fn whip_resource_patch(
 
 /// Handle WHIP DELETE request (client disconnect).
 ///
-/// After forwarding DELETE to whipserversrc, we trigger async element
-/// recreation. The whipserversrc element is treated as single-use: it handles
-/// one session, then gets destroyed and replaced with a fresh element.
-/// The pad-removed callback also triggers recreation, but the AtomicBool
-/// idempotency flag in WhipServerContext prevents double-recreation.
+/// Proxies the DELETE to the session's whipserversrc, then tears down the element
+/// and removes the session from the session manager.
+#[utoipa::path(
+    delete,
+    path = "/whip/{endpoint_id}/resource/{resource_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHIP resource/session identifier")
+    ),
+    responses(
+        (status = 200, description = "WHIP session deleted"),
+        (status = 404, description = "WHIP endpoint or session not found"),
+        (status = 502, description = "Proxy error forwarding to internal WHIP server")
+    )
+)]
 pub async fn whip_resource_delete(
     State(state): State<AppState>,
     Path((endpoint_id, resource_id)): Path<(String, String)>,
@@ -441,60 +631,63 @@ pub async fn whip_resource_delete(
         endpoint_id, resource_id
     );
 
-    let port = match state.whip_registry().get_port(&endpoint_id).await {
-        Some(port) => port,
-        None => {
-            return (StatusCode::NOT_FOUND, "WHIP endpoint not found").into_response();
-        }
+    // Look up and remove the session (returns element, session_pipeline, endpoint_id, port, slot)
+    let (element, session_pipeline, session_endpoint_id, _port, slot) =
+        match state.whip_session_manager().remove_session(&resource_id) {
+            Some(tuple) => tuple,
+            None => {
+                if !state.whip_registry().contains(&endpoint_id).await {
+                    return (StatusCode::NOT_FOUND, "WHIP endpoint not found").into_response();
+                }
+                // Session already removed (e.g., pad-removed cleanup) - return OK
+                info!(
+                    "WHIP DELETE: session '{}' not found (may already be cleaned up)",
+                    resource_id
+                );
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .body(Body::empty())
+                    .unwrap()
+                    .into_response();
+            }
+        };
+
+    // Release the slot so new sessions can use it
+    let webrtcbin_store = if let Some(config) = state
+        .whip_session_manager()
+        .get_endpoint_config(&session_endpoint_id)
+    {
+        config.release_slot(slot);
+        Some((
+            config.dynamic_webrtcbin_store.clone(),
+            config.instance_id.clone(),
+        ))
+    } else {
+        None
     };
 
-    let internal_url = format!("http://127.0.0.1:{}/whip/resource/{}", port, resource_id);
-
-    let client = match reqwest::Client::builder().no_proxy().build() {
-        Ok(c) => c,
-        Err(e) => {
-            error!("Failed to create HTTP client: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response();
+    // Tear down the session pipeline directly — no need to proxy the DELETE since
+    // set_state(Null) will clean up the whipserversrc and its WebRTC session.
+    // Proxying the DELETE first would cause a race: whipserversrc starts internal
+    // teardown (puts bins in PAUSED) before our set_state(Null) can cascade properly.
+    let _ = tokio::task::spawn_blocking(move || {
+        WhipSessionManager::teardown_session_pipeline(&session_pipeline);
+        drop(element);
+        // Remove stale webrtcbin entries so frontend stops showing dead stats
+        if let Some((store, block_id)) = webrtcbin_store {
+            WhipSessionManager::cleanup_dynamic_webrtcbin_store(&store, &block_id);
         }
-    };
-
-    let resp_status = match client.delete(&internal_url).send().await {
-        Ok(r) => r.status(),
-        Err(e) => {
-            error!("Failed to proxy WHIP DELETE: {}", e);
-            return (StatusCode::BAD_GATEWAY, format!("Proxy error: {}", e)).into_response();
-        }
-    };
-
-    // Recreate the whipserversrc element synchronously before returning the
-    // DELETE response. This ensures the new element is ready to accept the next
-    // client connection immediately. We use spawn_blocking + await because
-    // recreate_whipserversrc does GStreamer operations that must not run on
-    // the tokio runtime. The short sleep gives whipserversrc time to finish
-    // its internal teardown before we destroy the element.
-    let endpoint_id_for_recreate = endpoint_id.clone();
-    let recreate_result = tokio::task::spawn_blocking(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        crate::blocks::builtin::whip::recreate_whipserversrc(&endpoint_id_for_recreate)
     })
     .await;
 
-    match recreate_result {
-        Ok(Ok(())) => info!("WHIP DELETE: Recreated whipserversrc for '{}'", endpoint_id),
-        Ok(Err(e)) => warn!(
-            "WHIP DELETE: Failed to recreate for '{}': {}",
-            endpoint_id, e
-        ),
-        Err(e) => error!(
-            "WHIP DELETE: Recreation task panicked for '{}': {:?}",
-            endpoint_id, e
-        ),
-    }
+    info!(
+        "WHIP DELETE: session '{}' for endpoint '{}' cleaned up (slot {} released)",
+        resource_id, session_endpoint_id, slot
+    );
 
     Response::builder()
-        .status(
-            StatusCode::from_u16(resp_status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        )
+        .status(StatusCode::OK)
         .header("Access-Control-Allow-Origin", "*")
         .body(Body::empty())
         .unwrap_or_else(|_| {
@@ -507,6 +700,17 @@ pub async fn whip_resource_delete(
 }
 
 /// Handle CORS preflight for WHIP endpoints.
+#[utoipa::path(
+    options,
+    path = "/whip/{endpoint_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier")
+    ),
+    responses(
+        (status = 204, description = "CORS preflight response")
+    )
+)]
 pub async fn whip_options() -> impl IntoResponse {
     Response::builder()
         .status(StatusCode::NO_CONTENT)
@@ -528,6 +732,18 @@ pub async fn whip_options() -> impl IntoResponse {
 }
 
 /// Handle CORS preflight for WHIP resource endpoints.
+#[utoipa::path(
+    options,
+    path = "/whip/{endpoint_id}/resource/{resource_id}",
+    tag = "whip",
+    params(
+        ("endpoint_id" = String, Path, description = "WHIP endpoint identifier"),
+        ("resource_id" = String, Path, description = "WHIP resource/session identifier")
+    ),
+    responses(
+        (status = 204, description = "CORS preflight response")
+    )
+)]
 pub async fn whip_resource_options() -> impl IntoResponse {
     whip_options().await
 }

@@ -376,6 +376,91 @@ async fn test_export_gst_launch_with_properties() {
     assert!(pipeline.contains("sync=false"));
 }
 
+// ============================================================================
+// Buffer Age Probe API Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_list_probes_nonexistent_flow() {
+    let app = create_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/flows/00000000-0000-0000-0000-000000000001/probes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_activate_probe_nonexistent_flow() {
+    let app = create_test_app().await;
+
+    let request_body = json!({
+        "element_id": "some-element"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/flows/00000000-0000-0000-0000-000000000001/probes")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_activate_probe_invalid_flow_id() {
+    let app = create_test_app().await;
+
+    let request_body = json!({
+        "element_id": "some-element"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/flows/not-a-uuid/probes")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_deactivate_probe_nonexistent_flow() {
+    let app = create_test_app().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/flows/00000000-0000-0000-0000-000000000001/probes/some-probe-id")
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn test_export_gst_launch_empty() {
     let app = create_test_app().await;

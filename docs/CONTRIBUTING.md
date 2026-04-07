@@ -17,6 +17,7 @@ Thank you for your interest in contributing to Strom! This document provides gui
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
+    libcairo2-dev \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-base \
@@ -63,7 +64,7 @@ cargo fmt --all
 Code must pass clippy with no warnings:
 
 ```bash
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ### Testing
@@ -172,7 +173,7 @@ All checks must pass before a PR can be merged.
 2. Make your changes and ensure all checks pass:
    ```bash
    cargo fmt --all
-   cargo clippy --workspace --all-targets --all-features -- -D warnings
+   cargo clippy --workspace --all-targets -- -D warnings
    cargo test --workspace
    ```
 

@@ -2,12 +2,23 @@ use crate::info_page::{
     current_time_millis, format_datetime_local, format_uptime, parse_iso8601_to_millis,
 };
 use crate::state::AppMessage;
-use egui::{Color32, Context, TopBottomPanel};
+use egui::Color32;
 
 use super::*;
+
+fn truncate_str(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars).collect();
+        format!("{truncated}…")
+    }
+}
+
 impl StromApp {
     /// Render the log panel showing errors, warnings, and info messages.
-    pub(super) fn render_log_panel(&mut self, ctx: &Context) {
+    pub(super) fn render_log_panel(&mut self, ui: &mut egui::Ui) {
         if !self.show_log_panel || self.log_entries.is_empty() {
             return;
         }
@@ -18,22 +29,56 @@ impl StromApp {
         // Collect actions to perform after rendering (to avoid borrow issues)
         let mut entry_to_remove: Option<usize> = None;
         let mut navigate_to: Option<(strom_types::FlowId, Option<String>)> = None;
+        let mut copy_entry_text: Option<String> = None;
 
-        TopBottomPanel::bottom("log_panel")
+        // Pre-build flow name lookup
+        let flow_names: std::collections::HashMap<strom_types::FlowId, String> =
+            self.flows.iter().map(|f| (f.id, f.name.clone())).collect();
+
+        egui::Panel::bottom("log_panel")
             .resizable(true)
-            .min_height(80.0)
-            .max_height(400.0)
-            .default_height(panel_height)
-            .show(ctx, |ui| {
+            .min_size(80.0)
+            .max_size(400.0)
+            .default_size(panel_height)
+            .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("Pipeline Messages");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Clear All").clicked() {
+                        if ui
+                            .button(egui_phosphor::regular::TRASH)
+                            .on_hover_text("Clear all")
+                            .clicked()
+                        {
                             self.clear_log_entries();
-                            // Also clear all QoS stats since we're clearing the log
                             self.qos_stats = crate::qos_monitor::QoSStore::new();
                         }
-                        if ui.button("Hide").clicked() {
+                        if ui
+                            .button(egui_phosphor::regular::COPY)
+                            .on_hover_text("Copy all entries to clipboard")
+                            .clicked()
+                        {
+                            let all_text: String = self
+                                .log_entries
+                                .iter()
+                                .rev()
+                                .map(|e| {
+                                    let flow = e
+                                        .flow_id
+                                        .and_then(|fid| flow_names.get(&fid))
+                                        .map(|n| n.as_str())
+                                        .unwrap_or("");
+                                    let source = e.source.as_deref().unwrap_or("");
+                                    format!("[{}] [{}] {}", flow, source, e.message)
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            crate::clipboard::copy_text_with_ctx(ui.ctx(), &all_text);
+                        }
+                        if ui
+                            .button(egui_phosphor::regular::X)
+                            .on_hover_text("Hide panel")
+                            .clicked()
+                        {
                             self.show_log_panel = false;
                         }
                     });
@@ -41,71 +86,108 @@ impl StromApp {
 
                 ui.separator();
 
-                // Scrollable area for log entries
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::both()
                     .auto_shrink([false, false])
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
-                        // Show entries in reverse chronological order (newest first)
-                        // Use enumerate to track indices for removal
                         let entries_len = self.log_entries.len();
                         for (rev_idx, entry) in self.log_entries.iter().rev().enumerate() {
                             let actual_idx = entries_len - 1 - rev_idx;
 
                             ui.horizontal(|ui| {
-                                // Dismiss button (X) - small and subtle
-                                let dismiss_btn = ui.add(
-                                    egui::Button::new(
-                                        egui::RichText::new("×").size(14.0).color(Color32::GRAY),
+                                // Copy button (leftmost)
+                                if ui
+                                    .small_button(
+                                        egui::RichText::new(egui_phosphor::regular::COPY)
+                                            .size(14.0),
                                     )
-                                    .frame(false)
-                                    .min_size(egui::vec2(16.0, 16.0)),
-                                );
-                                if dismiss_btn.clicked() {
+                                    .on_hover_text("Copy")
+                                    .clicked()
+                                {
+                                    let flow = entry
+                                        .flow_id
+                                        .and_then(|fid| flow_names.get(&fid))
+                                        .map(|n| n.as_str())
+                                        .unwrap_or("");
+                                    let source = entry.source.as_deref().unwrap_or("");
+                                    copy_entry_text =
+                                        Some(format!("[{}] [{}] {}", flow, source, entry.message));
+                                }
+
+                                // Dismiss button
+                                if ui
+                                    .small_button(
+                                        egui::RichText::new(egui_phosphor::regular::X).size(14.0),
+                                    )
+                                    .on_hover_text("Dismiss")
+                                    .clicked()
+                                {
                                     entry_to_remove = Some(actual_idx);
                                 }
-                                dismiss_btn.on_hover_text("Dismiss this entry");
 
-                                // Level indicator
-                                ui.colored_label(entry.color(), entry.prefix());
+                                // Flow name (clickable, underline on hover)
+                                if let Some(flow_id) = entry.flow_id {
+                                    let flow_name = flow_names
+                                        .get(&flow_id)
+                                        .map(|n| n.as_str())
+                                        .unwrap_or("unknown");
+                                    let truncated_flow = truncate_str(flow_name, 15);
 
-                                // Source element if available - make it clickable
-                                if let Some(ref source) = entry.source {
-                                    let source_label = ui
-                                        .colored_label(
-                                            Color32::from_rgb(150, 150, 255),
-                                            format!("[{}]", source),
+                                    let flow_label = ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&truncated_flow)
+                                                .color(Color32::GRAY),
                                         )
-                                        .interact(egui::Sense::click());
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if flow_label.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        ui.painter().line_segment(
+                                            [
+                                                flow_label.rect.left_bottom(),
+                                                flow_label.rect.right_bottom(),
+                                            ],
+                                            egui::Stroke::new(1.0, Color32::GRAY),
+                                        );
+                                    }
+                                    if flow_label.clicked() {
+                                        navigate_to = Some((flow_id, entry.source.clone()));
+                                    }
+                                    flow_label.on_hover_text(format!("Navigate to {}", flow_name));
+                                }
 
+                                // Element/block ID (clickable, underline on hover)
+                                if let Some(ref source) = entry.source {
+                                    let truncated_source = truncate_str(source, 15);
+                                    let source_label = ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!("[{}]", truncated_source))
+                                                .color(Color32::from_rgb(150, 150, 255)),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if source_label.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        ui.painter().line_segment(
+                                            [
+                                                source_label.rect.left_bottom(),
+                                                source_label.rect.right_bottom(),
+                                            ],
+                                            egui::Stroke::new(
+                                                1.0,
+                                                Color32::from_rgb(150, 150, 255),
+                                            ),
+                                        );
+                                    }
                                     if source_label.clicked() {
                                         if let Some(flow_id) = entry.flow_id {
                                             navigate_to = Some((flow_id, Some(source.clone())));
                                         }
                                     }
-                                    source_label.on_hover_text("Click to navigate to this element");
+                                    source_label.on_hover_text(format!("Navigate to {}", source));
                                 }
 
-                                // Flow ID if available - make it clickable
-                                if let Some(flow_id) = entry.flow_id {
-                                    let flow_name = self
-                                        .flows
-                                        .iter()
-                                        .find(|f| f.id == flow_id)
-                                        .map(|f| f.name.clone())
-                                        .unwrap_or_else(|| "unknown".to_string());
-
-                                    let flow_label = ui
-                                        .colored_label(Color32::GRAY, format!("({})", flow_name))
-                                        .interact(egui::Sense::click());
-
-                                    if flow_label.clicked() {
-                                        navigate_to = Some((flow_id, entry.source.clone()));
-                                    }
-                                    flow_label.on_hover_text("Click to navigate to this flow");
-                                }
-
-                                // Message - use selectable label so user can copy text
+                                // Message
                                 ui.add(
                                     egui::Label::new(
                                         egui::RichText::new(&entry.message).color(entry.color()),
@@ -116,6 +198,11 @@ impl StromApp {
                         }
                     });
             });
+
+        // Copy single entry
+        if let Some(text) = copy_entry_text {
+            crate::clipboard::copy_text_with_ctx(ui.ctx(), &text);
+        }
 
         // Process deferred actions
         if let Some(idx) = entry_to_remove {
@@ -137,7 +224,7 @@ impl StromApp {
 
             // Clear any existing focus before changing graph structure
             // to prevent accesskit panic when focused node is removed
-            ctx.memory_mut(|mem| {
+            ui.ctx().memory_mut(|mem| {
                 if let Some(focused_id) = mem.focused() {
                     mem.surrender_focus(focused_id);
                 }
@@ -162,7 +249,7 @@ impl StromApp {
     }
 
     /// Render the new flow dialog.
-    pub(super) fn render_new_flow_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_new_flow_dialog(&mut self, ui: &mut egui::Ui) {
         if !self.show_new_flow_dialog {
             return;
         }
@@ -170,7 +257,7 @@ impl StromApp {
         egui::Window::new("New Flow")
             .collapsible(false)
             .resizable(false)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Name:");
                     ui.text_edit_singleline(&mut self.new_flow_name);
@@ -178,12 +265,12 @@ impl StromApp {
 
                 // Check for Enter key to create flow
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !self.new_flow_name.is_empty() {
-                    self.create_flow(ctx);
+                    self.create_flow(ui.ctx());
                 }
 
                 ui.horizontal(|ui| {
                     if ui.button("Create").clicked() {
-                        self.create_flow(ctx);
+                        self.create_flow(ui.ctx());
                     }
 
                     if ui.button("Cancel").clicked() {
@@ -195,7 +282,7 @@ impl StromApp {
     }
 
     /// Render the delete confirmation dialog.
-    pub(super) fn render_delete_confirmation_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_delete_confirmation_dialog(&mut self, ui: &mut egui::Ui) {
         if self.flow_pending_deletion.is_none() {
             return;
         }
@@ -206,15 +293,18 @@ impl StromApp {
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.label("Are you sure you want to delete this flow?");
                 ui.add_space(5.0);
                 ui.colored_label(Color32::YELLOW, format!("Flow: {}", flow_name));
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    if ui.button("❌ Delete").clicked() {
-                        self.delete_flow(flow_id, ctx);
+                    if ui
+                        .button(format!("{} Delete", egui_phosphor::regular::TRASH))
+                        .clicked()
+                    {
+                        self.delete_flow(flow_id, ui.ctx());
                         self.flow_pending_deletion = None;
                     }
 
@@ -226,7 +316,7 @@ impl StromApp {
     }
 
     /// Render the system monitor window.
-    pub(super) fn render_system_monitor_window(&mut self, ctx: &Context) {
+    pub(super) fn render_system_monitor_window(&mut self, ui: &mut egui::Ui) {
         if !self.show_system_monitor {
             return;
         }
@@ -237,7 +327,7 @@ impl StromApp {
             .default_width(700.0)
             .default_height(500.0)
             .open(&mut self.show_system_monitor)
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 // Build flow_id -> name mapping
                 let flow_names: std::collections::HashMap<_, _> =
                     self.flows.iter().map(|f| (f.id, f.name.clone())).collect();
@@ -280,7 +370,7 @@ impl StromApp {
     }
 
     /// Render the flow properties dialog.
-    pub(super) fn render_flow_properties_dialog(&mut self, ctx: &Context) {
+    pub(super) fn render_flow_properties_dialog(&mut self, ui: &mut egui::Ui) {
         let flow_id = match self.editing_properties_flow_id {
             Some(id) => id,
             None => return,
@@ -296,13 +386,13 @@ impl StromApp {
 
         let flow_name = flow.name.clone();
 
-        egui::Window::new(format!("⚙ {} - Properties", flow_name))
+        egui::Window::new(format!("{} {} - Properties", egui_phosphor::regular::GEAR, flow_name))
             .collapsible(false)
             .resizable(true)
             .default_width(400.0)
             .default_height(500.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 50.0) // Leave room for buttons
                     .show(ui, |ui| {
@@ -488,6 +578,32 @@ impl StromApp {
                     }
                 }
 
+                ui.add_space(10.0);
+
+                // CPU Affinity
+                ui.label("CPU Affinity:");
+                ui.horizontal(|ui| {
+                    use strom_types::flow::CpuAffinity;
+
+                    egui::ComboBox::from_id_salt("cpu_affinity_selector")
+                        .selected_text(match self.properties_cpu_affinity_buffer {
+                            CpuAffinity::Off => "Off",
+                            CpuAffinity::SingleCore => "Single Core",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.properties_cpu_affinity_buffer,
+                                CpuAffinity::Off,
+                                "Off (OS scheduler decides)",
+                            );
+                            ui.selectable_value(
+                                &mut self.properties_cpu_affinity_buffer,
+                                CpuAffinity::SingleCore,
+                                "Single Core (max cache locality)",
+                            );
+                        });
+                });
+
                 // Show timestamps section
                 if let Some(flow) = self.editing_properties_flow_id.and_then(|id| self.flows.iter().find(|f| f.id == id)) {
                     let has_timestamps = flow.properties.created_at.is_some()
@@ -541,7 +657,7 @@ impl StromApp {
 
                 // Buttons (outside scroll area)
                 ui.horizontal(|ui| {
-                    if ui.button("💾 Save").clicked() {
+                    if ui.button(format!("{} Save", egui_phosphor::regular::FLOPPY_DISK)).clicked() {
                         // Update flow properties
                         if let Some(flow) = self.editing_properties_flow_id.and_then(|id| self.flows.iter_mut().find(|f| f.id == id)) {
                             // Update flow name
@@ -569,9 +685,13 @@ impl StromApp {
                             flow.properties.thread_priority =
                                 self.properties_thread_priority_buffer;
 
+                            // Set CPU affinity
+                            flow.properties.cpu_affinity =
+                                self.properties_cpu_affinity_buffer;
+
                             let flow_clone = flow.clone();
                             let api = self.api.clone();
-                            let ctx_clone = ctx.clone();
+                            let ctx_clone = ui.ctx().clone();
 
                             spawn_task(async move {
                                 match api.update_flow(&flow_clone).await {
@@ -596,7 +716,7 @@ impl StromApp {
     }
 
     /// Render the stream picker modal for selecting discovered streams.
-    pub(super) fn render_stream_picker_modal(&mut self, ctx: &Context) {
+    pub(super) fn render_stream_picker_modal(&mut self, ui: &mut egui::Ui) {
         let Some(block_id) = self.show_stream_picker_for_block.clone() else {
             return;
         };
@@ -611,7 +731,7 @@ impl StromApp {
             .default_width(500.0)
             .default_height(400.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.label("Select a stream to use its SDP:");
                 ui.add_space(8.0);
 
@@ -627,8 +747,8 @@ impl StromApp {
                     ui.label("No discovered streams available.");
                     ui.label("Make sure SAP discovery is running and streams are being announced on the network.");
                     ui.add_space(8.0);
-                    if ui.button("🔄 Refresh").clicked() {
-                        self.discovery_page.refresh(&self.api, ctx, &self.channels.tx);
+                    if ui.button(egui_phosphor::regular::ARROWS_CLOCKWISE).on_hover_text("Refresh").clicked() {
+                        self.discovery_page.refresh(&self.api, ui.ctx(), &self.channels.tx);
                     }
                 } else {
                     egui::ScrollArea::vertical()
@@ -658,10 +778,10 @@ impl StromApp {
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    let refresh_clicked = ui.button("🔄 Refresh").clicked();
+                    let refresh_clicked = ui.button(egui_phosphor::regular::ARROWS_CLOCKWISE).on_hover_text("Refresh").clicked();
                     if refresh_clicked {
                         self.discovery_page
-                            .refresh(&self.api, ctx, &self.channels.tx);
+                            .refresh(&self.api, ui.ctx(), &self.channels.tx);
                     }
                 });
             });
@@ -678,7 +798,7 @@ impl StromApp {
             // Fetch the SDP and update the block
             let api = self.api.clone();
             let tx = self.channels.sender();
-            let ctx = ctx.clone();
+            let ctx = ui.ctx().clone();
 
             spawn_task(async move {
                 match api.get_stream_sdp(&stream_id).await {
@@ -704,7 +824,7 @@ impl StromApp {
     }
 
     /// Render the NDI picker modal for selecting discovered NDI sources.
-    pub(super) fn render_ndi_picker_modal(&mut self, ctx: &Context) {
+    pub(super) fn render_ndi_picker_modal(&mut self, ui: &mut egui::Ui) {
         let Some(block_id) = self.show_ndi_picker_for_block.clone() else {
             return;
         };
@@ -746,7 +866,7 @@ impl StromApp {
             .default_width(500.0)
             .default_height(400.0)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.label("Select an NDI source:");
                 ui.add_space(8.0);
 
@@ -774,7 +894,7 @@ impl StromApp {
                     ui.add_space(8.0);
                     if ui.button("Refresh").clicked() {
                         self.discovery_page
-                            .refresh(&self.api, ctx, &self.channels.tx);
+                            .refresh(&self.api, ui.ctx(), &self.channels.tx);
                     }
                 } else {
                     // Scroll area for the source list
@@ -808,7 +928,7 @@ impl StromApp {
                         let refresh_clicked = ui.button("Refresh").clicked();
                         if refresh_clicked {
                             self.discovery_page
-                                .refresh(&self.api, ctx, &self.channels.tx);
+                                .refresh(&self.api, ui.ctx(), &self.channels.tx);
                         }
                     }
                 });

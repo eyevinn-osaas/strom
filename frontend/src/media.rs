@@ -96,8 +96,8 @@ impl MediaPage {
             self.refresh(api, ctx, tx);
         }
 
-        // Auto-refresh every 10 seconds (files don't change as often)
-        if self.last_fetch.elapsed().as_secs() > 10 && !self.loading {
+        // Auto-refresh every 3 seconds
+        if self.last_fetch.elapsed().as_secs() > 3 && !self.loading {
             self.refresh(api, ctx, tx);
         }
 
@@ -115,8 +115,8 @@ impl MediaPage {
         }
 
         // Split view: file list on left, details on right
-        egui::SidePanel::left("media_file_list")
-            .default_width(400.0)
+        egui::Panel::left("media_file_list")
+            .default_size(400.0)
             .resizable(true)
             .show_inside(ui, |ui| {
                 self.render_toolbar(ui, api, ctx, tx);
@@ -187,17 +187,29 @@ impl MediaPage {
                 }
             }
 
-            if ui.button("🔄 Refresh").clicked() {
+            if ui
+                .button(egui_phosphor::regular::ARROWS_CLOCKWISE)
+                .clicked()
+            {
                 self.refresh(api, ctx, tx);
             }
 
-            if ui.button("📁 New Folder").clicked() {
+            if ui
+                .button(format!(
+                    "{} New Folder",
+                    egui_phosphor::regular::FOLDER_PLUS
+                ))
+                .clicked()
+            {
                 self.show_new_folder_dialog = true;
                 self.new_folder_name.clear();
             }
 
             #[cfg(target_arch = "wasm32")]
-            if ui.button("📤 Upload").clicked() {
+            if ui
+                .button(format!("{} Upload", egui_phosphor::regular::UPLOAD_SIMPLE))
+                .clicked()
+            {
                 self.trigger_file_upload(api, ctx, tx);
             }
         });
@@ -217,7 +229,12 @@ impl MediaPage {
                 self.focus_search_requested = false;
                 response.request_focus();
             }
-            if !self.search_filter.is_empty() && ui.small_button("x").clicked() {
+            if !self.search_filter.is_empty()
+                && ui
+                    .small_button(egui_phosphor::regular::X)
+                    .on_hover_text("Clear search")
+                    .clicked()
+            {
                 self.search_filter.clear();
             }
         });
@@ -381,18 +398,24 @@ impl MediaPage {
             if !entry.is_directory {
                 // Download link
                 let download_url = api.get_media_download_url(&entry.path);
-                ui.hyperlink_to("📥 Download", download_url);
+                ui.hyperlink_to(
+                    format!("{} Download", egui_phosphor::regular::DOWNLOAD_SIMPLE),
+                    download_url,
+                );
             }
 
-            if ui.button("✏ Rename").clicked() {
+            if ui
+                .button(format!("{} Rename", egui_phosphor::regular::PENCIL_SIMPLE))
+                .clicked()
+            {
                 self.rename_target = Some(entry.path.clone());
                 self.rename_input = entry.name.clone();
             }
 
             let delete_label = if entry.is_directory {
-                "🗑 Delete Folder"
+                format!("{} Delete Folder", egui_phosphor::regular::TRASH)
             } else {
-                "🗑 Delete"
+                format!("{} Delete", egui_phosphor::regular::TRASH)
             };
             if ui.button(delete_label).clicked() {
                 self.delete_confirm = Some(entry.path.clone());

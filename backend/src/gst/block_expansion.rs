@@ -2,10 +2,11 @@
 
 use crate::blocks::builtin;
 use crate::blocks::{
-    BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, WhepEndpointInfo,
-    WhipEndpointInfo,
+    BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, ElementSetupFn,
+    WhepEndpointInfo, WhipEndpointInfo,
 };
 use crate::whip_registry::WhipRegistry;
+use crate::whip_session_manager::WhipEndpointConfig;
 use gstreamer as gst;
 use strom_types::{BlockInstance, Link};
 use tracing::{debug, info};
@@ -23,12 +24,16 @@ pub struct ExpandedPipeline {
     pub links: Vec<Link>,
     /// Bus message handler connection functions from blocks
     pub bus_message_handlers: Vec<BusMessageConnectFn>,
+    /// Element signal setup functions from blocks
+    pub element_setups: Vec<ElementSetupFn>,
     /// Pad properties from blocks (element_id -> pad_name -> property_name -> value)
     pub pad_properties: HashMap<String, HashMap<String, HashMap<String, PropertyValue>>>,
     /// WHEP endpoints registered by blocks
     pub whep_endpoints: Vec<WhepEndpointInfo>,
     /// WHIP endpoints registered by blocks
     pub whip_endpoints: Vec<WhipEndpointInfo>,
+    /// WHIP endpoint configs for session manager registration
+    pub whip_endpoint_configs: Vec<(String, WhipEndpointConfig)>,
 }
 
 /// Expand block instances into GStreamer elements using BlockBuilder trait.
@@ -40,10 +45,14 @@ pub struct ExpandedPipeline {
 ///
 /// The `flow_id` is injected as a special `_flow_id` property for blocks that need it
 /// (e.g., InterOutput blocks use it to generate unique channel names).
+/// The `media_path` is injected as `_media_path` for blocks that resolve media files
+/// (e.g., MediaPlayer block).
+#[allow(clippy::too_many_arguments)]
 pub async fn expand_blocks(
     blocks: &[BlockInstance],
     regular_links: &[Link],
     flow_id: &strom_types::FlowId,
+    media_path: &std::path::Path,
     ice_servers: Vec<String>,
     ice_transport_policy: String,
     dynamic_webrtcbins: DynamicWebrtcbinStore,
@@ -65,6 +74,13 @@ pub async fn expand_blocks(
 
     debug!("Expanding {} block instance(s)", blocks.len());
 
+    // Canonicalize media_path once so all blocks get an absolute path,
+    // even if the config uses a relative path like "./strom-data/media".
+    let canonical_media = media_path
+        .canonicalize()
+        .unwrap_or_else(|_| media_path.to_path_buf());
+    let canonical_media_str = canonical_media.to_string_lossy().to_string();
+
     for block_instance in blocks {
         // Get builder for this block type
         let builder =
@@ -80,7 +96,7 @@ pub async fn expand_blocks(
             block_instance.id, block_instance.block_definition_id
         );
 
-        // Inject _flow_id and _block_id into properties for blocks that need them
+        // Inject _flow_id, _block_id, and _media_path into properties for blocks that need them
         let mut properties = block_instance.properties.clone();
         properties.insert(
             "_flow_id".to_string(),
@@ -89,6 +105,10 @@ pub async fn expand_blocks(
         properties.insert(
             "_block_id".to_string(),
             PropertyValue::String(block_instance.id.clone()),
+        );
+        properties.insert(
+            "_media_path".to_string(),
+            PropertyValue::String(canonical_media_str.clone()),
         );
 
         // Call the builder to create GStreamer elements
@@ -146,6 +166,15 @@ pub async fn expand_blocks(
         all_links.push(Link { from, to });
     }
 
+    // Collect element signal setup functions from context
+    let element_setups = ctx.take_element_setups();
+    if !element_setups.is_empty() {
+        debug!(
+            "Collected {} element signal setup(s) from blocks",
+            element_setups.len()
+        );
+    }
+
     // Collect WHEP endpoints from context
     let whep_endpoints = ctx.take_whep_endpoints();
     if !whep_endpoints.is_empty() {
@@ -162,17 +191,27 @@ pub async fn expand_blocks(
     if !whip_endpoints.is_empty() {
         for ep in &whip_endpoints {
             info!(
-                "Block {} registered WHIP endpoint: endpoint_id='{}', port={}",
-                ep.block_id, ep.endpoint_id, ep.internal_port
+                "Block {} registered WHIP endpoint: endpoint_id='{}' (port assigned per-session)",
+                ep.block_id, ep.endpoint_id
             );
         }
     }
 
+    // Collect WHIP endpoint configs for session manager
+    let whip_endpoint_configs = ctx.take_whip_endpoint_configs();
+    if !whip_endpoint_configs.is_empty() {
+        debug!(
+            "Collected {} WHIP endpoint config(s) for session manager",
+            whip_endpoint_configs.len()
+        );
+    }
+
     debug!(
-        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
+        "Block expansion complete: {} GStreamer elements, {} links, {} bus message handlers, {} element setups, {} elements with pad properties, {} WHEP endpoints, {} WHIP endpoints",
         gst_elements.len(),
         all_links.len(),
         bus_message_handlers.len(),
+        element_setups.len(),
         all_pad_properties.len(),
         whep_endpoints.len(),
         whip_endpoints.len()
@@ -182,9 +221,11 @@ pub async fn expand_blocks(
         gst_elements,
         links: all_links,
         bus_message_handlers,
+        element_setups,
         pad_properties: all_pad_properties,
         whep_endpoints,
         whip_endpoints,
+        whip_endpoint_configs,
     })
 }
 
@@ -304,6 +345,7 @@ mod tests {
             &[],
             &[],
             &flow_id,
+            std::path::Path::new("./media"),
             ice_servers,
             ice_transport_policy,
             dynamic_webrtcbins,

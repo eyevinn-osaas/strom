@@ -180,13 +180,16 @@ pub fn calculate_compact_height() -> f32 {
 pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, Option<u64>)> {
     let available_width = ui.available_width().max(100.0);
 
-    // Show current file name (if any)
+    // Show current file name (if any), truncated with hover for full path
     if let Some(ref file) = player_data.current_file {
         let filename = std::path::Path::new(file)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| file.clone());
-        ui.label(filename);
+        let label = egui::Label::new(filename)
+            .truncate()
+            .sense(egui::Sense::hover());
+        ui.add(label).on_hover_text(file);
     }
 
     // Show playback state and file count
@@ -199,22 +202,30 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
     let button_action = ui
         .horizontal(|ui| {
             // Playlist button
-            if ui.button("+").on_hover_text("Edit playlist").clicked() {
+            if ui
+                .button(egui_phosphor::regular::PLUS)
+                .on_hover_text("Edit playlist")
+                .clicked()
+            {
                 tracing::debug!("Playlist button clicked");
                 return Some(("playlist".to_string(), None));
             }
 
             // Previous button
-            if ui.button("|<").on_hover_text("Previous file").clicked() {
+            if ui
+                .button(egui_phosphor::regular::SKIP_BACK)
+                .on_hover_text("Previous file")
+                .clicked()
+            {
                 tracing::debug!("Previous button clicked");
                 return Some(("previous".to_string(), None));
             }
 
             // Play/Pause button
             let play_pause_text = if player_data.state == "playing" {
-                "||"
+                egui_phosphor::regular::PAUSE
             } else {
-                ">"
+                egui_phosphor::regular::PLAY
             };
             let play_hover = if player_data.state == "playing" {
                 "Pause"
@@ -235,7 +246,11 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
             }
 
             // Next button
-            if ui.button(">|").on_hover_text("Next file").clicked() {
+            if ui
+                .button(egui_phosphor::regular::SKIP_FORWARD)
+                .on_hover_text("Next file")
+                .clicked()
+            {
                 tracing::debug!("Next button clicked");
                 return Some(("next".to_string(), None));
             }
@@ -370,14 +385,17 @@ pub fn show_full(
 
     // Control buttons
     ui.horizontal(|ui| {
-        if ui.button("|< Prev").clicked() {
+        if ui
+            .button(format!("{} Prev", egui_phosphor::regular::SKIP_BACK))
+            .clicked()
+        {
             action = Some(("prev".to_string(), None));
         }
 
         let play_pause_text = if player_data.state == "playing" {
-            "|| Pause"
+            format!("{} Pause", egui_phosphor::regular::PAUSE)
         } else {
-            "> Play"
+            format!("{} Play", egui_phosphor::regular::PLAY)
         };
         if ui.button(play_pause_text).clicked() {
             if player_data.state == "playing" {
@@ -387,7 +405,10 @@ pub fn show_full(
             }
         }
 
-        if ui.button("Next >|").clicked() {
+        if ui
+            .button(format!("Next {}", egui_phosphor::regular::SKIP_FORWARD))
+            .clicked()
+        {
             action = Some(("next".to_string(), None));
         }
     });
@@ -456,6 +477,8 @@ pub struct PlaylistEditor {
     pub browser_needs_refresh: bool,
     /// Index of the currently playing file (for highlighting)
     pub current_playing_index: Option<usize>,
+    /// Width in pixels of the file browser left pane (draggable)
+    pub browser_width_px: f32,
 }
 
 impl PlaylistEditor {
@@ -472,6 +495,7 @@ impl PlaylistEditor {
             browser_loading: false,
             browser_needs_refresh: true, // Load on first show
             current_playing_index: None,
+            browser_width_px: 350.0,
         }
     }
 
@@ -521,22 +545,68 @@ impl PlaylistEditor {
             .default_width(600.0)
             .default_height(400.0)
             .resizable(true)
+            .vscroll(false)
+            .hscroll(false)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(format!("Block: {}", self.block_id));
-                });
-                ui.separator();
+                const DIVIDER_WIDTH: f32 = 6.0;
+                let left_width = self.browser_width_px.clamp(80.0, 800.0);
 
-                // Two columns: file browser on left, playlist on right
-                ui.columns(2, |columns| {
-                    // Left column: File browser
-                    columns[0].heading("Server Media Files");
-                    self.show_browser_panel(&mut columns[0]);
+                // StripBuilder cells don't grow with children — no feedback loop.
+                // clip(true) prevents content overflow from affecting the Resize container.
+                egui_extras::StripBuilder::new(ui)
+                    .size(egui_extras::Size::remainder())
+                    .clip(true)
+                    .vertical(|mut strip| {
+                        strip.cell(|ui| {
+                            egui_extras::StripBuilder::new(ui)
+                                .size(egui_extras::Size::exact(left_width))
+                                .size(egui_extras::Size::exact(DIVIDER_WIDTH))
+                                .size(egui_extras::Size::remainder().at_least(120.0))
+                                .clip(true)
+                                .horizontal(|mut strip| {
+                                    // Left pane — file browser
+                                    strip.cell(|ui| {
+                                        ui.heading("Server Media Files");
+                                        self.show_browser_panel(ui);
+                                    });
 
-                    // Right column: Playlist
-                    columns[1].heading("Playlist");
-                    self.show_playlist_panel(&mut columns[1], &mut result);
-                });
+                                    // Draggable divider
+                                    strip.cell(|ui| {
+                                        let rect = ui.available_rect_before_wrap();
+                                        let resp = ui.interact(
+                                            rect,
+                                            egui::Id::new("playlist_divider").with(&self.block_id),
+                                            egui::Sense::drag(),
+                                        );
+                                        let color = if resp.hovered() || resp.dragged() {
+                                            ui.ctx().set_cursor_icon(
+                                                egui::CursorIcon::ResizeHorizontal,
+                                            );
+                                            Color32::from_gray(120)
+                                        } else {
+                                            Color32::from_gray(60)
+                                        };
+                                        ui.painter().line_segment(
+                                            [rect.center_top(), rect.center_bottom()],
+                                            egui::Stroke::new(1.0, color),
+                                        );
+                                        if resp.dragged() {
+                                            if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                                                self.browser_width_px = (pos.x - rect.left()
+                                                    + left_width / 2.0)
+                                                    .clamp(80.0, 800.0);
+                                            }
+                                        }
+                                    });
+
+                                    // Right pane — playlist
+                                    strip.cell(|ui| {
+                                        ui.heading("Playlist");
+                                        self.show_playlist_panel(ui, &mut result);
+                                    });
+                                });
+                        });
+                    });
             });
 
         // Sync open state back
@@ -549,27 +619,37 @@ impl PlaylistEditor {
         // Path display and navigation
         ui.horizontal(|ui| {
             // Up button
-            if self.browser_parent.is_some() && ui.button("..").on_hover_text("Go up").clicked() {
+            if self.browser_parent.is_some()
+                && ui
+                    .button(egui_phosphor::regular::ARROW_BEND_UP_LEFT)
+                    .on_hover_text("Go up")
+                    .clicked()
+            {
                 self.browser_path = self.browser_parent.clone().unwrap_or_default();
                 self.browser_needs_refresh = true;
             }
             // Current path
             let path_display = if self.browser_path.is_empty() {
-                "./media/".to_string()
+                "media/".to_string()
             } else {
-                format!("./media/{}/", self.browser_path)
+                format!("media/{}/", self.browser_path)
             };
             ui.label(path_display);
 
             // Refresh button
-            if ui.button("⟳").on_hover_text("Refresh").clicked() {
+            if ui
+                .button(egui_phosphor::regular::ARROWS_CLOCKWISE)
+                .on_hover_text("Refresh")
+                .clicked()
+            {
                 self.browser_needs_refresh = true;
             }
         });
 
         ui.separator();
+        ui.label("Click a file to add it to the playlist.");
 
-        // File list
+        // File list (scroll area LAST so it fills the remaining cell height)
         if self.browser_loading {
             ui.spinner();
             ui.label("Loading...");
@@ -578,7 +658,8 @@ impl PlaylistEditor {
         } else {
             egui::ScrollArea::vertical()
                 .id_salt("media_browser_scroll")
-                .max_height(250.0)
+                .auto_shrink(false)
+                .max_height(ui.available_height())
                 .show(ui, |ui| {
                     let mut nav_to_folder: Option<String> = None;
                     let mut add_file: Option<String> = None;
@@ -588,7 +669,11 @@ impl PlaylistEditor {
                             if entry.is_dir {
                                 // Folder - click to navigate
                                 let folder_btn = ui
-                                    .button(format!("📁 {}", entry.name))
+                                    .button(format!(
+                                        "{} {}",
+                                        egui_phosphor::regular::FOLDER,
+                                        entry.name
+                                    ))
                                     .on_hover_text("Open folder");
                                 if folder_btn.clicked() {
                                     nav_to_folder = Some(entry.path.clone());
@@ -597,7 +682,11 @@ impl PlaylistEditor {
                                 // File - click to add to playlist
                                 let size_str = format_file_size(entry.size);
                                 let file_btn = ui
-                                    .button(format!("🎬 {}", entry.name))
+                                    .button(format!(
+                                        "{} {}",
+                                        egui_phosphor::regular::FILE_VIDEO,
+                                        entry.name
+                                    ))
                                     .on_hover_text(format!("Add to playlist ({})", size_str));
                                 if file_btn.clicked() {
                                     add_file = Some(entry.path.clone());
@@ -614,25 +703,52 @@ impl PlaylistEditor {
 
                     // Handle file add
                     if let Some(file_path) = add_file {
-                        // Convert relative path to file:// URI with absolute path
-                        let uri = format!("./media/{}", file_path);
-                        if !self.playlist.contains(&uri) {
-                            self.playlist.push(uri);
+                        // Store as path relative to media root; the backend resolves it
+                        if !self.playlist.contains(&file_path) {
+                            self.playlist.push(file_path);
                             self.dirty = true;
                         }
                     }
                 });
         }
-
-        ui.separator();
-        ui.label("Click a file to add it to the playlist.");
     }
 
     fn show_playlist_panel(&mut self, ui: &mut Ui, result: &mut Option<Vec<String>>) {
-        // Scrollable playlist
+        // Action buttons BEFORE scroll area so they don't overflow the cell
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!(
+                    "{} Save & Apply",
+                    egui_phosphor::regular::FLOPPY_DISK
+                ))
+                .clicked()
+            {
+                *result = Some(self.playlist.clone());
+                self.dirty = false;
+            }
+
+            if ui
+                .button(format!("{} Clear All", egui_phosphor::regular::TRASH))
+                .clicked()
+            {
+                self.playlist.clear();
+                self.dirty = true;
+            }
+
+            if self.dirty {
+                ui.label("*");
+            }
+        });
+        ui.separator();
+
+        if self.playlist.is_empty() {
+            ui.label("(empty - click files on the left or enter path above)");
+        }
+
+        // Scrollable playlist (LAST so it fills the remaining cell height)
         egui::ScrollArea::vertical()
             .id_salt("playlist_scroll")
-            .max_height(200.0)
+            .max_height(ui.available_height())
             .show(ui, |ui| {
                 let mut to_remove = None;
                 let mut to_move_up = None;
@@ -641,49 +757,63 @@ impl PlaylistEditor {
                 for (i, file) in self.playlist.iter().enumerate() {
                     let is_playing = self.current_playing_index == Some(i);
                     ui.horizontal(|ui| {
-                        // Playing indicator or index
+                        // Fixed-width left: playing indicator + index number
                         if is_playing {
-                            ui.colored_label(Color32::GREEN, ">");
+                            ui.colored_label(Color32::GREEN, egui_phosphor::regular::PLAY);
                         }
                         ui.label(format!("{}.", i + 1));
 
-                        // File name (truncated)
-                        let display_name = std::path::Path::new(file)
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| file.clone());
-                        if is_playing {
-                            ui.colored_label(Color32::GREEN, &display_name)
-                                .on_hover_text(file);
-                        } else {
-                            ui.label(&display_name).on_hover_text(file);
-                        }
-
+                        // Remaining space: buttons on the right, filename fills the middle
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Remove button
-                            if ui.button("X").on_hover_text("Remove").clicked() {
+                            // Buttons — added right-to-left (X is rightmost)
+                            if ui
+                                .button(egui_phosphor::regular::X)
+                                .on_hover_text("Remove")
+                                .clicked()
+                            {
                                 to_remove = Some(i);
                             }
 
-                            // Move down button
                             let can_move_down = i < self.playlist.len() - 1;
                             if ui
-                                .add_enabled(can_move_down, egui::Button::new("v"))
+                                .add_enabled(
+                                    can_move_down,
+                                    egui::Button::new(egui_phosphor::regular::ARROW_DOWN),
+                                )
                                 .on_hover_text("Move down")
                                 .clicked()
                             {
                                 to_move_down = Some(i);
                             }
 
-                            // Move up button
                             let can_move_up = i > 0;
                             if ui
-                                .add_enabled(can_move_up, egui::Button::new("^"))
+                                .add_enabled(
+                                    can_move_up,
+                                    egui::Button::new(egui_phosphor::regular::ARROW_UP),
+                                )
                                 .on_hover_text("Move up")
                                 .clicked()
                             {
                                 to_move_up = Some(i);
                             }
+
+                            // Filename fills the remaining space with truncation
+                            let display_name = std::path::Path::new(file)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| file.clone());
+                            let color = if is_playing {
+                                Color32::GREEN
+                            } else {
+                                ui.style().visuals.text_color()
+                            };
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&display_name).color(color))
+                                    .truncate()
+                                    .sense(egui::Sense::hover()),
+                            )
+                            .on_hover_text(file);
                         });
                     });
                 }
@@ -702,30 +832,6 @@ impl PlaylistEditor {
                     self.dirty = true;
                 }
             });
-
-        if self.playlist.is_empty() {
-            ui.label("(empty - click files on the left or enter path above)");
-        }
-
-        ui.add_space(10.0);
-        ui.separator();
-
-        // Action buttons
-        ui.horizontal(|ui| {
-            if ui.button("Save & Apply").clicked() {
-                *result = Some(self.playlist.clone());
-                self.dirty = false;
-            }
-
-            if ui.button("Clear All").clicked() {
-                self.playlist.clear();
-                self.dirty = true;
-            }
-
-            if self.dirty {
-                ui.label("*");
-            }
-        });
     }
 }
 

@@ -180,6 +180,7 @@ pkg-config               # For finding library paths
 ### 5. Install ARM64 Development Libraries
 
 ```bash
+libcairo2-dev:arm64
 libgstreamer1.0-dev:arm64
 libgstreamer-plugins-base1.0-dev:arm64
 libgstreamer-plugins-bad1.0-dev:arm64

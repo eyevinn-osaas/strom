@@ -5,18 +5,36 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
+/// OpenGL renderer information detected from GStreamer's GL context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct GlRendererInfo {
+    /// GL renderer string (e.g. "NVIDIA GeForce RTX 3080/PCIe/SSE2")
+    pub renderer: String,
+    /// GL version string (e.g. "4.6.0 NVIDIA 535.183.01")
+    pub version: String,
+    /// GL vendor string (e.g. "NVIDIA Corporation")
+    pub vendor: String,
+    /// GLSL version string (e.g. "4.60 NVIDIA")
+    pub glsl_version: String,
+}
+
 /// System monitoring statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SystemStats {
     /// CPU usage percentage (0-100)
     pub cpu_usage: f32,
+    /// Number of CPU cores available to this process (cgroup-aware)
+    pub num_cores: usize,
     /// Total system memory in bytes
     pub total_memory: u64,
     /// Used system memory in bytes
     pub used_memory: u64,
     /// GPU statistics (if available)
     pub gpu_stats: Vec<GpuStats>,
+    /// OpenGL renderer info from GStreamer (if available)
+    pub gl_renderer: Option<GlRendererInfo>,
     /// Timestamp of the measurement
     pub timestamp: i64,
 }

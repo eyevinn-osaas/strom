@@ -9,6 +9,7 @@
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::sync::OnceLock;
+use strom_types::GlRendererInfo;
 use tracing::{debug, info, warn};
 
 /// Video conversion mode based on detected GPU capabilities.
@@ -32,6 +33,9 @@ impl VideoConvertMode {
 
 /// Global detected video convert mode, set once at startup.
 static VIDEO_CONVERT_MODE: OnceLock<VideoConvertMode> = OnceLock::new();
+
+/// Global GL renderer info, probed once at startup.
+static GL_RENDERER_INFO: OnceLock<Option<GlRendererInfo>> = OnceLock::new();
 
 /// Get the detected video conversion mode.
 /// Panics if called before `detect_gpu_capabilities()`.
@@ -76,6 +80,125 @@ fn is_wsl() -> bool {
 //     }
 // }
 
+/// Get the detected GL renderer info (None if detection failed or not yet run).
+pub fn gl_renderer_info() -> Option<GlRendererInfo> {
+    GL_RENDERER_INFO.get().cloned().flatten()
+}
+
+/// Probe the OpenGL renderer via GStreamer's GL context API.
+///
+/// Creates a minimal in-process pipeline (`videotestsrc ! glupload ! appsink`),
+/// runs it to produce one buffer, extracts the `GstGLContext` from the GL memory,
+/// then queries `glGetString` on the GL thread via `thread_add`.
+fn detect_gl_renderer() -> Option<GlRendererInfo> {
+    use gstreamer_gl::prelude::*;
+    use std::ffi::CStr;
+
+    // GL constants
+    const GL_VENDOR: u32 = 0x1F00;
+    const GL_RENDERER: u32 = 0x1F01;
+    const GL_VERSION: u32 = 0x1F02;
+    const GL_SHADING_LANGUAGE_VERSION: u32 = 0x8B8C;
+
+    let pipeline = gst::parse::launch(
+        "videotestsrc num-buffers=1 ! video/x-raw,width=64,height=64 ! glupload ! appsink name=sink",
+    )
+    .map_err(|e| warn!("GL probe: failed to create pipeline: {}", e))
+    .ok()?;
+
+    let pipeline = pipeline.downcast::<gst::Pipeline>().ok()?;
+
+    let sink = pipeline
+        .by_name("sink")
+        .and_then(|e| e.downcast::<gstreamer_app::AppSink>().ok())?;
+
+    pipeline
+        .set_state(gst::State::Playing)
+        .map_err(|e| warn!("GL probe: failed to start pipeline: {}", e))
+        .ok()?;
+
+    // Pull one buffer to ensure the GL context has been created (timeout avoids
+    // hanging on headless systems without a display server)
+    let sample = sink.try_pull_sample(gst::ClockTime::from_seconds(5));
+    if sample.is_none() {
+        debug!("GL probe: no sample received within timeout (GL context may not be available)");
+    }
+    let gl_context = sample.as_ref().and_then(|s| {
+        let buffer = s.buffer()?;
+        let mem = (buffer.n_memory() > 0).then(|| buffer.peek_memory(0))?;
+        let gl_mem = mem.downcast_memory_ref::<gstreamer_gl::GLBaseMemory>()?;
+        Some(gl_mem.context().clone())
+    });
+
+    // Tear down pipeline regardless of result
+    let _ = pipeline.set_state(gst::State::Null);
+
+    let gl_context = match gl_context {
+        Some(ctx) => ctx,
+        None => {
+            debug!("GL probe: could not extract GL context from buffer");
+            return None;
+        }
+    };
+
+    // Query GL strings on the GL thread
+    let (renderer, version, vendor, glsl_version) = {
+        let result =
+            std::sync::Mutex::new((String::new(), String::new(), String::new(), String::new()));
+
+        gl_context.thread_add(|ctx| {
+            // glGetString function pointer from the GL context
+            type GlGetString = unsafe extern "system" fn(u32) -> *const u8;
+            let get_string_ptr = ctx.proc_address("glGetString");
+            if get_string_ptr == 0 {
+                return;
+            }
+            let get_string: GlGetString = unsafe { std::mem::transmute(get_string_ptr) };
+
+            let read_str = |name: u32| -> String {
+                let ptr = unsafe { get_string(name) };
+                if ptr.is_null() {
+                    String::new()
+                } else {
+                    unsafe { CStr::from_ptr(ptr as *const _) }
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            };
+
+            if let Ok(mut r) = result.lock() {
+                *r = (
+                    read_str(GL_RENDERER),
+                    read_str(GL_VERSION),
+                    read_str(GL_VENDOR),
+                    read_str(GL_SHADING_LANGUAGE_VERSION),
+                );
+            }
+        });
+
+        result.into_inner().unwrap_or_default()
+    };
+
+    if renderer.is_empty() {
+        debug!("GL probe: glGetString returned empty strings");
+        return None;
+    }
+
+    let gl_info = GlRendererInfo {
+        renderer,
+        version,
+        vendor,
+        glsl_version,
+    };
+
+    info!(
+        "GL renderer: {} ({}), GL {}, GLSL {}",
+        gl_info.renderer, gl_info.vendor, gl_info.version, gl_info.glsl_version
+    );
+
+    Some(gl_info)
+}
+
 /// Detect GPU capabilities and set the global video conversion mode.
 /// This should be called once at startup after GStreamer is initialized.
 ///
@@ -84,6 +207,10 @@ fn is_wsl() -> bool {
 /// 2. If cudadownload element is unavailable, use software mode
 /// 3. Test GL→CUDA interop with a fast pipeline (no nvenc initialization)
 pub fn detect_gpu_capabilities() -> VideoConvertMode {
+    // Probe GL renderer info early (best-effort, independent of CUDA-GL interop)
+    let gl_info = detect_gl_renderer();
+    let _ = GL_RENDERER_INFO.set(gl_info);
+
     // Fast path: WSL has broken CUDA-GL interop, skip expensive test
     if is_wsl() {
         info!("WSL detected - using software video conversion (CUDA-GL interop unsupported)");

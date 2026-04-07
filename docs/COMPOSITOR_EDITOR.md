@@ -57,7 +57,7 @@ A visual, interactive layout editor for the `glcompositor` block that allows dra
 ### 3. API Integration (`frontend/src/api.rs`)
 - `get_pad_properties()` - Fetch current mixer pad properties
 - `update_pad_property()` - Update a single pad property
-- `get_compositor_thumbnail()` - Fetch thumbnail for compositor input
+- `get_block_thumbnail()` - Fetch thumbnail for a block (compositor input index via `index` param)
 - `animate_compositor_input()` - Trigger animated layout change
 - `start_compositor_transition()` - Start scene transition between inputs
 

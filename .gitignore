@@ -26,11 +26,17 @@ config.toml
 .DS_Store
 Thumbs.db
 
+docker-compose.yml
+
 # other
 /*.sh
 /notes.txt
 /media
 /.mcp.json
 *.pem
+strom-data
 
 whip-iterate-instructions.md
+
+# OpenAPI snapshot test diff artifact
+backend/tests/openapi_snapshot.json.new

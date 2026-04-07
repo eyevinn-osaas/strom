@@ -721,6 +721,7 @@ fn ndi_input_definition() -> BlockDefinition {
                     property_name: "ndi_name".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "url_address".to_string(),
@@ -733,6 +734,7 @@ fn ndi_input_definition() -> BlockDefinition {
                     property_name: "url_address".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "mode".to_string(),
@@ -747,6 +749,7 @@ fn ndi_input_definition() -> BlockDefinition {
                     property_name: "mode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "bandwidth".to_string(),
@@ -761,6 +764,7 @@ fn ndi_input_definition() -> BlockDefinition {
                     property_name: "bandwidth".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "timeout_ms".to_string(),
@@ -773,6 +777,7 @@ fn ndi_input_definition() -> BlockDefinition {
                     property_name: "timeout_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "connect_timeout_ms".to_string(),
@@ -787,6 +792,7 @@ fn ndi_input_definition() -> BlockDefinition {
                     property_name: "connect_timeout_ms".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -841,6 +847,7 @@ fn ndi_output_definition() -> BlockDefinition {
                     property_name: "ndi_name".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "mode".to_string(),
@@ -855,6 +862,7 @@ fn ndi_output_definition() -> BlockDefinition {
                     property_name: "mode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {

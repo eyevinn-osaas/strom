@@ -29,9 +29,10 @@ struct TimestampedMeterData {
     updated_at: Instant,
 }
 
-/// Key for identifying meter data (flow + element).
+/// Key for identifying block data by flow and element ID.
+/// Shared across meter, loudness, spectrum, and latency data stores.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct MeterKey {
+pub struct BlockDataKey {
     pub flow_id: FlowId,
     pub element_id: String,
 }
@@ -39,7 +40,7 @@ pub struct MeterKey {
 /// Storage for all meter data in the application.
 #[derive(Debug, Clone, Default)]
 pub struct MeterDataStore {
-    data: HashMap<MeterKey, TimestampedMeterData>,
+    data: HashMap<BlockDataKey, TimestampedMeterData>,
 }
 
 impl MeterDataStore {
@@ -51,7 +52,7 @@ impl MeterDataStore {
 
     /// Update meter data for a specific element.
     pub fn update(&mut self, flow_id: FlowId, element_id: String, data: MeterData) {
-        let key = MeterKey {
+        let key = BlockDataKey {
             flow_id,
             element_id,
         };
@@ -67,7 +68,7 @@ impl MeterDataStore {
     /// Get meter data for a specific element.
     /// Returns None if the data is stale (older than TTL).
     pub fn get(&self, flow_id: &FlowId, element_id: &str) -> Option<&MeterData> {
-        let key = MeterKey {
+        let key = BlockDataKey {
             flow_id: *flow_id,
             element_id: element_id.to_string(),
         };
@@ -541,14 +542,15 @@ pub fn show_full(ui: &mut Ui, meter_data: &MeterData) {
                     egui::epaint::StrokeKind::Inside,
                 );
 
-                // dB value below
-                if response.hovered() {
-                    ui.label(format!("RMS: {:.1}", rms));
-                    ui.label(format!("Peak: {:.1}", peak));
-                    ui.label(format!("Decay: {:.1}", decay));
-                } else {
-                    ui.label(format!("{:.1}", peak));
-                }
+                // dB value below, detailed info on hover
+                ui.label(format!("{:.1}", peak));
+                response.on_hover_text(format!(
+                    "Ch {}\nRMS: {:.1} dB\nPeak: {:.1} dB\nDecay: {:.1} dB",
+                    i + 1,
+                    rms,
+                    peak,
+                    decay
+                ));
             });
         }
     });

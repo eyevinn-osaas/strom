@@ -322,17 +322,24 @@ impl PipelineManager {
             self.pending_links.len()
         );
 
-        // Clone what we need for the closures
-        let elements_map = self.elements.clone();
+        // Build weak ref maps for the closures to avoid circular references.
+        // Strong refs to pipeline/elements inside pad-added closures would prevent
+        // the pipeline from ever being finalized (elements own the closures via
+        // signal handlers, and the closures would own the pipeline).
+        let elements_weak: std::collections::HashMap<String, gst::glib::WeakRef<gst::Element>> =
+            self.elements
+                .iter()
+                .map(|(name, elem)| (name.clone(), elem.downgrade()))
+                .collect();
         let pending_links = self.pending_links.clone();
-        let pipeline = self.pipeline.clone();
+        let pipeline_weak: gst::glib::WeakRef<gst::Pipeline> = self.pipeline.downgrade();
         let dynamic_pad_tees = self.dynamic_pad_tees.clone();
 
         for (element_id, element) in &self.elements {
             let element_id = element_id.clone();
-            let elements_map = elements_map.clone();
+            let elements_weak = elements_weak.clone();
             let pending_links = pending_links.clone();
-            let pipeline = pipeline.clone();
+            let pipeline_weak = pipeline_weak.clone();
             let dynamic_pad_tees = dynamic_pad_tees.clone();
 
             // Connect to pad-added signal
@@ -375,9 +382,16 @@ impl PipelineManager {
                                         expected_pad_name, new_pad_name, element_id
                                     );
                                 }
-                                // This is the source pad we're waiting for
+                                // Upgrade weak refs to get the elements
+                                let sink_elem: Option<gst::Element> = elements_weak
+                                    .get(to_elem)
+                                    .and_then(gst::glib::WeakRef::upgrade);
+                                let src_elem: Option<gst::Element> = elements_weak
+                                    .get(from_elem)
+                                    .and_then(gst::glib::WeakRef::upgrade);
+
                                 if let (Some(_src_elem), Some(sink_elem)) =
-                                    (elements_map.get(from_elem), elements_map.get(to_elem))
+                                    (src_elem, sink_elem)
                                 {
                                     if let Some(sink_pad_name) = to_pad {
                                         // Get the sink pad
@@ -421,8 +435,21 @@ impl PipelineManager {
                 }
 
                 // If no pending link matched this pad, auto-attach a tee with allow-not-linked=true
-                // This prevents unlinked dynamic pads from blocking the pipeline
-                if !found_link && new_pad.peer().is_none() {
+                // This prevents unlinked dynamic pads from blocking the pipeline.
+                // Skip elements that already have allow-not-linked=true (e.g. thumbnail tees) —
+                // they handle unlinked pads themselves and may get pads requested later at runtime.
+                let Some(pipeline) = pipeline_weak.upgrade() else {
+                    return;
+                };
+                let is_allow_not_linked = {
+                    if let Some(elem) = pipeline.by_name(&element_id) {
+                        elem.has_property("allow-not-linked")
+                            && elem.property::<bool>("allow-not-linked")
+                    } else {
+                        false
+                    }
+                };
+                if !found_link && new_pad.peer().is_none() && !is_allow_not_linked {
                     let tee_name = format!("{}_{}_autotee", element_id, new_pad_name);
                     info!(
                         "Auto-creating tee '{}' for unlinked dynamic pad {}:{}",

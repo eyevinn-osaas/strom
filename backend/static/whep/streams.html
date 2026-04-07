@@ -103,15 +103,16 @@
 
             noStreams.style.display = 'none';
 
-            // Sort streams by endpoint_id
-            streams.sort((a, b) => a.endpoint_id.localeCompare(b.endpoint_id));
+            // Sort streams by endpoint_id (natural/numeric order)
+            streams.sort((a, b) => a.endpoint_id.localeCompare(b.endpoint_id, undefined, { numeric: true }));
 
+            // Rebuild DOM order to match sorted order
             streams.forEach(stream => {
                 let card = document.getElementById('card-' + stream.endpoint_id);
                 if (!card) {
                     card = createStreamCard(stream);
-                    grid.appendChild(card);
                 }
+                grid.appendChild(card);
             });
 
             const cards = grid.querySelectorAll('.stream-card');

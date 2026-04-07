@@ -13,14 +13,43 @@
 - Do not add emojis to log macros (`info!`, `debug!`, `trace!`, `warn!`, `error!`)
 - If you find emojis in existing log rows, remove them. Emojis in UI icons are OK.
 
+## GStreamer Pad Probes
+- BUFFER probes fire on **every single buffer** in the pipeline — they are the hottest path in GStreamer. Never add a BUFFER probe without careful consideration.
+- Inside a BUFFER probe callback: no Mutex locks, no heap allocations, no string formatting, no system calls. Use atomics and pre-computed values instead.
+- Prefer `Instant::now()` over `SystemTime::now()` (Instant uses the vDSO fast path on Linux).
+- For rate-limiting inside a BUFFER probe, use `AtomicU64` with `Instant`-based epoch offsets rather than `Mutex<Instant>`.
+- EVENT_DOWNSTREAM probes (for caps detection, one-time setup) are fine — they fire infrequently.
+- When reviewing or adding a probe, always ask: "Does this fire per-buffer or per-event?" and treat per-buffer probes as performance-critical code.
+
+## GStreamer Object References in Closures
+- **NEVER capture a strong reference (`clone()`) to a `gst::Pipeline`, `gst::Element`, or `gst::Bin` inside a signal handler closure** (e.g. `connect_pad_added`, `connect_element_added`, `connect("deep-element-added", ...)`). Elements own their signal handlers — capturing the pipeline or sibling elements creates a circular reference that prevents GStreamer from ever finalizing the pipeline. All OS resources (UDP sockets, threads, file descriptors) will leak on every pipeline restart.
+- Use `WeakRef` (`ObjectExt::downgrade()`) instead, and `upgrade()` inside the closure. If upgrade returns `None`, the pipeline is already torn down — just return early.
+- This also applies to `HashMap<String, gst::Element>` maps — never clone and capture the map; build a `HashMap<String, WeakRef<gst::Element>>` instead.
+- The regression test `pipeline_lifecycle_test.rs` catches these leaks — it must always pass.
+- `stop_flow()` in `state.rs` logs `ERROR` at runtime if a pipeline survives after drop — treat these as P0 bugs.
+
+## GStreamer Queues
+- Leave `queue`, `queue2`, and `multiqueue` elements with default property values unless there is a documented latency requirement that justifies overriding them.
+
 ## Code Organization
 - When working in or near a file that exceeds 1500 lines, proactively suggest splitting it into focused sub-modules (following the pattern used for `pipeline.rs` and `app.rs`)
 - Each sub-module should have a single clear responsibility (e.g. construction, lifecycle, linking, properties)
 - Check for large files with: `find backend/src frontend/src -name "*.rs" | xargs wc -l | sort -rn | head -20`
-- Shared types (structs, enums), default values, and constants used by both frontend and backend must be defined in `strom-types`. Never duplicate these across crates. If you find a duplicate, move it to `strom-types`.
+
+## Shared Types (`strom-types`)
+- Before defining a new struct, enum, constant, or default value — always check if it already exists in `strom-types`. All new API-visible or shared types must be placed in `strom-types`, never directly in the backend. If you find a duplicate, move it to `strom-types`.
+- `strom-types` must not depend on the backend, GStreamer crates, or other internal crates — only pure utility crates such as `serde` and `uuid`.
+
+## API Contract
+- Every new endpoint must have a `#[utoipa::path(...)]` annotation AND be registered in `openapi.rs`. Both are required — an annotation without registration does not appear in the schema.
+- After changes to API types or endpoints, run the snapshot test (`cargo test --test openapi_test`). If it fails, update `openapi.json` in the repo root intentionally — do not silently let the schema drift.
+
+## WebSocket Contract
+- Any type referenced by a new `StromEvent` variant must have a `ToSchema` annotation (`#[cfg_attr(feature = "openapi", derive(ToSchema))]`). If the variant introduces new inner types, those need `ToSchema` too.
+- Never modify an existing `StromEvent` variant (rename, change fields, remove) without treating it as an intentional breaking change.
 
 ## Dead Code
-- Never use blanket `#![allow(dead_code)]`. Each case must be handled individually.
+- Never use blanket `#![allow(dead_code)]`. Each case must be handled individually. Never use `#[allow(dead_code)]` in `strom-types`.
 - For target-specific code (e.g. only used in WASM or only in native), use `#[cfg(target_arch = "wasm32")]` or `#[cfg(not(target_arch = "wasm32"))]` — not `#[allow(dead_code)]`.
 - `#[allow(dead_code)]` is acceptable only for serde deserialization fields or event data fields that mirror the backend but are not yet displayed in the UI.
 

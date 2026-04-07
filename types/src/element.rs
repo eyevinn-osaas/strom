@@ -24,6 +24,7 @@ pub struct Element {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub pad_properties: HashMap<String, HashMap<String, PropertyValue>>,
     /// Display position in the visual editor (x, y)
+    #[cfg_attr(feature = "openapi", schema(value_type = [f32]))]
     pub position: (f32, f32),
 }
 

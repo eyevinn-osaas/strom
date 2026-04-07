@@ -37,6 +37,7 @@ Run this service in the cloud with a single click.
 - **Native or Web** - Run as desktop app or web service
 - **MCP Integration** - Control pipelines with AI assistants (Claude, etc.)
 - **CI/CD** - Automated testing, building, and releases for Linux, Windows, macOS, and ARM64
+- **Vision Mixer** - Broadcast-style PVW/PGM video switcher with web control UI
 - **HTML Rendering** - Render web pages as video sources using CEF (via `strom-full` Docker image)
 
 ### Advanced Capabilities
@@ -111,7 +112,8 @@ sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-  gstreamer1.0-tools libnice-dev gstreamer1.0-nice graphviz
+  gstreamer1.0-tools libnice-dev gstreamer1.0-nice \
+  libcairo2-dev graphviz
 
 # Install GStreamer (macOS)
 brew install gstreamer gst-plugins-base libnice-gstreamer
@@ -121,6 +123,21 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 rustup target add wasm32-unknown-unknown
 cargo install trunk
 ```
+
+#### Optional Features
+
+| Feature | Description | Extra dependencies |
+|---------|-------------|-------------------|
+| `nvidia` | NVIDIA GPU monitoring (default) | None |
+| `efp` | EFP/SRT input and output blocks | `cmake`, `libclang-dev` (Linux) |
+
+```bash
+# Build with EFP support (Linux)
+sudo apt install cmake libclang-dev
+cargo run --release --features efp
+```
+
+EFP support is currently Linux-only. Pre-built Linux releases and Docker images include EFP by default.
 
 #### Run
 
@@ -155,7 +172,7 @@ Pre-built multi-architecture images (amd64/arm64):
 
 ```bash
 docker pull eyevinntechnology/strom:latest
-docker pull eyevinntechnology/strom:0.3.22  # Specific version
+docker pull eyevinntechnology/strom:0.3.25  # Specific version
 
 # Extended image with HTML rendering support (CEF/Chromium)
 docker pull eyevinntechnology/strom-full:latest
@@ -284,6 +301,9 @@ Create reusable components from element groups:
 - **Media Player** - File and playlist playback with position tracking, loop support, and decode/passthrough modes
 - **AES67 Input** - Receives AES67/Ravenna audio via RTP multicast using SDP
 - **WHEP Input** - Receives audio/video via WebRTC WHEP protocol
+- **WHIP Input** - Hosts a WHIP server for browser/encoder ingest
+- **MPEG-TS/SRT Input** - Receives MPEG Transport Stream over SRT with decode or passthrough modes
+- **EFP/SRT Input** - Receives EFP (Elastic Frame Protocol) over SRT with decode or passthrough modes *(Linux only, requires `efp` feature)*
 - **DeckLink Video/Audio Input** - Captures from Blackmagic DeckLink SDI/HDMI cards
 - **NDI Input** - Receives video/audio via NewTek NDI protocol
 - **Inter Input** - Subscribes to streams from other flows (inter-pipeline routing)
@@ -293,9 +313,11 @@ Create reusable components from element groups:
 - **WHIP Output** - Sends audio via WebRTC WHIP protocol
 - **WHEP Output** - Serves audio/video streams via WebRTC WHEP with built-in player pages
 - **MPEG-TS/SRT Output** - Muxes audio/video to MPEG Transport Stream over SRT
+- **EFP/SRT Output** - Muxes audio/video to EFP over SRT *(Linux only, requires `efp` feature)*
 - **DeckLink Video/Audio Output** - Outputs to Blackmagic DeckLink SDI/HDMI cards
 - **NDI Output** - Sends video/audio via NewTek NDI protocol
 - **Inter Output** - Publishes streams for other flows to consume
+- **Recorder** - Writes audio/video streams to file with configurable segmentation and auto-stop
 
 **Processing:**
 - **Audio Mixer** - Digital mixing console with up to 32 input channels, per-channel processing (gain, gate, compressor, EQ, pan, fader, mute), auxiliary sends, groups, PFL bus, and main stereo bus with metering
@@ -304,10 +326,14 @@ Create reusable components from element groups:
 - **Video Format** - Resolution, framerate, and pixel format conversion
 - **Audio Format** - Sample rate, channels, and PCM format conversion (supports surround sound)
 - **Video Compositor** - Multi-input compositing with GPU (OpenGL) and CPU backends
+- **Vision Mixer** - Broadcast-style PVW/PGM video switcher with CUT/AUTO transitions, DSK overlays, fade-to-black, multiview output, and web control UI
 
 **Analysis:**
 - **Audio Meter** - RMS and peak level monitoring per channel
 - **Audio Latency** - Measures audio round-trip latency using GStreamer's audiolatency element
+- **Loudness Meter** - EBU R128 real-time integrated loudness, LRA, and true-peak measurement
+- **Spectrum Analyzer** - Real-time audio frequency spectrum visualization
+- **Audio Analyzer** - Real-time waveform and vectorscope visualization
 
 Custom blocks can also be created via JSON or API.
 

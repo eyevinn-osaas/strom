@@ -32,9 +32,23 @@ impl WhipRegistry {
     }
 
     /// Register an endpoint with its internal port and stream mode.
-    pub async fn register(&self, endpoint_id: String, port: u16, mode: WhepStreamMode) {
+    ///
+    /// Returns an error if an endpoint with the same ID is already registered.
+    pub async fn register(
+        &self,
+        endpoint_id: String,
+        port: u16,
+        mode: WhepStreamMode,
+    ) -> Result<(), String> {
         let mut map = self.inner.write().await;
+        if map.contains_key(&endpoint_id) {
+            return Err(format!(
+                "WHIP endpoint '{}' is already registered by another flow",
+                endpoint_id
+            ));
+        }
         map.insert(endpoint_id, WhipEndpointEntry { port, mode });
+        Ok(())
     }
 
     /// Unregister an endpoint.

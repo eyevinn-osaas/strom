@@ -1,10 +1,10 @@
 //! Types for AES67 stream discovery (SAP/mDNS).
 
-use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::time::{Duration, Instant};
 use strom_types::FlowId;
-use utoipa::ToSchema;
+
+pub use strom_types::discovery::DiscoveredStreamResponse;
 
 /// Default TTL for discovered streams (5 minutes per RFC 2974).
 pub const DEFAULT_STREAM_TTL: Duration = Duration::from_secs(300);
@@ -102,26 +102,6 @@ impl DiscoveredStream {
             received_on_interface: self.received_on_interface.clone(),
         }
     }
-}
-
-/// API response for a discovered stream.
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct DiscoveredStreamResponse {
-    pub id: String,
-    pub name: String,
-    pub source: String,
-    pub multicast_address: String,
-    pub port: u16,
-    pub channels: u8,
-    pub sample_rate: u32,
-    pub encoding: String,
-    pub origin_host: String,
-    pub first_seen_secs_ago: u64,
-    pub last_seen_secs_ago: u64,
-    pub ttl_secs: u64,
-    /// Network interface the stream was discovered on (for SAP).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub received_on_interface: Option<String>,
 }
 
 /// How a stream was discovered.

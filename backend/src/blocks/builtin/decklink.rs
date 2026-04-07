@@ -491,6 +491,7 @@ fn decklink_video_input_definition() -> BlockDefinition {
                     property_name: "device_number".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "mode".to_string(),
@@ -505,6 +506,7 @@ fn decklink_video_input_definition() -> BlockDefinition {
                     property_name: "mode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "connection".to_string(),
@@ -544,6 +546,7 @@ fn decklink_video_input_definition() -> BlockDefinition {
                     property_name: "connection".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -586,6 +589,7 @@ fn decklink_audio_input_definition() -> BlockDefinition {
                     property_name: "device_number".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "connection".to_string(),
@@ -617,6 +621,7 @@ fn decklink_audio_input_definition() -> BlockDefinition {
                     property_name: "connection".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "channels".to_string(),
@@ -648,6 +653,7 @@ fn decklink_audio_input_definition() -> BlockDefinition {
                     property_name: "channels".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -691,6 +697,7 @@ fn decklink_video_output_definition() -> BlockDefinition {
                     property_name: "device_number".to_string(),
                     transform: None,
                 },
+                live: false,
             },
             ExposedProperty {
                 name: "mode".to_string(),
@@ -705,6 +712,7 @@ fn decklink_video_output_definition() -> BlockDefinition {
                     property_name: "mode".to_string(),
                     transform: None,
                 },
+                live: false,
             },
         ],
         external_pads: ExternalPads {
@@ -746,6 +754,7 @@ fn decklink_audio_output_definition() -> BlockDefinition {
                 property_name: "device_number".to_string(),
                 transform: None,
             },
+            live: false,
         }],
         external_pads: ExternalPads {
             inputs: vec![ExternalPad {

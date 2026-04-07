@@ -48,6 +48,8 @@ ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     pkg-config \
+    cmake \
+    libclang-dev \
     curl \
     xz-utils \
     build-essential \
@@ -87,18 +89,24 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     # Install ARM64 GStreamer development libraries
     apt-get install -y --no-install-recommends \
         libssl-dev:arm64 \
+        libcairo2-dev:arm64 \
         libglib2.0-dev:arm64 \
         libgstreamer1.0-dev:arm64 \
         libgstreamer-plugins-base1.0-dev:arm64 \
-        libgstreamer-plugins-bad1.0-dev:arm64 && \
+        libgstreamer-plugins-bad1.0-dev:arm64 \
+        cmake \
+        libclang-dev && \
     rm -rf /var/lib/apt/lists/*; \
 else \
     echo "==> Native build for $TARGETPLATFORM - Installing native GStreamer libs"; \
     apt-get update && apt-get install -y \
         libssl-dev \
+        libcairo2-dev \
         libgstreamer1.0-dev \
         libgstreamer-plugins-base1.0-dev \
-        libgstreamer-plugins-bad1.0-dev && \
+        libgstreamer-plugins-bad1.0-dev \
+        cmake \
+        libclang-dev && \
     rm -rf /var/lib/apt/lists/*; \
 fi
 
@@ -127,7 +135,7 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     export CMAKE_C_FLAGS="-std=gnu17" && \
     export CMAKE_CXX_FLAGS="-std=gnu++17" && \
     export RUSTFLAGS="-L /usr/lib/aarch64-linux-gnu" && \
-    cargo zigbuild --release --package strom --no-default-features --features no-gui --target aarch64-unknown-linux-gnu.2.36 && \
+    cargo zigbuild --release --package strom --no-default-features --features no-gui,efp --target aarch64-unknown-linux-gnu.2.36 && \
     cargo zigbuild --release --package strom-mcp-server --target aarch64-unknown-linux-gnu.2.36 && \
     # Move binaries to expected location (cargo-zigbuild puts them in target/aarch64-unknown-linux-gnu/release)
     mkdir -p target/release && \
@@ -135,7 +143,7 @@ RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ];
     cp target/aarch64-unknown-linux-gnu/release/strom-mcp-server target/release/strom-mcp-server; \
 else \
     echo "==> Native build for $TARGETPLATFORM"; \
-    cargo build --release --package strom --features no-gui && \
+    cargo build --release --package strom --features no-gui,efp && \
     cargo build --release --package strom-mcp-server; \
 fi
 
@@ -171,6 +179,8 @@ RUN apt-get update && apt-get install -y \
         libgl1-mesa-dri \
         graphviz \
         ca-certificates \
+        dbus \
+        avahi-daemon \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled binaries from backend-builder to /app
@@ -205,8 +215,12 @@ RUN mkdir -p /usr/share/glvnd/egl_vendor.d && \
 # Create data directory for persistent storage
 RUN mkdir -p /data
 
+# Copy entrypoint script that starts dbus/avahi for NDI discovery
+COPY docker/strom/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Expose the server port
 EXPOSE 8080
 
-# Run the server from /app
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/app/strom"]

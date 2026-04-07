@@ -13,9 +13,9 @@ use axum::{
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
-use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+pub mod affinity_manager;
 pub mod api;
 pub mod assets;
 pub mod auth;
@@ -26,6 +26,7 @@ pub mod events;
 pub mod gpu;
 pub mod gst;
 pub mod gui;
+pub mod json_rejection;
 pub mod layout;
 pub mod mcp;
 pub mod network;
@@ -43,6 +44,7 @@ pub mod tls;
 pub mod version;
 pub mod whep_registry;
 pub mod whip_registry;
+pub mod whip_session_manager;
 
 use state::AppState;
 
@@ -113,6 +115,7 @@ pub async fn create_app_with_config(
         .route("/flows/{id}/rtp-stats", get(api::flows::get_flow_rtp_stats))
         .route("/flows/{id}/debug", get(api::flows::get_flow_debug_info))
         .route("/flows/{id}/debug-graph", get(api::flows::debug_graph))
+        .route("/flows/{id}/pad-caps", get(api::flows::get_flow_pad_caps))
         .route(
             "/flows/{id}/dynamic-pads",
             get(api::flows::get_dynamic_pads),
@@ -146,16 +149,55 @@ pub async fn create_app_with_config(
             patch(api::flows::update_pad_property),
         )
         .route(
+            "/flows/{flow_id}/blocks/{block_id}/loudness/reset",
+            post(api::flows::reset_loudness),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/recorder/split",
+            post(api::flows::recorder_split_now),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/transition",
             post(api::flows::trigger_transition),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/preview",
+            post(api::flows::select_preview),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/overlay-alpha",
+            post(api::flows::set_overlay_alpha),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/dsk",
+            post(api::flows::toggle_dsk),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/background",
+            post(api::flows::set_background),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/ftb",
+            post(api::flows::fade_to_black),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/multiview-endpoint",
+            get(api::vision_mixer_page::get_multiview_endpoint),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/animate",
             post(api::flows::animate_input),
         )
         .route(
-            "/flows/{id}/compositor/{block_id}/thumbnail/{input_idx}",
-            get(api::flows::get_compositor_thumbnail),
+            "/flows/{id}/blocks/{block_id}/thumbnail",
+            get(api::flows::get_block_thumbnail),
+        )
+        // Buffer age probes
+        .route("/flows/{id}/probes", post(api::probes::activate_probe))
+        .route("/flows/{id}/probes", get(api::probes::list_probes))
+        .route(
+            "/flows/{id}/probes/{probe_id}",
+            delete(api::probes::deactivate_probe),
         )
         .route("/elements", get(api::elements::list_elements))
         .route("/elements/{name}", get(api::elements::get_element_info))
@@ -280,6 +322,10 @@ pub async fn create_app_with_config(
         .route("/whep", get(api::whep_player::whep_player))
         .route("/whep-streams", get(api::whep_player::whep_streams_page))
         .route("/whip-ingest", get(api::whip_ingest::whip_ingest_page))
+        .route(
+            "/vision-mixer/{flow_id}",
+            get(api::vision_mixer_page::vision_mixer_page),
+        )
         .with_state(state.clone());
 
     // WHEP proxy routes - outside /api (acts as WHEP server endpoint)
@@ -380,9 +426,7 @@ pub async fn create_app_with_config(
 
     // Build Swagger UI router behind authentication
     let swagger_router = Router::new()
-        .merge(
-            SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::ApiDoc::openapi()),
-        )
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", openapi::openapi_spec()))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(auth_config));
 

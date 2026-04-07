@@ -17,10 +17,11 @@ pub struct EnumValue {
 }
 
 /// Property type enumeration for exposed properties
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum PropertyType {
+    #[default]
     String,
     Multiline,
     Int,
@@ -68,7 +69,7 @@ pub struct BlockDefinition {
 }
 
 /// Property exposed by a block to the outside
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ExposedProperty {
     /// Name of the exposed property (used as key)
@@ -89,10 +90,15 @@ pub struct ExposedProperty {
 
     /// Mapping to internal element property
     pub mapping: PropertyMapping,
+
+    /// Whether this property updates the pipeline in real-time without requiring a flow save.
+    /// Live properties show a LIVE badge in the UI and send updates directly to running elements.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
 }
 
 /// Maps an exposed property to one or more internal element properties
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PropertyMapping {
     /// Which internal element's property to set
@@ -301,6 +307,27 @@ pub const DEFAULT_SRT_INPUT_URI: &str = "srt://127.0.0.1:5000?mode=caller";
 /// Default SRT latency in milliseconds.
 pub const DEFAULT_SRT_LATENCY_MS: i32 = 125;
 
+/// Default MTU for EFP fragmentation (bytes).
+pub const DEFAULT_EFP_MTU: u32 = 1400;
+
+/// Default EFP bucket timeout (units of 10ms).
+pub const DEFAULT_EFP_BUCKET_TIMEOUT: u32 = 5;
+
+/// Default EFP head-of-line timeout (units of 10ms).
+pub const DEFAULT_EFP_HOL_TIMEOUT: u32 = 5;
+
+/// Default audiobuffersplit output buffer duration in milliseconds.
+/// Compacts small AES67 buffers (typically 1ms) into larger chunks to reduce
+/// downstream wakeups and context switches.
+pub const DEFAULT_AES67_INPUT_BUFFER_DURATION_MS: i64 = 20;
+
+/// Default Opus encoder complexity (0-10). GStreamer defaults to 10 (max CPU).
+/// 5 is a good balance between quality and CPU for real-time use cases.
+pub const DEFAULT_OPUS_COMPLEXITY: i32 = 5;
+
+/// Default Opus encoder bitrate in bps.
+pub const DEFAULT_OPUS_BITRATE: i32 = 64000;
+
 /// Common video resolutions for use in block property dropdowns.
 /// Ordered from largest to smallest.
 pub const COMMON_VIDEO_RESOLUTIONS: &[(&str, &str)] = &[
@@ -331,6 +358,61 @@ pub fn common_video_resolution_enum_values(include_empty: bool) -> Vec<EnumValue
     }
 
     for (value, label) in COMMON_VIDEO_RESOLUTIONS {
+        values.push(EnumValue {
+            value: (*value).to_string(),
+            label: Some((*label).to_string()),
+        });
+    }
+
+    values
+}
+
+/// Common video pixel formats for use in block property dropdowns.
+/// Grouped by color model: YUV 4:2:0, YUV 4:2:2, YUV 4:4:4, RGB/BGR, padded RGB, grayscale.
+pub const COMMON_VIDEO_PIXEL_FORMATS: &[(&str, &str)] = &[
+    // YUV 4:2:0
+    ("I420", "I420 (YUV 4:2:0 planar)"),
+    ("A420", "A420 (YUV 4:2:0 + alpha)"),
+    ("YV12", "YV12 (YUV 4:2:0 planar)"),
+    ("NV12", "NV12 (YUV 4:2:0 semi-planar)"),
+    ("NV21", "NV21 (YUV 4:2:0 semi-planar)"),
+    // YUV 4:2:2
+    ("YUY2", "YUY2 (YUV 4:2:2 packed)"),
+    ("UYVY", "UYVY (YUV 4:2:2 packed)"),
+    ("A422", "A422 (YUV 4:2:2 + alpha)"),
+    ("v210", "v210 (10-bit YUV 4:2:2)"),
+    // YUV 4:4:4
+    ("AYUV", "AYUV (YUV 4:4:4 + alpha packed)"),
+    ("A444", "A444 (YUV 4:4:4 + alpha planar)"),
+    // RGB / BGR
+    ("RGB", "RGB"),
+    ("BGR", "BGR"),
+    ("RGBA", "RGBA"),
+    ("BGRA", "BGRA"),
+    ("ARGB", "ARGB"),
+    ("ABGR", "ABGR"),
+    // Padded RGB (no alpha channel, padded to 32-bit)
+    ("RGBx", "RGBx"),
+    ("BGRx", "BGRx"),
+    ("xRGB", "xRGB"),
+    ("xBGR", "xBGR"),
+    // Grayscale
+    ("GRAY8", "GRAY8 (8-bit grayscale)"),
+];
+
+/// Get common video pixel formats as EnumValue list for block properties.
+/// Set `include_empty` to true to add an empty "-" option at the start.
+pub fn common_video_pixel_format_enum_values(include_empty: bool) -> Vec<EnumValue> {
+    let mut values = Vec::new();
+
+    if include_empty {
+        values.push(EnumValue {
+            value: String::new(),
+            label: Some("-".to_string()),
+        });
+    }
+
+    for (value, label) in COMMON_VIDEO_PIXEL_FORMATS {
         values.push(EnumValue {
             value: (*value).to_string(),
             label: Some((*label).to_string()),

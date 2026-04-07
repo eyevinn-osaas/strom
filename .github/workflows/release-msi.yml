@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Determine version
         id: version
@@ -266,7 +266,7 @@ jobs:
 
       - name: Upload MSI to release
         if: github.event_name != 'workflow_dispatch' || github.event.inputs.upload_to_release != 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           files: installer/windows/build/strom-${{ steps.version.outputs.version }}-windows-x86_64.msi

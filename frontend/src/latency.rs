@@ -1,5 +1,6 @@
 //! Audio latency measurement visualization widget.
 
+use crate::meter::BlockDataKey;
 use egui::{Color32, Rect, RichText, Stroke, Ui, Vec2};
 use instant::Instant;
 use std::collections::HashMap;
@@ -39,17 +40,10 @@ struct TimestampedLatencyData {
     updated_at: Instant,
 }
 
-/// Key for identifying latency data (flow + element).
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct LatencyKey {
-    pub flow_id: FlowId,
-    pub element_id: String,
-}
-
 /// Storage for all latency data in the application.
 #[derive(Debug, Clone, Default)]
 pub struct LatencyDataStore {
-    data: HashMap<LatencyKey, TimestampedLatencyData>,
+    data: HashMap<BlockDataKey, TimestampedLatencyData>,
 }
 
 impl LatencyDataStore {
@@ -61,7 +55,7 @@ impl LatencyDataStore {
 
     /// Update latency data for a specific element.
     pub fn update(&mut self, flow_id: FlowId, element_id: String, data: LatencyData) {
-        let key = LatencyKey {
+        let key = BlockDataKey {
             flow_id,
             element_id,
         };
@@ -77,7 +71,7 @@ impl LatencyDataStore {
     /// Get latency data for a specific element.
     /// Returns None if the data is stale (older than TTL).
     pub fn get(&self, flow_id: &FlowId, element_id: &str) -> Option<&LatencyData> {
-        let key = LatencyKey {
+        let key = BlockDataKey {
             flow_id: *flow_id,
             element_id: element_id.to_string(),
         };

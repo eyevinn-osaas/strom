@@ -160,8 +160,8 @@ impl DiscoveryPage {
         ctx: &Context,
         tx: &std::sync::mpsc::Sender<crate::state::AppMessage>,
     ) {
-        // Auto-refresh every 5 seconds
-        if self.last_fetch.elapsed().as_secs() > 5 && !self.loading {
+        // Auto-refresh every 3 seconds
+        if self.last_fetch.elapsed().as_secs() > 3 && !self.loading {
             self.refresh(api, ctx, tx);
         }
 
@@ -171,8 +171,8 @@ impl DiscoveryPage {
         }
 
         // Split view: stream list on left, details on right
-        egui::SidePanel::left("stream_list")
-            .default_width(400.0)
+        egui::Panel::left("stream_list")
+            .default_size(400.0)
             .resizable(true)
             .show_inside(ui, |ui| {
                 // Search filter at top of list
@@ -188,7 +188,12 @@ impl DiscoveryPage {
                         self.focus_search_requested = false;
                         response.request_focus();
                     }
-                    if !self.search_filter.is_empty() && ui.small_button("x").clicked() {
+                    if !self.search_filter.is_empty()
+                        && ui
+                            .small_button(egui_phosphor::regular::X)
+                            .on_hover_text("Clear search")
+                            .clicked()
+                    {
                         self.search_filter.clear();
                     }
                 });
@@ -696,7 +701,7 @@ impl DiscoveryPage {
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
                             if ui
-                                .button("📋 Copy NDI Name")
+                                .button(egui_phosphor::regular::COPY)
                                 .on_hover_text(
                                     "Copy NDI name to clipboard. Paste into NDI Input block's ndi-name property.",
                                 )
@@ -723,12 +728,15 @@ impl DiscoveryPage {
 
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("📋 Copy SDP").clicked() {
+                        if ui.button(egui_phosphor::regular::COPY)
+                            .on_hover_text("Copy SDP to clipboard")
+                            .clicked()
+                        {
                             crate::clipboard::copy_text_with_ctx(ui.ctx(), sdp);
                         }
                         // Only show "Create Flow" for discovered streams (not announced)
                         if let SelectedStream::Discovered(stream_id) = selected {
-                            if ui.button("➕ Create Flow").clicked() {
+                            if ui.button(format!("{} Create Flow", egui_phosphor::regular::PLUS)).clicked() {
                                 let interface = self
                                     .discovered_streams
                                     .iter()

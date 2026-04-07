@@ -21,6 +21,7 @@ impl PipelineManager {
         let priority_state = thread_priority::setup_thread_priority_handler(
             &self.pipeline,
             self.properties.thread_priority,
+            self.assigned_cpus.clone(),
             self.flow_id,
             self.thread_registry.clone(),
         );
@@ -88,24 +89,13 @@ impl PipelineManager {
         let state_change_success = state_change_result
             .map_err(|e| PipelineError::StateChange(format!("Failed to start: {}", e)))?;
 
-        // For async state changes (like SRT sink), don't query state immediately
-        // The state will change asynchronously and we'll get state-changed messages on the bus
-        // Also treat NoPreroll (live sources) as async since they transition on their own timeline
-        if matches!(
-            state_change_success,
-            gst::StateChangeSuccess::Async | gst::StateChangeSuccess::NoPreroll
-        ) {
-            info!(
-                "Pipeline '{}' state change is async/live, skipping immediate state query to avoid race conditions",
-                self.flow_name
-            );
-            // Update cached state - the bus watch will update it when the actual transition happens
-            *self.cached_state.write().unwrap() = PipelineState::Playing;
-            return Ok(PipelineState::Playing);
+        if state_change_success == gst::StateChangeSuccess::NoPreroll {
+            info!("Pipeline '{}' is live (NoPreroll)", self.flow_name);
         }
 
-        // For synchronous state changes, verify the state was reached
-        info!("Querying pipeline state to verify synchronous state change...");
+        // Query the actual state GStreamer has reached so far.
+        // For Async pipelines this returns the current state (e.g. Paused)
+        // without blocking. For NoPreroll/Success it returns the final state.
         let (result, current_state, pending_state) =
             self.pipeline.state(gst::ClockTime::from_mseconds(500));
         info!(
@@ -113,31 +103,24 @@ impl PipelineManager {
             self.flow_name, result, current_state, pending_state
         );
 
-        // Check if we've reached the target state
-        // If current_state is Playing and pending is VoidPending, that's success!
-        let target_reached =
-            current_state == gst::State::Playing && pending_state == gst::State::VoidPending;
-
-        if !target_reached {
-            // Only fail if we haven't reached the target state
-            if let Err(e) = result {
+        if let Err(e) = result {
+            if pending_state == gst::State::VoidPending {
                 error!(
-                    "Pipeline '{}' failed to reach PLAYING state: {:?} (current: {:?}, pending: {:?})",
-                    self.flow_name, e, current_state, pending_state
+                    "Pipeline '{}' failed to reach PLAYING state: {:?} (current: {:?})",
+                    self.flow_name, e, current_state
                 );
                 return Err(PipelineError::StateChange(format!(
-                    "State change failed: {:?} - current: {:?}, pending: {:?}",
-                    e, current_state, pending_state
+                    "State change failed: {:?} - current: {:?}",
+                    e, current_state
                 )));
             }
-        } else {
+            // Async state change still in progress — not an error
             info!(
-                "Pipeline '{}' successfully reached PLAYING state",
-                self.flow_name
+                "Pipeline '{}' state change still in progress (current: {:?}, pending: {:?})",
+                self.flow_name, current_state, pending_state
             );
         }
 
-        // Return the actual current state
         let actual_state = match current_state {
             gst::State::Null => PipelineState::Null,
             gst::State::Ready => PipelineState::Ready,
@@ -145,16 +128,74 @@ impl PipelineManager {
             gst::State::Playing => PipelineState::Playing,
             _ => PipelineState::Null,
         };
-
-        // Update cached state
         *self.cached_state.write().unwrap() = actual_state;
 
+        // Attach automatic buffer age monitoring probes and start the
+        // periodic broadcast task that reads probe slots off the hot path.
+        self.attach_automatic_probes();
+        self.probe_manager.start_broadcast_task();
+
+        // Start periodic thumbnail deactivation task
+        self.start_thumbnail_deactivation_task();
+
         Ok(actual_state)
+    }
+
+    /// Start periodic task that deactivates idle thumbnail branches.
+    fn start_thumbnail_deactivation_task(&mut self) {
+        if self.thumbnail_deactivation_task.is_some() {
+            return;
+        }
+
+        let taps = self.thumbnail_taps.clone();
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let store = taps.lock().unwrap();
+                for block_taps in store.values() {
+                    for tap in block_taps {
+                        tap.maybe_deactivate();
+                    }
+                }
+            }
+        });
+
+        self.thumbnail_deactivation_task = Some(task);
+    }
+
+    /// Attach automatic buffer age monitoring probes to key measurement points.
+    fn attach_automatic_probes(&self) {
+        let pipeline = self.pipeline.clone();
+        self.probe_manager.attach_automatic(
+            &pipeline,
+            &self.elements,
+            &self.blocks,
+            &self.block_definitions,
+        );
     }
 
     /// Stop the pipeline (set to NULL state).
     pub fn stop(&mut self) -> Result<PipelineState, PipelineError> {
         info!("Stopping pipeline: {}", self.flow_name);
+
+        // Stop buffer age broadcast task and deactivate probes BEFORE
+        // set_state(Null) — same order as Drop. This removes probe closures
+        // (and their weak pipeline refs) before GStreamer tries to deactivate
+        // pads, avoiding contention during state transition.
+        self.probe_manager.stop_broadcast_task();
+        self.probe_manager.deactivate_all();
+
+        // Remove bus watch when stopped to free resources
+        self.remove_bus_watch();
+
+        // Stop QoS broadcast task
+        self.stop_qos_broadcast_task();
+
+        // Stop thumbnail deactivation task
+        if let Some(task) = self.thumbnail_deactivation_task.take() {
+            task.abort();
+        }
 
         // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
         // from within a runtime" panics. Some GStreamer elements (e.g. whipserversrc)
@@ -166,12 +207,6 @@ impl PipelineManager {
             .map_err(|_| PipelineError::StateChange("set_state thread panicked".to_string()))?
             .map_err(|e| PipelineError::StateChange(format!("Failed to stop: {}", e)))?;
         let _ = result;
-
-        // Remove bus watch when stopped to free resources
-        self.remove_bus_watch();
-
-        // Stop QoS broadcast task
-        self.stop_qos_broadcast_task();
 
         // Remove thread priority handler
         thread_priority::remove_thread_priority_handler(&self.pipeline);

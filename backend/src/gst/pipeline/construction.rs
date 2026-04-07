@@ -8,7 +8,7 @@ use gstreamer::prelude::*;
 use gstreamer_net as gst_net;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use strom_types::{Element, Flow, PipelineState};
+use strom_types::{BlockDefinition, Element, Flow, PipelineState};
 use tracing::{debug, error, info, warn};
 
 impl PipelineManager {
@@ -20,6 +20,7 @@ impl PipelineManager {
         ice_servers: Vec<String>,
         ice_transport_policy: String,
         whip_registry: Option<WhipRegistry>,
+        media_path: std::path::PathBuf,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
         info!(
@@ -38,6 +39,9 @@ impl PipelineManager {
         let dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore =
             Arc::new(Mutex::new(HashMap::new()));
 
+        let probe_manager =
+            crate::gst::buffer_age_probe::ProbeManager::new(flow.id, events.clone());
+
         let mut manager = Self {
             flow_id: flow.id,
             flow_name: flow.name.clone(),
@@ -49,8 +53,10 @@ impl PipelineManager {
             pad_properties: HashMap::new(),
             block_message_handlers: Vec::new(),
             block_message_connect_fns: Vec::new(),
+            element_setup_fns: Vec::new(),
             thread_priority_state: None,
             thread_registry: None,
+            assigned_cpus: None,
             cached_state: std::sync::Arc::new(std::sync::RwLock::new(PipelineState::Null)),
             qos_aggregator: QoSAggregator::new(),
             qos_broadcast_task: None,
@@ -60,20 +66,29 @@ impl PipelineManager {
             dynamic_pad_tees: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
             whep_endpoints: Vec::new(),
             whip_endpoints: Vec::new(),
+            whip_endpoint_configs: Vec::new(),
             dynamic_webrtcbins: Arc::clone(&dynamic_webrtcbins),
+            thumbnail_taps: crate::gst::new_tap_store(),
+            thumbnail_deactivation_task: None,
+            probe_manager,
+            blocks: flow.blocks.clone(),
+            block_definitions: HashMap::new(),
         };
 
         // Expand blocks into GStreamer elements
         info!("Starting block expansion (block_in_place)...");
         let flow_id = flow.id;
-        let expanded = tokio::task::block_in_place(|| {
+        let blocks_for_defs = flow.blocks.clone();
+        let registry_ref = _block_registry;
+        let (expanded, block_definitions) = tokio::task::block_in_place(|| {
             info!("Inside block_in_place, calling block_on...");
             tokio::runtime::Handle::current().block_on(async {
                 info!("Inside block_on, calling expand_blocks...");
                 let result = super::super::block_expansion::expand_blocks(
-                    &flow.blocks,
+                    &blocks_for_defs,
                     &flow.links,
                     &flow_id,
+                    &media_path,
                     ice_servers,
                     ice_transport_policy,
                     dynamic_webrtcbins,
@@ -81,10 +96,23 @@ impl PipelineManager {
                 )
                 .await;
                 info!("expand_blocks completed");
-                result
+
+                // Resolve block definitions for automatic probe attachment
+                let mut defs: HashMap<String, BlockDefinition> = HashMap::new();
+                for block in &blocks_for_defs {
+                    if !defs.contains_key(&block.block_definition_id) {
+                        if let Some(def) = registry_ref.get_by_id(&block.block_definition_id).await
+                        {
+                            defs.insert(block.block_definition_id.clone(), def);
+                        }
+                    }
+                }
+
+                result.map(|expanded| (expanded, defs))
             })
         })?;
         info!("Block expansion completed");
+        manager.block_definitions = block_definitions;
 
         // Add regular elements from flow
         debug!(
@@ -132,6 +160,15 @@ impl PipelineManager {
         );
         manager.block_message_connect_fns = expanded.bus_message_handlers;
 
+        // Store element signal setup functions from blocks
+        if !expanded.element_setups.is_empty() {
+            debug!(
+                "Storing {} element signal setup(s) from blocks",
+                expanded.element_setups.len()
+            );
+        }
+        manager.element_setup_fns = expanded.element_setups;
+
         // Merge pad properties from blocks with existing pad properties
         info!(
             "Merging {} element(s) with pad properties from blocks",
@@ -161,6 +198,7 @@ impl PipelineManager {
             );
         }
         manager.whip_endpoints = expanded.whip_endpoints;
+        manager.whip_endpoint_configs = expanded.whip_endpoint_configs;
 
         // Analyze links and auto-insert tee elements where needed
         let all_links = expanded.links;

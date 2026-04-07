@@ -21,6 +21,10 @@ pub struct ThreadCpuStats {
     pub flow_id: FlowId,
     /// Block ID if the element is inside a block
     pub block_id: Option<String>,
+    /// Logical CPUs this thread is pinned to (None if affinity is off).
+    /// Contains all sibling hyperthreads of the allocated physical core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_cpus: Option<Vec<usize>>,
 }
 
 /// Aggregated thread statistics for all GStreamer streaming threads.

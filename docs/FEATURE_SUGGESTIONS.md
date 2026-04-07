@@ -45,22 +45,16 @@ Enable time-based and event-driven pipeline automation:
 ---
 
 ### 3. Live Video/Audio Preview
-**Complexity: High**
+**Complexity: High** | **Status: Partially implemented**
 
 Provide in-browser preview of pipeline output:
 
-- **WebRTC-based preview**: Low-latency video preview directly in browser
-- **Audio monitoring**: Waveform visualization and level meters
+- ✅ **WebRTC-based preview**: WHEP Output block serves streams with built-in browser player pages
+- ✅ **Audio monitoring**: Audio Meter block with RMS and peak level monitoring per channel
 - **Thumbnail generation**: Auto-generate thumbnails from video sources
 - **Multi-view**: Monitor multiple pipelines simultaneously in grid layout
 
-**Why valuable**: Essential for video production workflows - users need visual feedback on what they're processing.
-
-**Implementation considerations**:
-- Use `webrtcbin` GStreamer element
-- Implement signaling server for WebRTC negotiation
-- Add preview canvas in egui frontend
-- Consider HLS/DASH fallback for wider browser compatibility
+**Remaining work**: Thumbnail generation and multi-view dashboard.
 
 ---
 
@@ -93,44 +87,32 @@ Accelerate workflow creation with pre-built configurations:
 ---
 
 ### 5. Codec Optimizer & Quality Assistant
-**Complexity: Medium**
+**Complexity: Medium** | **Status: Partially implemented**
 
 Intelligent encoding recommendations and optimization:
 
 - **Smart encoding suggestions**: Recommend bitrate/resolution based on use case (streaming, archival, etc.)
 - **Quality calculator**: Estimate file size for given settings
-- **Hardware acceleration detector**: Auto-detect and suggest GPU encoders (nvenc, vaapi, qsv, videotoolbox)
+- ✅ **Hardware acceleration detector**: Video Encoder block auto-detects and selects best available encoder (NVENC, QSV, VA-API, AMF, software)
 - **A/B comparison**: Test different encoding settings side-by-side
 - **Preset wizard**: Step-by-step guide for selecting optimal encoder settings
 
-**Why valuable**: Makes GStreamer accessible to non-experts and helps optimize quality/performance trade-offs.
-
-**Implementation considerations**:
-- Detect available hardware encoders at startup
-- Build quality estimation models
-- Add comparison view in UI
-- Include benchmark mode for testing
+**Remaining work**: Smart encoding suggestions, quality calculator, A/B comparison, preset wizard.
 
 ---
 
 ### 6. Multi-Pipeline Orchestration
-**Complexity: High**
+**Complexity: High** | **Status: Partially implemented**
 
 Coordinate multiple pipelines for complex workflows:
 
 - **Pipeline groups**: Organize related pipelines (e.g., "Camera System A", "Live Event Production")
-- **Cascading pipelines**: Output from one flow becomes input to another (inter-pipeline communication)
+- ✅ **Cascading pipelines**: Inter Input/Output blocks enable inter-pipeline routing (publish/subscribe streams between flows)
 - **Synchronized operations**: Start/stop multiple pipelines atomically
 - **Dependency management**: Pipeline B waits for Pipeline A to be ready
 - **Shared resources**: Manage resource allocation across pipelines
 
-**Why valuable**: Enables complex multi-stage workflows like live production with multiple cameras and outputs.
-
-**Implementation considerations**:
-- Add flow grouping metadata
-- Implement inter-pipeline messaging (shmsrc/shmsink)
-- Add dependency graph visualization
-- Resource reservation system
+**Remaining work**: Pipeline groups, synchronized operations, dependency management, shared resources.
 
 ---
 
@@ -177,23 +159,17 @@ Comprehensive diagnostics for live streaming:
 ---
 
 ### 9. AI-Powered Troubleshooting Assistant
-**Complexity: Medium**
+**Complexity: Medium** | **Status: Partially implemented**
 
 Intelligent assistance for debugging and optimization:
 
+- ✅ **Natural language queries**: MCP integration enables AI assistants (Claude, etc.) to create and manage pipelines
 - **Error diagnosis**: Analyze GStreamer errors and suggest fixes with context
 - **Compatibility checker**: Validate element combinations before runtime
 - **Pipeline recommendations**: "Users who built X also used Y" suggestions
-- **Natural language queries**: "How do I reduce latency?" → suggests elements/configs
 - **Best practices advisor**: Detect anti-patterns and suggest improvements
 
-**Why valuable**: GStreamer has a steep learning curve - AI assistance significantly reduces friction.
-
-**Implementation considerations**:
-- Build knowledge base of common errors and solutions
-- Integrate with LLM API (Claude, GPT) for natural language interface
-- Add element compatibility matrix
-- Implement pattern matching for common mistakes
+**Remaining work**: Error diagnosis, compatibility checker, pipeline recommendations, best practices advisor.
 
 ---
 
@@ -389,5 +365,5 @@ Interested in implementing any of these features? See [CONTRIBUTING.md](CONTRIBU
 
 ---
 
-*Last updated: 2025-01-14*
+*Last updated: 2026-03-02*
 *Status: Community feedback welcome*
