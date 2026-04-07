@@ -232,6 +232,16 @@ impl BlockBuilder for AES67InputBuilder {
                 }
             }
 
+            // Workaround for GStreamer rtpjitterbuffer packet_spacing bug:
+            // see comment in whep.rs build_whepsrc iterate_recurse for details.
+            if factory_name == "rtpbin" && element.has_property("drop-on-latency") {
+                element.set_property("drop-on-latency", true);
+                info!(
+                    "AES67 Input [{}]: Set drop-on-latency=true on {}",
+                    sdpdemux_id_for_element_handler, element_name
+                );
+            }
+
             // Look for rtpbin to attach SSRC change handlers
             if factory_name == "rtpbin" {
                 info!(

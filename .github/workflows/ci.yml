@@ -32,8 +32,8 @@ jobs:
       - name: Cache apt packages
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: libssl-dev libcairo2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base cmake libclang-dev
-          version: 1.4
+          packages: libssl-dev libcairo2-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good cmake libclang-dev
+          version: 1.5
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -429,7 +429,7 @@ jobs:
 
       - name: Install GStreamer
         run: |
-          brew install gstreamer gst-plugins-base gst-plugins-bad
+          brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad
           echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig:$(brew --prefix gstreamer)/lib/pkgconfig:$(brew --prefix glib)/lib/pkgconfig" >> $GITHUB_ENV
           echo "LIBRARY_PATH=$(brew --prefix)/lib" >> $GITHUB_ENV
 
