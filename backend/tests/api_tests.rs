@@ -7,6 +7,7 @@ use axum::{
 };
 use serde_json::json;
 use strom_types::api::FlowListResponse;
+use strom_types::Flow;
 use tower::ServiceExt; // for `oneshot`
 
 /// Helper to create a test app instance.
@@ -63,9 +64,7 @@ async fn test_list_flows_empty() {
 async fn test_create_flow() {
     let app = create_test_app().await;
 
-    let request_body = json!({
-        "name": "Test Flow"
-    });
+    let flow = Flow::new("Test Flow".to_string());
 
     let response = app
         .oneshot(
@@ -73,7 +72,7 @@ async fn test_create_flow() {
                 .uri("/api/flows")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+                .body(Body::from(serde_json::to_vec(&flow).unwrap()))
                 .unwrap(),
         )
         .await
