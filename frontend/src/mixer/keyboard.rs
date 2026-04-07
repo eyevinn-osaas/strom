@@ -15,7 +15,7 @@ impl MixerEditor {
         }
 
         // Don't process other shortcuts if a text input has focus
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return;
         }
 

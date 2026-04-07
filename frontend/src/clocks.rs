@@ -42,8 +42,8 @@ impl ClocksPage {
         }
 
         // Split view: domain list on left, details on right
-        egui::SidePanel::left("ptp_domain_list")
-            .default_width(350.0)
+        egui::Panel::left("ptp_domain_list")
+            .default_size(350.0)
             .resizable(true)
             .show_inside(ui, |ui| {
                 self.render_domain_list(ui, &domain_info);

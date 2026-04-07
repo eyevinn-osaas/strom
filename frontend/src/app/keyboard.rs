@@ -133,7 +133,7 @@ impl StromApp {
         }
 
         // Don't process shortcuts if a text input has focus (except ESC)
-        let wants_keyboard = ctx.wants_keyboard_input();
+        let wants_keyboard = ctx.egui_wants_keyboard_input();
 
         // ESC key - highest priority, works even in text inputs
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {

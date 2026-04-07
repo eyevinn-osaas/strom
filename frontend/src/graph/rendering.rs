@@ -228,7 +228,7 @@ impl GraphEditor {
             let pointer_in_canvas = pointer_pos
                 .map(|p| response.rect.contains(p))
                 .unwrap_or(false);
-            let window_hovered = ui.ctx().wants_pointer_input();
+            let window_hovered = ui.ctx().egui_wants_pointer_input();
 
             if pointer_in_canvas && !window_hovered {
                 let hover_pos = pointer_pos.unwrap();
