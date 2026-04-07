@@ -1,14 +1,60 @@
-//! Vision Mixer control page — serves the web-based switcher UI.
+//! Vision Mixer control page and helpers.
 
 use axum::{
     extract::{Path, State},
     response::Html,
+    Json,
 };
-use strom_types::FlowId;
+use strom_types::{Flow, FlowId};
 
 use crate::blocks::builtin::vision_mixer::overlay;
 use crate::blocks::builtin::vision_mixer::properties as vm_props;
 use crate::state::AppState;
+
+/// Follow links from a block's output pad through intermediate blocks until
+/// a WHEP output block is reached. Returns the WHEP endpoint path
+/// (e.g. `/whep/{endpoint_id}`) or an empty string if none is found.
+pub fn find_whep_endpoint_for_pad(flow: &Flow, block_id: &str, pad_name: &str) -> String {
+    let whep_block_ids: std::collections::HashSet<&str> = flow
+        .blocks
+        .iter()
+        .filter(|b| b.block_definition_id == "builtin.whep_output")
+        .map(|b| b.id.as_str())
+        .collect();
+
+    let mut current = format!("{}:{}", block_id, pad_name);
+    let mut visited = std::collections::HashSet::new();
+
+    while let Some(link) = flow.links.iter().find(|l| l.from == current) {
+        let target_block_id = link.to.split(':').next().unwrap_or("");
+        if !visited.insert(target_block_id.to_string()) {
+            break;
+        }
+        if whep_block_ids.contains(target_block_id) {
+            if let Some(eid) = flow
+                .blocks
+                .iter()
+                .find(|b| b.id == target_block_id)
+                .and_then(|b| b.runtime_data.as_ref())
+                .and_then(|rd| rd.get("whep_endpoint_id"))
+            {
+                return format!("/whep/{}", eid);
+            }
+            break;
+        }
+        // Follow through: find an output link from this intermediate block
+        match flow
+            .links
+            .iter()
+            .find(|l| l.from.starts_with(&format!("{}:", target_block_id)))
+        {
+            Some(next) => current = next.from.clone(),
+            None => break,
+        }
+    }
+
+    String::new()
+}
 
 const VISION_MIXER_HTML: &str = include_str!("../../static/vision-mixer.html");
 
@@ -41,49 +87,6 @@ pub async fn vision_mixer_page(
     let num_inputs = vm_props::parse_num_inputs(&vm_block.properties);
     let labels = vm_props::parse_input_labels(&vm_block.properties, num_inputs);
     let num_dsk_inputs = vm_props::parse_num_dsk_inputs(&vm_block.properties);
-
-    // Find the multiview WHEP endpoint by following links from the vision
-    // mixer's multiview_out pad through intermediate blocks until we reach
-    // a WHEP output block.
-    let whep_block_ids: std::collections::HashSet<&str> = flow
-        .blocks
-        .iter()
-        .filter(|b| b.block_definition_id == "builtin.whep_output")
-        .map(|b| b.id.as_str())
-        .collect();
-    let multiview_endpoint = {
-        let mut current = format!("{}:multiview_out", block_id);
-        let mut result = String::new();
-        let mut visited = std::collections::HashSet::new();
-        while let Some(link) = flow.links.iter().find(|l| l.from == current) {
-            let target_block_id = link.to.split(':').next().unwrap_or("");
-            if !visited.insert(target_block_id.to_string()) {
-                break; // cycle guard
-            }
-            if whep_block_ids.contains(target_block_id) {
-                if let Some(eid) = flow
-                    .blocks
-                    .iter()
-                    .find(|b| b.id == target_block_id)
-                    .and_then(|b| b.runtime_data.as_ref())
-                    .and_then(|rd| rd.get("whep_endpoint_id"))
-                {
-                    result = format!("/whep/{}", eid);
-                }
-                break;
-            }
-            // Follow through: find the output pad of this intermediate block
-            match flow
-                .links
-                .iter()
-                .find(|l| l.from.starts_with(&format!("{}:", target_block_id)))
-            {
-                Some(next) => current = next.from.clone(),
-                None => break,
-            }
-        }
-        result
-    };
 
     // Get current state from live overlay state or fall back to defaults
     let overlay = overlay::get_overlay_state(block_id);
@@ -120,7 +123,6 @@ pub async fn vision_mixer_page(
         "flow_id": flow_id.to_string(),
         "block_id": block_id,
         "num_inputs": num_inputs,
-        "multiview_endpoint": multiview_endpoint,
         "input_labels": labels,
         "initial_pgm": initial_pgm_group.first().copied().unwrap_or(0),
         "initial_pvw": initial_pvw_group.first().copied().unwrap_or(1),
@@ -136,4 +138,42 @@ pub async fn vision_mixer_page(
     let html = VISION_MIXER_HTML.replace("{{VM_CONFIG_JSON}}", &config.to_string());
 
     Html(html)
+}
+
+/// Get the multiview WHEP endpoint for a vision mixer block.
+/// GET /api/flows/{flow_id}/blocks/{block_id}/multiview-endpoint
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/multiview-endpoint",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block ID"),
+    ),
+    responses(
+        (status = 200, description = "Multiview endpoint info", body = strom_types::api::MultiviewEndpointResponse),
+        (status = 404, description = "Flow or block not found"),
+    ),
+    tag = "vision-mixer"
+)]
+pub async fn get_multiview_endpoint(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<Json<strom_types::api::MultiviewEndpointResponse>, axum::http::StatusCode> {
+    let flows = state.get_flows().await;
+    let flow = flows
+        .iter()
+        .find(|f| f.id == flow_id)
+        .ok_or(axum::http::StatusCode::NOT_FOUND)?;
+
+    // Verify the block exists and is a vision mixer
+    flow.blocks
+        .iter()
+        .find(|b| b.id == block_id && b.block_definition_id == "builtin.vision_mixer")
+        .ok_or(axum::http::StatusCode::NOT_FOUND)?;
+
+    let endpoint = find_whep_endpoint_for_pad(flow, &block_id, "multiview_out");
+
+    Ok(Json(strom_types::api::MultiviewEndpointResponse {
+        endpoint,
+    }))
 }
