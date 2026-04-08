@@ -117,6 +117,36 @@ pub fn parse_output_format(properties: &HashMap<String, PropertyValue>) -> Optio
     })
 }
 
+/// Parse a framerate string "N/D" into (numerator, denominator).
+pub fn parse_framerate(
+    properties: &HashMap<String, PropertyValue>,
+    key: &str,
+    default: &str,
+) -> (i32, i32) {
+    let s = properties
+        .get(key)
+        .and_then(|v| match v {
+            PropertyValue::String(s) if !s.is_empty() => Some(s.as_str()),
+            _ => None,
+        })
+        .unwrap_or(default);
+    parse_framerate_string(s).unwrap_or_else(|| {
+        parse_framerate_string(default).expect("default framerate must be valid")
+    })
+}
+
+fn parse_framerate_string(s: &str) -> Option<(i32, i32)> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() == 2 {
+        let n = parts[0].parse::<i32>().ok()?;
+        let d = parts[1].parse::<i32>().ok()?;
+        if n > 0 && d > 0 {
+            return Some((n, d));
+        }
+    }
+    None
+}
+
 /// Parse a u64 property with a default.
 pub fn parse_u64(properties: &HashMap<String, PropertyValue>, key: &str, default: u64) -> u64 {
     properties

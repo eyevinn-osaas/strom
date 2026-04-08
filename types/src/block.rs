@@ -422,6 +422,44 @@ pub fn common_video_pixel_format_enum_values(include_empty: bool) -> Vec<EnumVal
     values
 }
 
+/// Common video framerates for use in block property dropdowns.
+/// Each entry is (fraction_string, label) where fraction_string is "N/D" format.
+pub const COMMON_VIDEO_FRAMERATES: &[(&str, &str)] = &[
+    ("10/1", "10 fps"),
+    ("15/1", "15 fps"),
+    ("24000/1001", "23.976 fps"),
+    ("24/1", "24 fps"),
+    ("25/1", "25 fps"),
+    ("30000/1001", "29.97 fps"),
+    ("30/1", "30 fps"),
+    ("50/1", "50 fps"),
+    ("60000/1001", "59.94 fps"),
+    ("60/1", "60 fps"),
+    ("120/1", "120 fps"),
+];
+
+/// Get common video framerates as EnumValue list for block properties.
+/// Set `include_empty` to true to add an empty "-" option at the start.
+pub fn common_video_framerate_enum_values(include_empty: bool) -> Vec<EnumValue> {
+    let mut values = Vec::new();
+
+    if include_empty {
+        values.push(EnumValue {
+            value: String::new(),
+            label: Some("-".to_string()),
+        });
+    }
+
+    for (value, label) in COMMON_VIDEO_FRAMERATES {
+        values.push(EnumValue {
+            value: (*value).to_string(),
+            label: Some((*label).to_string()),
+        });
+    }
+
+    values
+}
+
 /// Parse a resolution string like "1920x1080" into (width, height).
 /// Returns None if parsing fails.
 pub fn parse_resolution_string(s: &str) -> Option<(u32, u32)> {
