@@ -60,3 +60,176 @@ pub fn normalize_uri(path: &str, media_path: &Path) -> String {
     debug!("Normalized '{}' → '{}'", path, uri);
     uri
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::blocks::builtin::mediaplayer::state::{
+        MediaPlayerKey, MediaPlayerRegistry, MediaPlayerState,
+    };
+    use gstreamer as gst;
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+    use std::sync::{Arc, RwLock};
+    use strom_types::block::PropertyType;
+    use strom_types::PropertyValue;
+    use uuid::Uuid;
+
+    /// Helper to create a MediaPlayerState for testing (no GStreamer elements).
+    fn test_state(flow_id: Uuid, block_id: &str, playlist: Vec<String>) -> MediaPlayerState {
+        MediaPlayerState {
+            instance_id: Uuid::new_v4(),
+            source_element: gst::glib::WeakRef::new(),
+            internal_pipeline: RwLock::new(None),
+            video_appsrc: None,
+            audio_appsrc: None,
+            playlist: RwLock::new(playlist),
+            current_index: AtomicUsize::new(0),
+            is_paused: AtomicBool::new(false),
+            loop_playlist: AtomicBool::new(true),
+            block_id: block_id.to_string(),
+            flow_id,
+            video_linked: AtomicBool::new(false),
+            audio_linked: AtomicBool::new(false),
+            decode: false,
+            sync: true,
+            media_path: std::path::PathBuf::from("/media"),
+            ts_offset: Arc::new(AtomicI64::new(i64::MIN)),
+            main_pipeline: gst::glib::WeakRef::new(),
+        }
+    }
+
+    #[test]
+    fn test_normalize_uri_file_scheme() {
+        let media_path = std::path::Path::new("/media");
+        assert_eq!(
+            normalize_uri("file:///path/to/video.mp4", media_path),
+            "file:///path/to/video.mp4"
+        );
+    }
+
+    #[test]
+    fn test_normalize_uri_http_scheme() {
+        let media_path = std::path::Path::new("/media");
+        assert_eq!(
+            normalize_uri("http://example.com/video.mp4", media_path),
+            "http://example.com/video.mp4"
+        );
+    }
+
+    #[test]
+    fn test_normalize_uri_https_scheme() {
+        let media_path = std::path::Path::new("/media");
+        assert_eq!(
+            normalize_uri("https://example.com/video.mp4", media_path),
+            "https://example.com/video.mp4"
+        );
+    }
+
+    #[test]
+    fn test_normalize_uri_relative_path() {
+        let media_path = std::path::Path::new("/media");
+        let result = normalize_uri("video.mp4", media_path);
+        assert!(result.starts_with("file://"));
+        assert!(result.ends_with("video.mp4"));
+    }
+
+    #[test]
+    fn test_normalize_uri_absolute_path() {
+        let media_path = std::path::Path::new("/media");
+        assert_eq!(
+            normalize_uri("/tmp/video.mp4", media_path),
+            "file:///tmp/video.mp4"
+        );
+    }
+
+    #[test]
+    fn test_registry_register_and_get() {
+        let registry = MediaPlayerRegistry::new();
+        let key = MediaPlayerKey {
+            flow_id: Uuid::new_v4(),
+            block_id: "test".to_string(),
+        };
+
+        assert!(!registry.contains(&key));
+
+        let state = Arc::new(test_state(key.flow_id, "test", vec!["a.mp4".into()]));
+        registry.register(key.clone(), Arc::clone(&state));
+        assert!(registry.contains(&key));
+        assert!(registry.get(&key).is_some());
+
+        registry.unregister(&key);
+        assert!(!registry.contains(&key));
+    }
+
+    #[test]
+    fn test_state_playlist() {
+        let state = test_state(Uuid::new_v4(), "t", vec![]);
+        assert_eq!(state.playlist_len(), 0);
+        assert!(state.current_file().is_none());
+
+        state.set_playlist(vec!["a.mp4".into(), "b.mp4".into(), "c.mp4".into()]);
+        assert_eq!(state.playlist_len(), 3);
+        assert_eq!(state.current_file(), Some("a.mp4".to_string()));
+    }
+
+    #[test]
+    fn test_state_string() {
+        let state = test_state(Uuid::new_v4(), "t", vec![]);
+        assert_eq!(state.state_string(), "stopped");
+
+        state.set_playlist(vec!["file.mp4".into()]);
+        assert_eq!(state.state_string(), "playing");
+
+        state.is_paused.store(true, Ordering::SeqCst);
+        assert_eq!(state.state_string(), "paused");
+    }
+
+    #[test]
+    fn test_block_definition() {
+        let def = definition::media_player_definition();
+
+        assert_eq!(def.id, "builtin.media_player");
+        assert_eq!(def.category, "Inputs");
+        assert!(def.built_in);
+        assert_eq!(def.exposed_properties.len(), 4);
+
+        let decode = def
+            .exposed_properties
+            .iter()
+            .find(|p| p.name == "decode")
+            .unwrap();
+        assert!(matches!(decode.property_type, PropertyType::Bool));
+        assert!(matches!(
+            decode.default_value,
+            Some(PropertyValue::Bool(false))
+        ));
+
+        let sync = def
+            .exposed_properties
+            .iter()
+            .find(|p| p.name == "sync")
+            .unwrap();
+        assert!(matches!(
+            sync.default_value,
+            Some(PropertyValue::Bool(true))
+        ));
+
+        assert!(def
+            .exposed_properties
+            .iter()
+            .any(|p| p.name == "loop_playlist"));
+
+        assert_eq!(def.external_pads.inputs.len(), 0);
+        assert_eq!(def.external_pads.outputs.len(), 2);
+        assert!(def
+            .external_pads
+            .outputs
+            .iter()
+            .any(|p| p.name == "video_out"));
+        assert!(def
+            .external_pads
+            .outputs
+            .iter()
+            .any(|p| p.name == "audio_out"));
+    }
+}
