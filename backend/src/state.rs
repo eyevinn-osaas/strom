@@ -344,6 +344,9 @@ impl AppState {
         let flows = self.inner.flows.read().await;
         for flow_id in to_save {
             if let Some(flow) = flows.get(&flow_id) {
+                if flow.properties.ephemeral {
+                    continue;
+                }
                 if let Err(e) = self.inner.storage.save_flow(flow).await {
                     error!("Failed to save flow {} to storage: {}", flow_id, e);
                     // Re-add to pending saves to retry later
@@ -467,8 +470,11 @@ impl AppState {
             flows.insert(flow.id, flow.clone());
         }
 
-        // Persist to storage
-        if let Err(e) = self.inner.storage.save_flow(&flow).await {
+        // Persist to storage (skip ephemeral flows)
+        if flow.properties.ephemeral {
+            // Remove any previously persisted copy so it doesn't reappear on restart
+            let _ = self.inner.storage.delete_flow(&flow.id).await;
+        } else if let Err(e) = self.inner.storage.save_flow(&flow).await {
             error!("Failed to save flow to storage: {}", e);
             return Err(e.into());
         }
@@ -510,10 +516,16 @@ impl AppState {
             return Ok(false);
         }
 
-        // Delete from storage first
-        if let Err(e) = self.inner.storage.delete_flow(id).await {
-            error!("Failed to delete flow from storage: {}", e);
-            return Err(e.into());
+        // Delete from storage first (skip for ephemeral flows)
+        let is_ephemeral = {
+            let flows = self.inner.flows.read().await;
+            flows.get(id).is_some_and(|f| f.properties.ephemeral)
+        };
+        if !is_ephemeral {
+            if let Err(e) = self.inner.storage.delete_flow(id).await {
+                error!("Failed to delete flow from storage: {}", e);
+                return Err(e.into());
+            }
         }
 
         // Delete from in-memory state
@@ -1034,8 +1046,10 @@ impl AppState {
             let mut flows = self.inner.flows.write().await;
             flows.insert(*id, flow.clone());
         }
-        if let Err(e) = self.inner.storage.save_flow(&flow).await {
-            error!("Failed to save flow state: {}", e);
+        if !flow.properties.ephemeral {
+            if let Err(e) = self.inner.storage.save_flow(&flow).await {
+                error!("Failed to save flow state: {}", e);
+            }
         }
 
         // Broadcast events
@@ -1072,8 +1086,10 @@ impl AppState {
                 flow.properties.started_at = None;
                 let flow_clone = flow.clone();
                 drop(flows);
-                if let Err(e) = self.inner.storage.save_flow(&flow_clone).await {
-                    error!("Failed to save flow state: {}", e);
+                if !flow_clone.properties.ephemeral {
+                    if let Err(e) = self.inner.storage.save_flow(&flow_clone).await {
+                        error!("Failed to save flow state: {}", e);
+                    }
                 }
                 self.inner.events.broadcast(StromEvent::FlowStateChanged {
                     flow_id: *id,
@@ -1190,8 +1206,10 @@ impl AppState {
         };
 
         if let Some(ref flow) = flow {
-            if let Err(e) = self.inner.storage.save_flow(flow).await {
-                error!("Failed to save flow state: {}", e);
+            if !flow.properties.ephemeral {
+                if let Err(e) = self.inner.storage.save_flow(flow).await {
+                    error!("Failed to save flow state: {}", e);
+                }
             }
 
             // Unregister inter channels and broadcast events

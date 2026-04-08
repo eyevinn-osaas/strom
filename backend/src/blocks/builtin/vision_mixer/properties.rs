@@ -117,6 +117,36 @@ pub fn parse_output_format(properties: &HashMap<String, PropertyValue>) -> Optio
     })
 }
 
+/// Parse a framerate string "N/D" into (numerator, denominator).
+pub fn parse_framerate(
+    properties: &HashMap<String, PropertyValue>,
+    key: &str,
+    default: &str,
+) -> (i32, i32) {
+    let s = properties
+        .get(key)
+        .and_then(|v| match v {
+            PropertyValue::String(s) if !s.is_empty() => Some(s.as_str()),
+            _ => None,
+        })
+        .unwrap_or(default);
+    parse_framerate_string(s).unwrap_or_else(|| {
+        parse_framerate_string(default).expect("default framerate must be valid")
+    })
+}
+
+fn parse_framerate_string(s: &str) -> Option<(i32, i32)> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() == 2 {
+        let n = parts[0].parse::<i32>().ok()?;
+        let d = parts[1].parse::<i32>().ok()?;
+        if n > 0 && d > 0 {
+            return Some((n, d));
+        }
+    }
+    None
+}
+
 /// Parse a u64 property with a default.
 pub fn parse_u64(properties: &HashMap<String, PropertyValue>, key: &str, default: u64) -> u64 {
     properties
@@ -128,4 +158,46 @@ pub fn parse_u64(properties: &HashMap<String, PropertyValue>, key: &str, default
             _ => None,
         })
         .unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_framerate_string_valid_fractions() {
+        assert_eq!(parse_framerate_string("25/1"), Some((25, 1)));
+        assert_eq!(parse_framerate_string("30000/1001"), Some((30000, 1001)));
+        assert_eq!(parse_framerate_string("1/1"), Some((1, 1)));
+    }
+
+    #[test]
+    fn parse_framerate_string_rejects_invalid() {
+        assert_eq!(parse_framerate_string("0/1"), None);
+        assert_eq!(parse_framerate_string("25/0"), None);
+        assert_eq!(parse_framerate_string("-1/1"), None);
+        assert_eq!(parse_framerate_string("25"), None);
+        assert_eq!(parse_framerate_string(""), None);
+        assert_eq!(parse_framerate_string("abc/def"), None);
+    }
+
+    #[test]
+    fn parse_framerate_uses_property_value() {
+        let mut props = HashMap::new();
+        props.insert("fps".to_string(), PropertyValue::String("60/1".to_string()));
+        assert_eq!(parse_framerate(&props, "fps", "25/1"), (60, 1));
+    }
+
+    #[test]
+    fn parse_framerate_falls_back_to_default() {
+        let props = HashMap::new();
+        assert_eq!(parse_framerate(&props, "fps", "25/1"), (25, 1));
+    }
+
+    #[test]
+    fn parse_framerate_invalid_value_falls_back_to_default() {
+        let mut props = HashMap::new();
+        props.insert("fps".to_string(), PropertyValue::String("nope".to_string()));
+        assert_eq!(parse_framerate(&props, "fps", "30/1"), (30, 1));
+    }
 }

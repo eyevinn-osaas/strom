@@ -18,8 +18,8 @@ use crate::gpu::video_convert_mode;
 use gstreamer as gst;
 use std::collections::HashMap;
 use strom_types::{
-    block::*, common_video_pixel_format_enum_values, common_video_resolution_enum_values,
-    element::ElementPadRef, PropertyValue, *,
+    block::*, common_video_framerate_enum_values, common_video_pixel_format_enum_values,
+    common_video_resolution_enum_values, element::ElementPadRef, PropertyValue, *,
 };
 use tracing::info;
 
@@ -73,14 +73,19 @@ impl BlockBuilder for VideoFormatBuilder {
             }
         }
 
-        // Add framerate if specified
+        // Add framerate if specified (supports both fraction "25/1" and legacy decimal "25" formats)
         if let Some(fps) = framerate {
-            // Convert decimal framerates to proper fractions
-            let framerate_fraction = match fps {
-                "23.976" => "24000/1001".to_string(),
-                "29.97" => "30000/1001".to_string(),
-                "59.94" => "60000/1001".to_string(),
-                _ => format!("{}/1", fps),
+            let framerate_fraction = if fps.contains('/') {
+                // Already in fraction format (e.g. "25/1", "30000/1001")
+                fps.to_string()
+            } else {
+                // Legacy decimal format — convert to fraction
+                match fps {
+                    "23.976" => "24000/1001".to_string(),
+                    "29.97" => "30000/1001".to_string(),
+                    "59.94" => "60000/1001".to_string(),
+                    _ => format!("{}/1", fps),
+                }
             };
             caps_fields.push(format!("framerate={}", framerate_fraction));
         }
@@ -193,20 +198,7 @@ fn videoformat_definition() -> BlockDefinition {
                 label: "Framerate".to_string(),
                 description: "Framerate in fps - creates videorate element. Leave empty to pass through.".to_string(),
                 property_type: PropertyType::Enum {
-                    values: vec![
-                        EnumValue { value: "".to_string(), label: Some("-".to_string()) },
-                        EnumValue { value: "10".to_string(), label: Some("10 fps".to_string()) },
-                        EnumValue { value: "15".to_string(), label: Some("15 fps".to_string()) },
-                        EnumValue { value: "23.976".to_string(), label: Some("23.976 fps (24000/1001)".to_string()) },
-                        EnumValue { value: "24".to_string(), label: Some("24 fps".to_string()) },
-                        EnumValue { value: "25".to_string(), label: Some("25 fps".to_string()) },
-                        EnumValue { value: "29.97".to_string(), label: Some("29.97 fps (30000/1001)".to_string()) },
-                        EnumValue { value: "30".to_string(), label: Some("30 fps".to_string()) },
-                        EnumValue { value: "50".to_string(), label: Some("50 fps".to_string()) },
-                        EnumValue { value: "59.94".to_string(), label: Some("59.94 fps (60000/1001)".to_string()) },
-                        EnumValue { value: "60".to_string(), label: Some("60 fps".to_string()) },
-                        EnumValue { value: "120".to_string(), label: Some("120 fps".to_string()) },
-                    ],
+                    values: common_video_framerate_enum_values(true),
                 },
                 default_value: Some(PropertyValue::String("".to_string())),
                 mapping: PropertyMapping {

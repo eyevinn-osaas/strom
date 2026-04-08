@@ -259,7 +259,7 @@ impl StromApp {
             .resizable(false)
             .show(ui.ctx(), |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Name:");
+                    ui.label("Name");
                     ui.text_edit_singleline(&mut self.new_flow_name);
                 });
 
@@ -399,13 +399,18 @@ impl StromApp {
                 ui.heading("Flow Properties");
                 ui.add_space(5.0);
 
+                // Persistence
+                ui.label(egui::RichText::new("Persistence").strong());
+                ui.checkbox(&mut self.properties_ephemeral_buffer, "Ephemeral (don't persist to storage)");
+                ui.add_space(10.0);
+
                 // Name
-                ui.label("Name:");
+                ui.label("Name");
                 ui.text_edit_singleline(&mut self.properties_name_buffer);
                 ui.add_space(10.0);
 
                 // Description
-                ui.label("Description:");
+                ui.label("Description");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.properties_description_buffer)
                         .desired_width(f32::INFINITY)
@@ -416,7 +421,7 @@ impl StromApp {
                 ui.add_space(10.0);
 
                 // Clock Type
-                ui.label("Clock Type:");
+                ui.label("Clock Type");
                 ui.horizontal(|ui| {
                     use strom_types::flow::GStreamerClockType;
 
@@ -447,7 +452,7 @@ impl StromApp {
                     strom_types::flow::GStreamerClockType::Ptp
                 ) {
                     ui.add_space(10.0);
-                    ui.label("PTP Domain (0-255):");
+                    ui.label("PTP Domain (0-255)");
                     ui.add(
                         egui::TextEdit::singleline(&mut self.properties_ptp_domain_buffer)
                             .desired_width(100.0)
@@ -529,7 +534,7 @@ impl StromApp {
                 ui.add_space(10.0);
 
                 // Thread Priority
-                ui.label("Thread Priority:");
+                ui.label("Thread Priority");
                 ui.horizontal(|ui| {
                     use strom_types::flow::ThreadPriority;
 
@@ -581,7 +586,7 @@ impl StromApp {
                 ui.add_space(10.0);
 
                 // CPU Affinity
-                ui.label("CPU Affinity:");
+                ui.label("CPU Affinity");
                 ui.horizontal(|ui| {
                     use strom_types::flow::CpuAffinity;
 
@@ -688,6 +693,9 @@ impl StromApp {
                             // Set CPU affinity
                             flow.properties.cpu_affinity =
                                 self.properties_cpu_affinity_buffer;
+
+                            // Set ephemeral
+                            flow.properties.ephemeral = self.properties_ephemeral_buffer;
 
                             let flow_clone = flow.clone();
                             let api = self.api.clone();

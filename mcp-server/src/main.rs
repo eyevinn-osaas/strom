@@ -294,11 +294,8 @@ impl McpServer {
                     .ok_or_else(|| anyhow::anyhow!("name is required"))?
                     .to_string();
                 info!("MCP: Creating flow '{}'", name);
-                let request = strom_types::api::CreateFlowRequest {
-                    name,
-                    description: None,
-                };
-                let flow = self.client.create_flow(request).await?;
+                let flow = strom_types::flow::Flow::new(name);
+                let flow = self.client.create_flow(flow).await?;
                 serde_json::to_value(&flow)?
             }
             "update_flow" => {

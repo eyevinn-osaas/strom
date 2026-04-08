@@ -45,6 +45,15 @@ pub const DEFAULT_LATENCY_MS: u64 = 20;
 /// Default minimum upstream latency in milliseconds.
 pub const DEFAULT_MIN_UPSTREAM_LATENCY_MS: u64 = 20;
 
+/// Default PGM output framerate (fps as "numerator/denominator").
+pub const DEFAULT_PGM_FRAMERATE: &str = "30/1";
+
+/// Default multiview output framerate.
+pub const DEFAULT_MULTIVIEW_FRAMERATE: &str = "30/1";
+
+/// Whether to download GPU memory to system memory on output (GPU path only).
+pub const DEFAULT_GL_DOWNLOAD: bool = true;
+
 // --- Z-order constants for compositor pads ---
 
 /// Z-order for thumbnail pads on the multiview compositor.

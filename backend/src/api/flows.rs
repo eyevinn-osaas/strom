@@ -12,10 +12,10 @@ use serde::Deserialize;
 use std::process::{Command, Stdio};
 use strom_types::{
     api::{
-        AnimateInputRequest, AvailableOutput, AvailableSourcesResponse, CreateFlowRequest,
-        DynamicPadsResponse, ElementPropertiesResponse, ErrorResponse, FlowDebugInfo,
-        FlowListResponse, FlowResponse, FlowStatsResponse, LatencyResponse, PadPropertiesResponse,
-        SourceFlowInfo, TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
+        AnimateInputRequest, AvailableOutput, AvailableSourcesResponse, DynamicPadsResponse,
+        ElementPropertiesResponse, ErrorResponse, FlowDebugInfo, FlowListResponse, FlowResponse,
+        FlowStatsResponse, LatencyResponse, PadPropertiesResponse, SourceFlowInfo,
+        TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
         UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcStatsResponse,
     },
     Flow, FlowId,
@@ -185,87 +185,9 @@ pub async fn get_flow(
     }
 }
 
-/// Create a new flow.
-#[utoipa::path(
-    post,
-    path = "/api/flows",
-    tag = "flows",
-    request_body = CreateFlowRequest,
-    responses(
-        (status = 201, description = "Flow created", body = FlowResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
-    )
-)]
-pub async fn create_flow(
-    State(state): State<AppState>,
-    ValidatedJson(req): ValidatedJson<CreateFlowRequest>,
-) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
-    info!("Received create flow request: name='{}'", req.name);
-
-    let mut flow = Flow::new(req.name);
-
-    // Set description if provided
-    if let Some(description) = req.description {
-        flow.properties.description = Some(description);
-    }
-
-    // Set creation timestamp
-    let now = Local::now().to_rfc3339();
-    flow.properties.created_at = Some(now.clone());
-    flow.properties.last_modified = Some(now);
-
-    info!("Creating flow: {} ({})", flow.name, flow.id);
-
-    if let Err(e) = state.upsert_flow(flow.clone()).await {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::with_details(
-                "Failed to save flow",
-                e.to_string(),
-            )),
-        ));
-    }
-
-    Ok((StatusCode::CREATED, Json(FlowResponse { flow })))
-}
-
-/// Update an existing flow.
-#[utoipa::path(
-    post,
-    path = "/api/flows/{id}",
-    tag = "flows",
-    params(
-        ("id" = String, Path, description = "Flow ID (UUID)")
-    ),
-    request_body = Flow,
-    responses(
-        (status = 200, description = "Flow updated", body = FlowResponse),
-        (status = 400, description = "Bad request", body = ErrorResponse),
-        (status = 404, description = "Flow not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
-    )
-)]
-pub async fn update_flow(
-    State(state): State<AppState>,
-    Path(id): Path<FlowId>,
-    JsonBody(mut flow): JsonBody<Flow>,
-) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
-    // Ensure the ID in the path matches the flow
-    if id != flow.id {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("Flow ID mismatch")),
-        ));
-    }
-
-    // Get old flow to compare for live updates
-    let old_flow = state.get_flow(&id).await.ok_or((
-        StatusCode::NOT_FOUND,
-        Json(ErrorResponse::new("Flow not found")),
-    ))?;
-
-    info!("Updating flow: {} ({})", flow.name, flow.id);
-
+/// Prepare a flow for storage: trim endpoint strings, compute pads,
+/// validate links, and apply auto-layout if needed.
+fn prepare_flow(flow: &mut Flow) {
     // Trim endpoint string properties to avoid whitespace-related issues
     for block in &mut flow.blocks {
         let prop_name = match block.block_definition_id.as_str() {
@@ -292,8 +214,6 @@ pub async fn update_flow(
     }
 
     // Remove links that reference pads that no longer exist on blocks
-    // This can happen when block properties change (e.g., reducing num_audio_tracks)
-    // We need to collect pad info before calling retain to avoid borrow checker issues
     let mut valid_block_pads = std::collections::HashSet::new();
     let mut blocks_with_computed_pads = std::collections::HashSet::new();
 
@@ -351,13 +271,112 @@ pub async fn update_flow(
     }
 
     // Apply auto-layout if needed
-    if layout::needs_auto_layout(&flow) {
+    if layout::needs_auto_layout(flow) {
         info!(
             "Flow '{}' needs auto-layout (elements stacked or missing positions)",
             flow.name
         );
-        layout::apply_auto_layout(&mut flow);
+        layout::apply_auto_layout(flow);
     }
+}
+
+/// Create a new flow.
+#[utoipa::path(
+    post,
+    path = "/api/flows",
+    tag = "flows",
+    request_body = Flow,
+    responses(
+        (status = 201, description = "Flow created", body = FlowResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn create_flow(
+    State(state): State<AppState>,
+    JsonBody(mut flow): JsonBody<Flow>,
+) -> Result<(StatusCode, Json<FlowResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let name_len = flow.name.trim().len();
+    if name_len == 0 || name_len > 255 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "Flow name must be between 1 and 255 characters",
+            )),
+        ));
+    }
+
+    info!("Received create flow request: name='{}'", flow.name);
+
+    // Assign a new ID to avoid collisions with imported flows
+    flow.id = FlowId::new_v4();
+
+    // Clear runtime state
+    flow.running = false;
+    flow.gst_state = None;
+    for block in &mut flow.blocks {
+        block.runtime_data = None;
+    }
+
+    // Set timestamps
+    let now = Local::now().to_rfc3339();
+    flow.properties.created_at = Some(now.clone());
+    flow.properties.last_modified = Some(now);
+
+    prepare_flow(&mut flow);
+
+    info!("Creating flow: {} ({})", flow.name, flow.id);
+
+    if let Err(e) = state.upsert_flow(flow.clone()).await {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::with_details(
+                "Failed to save flow",
+                e.to_string(),
+            )),
+        ));
+    }
+
+    Ok((StatusCode::CREATED, Json(FlowResponse { flow })))
+}
+
+/// Update an existing flow.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{id}",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    request_body = Flow,
+    responses(
+        (status = 200, description = "Flow updated", body = FlowResponse),
+        (status = 400, description = "Bad request", body = ErrorResponse),
+        (status = 404, description = "Flow not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn update_flow(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+    JsonBody(mut flow): JsonBody<Flow>,
+) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
+    // Ensure the ID in the path matches the flow
+    if id != flow.id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("Flow ID mismatch")),
+        ));
+    }
+
+    // Get old flow to compare for live updates
+    let old_flow = state.get_flow(&id).await.ok_or((
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse::new("Flow not found")),
+    ))?;
+
+    info!("Updating flow: {} ({})", flow.name, flow.id);
+
+    prepare_flow(&mut flow);
 
     // Update last_modified timestamp (preserve created_at from old flow)
     flow.properties.last_modified = Some(Local::now().to_rfc3339());

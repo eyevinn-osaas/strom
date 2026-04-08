@@ -3,8 +3,8 @@
 use strom_types::block::*;
 use strom_types::vision_mixer::*;
 use strom_types::{
-    common_video_pixel_format_enum_values, common_video_resolution_enum_values, MediaType,
-    PropertyValue,
+    common_video_framerate_enum_values, common_video_pixel_format_enum_values,
+    common_video_resolution_enum_values, MediaType, PropertyValue,
 };
 
 /// Get block definitions for the vision mixer.
@@ -116,16 +116,38 @@ fn vision_mixer_definition() -> BlockDefinition {
             },
             live: false,
         },
-        // Force live
+        // PGM output framerate
         ExposedProperty {
-            name: "force_live".to_string(),
-            label: "Force Live".to_string(),
-            description: "Force compositors into live mode".to_string(),
-            property_type: PropertyType::Bool,
-            default_value: Some(PropertyValue::Bool(true)),
+            name: "pgm_framerate".to_string(),
+            label: "PGM Framerate".to_string(),
+            description: "Distribution/PGM output framerate".to_string(),
+            property_type: PropertyType::Enum {
+                values: common_video_framerate_enum_values(false),
+            },
+            default_value: Some(PropertyValue::String(
+                DEFAULT_PGM_FRAMERATE.to_string(),
+            )),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
-                property_name: "force_live".to_string(),
+                property_name: "pgm_framerate".to_string(),
+                transform: None,
+            },
+            live: false,
+        },
+        // Multiview output framerate
+        ExposedProperty {
+            name: "multiview_framerate".to_string(),
+            label: "Multiview Framerate".to_string(),
+            description: "Multiview monitor output framerate".to_string(),
+            property_type: PropertyType::Enum {
+                values: common_video_framerate_enum_values(false),
+            },
+            default_value: Some(PropertyValue::String(
+                DEFAULT_MULTIVIEW_FRAMERATE.to_string(),
+            )),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "multiview_framerate".to_string(),
                 transform: None,
             },
             live: false,
@@ -210,6 +232,20 @@ fn vision_mixer_definition() -> BlockDefinition {
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "output_format".to_string(),
+                transform: None,
+            },
+            live: false,
+        },
+        // GL download (GPU path only)
+        ExposedProperty {
+            name: "gl_download".to_string(),
+            label: "GL Download".to_string(),
+            description: "Download GPU memory to system memory on output. Disable to pass GL memory downstream (GPU path only).".to_string(),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(DEFAULT_GL_DOWNLOAD)),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "gl_download".to_string(),
                 transform: None,
             },
             live: false,
