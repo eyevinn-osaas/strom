@@ -41,7 +41,6 @@ pub fn select_backend(preference: &str) -> Result<CompositorBackend, BlockBuildE
 /// Create the distribution (PGM) compositor element.
 pub fn make_dist_compositor(
     backend: CompositorBackend,
-    force_live: bool,
     latency_ms: u64,
     min_upstream_latency_ms: u64,
 ) -> Result<gst::Element, BlockBuildError> {
@@ -52,7 +51,7 @@ pub fn make_dist_compositor(
 
     let mixer = gst::ElementFactory::make(element_type)
         .name("mixer")
-        .property("force-live", force_live)
+        .property("force-live", true)
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", element_type, e)))?;
 
@@ -71,7 +70,6 @@ pub fn make_dist_compositor(
 /// Create the multiview compositor element.
 pub fn make_mv_compositor(
     backend: CompositorBackend,
-    force_live: bool,
     latency_ms: u64,
     min_upstream_latency_ms: u64,
 ) -> Result<gst::Element, BlockBuildError> {
@@ -82,12 +80,11 @@ pub fn make_mv_compositor(
 
     let mixer = gst::ElementFactory::make(element_type)
         .name("mv_comp")
-        .property("force-live", force_live)
+        .property("force-live", true)
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", element_type, e)))?;
 
     apply_post_build_properties(&mixer, latency_ms, min_upstream_latency_ms);
-    // Black background for multiview
     if mixer.find_property("background").is_some() {
         mixer.set_property_from_str("background", "black");
     }

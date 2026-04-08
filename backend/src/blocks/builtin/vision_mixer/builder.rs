@@ -74,7 +74,6 @@ impl BlockBuilder for VisionMixerBuilder {
         let pgm_input = properties::parse_initial_pgm(props, num_inputs);
         let pvw_input = properties::parse_initial_pvw(props, num_inputs);
         let labels = properties::parse_input_labels(props, num_inputs);
-        let force_live = properties::parse_bool(props, "force_live", true);
         let latency_ms = properties::parse_u64(props, "latency", vision_mixer::DEFAULT_LATENCY_MS);
         let min_upstream_ms = properties::parse_u64(
             props,
@@ -91,10 +90,22 @@ impl BlockBuilder for VisionMixerBuilder {
             "multiview_resolution",
             vision_mixer::DEFAULT_MULTIVIEW_RESOLUTION,
         );
+        let pgm_framerate = properties::parse_framerate(
+            props,
+            "pgm_framerate",
+            vision_mixer::DEFAULT_PGM_FRAMERATE,
+        );
+        let mv_framerate = properties::parse_framerate(
+            props,
+            "multiview_framerate",
+            vision_mixer::DEFAULT_MULTIVIEW_FRAMERATE,
+        );
 
         let num_dsk_inputs = properties::parse_num_dsk_inputs(props);
 
         let output_format = properties::parse_output_format(props);
+        let gl_download =
+            properties::parse_bool(props, "gl_download", vision_mixer::DEFAULT_GL_DOWNLOAD);
 
         let pref = props
             .get("compositor_preference")
@@ -106,8 +117,10 @@ impl BlockBuilder for VisionMixerBuilder {
         let backend = elements::select_backend(pref)?;
 
         info!(
-            "Building vision mixer: {} inputs, PGM={}x{}, MV={}x{}, backend={:?}, pgm={}, pvw={}",
-            num_inputs, pgm_w, pgm_h, mv_w, mv_h, backend, pgm_input, pvw_input
+            "Building vision mixer: {} inputs, PGM={}x{}@{}/{}, MV={}x{}@{}/{}, backend={:?}, pgm={}, pvw={}",
+            num_inputs, pgm_w, pgm_h, pgm_framerate.0, pgm_framerate.1,
+            mv_w, mv_h, mv_framerate.0, mv_framerate.1,
+            backend, pgm_input, pvw_input
         );
 
         let p = PipelineParams {
@@ -117,15 +130,17 @@ impl BlockBuilder for VisionMixerBuilder {
             pgm_input,
             pvw_input,
             labels: &labels,
-            force_live,
             latency_ms,
             min_upstream_ms,
             pgm_w,
             pgm_h,
             mv_w,
             mv_h,
+            pgm_framerate,
+            mv_framerate,
             backend,
             output_format,
+            gl_download,
         };
 
         match backend {
@@ -143,15 +158,17 @@ struct PipelineParams<'a> {
     pgm_input: usize,
     pvw_input: usize,
     labels: &'a [String],
-    force_live: bool,
     latency_ms: u64,
     min_upstream_ms: u64,
     pgm_w: u32,
     pgm_h: u32,
     mv_w: u32,
     mv_h: u32,
+    pgm_framerate: (i32, i32),
+    mv_framerate: (i32, i32),
     backend: CompositorBackend,
     output_format: Option<String>,
+    gl_download: bool,
 }
 
 impl<'a> PipelineParams<'a> {
@@ -160,11 +177,31 @@ impl<'a> PipelineParams<'a> {
         format!("{}:{}", self.instance_id, name)
     }
 
-    /// Build output caps with resolution and optional pixel format.
-    fn output_caps(&self, width: u32, height: u32) -> gst::Caps {
+    /// Build PGM output caps with resolution, framerate, and optional pixel format.
+    fn pgm_caps(&self) -> gst::Caps {
         let mut builder = gst::Caps::builder("video/x-raw")
-            .field("width", width as i32)
-            .field("height", height as i32)
+            .field("width", self.pgm_w as i32)
+            .field("height", self.pgm_h as i32)
+            .field(
+                "framerate",
+                gst::Fraction::new(self.pgm_framerate.0, self.pgm_framerate.1),
+            )
+            .field("pixel-aspect-ratio", gst::Fraction::new(1, 1));
+        if let Some(ref fmt) = self.output_format {
+            builder = builder.field("format", fmt.as_str());
+        }
+        builder.build()
+    }
+
+    /// Build multiview output caps with resolution, framerate, and optional pixel format.
+    fn mv_caps(&self) -> gst::Caps {
+        let mut builder = gst::Caps::builder("video/x-raw")
+            .field("width", self.mv_w as i32)
+            .field("height", self.mv_h as i32)
+            .field(
+                "framerate",
+                gst::Fraction::new(self.mv_framerate.0, self.mv_framerate.1),
+            )
             .field("pixel-aspect-ratio", gst::Fraction::new(1, 1));
         if let Some(ref fmt) = self.output_format {
             builder = builder.field("format", fmt.as_str());
@@ -185,10 +222,8 @@ fn build_gpu_pipeline(
     let mut links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
 
     // --- Create compositors (no pre-requested pads — the linker auto-creates them) ---
-    let dist_comp =
-        elements::make_dist_compositor(p.backend, p.force_live, p.latency_ms, p.min_upstream_ms)?;
-    let mv_comp =
-        elements::make_mv_compositor(p.backend, p.force_live, p.latency_ms, p.min_upstream_ms)?;
+    let dist_comp = elements::make_dist_compositor(p.backend, p.latency_ms, p.min_upstream_ms)?;
+    let mv_comp = elements::make_mv_compositor(p.backend, p.latency_ms, p.min_upstream_ms)?;
 
     dist_comp.set_property("name", p.id("mixer"));
     mv_comp.set_property("name", p.id("mv_comp"));
@@ -202,27 +237,17 @@ fn build_gpu_pipeline(
     let mv_layout = layout::compute_layout(p.mv_w, p.mv_h, p.num_inputs);
 
     // --- Distribution output chain ---
-    // mixer → queue_post_dist → tee_pgm → gldownload → capsfilter → queue_dist_out
     // queue_post_dist decouples the compositor from downstream processing.
+    // With gl_download=true:  mixer → queue_post_dist → tee_pgm → gldownload → capsfilter → queue_dist_out
+    // With gl_download=false: mixer → queue_post_dist → tee_pgm → queue_dist_out (GL memory passthrough)
     let q_post_dist_id = p.id("queue_post_dist");
     let queue_post_dist = elements::make_queue(&q_post_dist_id)?;
     let tee_pgm_id = p.id("tee_pgm");
     let tee_pgm = elements::make_tee(&tee_pgm_id)?;
-    let dl_dist_id = p.id("gldownload_dist");
-    let gldownload_dist = elements::make_element("gldownload", "gldownload_dist")?;
-    gldownload_dist.set_property("name", &dl_dist_id);
-    let cf_dist_id = p.id("capsfilter_dist");
-    let capsfilter_dist = gst::ElementFactory::make("capsfilter")
-        .name(&cf_dist_id)
-        .property("caps", p.output_caps(p.pgm_w, p.pgm_h))
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_dist: {}", e)))?;
     let q_dist_out_id = p.id("queue_dist_out");
     let queue_dist_out = elements::make_queue(&q_dist_out_id)?;
     elems.push((q_post_dist_id.clone(), queue_post_dist));
     elems.push((tee_pgm_id.clone(), tee_pgm));
-    elems.push((dl_dist_id.clone(), gldownload_dist));
-    elems.push((cf_dist_id.clone(), capsfilter_dist));
     elems.push((q_dist_out_id.clone(), queue_dist_out));
     links.push((
         ElementPadRef::pad(&mixer_id, "src"),
@@ -232,32 +257,36 @@ fn build_gpu_pipeline(
         ElementPadRef::pad(&q_post_dist_id, "src"),
         ElementPadRef::pad(&tee_pgm_id, "sink"),
     ));
-    links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_0"),
-        ElementPadRef::pad(&dl_dist_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&dl_dist_id, "src"),
-        ElementPadRef::pad(&cf_dist_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&cf_dist_id, "src"),
-        ElementPadRef::pad(&q_dist_out_id, "sink"),
-    ));
-
-    // Fakesink on tee_pgm to ensure PGM pipeline always has a pulling sink
-    let fs_pgm_id = p.id("fakesink_pgm");
-    let fakesink_pgm = gst::ElementFactory::make("fakesink")
-        .name(&fs_pgm_id)
-        .property("async", false)
-        .property("sync", false)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_pgm: {}", e)))?;
-    elems.push((fs_pgm_id.clone(), fakesink_pgm));
-    links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_1"),
-        ElementPadRef::pad(&fs_pgm_id, "sink"),
-    ));
+    if p.gl_download {
+        let dl_dist_id = p.id("gldownload_dist");
+        let gldownload_dist = elements::make_element("gldownload", "gldownload_dist")?;
+        gldownload_dist.set_property("name", &dl_dist_id);
+        let cf_dist_id = p.id("capsfilter_dist");
+        let capsfilter_dist = gst::ElementFactory::make("capsfilter")
+            .name(&cf_dist_id)
+            .property("caps", p.pgm_caps())
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_dist: {}", e)))?;
+        elems.push((dl_dist_id.clone(), gldownload_dist));
+        elems.push((cf_dist_id.clone(), capsfilter_dist));
+        links.push((
+            ElementPadRef::pad(&tee_pgm_id, "src_0"),
+            ElementPadRef::pad(&dl_dist_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&dl_dist_id, "src"),
+            ElementPadRef::pad(&cf_dist_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&cf_dist_id, "src"),
+            ElementPadRef::pad(&q_dist_out_id, "sink"),
+        ));
+    } else {
+        links.push((
+            ElementPadRef::pad(&tee_pgm_id, "src_0"),
+            ElementPadRef::pad(&q_dist_out_id, "sink"),
+        ));
+    }
 
     // Queue to decouple tee_pgm from the multiview compositor (separate thread)
     let q_pgm_mv_id = p.id("queue_pgm_mv");
@@ -290,28 +319,17 @@ fn build_gpu_pipeline(
     }
 
     // --- Multiview output chain ---
-    // mv_comp → queue_post_mv → gldownload → capsfilter → tee_mv → queue_mv_out
     // queue_post_mv decouples the compositor from downstream processing.
+    // With gl_download=true:  mv_comp → queue_post_mv → gldownload → capsfilter → tee_mv → queue_mv_out
+    // With gl_download=false: mv_comp → queue_post_mv → tee_mv → queue_mv_out (GL memory passthrough)
     let q_post_mv_id = p.id("queue_post_mv");
     let queue_post_mv = elements::make_queue(&q_post_mv_id)?;
-    let dl_id = p.id("gldownload_mv");
-    let cf_mv_id = p.id("capsfilter_mv");
     let tee_mv_id = p.id("tee_mv");
-    let q_mv_out_id = p.id("queue_mv_out");
-
-    let gldownload_mv = elements::make_element("gldownload", "gldownload_mv")?;
-    gldownload_mv.set_property("name", &dl_id);
-    let capsfilter_mv = gst::ElementFactory::make("capsfilter")
-        .name(&cf_mv_id)
-        .property("caps", p.output_caps(p.mv_w, p.mv_h))
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_mv: {}", e)))?;
     let tee_mv = elements::make_tee(&tee_mv_id)?;
+    let q_mv_out_id = p.id("queue_mv_out");
     let queue_mv_out = elements::make_queue(&q_mv_out_id)?;
 
     elems.push((q_post_mv_id.clone(), queue_post_mv));
-    elems.push((dl_id.clone(), gldownload_mv));
-    elems.push((cf_mv_id.clone(), capsfilter_mv));
     elems.push((tee_mv_id.clone(), tee_mv));
     elems.push((q_mv_out_id.clone(), queue_mv_out));
 
@@ -319,42 +337,46 @@ fn build_gpu_pipeline(
         ElementPadRef::pad(&mv_comp_id, "src"),
         ElementPadRef::pad(&q_post_mv_id, "sink"),
     ));
-    links.push((
-        ElementPadRef::pad(&q_post_mv_id, "src"),
-        ElementPadRef::pad(&dl_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&dl_id, "src"),
-        ElementPadRef::pad(&cf_mv_id, "sink"),
-    ));
-    links.push((
-        ElementPadRef::pad(&cf_mv_id, "src"),
-        ElementPadRef::pad(&tee_mv_id, "sink"),
-    ));
+    if p.gl_download {
+        let dl_id = p.id("gldownload_mv");
+        let gldownload_mv = elements::make_element("gldownload", "gldownload_mv")?;
+        gldownload_mv.set_property("name", &dl_id);
+        let cf_mv_id = p.id("capsfilter_mv");
+        let capsfilter_mv = gst::ElementFactory::make("capsfilter")
+            .name(&cf_mv_id)
+            .property("caps", p.mv_caps())
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_mv: {}", e)))?;
+        elems.push((dl_id.clone(), gldownload_mv));
+        elems.push((cf_mv_id.clone(), capsfilter_mv));
+        links.push((
+            ElementPadRef::pad(&q_post_mv_id, "src"),
+            ElementPadRef::pad(&dl_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&dl_id, "src"),
+            ElementPadRef::pad(&cf_mv_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&cf_mv_id, "src"),
+            ElementPadRef::pad(&tee_mv_id, "sink"),
+        ));
+    } else {
+        links.push((
+            ElementPadRef::pad(&q_post_mv_id, "src"),
+            ElementPadRef::pad(&tee_mv_id, "sink"),
+        ));
+    }
     links.push((
         ElementPadRef::pad(&tee_mv_id, "src_0"),
         ElementPadRef::pad(&q_mv_out_id, "sink"),
     ));
 
-    // Fakesink on tee_mv to ensure MV pipeline always has a pulling sink
-    let fs_mv_id = p.id("fakesink_mv");
-    let fakesink_mv = gst::ElementFactory::make("fakesink")
-        .name(&fs_mv_id)
-        .property("async", false)
-        .property("sync", false)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_mv: {}", e)))?;
-    elems.push((fs_mv_id.clone(), fakesink_mv));
-    links.push((
-        ElementPadRef::pad(&tee_mv_id, "src_1"),
-        ElementPadRef::pad(&fs_mv_id, "sink"),
-    ));
-
     // --- Overlay appsrc → glupload → mv_comp (composited in GPU at high zorder) ---
     let appsrc_overlay_id = p.id("appsrc_overlay");
     let overlay_caps_str = format!(
-        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate={}/1,interlace-mode=progressive,multiview-mode=mono",
-        p.mv_w, p.mv_h, vision_mixer::OVERLAY_FRAMERATE
+        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate={}/{},interlace-mode=progressive,multiview-mode=mono",
+        p.mv_w, p.mv_h, p.mv_framerate.0, p.mv_framerate.1
     );
     let overlay_caps: gst::Caps = overlay_caps_str
         .parse()
@@ -470,10 +492,9 @@ fn build_gpu_pipeline(
         ));
     }
 
-    // Multiview PGM big display: tee_pgm.src_2 → queue_pgm_mv → mv_comp.sink_N
-    // (src_1 is used by fakesink_pgm)
+    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → mv_comp.sink_N
     links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_2"),
+        ElementPadRef::pad(&tee_pgm_id, "src_1"),
         ElementPadRef::pad(&q_pgm_mv_id, "sink"),
     ));
     links.push((
@@ -532,10 +553,8 @@ fn build_cpu_pipeline(
     let mut elems: Vec<(String, gst::Element)> = Vec::new();
     let mut links: Vec<(ElementPadRef, ElementPadRef)> = Vec::new();
 
-    let dist_comp =
-        elements::make_dist_compositor(p.backend, p.force_live, p.latency_ms, p.min_upstream_ms)?;
-    let mv_comp =
-        elements::make_mv_compositor(p.backend, p.force_live, p.latency_ms, p.min_upstream_ms)?;
+    let dist_comp = elements::make_dist_compositor(p.backend, p.latency_ms, p.min_upstream_ms)?;
+    let mv_comp = elements::make_mv_compositor(p.backend, p.latency_ms, p.min_upstream_ms)?;
 
     dist_comp.set_property("name", p.id("mixer"));
     mv_comp.set_property("name", p.id("mv_comp"));
@@ -553,7 +572,7 @@ fn build_cpu_pipeline(
     let cf_dist_id = p.id("capsfilter_dist");
     let capsfilter_dist = gst::ElementFactory::make("capsfilter")
         .name(&cf_dist_id)
-        .property("caps", p.output_caps(p.pgm_w, p.pgm_h))
+        .property("caps", p.pgm_caps())
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_dist: {}", e)))?;
     let tee_pgm_id = p.id("tee_pgm");
@@ -577,20 +596,6 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&q_dist_out_id, "sink"),
     ));
 
-    // Fakesink on tee_pgm to ensure PGM pipeline always has a pulling sink
-    let fs_pgm_id = p.id("fakesink_pgm");
-    let fakesink_pgm = gst::ElementFactory::make("fakesink")
-        .name(&fs_pgm_id)
-        .property("async", false)
-        .property("sync", false)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_pgm: {}", e)))?;
-    elems.push((fs_pgm_id.clone(), fakesink_pgm));
-    links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_1"),
-        ElementPadRef::pad(&fs_pgm_id, "sink"),
-    ));
-
     // Queue + capsfilter to decouple tee_pgm from the multiview compositor.
     // The capsfilter breaks the caps negotiation cycle: PGM compositor → tee →
     // queue_pgm_mv → mv_comp → (feedback). Without it, tee forwards caps queries
@@ -603,7 +608,7 @@ fn build_cpu_pipeline(
     let cf_pgm_mv_id = p.id("capsfilter_pgm_mv");
     let capsfilter_pgm_mv = gst::ElementFactory::make("capsfilter")
         .name(&cf_pgm_mv_id)
-        .property("caps", p.output_caps(p.pgm_w, p.pgm_h))
+        .property("caps", p.pgm_caps())
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_pgm_mv: {}", e)))?;
     elems.push((q_pgm_mv_id.clone(), queue_pgm_mv));
@@ -654,7 +659,7 @@ fn build_cpu_pipeline(
     let cf_mv_id = p.id("capsfilter_mv");
     let capsfilter_mv = gst::ElementFactory::make("capsfilter")
         .name(&cf_mv_id)
-        .property("caps", p.output_caps(p.mv_w, p.mv_h))
+        .property("caps", p.mv_caps())
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("capsfilter_mv: {}", e)))?;
     let tee_mv_id = p.id("tee_mv");
@@ -679,25 +684,11 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&q_mv_out_id, "sink"),
     ));
 
-    // Fakesink on tee_mv to ensure MV pipeline always has a pulling sink
-    let fs_mv_id = p.id("fakesink_mv");
-    let fakesink_mv = gst::ElementFactory::make("fakesink")
-        .name(&fs_mv_id)
-        .property("async", false)
-        .property("sync", false)
-        .build()
-        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink_mv: {}", e)))?;
-    elems.push((fs_mv_id.clone(), fakesink_mv));
-    links.push((
-        ElementPadRef::pad(&tee_mv_id, "src_1"),
-        ElementPadRef::pad(&fs_mv_id, "sink"),
-    ));
-
     // --- Overlay appsrc → mv_comp (CPU compositor accepts raw BGRA directly) ---
     let appsrc_overlay_id = p.id("appsrc_overlay");
     let overlay_caps_str = format!(
-        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate={}/1,interlace-mode=progressive,multiview-mode=mono",
-        p.mv_w, p.mv_h, vision_mixer::OVERLAY_FRAMERATE
+        "video/x-raw,format=RGBA,width={},height={},pixel-aspect-ratio=1/1,framerate={}/{},interlace-mode=progressive,multiview-mode=mono",
+        p.mv_w, p.mv_h, p.mv_framerate.0, p.mv_framerate.1
     );
     let overlay_caps: gst::Caps = overlay_caps_str
         .parse()
@@ -889,10 +880,10 @@ fn build_cpu_pipeline(
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", overlay_pad_idx)),
     ));
 
-    // Multiview PGM big display: tee_pgm.src_2 → queue_pgm_mv → capsfilter_pgm_mv → mv_comp.sink_N
-    // (src_1 is used by fakesink_pgm; capsfilter breaks caps query cycle back to PGM compositor)
+    // Multiview PGM big display: tee_pgm.src_1 → queue_pgm_mv → capsfilter_pgm_mv → mv_comp.sink_N
+    // (capsfilter breaks caps query cycle back to PGM compositor)
     links.push((
-        ElementPadRef::pad(&tee_pgm_id, "src_2"),
+        ElementPadRef::pad(&tee_pgm_id, "src_1"),
         ElementPadRef::pad(&q_pgm_mv_id, "sink"),
     ));
     links.push((
