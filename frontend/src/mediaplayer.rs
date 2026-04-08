@@ -312,10 +312,13 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
         egui::epaint::StrokeKind::Inside,
     );
 
-    // Seek is disabled - doesn't work properly with live sinks (sync=true)
-    // Show tooltip explaining why seek is disabled
-    if response.hovered() {
-        response.on_hover_text("Seek disabled: not supported with live streaming output");
+    // Seek: click or drag on the progress bar to seek
+    if response.clicked() || response.dragged() {
+        if let Some(pointer_pos) = response.interact_pointer_pos() {
+            let seek_progress = ((pointer_pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
+            let seek_ns = (seek_progress as f64 * player_data.duration_ns as f64) as u64;
+            return Some(("seek".to_string(), Some(seek_ns)));
+        }
     }
 
     // Time display
@@ -331,10 +334,6 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
 }
 
 /// Render a full media player widget (for property inspector).
-///
-/// TODO: This function is currently unused (dead code). Consider removing it,
-/// or integrating it into the properties panel like meter and webrtc_stats blocks.
-#[allow(dead_code)]
 pub fn show_full(
     ui: &mut Ui,
     block_id: &str,
@@ -389,7 +388,7 @@ pub fn show_full(
             .button(format!("{} Prev", egui_phosphor::regular::SKIP_BACK))
             .clicked()
         {
-            action = Some(("prev".to_string(), None));
+            action = Some(("previous".to_string(), None));
         }
 
         let play_pause_text = if player_data.state == "playing" {
@@ -425,17 +424,20 @@ pub fn show_full(
         ));
     });
 
-    // Progress bar (seek disabled - doesn't work properly with live sinks)
-    let progress = if player_data.duration_ns > 0 {
+    // Interactive seek slider
+    let mut progress = if player_data.duration_ns > 0 {
         player_data.position_ns as f32 / player_data.duration_ns as f32
     } else {
         0.0
     };
 
-    // Show progress as a read-only bar instead of interactive slider
-    let progress_bar = egui::ProgressBar::new(progress).show_percentage();
-    ui.add(progress_bar)
-        .on_hover_text("Seek disabled: not supported with live streaming output");
+    let slider = egui::Slider::new(&mut progress, 0.0..=1.0)
+        .show_value(false)
+        .text("Seek");
+    if ui.add(slider).changed() && player_data.duration_ns > 0 {
+        let seek_ns = (progress as f64 * player_data.duration_ns as f64) as u64;
+        action = Some(("seek".to_string(), Some(seek_ns)));
+    }
 
     ui.add_space(5.0);
     ui.label(format!("Block: {}", block_id));

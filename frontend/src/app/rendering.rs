@@ -1419,6 +1419,7 @@ impl StromApp {
                             &self.spectrum_data,
                             &self.loudness_data,
                             &self.latency_data,
+                            &self.mediaplayer_data,
                             &self.webrtc_stats,
                             rtp_stats,
                             &self.network_interfaces,
