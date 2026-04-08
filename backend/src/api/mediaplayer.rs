@@ -11,7 +11,7 @@ pub use strom_types::mediaplayer::{
     SetPlaylistRequest,
 };
 use strom_types::{api::ErrorResponse, element::PropertyValue, FlowId};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::blocks::builtin::mediaplayer::{MediaPlayerKey, MEDIA_PLAYER_REGISTRY};
 use crate::state::AppState;
@@ -219,12 +219,6 @@ pub async fn seek_player(
     ))?;
 
     info!("Player {} seek to {} ns", block_id, req.position_ns);
-    warn!(
-        "Seek may not work correctly with live streaming outputs (sync=true). \
-         This is a known limitation. See docs/MEDIAPLAYER_TEST_HARNESS.md for details."
-    );
-
-    // Seek is now scheduled on GLib main loop, so this returns immediately
     player.seek(req.position_ns).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
