@@ -116,7 +116,13 @@ fn apply_post_build_properties(
         mixer.set_property("min-upstream-latency", latency_ns);
     }
     if mixer.find_property("start-time-selection").is_some() {
-        mixer.set_property_from_str("start-time-selection", "first");
+        // Use "zero" instead of "first" to avoid a race condition in GStreamer 1.26:
+        // with "first", if the aggregator srcpad task runs before any buffer arrives,
+        // it falls through to using the absolute monotonic clock time as start time,
+        // causing the compositor to wait for an impossibly far deadline (2× system uptime).
+        // With "zero" and force-live=true, running time starts at 0 which is correct
+        // for live pipelines using monotonic clock.
+        mixer.set_property_from_str("start-time-selection", "zero");
     }
 }
 
