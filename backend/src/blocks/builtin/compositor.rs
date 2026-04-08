@@ -18,6 +18,7 @@
 //! CPU backend chain: queue -> videoconvert -> [thumb_tee] -> compositor -> capsfilter
 
 use crate::blocks::{BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder};
+use crate::gpu;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ use strom_types::{
     block::*, common_video_resolution_enum_values, element::ElementPadRef, parse_resolution_string,
     PropertyValue, *,
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Backend selection for the compositor.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -208,11 +209,13 @@ fn select_compositor(
             }
         }
         CompositorPreference::Auto => {
-            if has_gl {
+            // Only pick GL when a real hardware GPU is available.
+            // Mesa software renderers (llvmpipe) are slower than the CPU compositor.
+            if has_gl && gpu::has_hardware_gl() {
                 debug!("Auto-selected GPU (OpenGL) compositor");
                 Ok(CompositorBackend::OpenGL)
             } else if has_software {
-                warn!("GPU compositor unavailable, falling back to CPU compositor");
+                debug!("Auto-selected CPU compositor (no hardware GL)");
                 Ok(CompositorBackend::Software)
             } else {
                 Err(BlockBuildError::InvalidConfiguration(
