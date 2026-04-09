@@ -85,6 +85,20 @@ pub fn gl_renderer_info() -> Option<GlRendererInfo> {
     GL_RENDERER_INFO.get().cloned().flatten()
 }
 
+/// Returns true if a hardware-accelerated GL renderer was detected at startup.
+/// Returns false if GL probe failed, hasn't run, or detected a software renderer
+/// (Mesa llvmpipe/softpipe/swrast). Used by compositor auto-selection to avoid
+/// choosing glvideomixerelement when it would run slower than CPU compositor.
+pub fn has_hardware_gl() -> bool {
+    match gl_renderer_info() {
+        Some(info) => {
+            let r = info.renderer.to_lowercase();
+            !r.contains("llvmpipe") && !r.contains("softpipe") && !r.contains("swrast")
+        }
+        None => false,
+    }
+}
+
 /// Probe the OpenGL renderer via GStreamer's GL context API.
 ///
 /// Creates a minimal in-process pipeline (`videotestsrc ! glupload ! appsink`),
