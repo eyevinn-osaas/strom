@@ -650,13 +650,13 @@ async fn serve_with_tls(
         info!("Server listening on https://{}", addr);
         axum_server::bind_rustls(addr, tls_config)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
         info!("Server listening on http://{}", addr);
         axum_server::bind(addr)
             .handle(handle)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     }
     Ok(())
