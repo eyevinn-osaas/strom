@@ -325,11 +325,12 @@ impl GraphEditor {
                 }
 
                 // Handle node selection - select on click OR when starting to drag
+                // Use deferred selection to avoid egui two-pass ID instability
                 if node_response.clicked() || (node_response.dragged() && self.dragging.is_none()) {
-                    self.selected = Some(element.id.clone());
-                    self.selected_link = None; // Deselect any link
-                    self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
-                    self.focused_pad = None; // Clear pad focus
+                    self.pending_selected = Some(Some(element.id.clone()));
+                    self.pending_selected_link = Some(None);
+                    self.pending_property_tab = Some(PropertyTab::Element);
+                    self.pending_focused_pad = Some(None);
                 }
 
                 // Handle node dragging
@@ -447,10 +448,10 @@ impl GraphEditor {
                 };
 
                 if should_select {
-                    self.selected = Some(block.id.clone());
-                    self.selected_link = None;
-                    self.active_property_tab = PropertyTab::Element; // Switch to Element Properties tab
-                    self.focused_pad = None; // Clear pad focus
+                    self.pending_selected = Some(Some(block.id.clone()));
+                    self.pending_selected_link = Some(None);
+                    self.pending_property_tab = Some(PropertyTab::Element);
+                    self.pending_focused_pad = Some(None);
                 }
 
                 // Handle double-click to open compositor editor for compositor blocks
@@ -560,8 +561,8 @@ impl GraphEditor {
                     // Already deselected and not a double-click — signal to toggle right pane
                     self.request_toggle_right_pane.set(true);
                 }
-                self.selected = None;
-                self.selected_link = None;
+                self.pending_selected = Some(None);
+                self.pending_selected_link = Some(None);
             }
 
             // Ctrl+double-click on background: zoom to fit
@@ -652,8 +653,8 @@ impl GraphEditor {
 
             // Handle link selection on click
             if response.clicked() && self.hovered_link.is_some() {
-                self.selected_link = self.hovered_link;
-                self.selected = None; // Deselect any element
+                self.pending_selected_link = Some(self.hovered_link);
+                self.pending_selected = Some(None);
             }
 
             // Draw link being created (on top of everything)

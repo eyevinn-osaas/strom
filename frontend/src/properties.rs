@@ -181,14 +181,13 @@ impl PropertyInspector {
         input_pads: Vec<String>,
         output_pads: Vec<String>,
     ) -> (PropertyTab, bool) {
-        let element_id = element.id.clone();
         let mut new_tab = active_tab;
         let delete_requested = false;
 
-        ui.push_id(&element_id, |ui| {
+        ui.push_id("selected_inspector", |ui| {
             // Outer scroll area for entire inspector
             ScrollArea::both()
-                .id_salt("property_inspector_outer_scroll")
+                .id_salt("inspector_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     // Element info in collapsible section
@@ -465,10 +464,10 @@ impl PropertyInspector {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
 
-        ui.push_id(&block_id, |ui| {
+        ui.push_id("selected_inspector", |ui| {
             // Outer scroll area for entire block inspector
             ScrollArea::both()
-                .id_salt("block_inspector_outer_scroll")
+                .id_salt("inspector_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
             // Block info in collapsible section
