@@ -30,6 +30,9 @@ impl eframe::App for StromApp {
             }
         }
 
+        // Apply deferred graph selection (avoids egui two-pass ID instability)
+        self.graph.apply_pending_selection();
+
         // Handle pending flow selection (deferred from previous frame to avoid accesskit panic)
         // This MUST happen before any UI is drawn to prevent "Focused ID not in node list" errors
         if let Some(flow_id) = self.pending_flow_selection.take() {
@@ -985,6 +988,28 @@ impl eframe::App for StromApp {
                     if !status.auth_required || status.authenticated {
                         self.setup_websocket_connection(ui.ctx().clone());
                         self.load_version(ui.ctx().clone());
+                    }
+                }
+                AppMessage::SessionExpired => {
+                    tracing::warn!("Session expired (401), triggering re-authentication");
+
+                    // Reload the page so the HTML login form can re-initialize
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        if let Some(window) = web_sys::window() {
+                            if let Err(e) = window.location().reload() {
+                                tracing::error!("Failed to reload page: {:?}", e);
+                            }
+                        }
+                    }
+
+                    // For native mode, reset state and recheck auth
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        self.flows.clear();
+                        self.ws_client = None;
+                        self.connection_state = ConnectionState::Disconnected;
+                        self.check_auth_status(ui.ctx().clone());
                     }
                 }
                 AppMessage::LogoutComplete => {

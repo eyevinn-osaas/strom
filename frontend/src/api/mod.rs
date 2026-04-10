@@ -28,6 +28,13 @@ pub enum ApiError {
     Decode(String),
 }
 
+impl ApiError {
+    /// Returns true if this is a 401 Unauthorized error (session expired).
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(self, ApiError::Http(401, _))
+    }
+}
+
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

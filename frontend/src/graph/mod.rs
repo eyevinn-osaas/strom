@@ -74,6 +74,15 @@ pub struct GraphEditor {
     runtime_dynamic_pads: HashMap<String, HashMap<String, String>>,
     /// Currently selected element ID
     pub selected: Option<ElementId>,
+    /// Deferred selection to apply at start of next frame (avoids egui two-pass ID instability).
+    /// Outer Option: None = no pending change. Inner Option: the new selection value.
+    pending_selected: Option<Option<ElementId>>,
+    /// Deferred link selection to apply at start of next frame.
+    pending_selected_link: Option<Option<usize>>,
+    /// Deferred property tab to apply at start of next frame.
+    pending_property_tab: Option<PropertyTab>,
+    /// Deferred focused pad to apply at start of next frame.
+    pending_focused_pad: Option<Option<String>>,
     /// Element being dragged
     dragging: Option<ElementId>,
     /// Offset for panning the canvas
@@ -163,6 +172,10 @@ impl Default for GraphEditor {
             block_content_map: HashMap::new(),
             runtime_dynamic_pads: HashMap::new(),
             selected: None,
+            pending_selected: None,
+            pending_selected_link: None,
+            pending_property_tab: None,
+            pending_focused_pad: None,
             dragging: None,
             pan_offset: Vec2::ZERO,
             zoom: DEFAULT_ZOOM,
@@ -188,6 +201,23 @@ impl GraphEditor {
     /// Create a new graph editor.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Apply any deferred selection changes. Call at the start of each frame,
+    /// before any rendering, to keep selection state stable across egui's two passes.
+    pub fn apply_pending_selection(&mut self) {
+        if let Some(sel) = self.pending_selected.take() {
+            self.selected = sel;
+        }
+        if let Some(link) = self.pending_selected_link.take() {
+            self.selected_link = link;
+        }
+        if let Some(tab) = self.pending_property_tab.take() {
+            self.active_property_tab = tab;
+        }
+        if let Some(pad) = self.pending_focused_pad.take() {
+            self.focused_pad = pad;
+        }
     }
 
     /// Set the QoS health map for rendering indicators on nodes
