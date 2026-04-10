@@ -300,15 +300,6 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
                 }
             }
 
-            // Stop button
-            if ui
-                .button(egui_phosphor::regular::STOP)
-                .on_hover_text("Stop")
-                .clicked()
-            {
-                return Some(("stop".to_string(), None));
-            }
-
             // Next button
             if ui
                 .button(egui_phosphor::regular::SKIP_FORWARD)
@@ -480,25 +471,13 @@ pub fn show_full(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, 
 
     ui.add_space(10.0);
 
-    // Control buttons
+    // Transport buttons row: Prev | Play/Pause | Stop | Next
     ui.horizontal(|ui| {
         if ui
             .button(format!("{} Prev", egui_phosphor::regular::SKIP_BACK))
             .clicked()
         {
             action = Some(("previous".to_string(), None));
-        }
-
-        if ui
-            .button(format!(
-                "{} -{}s",
-                egui_phosphor::regular::REWIND,
-                JUMP_SECONDS
-            ))
-            .clicked()
-        {
-            let pos = player_data.position_ns.saturating_sub(JUMP_NS);
-            action = Some(("seek".to_string(), Some(pos)));
         }
 
         let play_pause_text = if player_data.state == PlayerState::Playing {
@@ -522,6 +501,42 @@ pub fn show_full(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, 
         }
 
         if ui
+            .button(format!("Next {}", egui_phosphor::regular::SKIP_FORWARD))
+            .clicked()
+        {
+            action = Some(("next".to_string(), None));
+        }
+    });
+
+    // Seek row: -15s | seek slider | +15s
+    ui.horizontal(|ui| {
+        if ui
+            .button(format!(
+                "{} -{}s",
+                egui_phosphor::regular::REWIND,
+                JUMP_SECONDS
+            ))
+            .clicked()
+        {
+            let pos = player_data.position_ns.saturating_sub(JUMP_NS);
+            action = Some(("seek".to_string(), Some(pos)));
+        }
+
+        let mut progress = if player_data.duration_ns > 0 {
+            player_data.position_ns as f32 / player_data.duration_ns as f32
+        } else {
+            0.0
+        };
+
+        let slider = egui::Slider::new(&mut progress, 0.0..=1.0)
+            .show_value(false)
+            .text("");
+        if ui.add(slider).changed() && player_data.duration_ns > 0 {
+            let seek_ns = (progress as f64 * player_data.duration_ns as f64) as u64;
+            action = Some(("seek".to_string(), Some(seek_ns)));
+        }
+
+        if ui
             .button(format!(
                 "+{}s {}",
                 JUMP_SECONDS,
@@ -535,41 +550,16 @@ pub fn show_full(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, 
                 .min(player_data.duration_ns);
             action = Some(("seek".to_string(), Some(pos)));
         }
-
-        if ui
-            .button(format!("Next {}", egui_phosphor::regular::SKIP_FORWARD))
-            .clicked()
-        {
-            action = Some(("next".to_string(), None));
-        }
     });
-
-    ui.add_space(10.0);
 
     // Time display
     ui.horizontal(|ui| {
-        ui.label("Time:");
         ui.label(format!(
             "{} / {}",
             format_time(player_data.position_ns),
             format_time(player_data.duration_ns)
         ));
     });
-
-    // Interactive seek slider
-    let mut progress = if player_data.duration_ns > 0 {
-        player_data.position_ns as f32 / player_data.duration_ns as f32
-    } else {
-        0.0
-    };
-
-    let slider = egui::Slider::new(&mut progress, 0.0..=1.0)
-        .show_value(false)
-        .text("Seek");
-    if ui.add(slider).changed() && player_data.duration_ns > 0 {
-        let seek_ns = (progress as f64 * player_data.duration_ns as f64) as u64;
-        action = Some(("seek".to_string(), Some(seek_ns)));
-    }
 
     action
 }
