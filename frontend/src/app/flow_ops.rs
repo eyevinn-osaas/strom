@@ -26,8 +26,12 @@ impl StromApp {
                     let _ = tx.send(AppMessage::FlowsLoaded(flows));
                 }
                 Err(e) => {
-                    tracing::error!("Failed to load flows: {}", e);
-                    let _ = tx.send(AppMessage::FlowsError(e.to_string()));
+                    if e.is_unauthorized() {
+                        let _ = tx.send(AppMessage::SessionExpired);
+                    } else {
+                        tracing::error!("Failed to load flows: {}", e);
+                        let _ = tx.send(AppMessage::FlowsError(e.to_string()));
+                    }
                 }
             }
             ctx.request_repaint();
