@@ -492,6 +492,19 @@ pub fn watch_internal_bus(
 
         match msg.view() {
             MessageView::Eos(_) => {
+                // Ignore EOS during file switch — the Ready→Playing transition
+                // can produce a spurious EOS from the old stream.
+                if state_for_bus
+                    .switching_file
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    debug!(
+                        "Media Player {}: Ignoring EOS during file switch",
+                        block_id_for_bus
+                    );
+                    return;
+                }
+
                 info!("Media Player {}: Internal pipeline EOS", block_id_for_bus);
 
                 match state_for_bus.next() {
@@ -503,7 +516,7 @@ pub fn watch_internal_bus(
                         events.broadcast(StromEvent::MediaPlayerStateChanged {
                             flow_id,
                             block_id: block_id_for_bus.clone(),
-                            state: "stopped".to_string(),
+                            state: strom_types::mediaplayer::PlayerState::Stopped,
                             current_file: None,
                         });
                     }
@@ -516,18 +529,16 @@ pub fn watch_internal_bus(
                     .unwrap_or(false);
                 if is_pipeline {
                     let new_state = state_msg.current();
-                    let state_str = match new_state {
-                        gst::State::Playing => "playing",
-                        gst::State::Paused => "paused",
-                        gst::State::Ready => "stopped",
-                        gst::State::Null => "stopped",
-                        _ => "unknown",
+                    let player_state = match new_state {
+                        gst::State::Playing => strom_types::mediaplayer::PlayerState::Playing,
+                        gst::State::Paused => strom_types::mediaplayer::PlayerState::Paused,
+                        _ => strom_types::mediaplayer::PlayerState::Stopped,
                     };
 
                     events.broadcast(StromEvent::MediaPlayerStateChanged {
                         flow_id,
                         block_id: block_id.clone(),
-                        state: state_str.to_string(),
+                        state: player_state,
                         current_file: state_for_bus.current_file(),
                     });
                 }

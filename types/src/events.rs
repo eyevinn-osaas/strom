@@ -240,8 +240,8 @@ pub enum StromEvent {
         #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         flow_id: FlowId,
         block_id: String,
-        /// Playback state: "playing", "paused", "stopped", "buffering"
-        state: String,
+        /// Playback state
+        state: crate::mediaplayer::PlayerState,
         /// Current file path (if any)
         current_file: Option<String>,
     },

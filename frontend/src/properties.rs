@@ -955,7 +955,7 @@ impl PropertyInspector {
                                 mediaplayer_data_store.get(&flow_id, &block.id)
                             {
                                 if let Some(action) =
-                                    crate::mediaplayer::show_full(ui, &block.id, player_data)
+                                    crate::mediaplayer::show_full(ui, player_data)
                                 {
                                     let value = if let Some(pos) = action.1 {
                                         format!("{}:{}:{}", block.id, action.0, pos)

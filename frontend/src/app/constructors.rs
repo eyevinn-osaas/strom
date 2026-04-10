@@ -3,7 +3,7 @@ use crate::audioanalyzer::AudioAnalyzerDataStore;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
 use crate::loudness::LoudnessDataStore;
-use crate::mediaplayer::MediaPlayerDataStore;
+use crate::mediaplayer::{MediaPlayerDataStore, SeekThrottle};
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
 use crate::spectrum::SpectrumDataStore;
@@ -117,6 +117,7 @@ impl StromApp {
             loudness_data: LoudnessDataStore::new(),
             latency_data: LatencyDataStore::new(),
             mediaplayer_data: MediaPlayerDataStore::new(),
+            seek_throttle: SeekThrottle::new(),
             webrtc_stats: WebRtcStatsStore::new(),
             system_monitor: SystemMonitorStore::new(),
             thread_monitor: ThreadMonitorStore::new(),
@@ -280,6 +281,7 @@ impl StromApp {
             loudness_data: LoudnessDataStore::new(),
             latency_data: LatencyDataStore::new(),
             mediaplayer_data: MediaPlayerDataStore::new(),
+            seek_throttle: SeekThrottle::new(),
             webrtc_stats: WebRtcStatsStore::new(),
             system_monitor: SystemMonitorStore::new(),
             thread_monitor: ThreadMonitorStore::new(),

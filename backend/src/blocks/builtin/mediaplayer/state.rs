@@ -5,7 +5,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 use strom_types::FlowId;
 use tracing::{debug, error, info};
@@ -22,6 +22,12 @@ pub struct MediaPlayerKey {
     pub block_id: String,
 }
 
+/// Playlist with current index, protected by a single lock for consistency.
+pub struct Playlist {
+    pub files: Vec<String>,
+    pub current_index: usize,
+}
+
 /// Runtime state for a media player instance.
 pub struct MediaPlayerState {
     /// Unique instance ID (to detect stale timers after restart)
@@ -34,10 +40,8 @@ pub struct MediaPlayerState {
     pub video_appsrc: Option<gst_app::AppSrc>,
     /// Audio appsrc in the main pipeline (bridge target)
     pub audio_appsrc: Option<gst_app::AppSrc>,
-    /// Current playlist of file URIs
-    pub playlist: RwLock<Vec<String>>,
-    /// Current file index
-    pub current_index: AtomicUsize,
+    /// Playlist and current index (single lock for atomicity)
+    pub playlist: RwLock<Playlist>,
     /// Whether playback is paused
     pub is_paused: AtomicBool,
     /// Whether to loop the playlist
@@ -46,6 +50,8 @@ pub struct MediaPlayerState {
     pub block_id: String,
     /// Flow ID for event broadcasting
     pub flow_id: FlowId,
+    /// True while load_current_file() is in progress — bus watch should ignore EOS.
+    pub switching_file: AtomicBool,
     /// Whether video pad has been linked (reset on file switch)
     pub video_linked: AtomicBool,
     /// Whether audio pad has been linked (reset on file switch)
@@ -67,73 +73,97 @@ pub struct MediaPlayerState {
 impl MediaPlayerState {
     /// Get the current file URI, if any.
     pub fn current_file(&self) -> Option<String> {
-        let playlist = self.playlist.read().ok()?;
-        let index = self.current_index.load(Ordering::SeqCst);
-        playlist.get(index).cloned()
+        let pl = self.playlist.read().ok()?;
+        pl.files.get(pl.current_index).cloned()
     }
 
     /// Get the playlist length.
     pub fn playlist_len(&self) -> usize {
-        self.playlist.read().map(|p| p.len()).unwrap_or(0)
+        self.playlist.read().map(|pl| pl.files.len()).unwrap_or(0)
     }
 
-    /// Set the playlist.
+    /// Get the current file index.
+    pub fn current_index(&self) -> usize {
+        self.playlist.read().map(|pl| pl.current_index).unwrap_or(0)
+    }
+
+    /// Get playlist snapshot (files list).
+    pub fn playlist_files(&self) -> Vec<String> {
+        self.playlist
+            .read()
+            .map(|pl| pl.files.clone())
+            .unwrap_or_default()
+    }
+
+    /// Set the playlist, keeping the current index unchanged.
     pub fn set_playlist(&self, files: Vec<String>) {
-        if let Ok(mut playlist) = self.playlist.write() {
-            *playlist = files;
+        if let Ok(mut pl) = self.playlist.write() {
+            pl.files = files;
         }
     }
 
     /// Go to a specific file index.
     pub fn goto(&self, index: usize) -> Result<(), String> {
-        let playlist_len = self.playlist_len();
-        if index >= playlist_len {
-            return Err(format!(
-                "Index {} out of range (playlist has {} files)",
-                index, playlist_len
-            ));
+        {
+            let mut pl = self
+                .playlist
+                .write()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            if index >= pl.files.len() {
+                return Err(format!(
+                    "Index {} out of range (playlist has {} files)",
+                    index,
+                    pl.files.len()
+                ));
+            }
+            pl.current_index = index;
         }
-        self.current_index.store(index, Ordering::SeqCst);
         self.load_current_file()
     }
 
     /// Advance to the next file.
     pub fn next(&self) -> Result<(), String> {
-        let playlist_len = self.playlist_len();
-        if playlist_len == 0 {
-            return Err("Playlist is empty".to_string());
-        }
-
-        let current = self.current_index.load(Ordering::SeqCst);
-        let next = current + 1;
-        if next >= playlist_len {
-            if self.loop_playlist.load(Ordering::SeqCst) {
-                self.current_index.store(0, Ordering::SeqCst);
-            } else {
-                return Err("End of playlist".to_string());
+        {
+            let mut pl = self
+                .playlist
+                .write()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            if pl.files.is_empty() {
+                return Err("Playlist is empty".to_string());
             }
-        } else {
-            self.current_index.store(next, Ordering::SeqCst);
+            let next = pl.current_index + 1;
+            if next >= pl.files.len() {
+                if self.loop_playlist.load(Ordering::SeqCst) {
+                    pl.current_index = 0;
+                } else {
+                    return Err("End of playlist".to_string());
+                }
+            } else {
+                pl.current_index = next;
+            }
         }
         self.load_current_file()
     }
 
     /// Go to the previous file.
     pub fn previous(&self) -> Result<(), String> {
-        let playlist_len = self.playlist_len();
-        if playlist_len == 0 {
-            return Err("Playlist is empty".to_string());
-        }
-
-        let current = self.current_index.load(Ordering::SeqCst);
-        if current == 0 {
-            if self.loop_playlist.load(Ordering::SeqCst) {
-                self.current_index.store(playlist_len - 1, Ordering::SeqCst);
-            } else {
-                return Err("Already at start of playlist".to_string());
+        {
+            let mut pl = self
+                .playlist
+                .write()
+                .map_err(|e| format!("Lock error: {}", e))?;
+            if pl.files.is_empty() {
+                return Err("Playlist is empty".to_string());
             }
-        } else {
-            self.current_index.store(current - 1, Ordering::SeqCst);
+            if pl.current_index == 0 {
+                if self.loop_playlist.load(Ordering::SeqCst) {
+                    pl.current_index = pl.files.len() - 1;
+                } else {
+                    return Err("Already at start of playlist".to_string());
+                }
+            } else {
+                pl.current_index -= 1;
+            }
         }
         self.load_current_file()
     }
@@ -144,6 +174,13 @@ impl MediaPlayerState {
     /// file, then sets the new URI and restarts. The pad-added callback will recreate
     /// the clocksync→appsink chain for the new file's pads.
     fn load_current_file(&self) -> Result<(), String> {
+        self.switching_file.store(true, Ordering::SeqCst);
+        let result = self.load_current_file_inner();
+        self.switching_file.store(false, Ordering::SeqCst);
+        result
+    }
+
+    fn load_current_file_inner(&self) -> Result<(), String> {
         let file_path = self.current_file().ok_or("No file to load")?;
         let source_element = self
             .source_element
@@ -162,9 +199,10 @@ impl MediaPlayerState {
             .ok_or("Internal pipeline not created")?;
 
         // Set internal pipeline to READY to flush the old stream
-        pipeline
-            .set_state(gst::State::Ready)
-            .map_err(|e| format!("Failed to set state to Ready: {:?}", e))?;
+        pipeline.set_state(gst::State::Ready).map_err(|e| {
+            error!("Failed to set internal pipeline to Ready: {:?}", e);
+            "Failed to prepare pipeline for file switch".to_string()
+        })?;
 
         // Remove dynamically-created clocksync and appsink elements from previous file.
         // The source element (uridecodebin/urisourcebin) stays — only the bridge chain
@@ -192,9 +230,10 @@ impl MediaPlayerState {
         source_element.set_property("uri", &uri);
 
         // Start playing again
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to set state to Playing: {:?}", e))?;
+        pipeline.set_state(gst::State::Playing).map_err(|e| {
+            error!("Failed to start internal pipeline: {:?}", e);
+            "Failed to start playback".to_string()
+        })?;
 
         self.is_paused.store(false, Ordering::SeqCst);
 
@@ -213,9 +252,10 @@ impl MediaPlayerState {
         // Reset timestamp offset so the bridge recomputes from the first buffer
         // after resume — prevents accumulated drift from pause duration.
         self.ts_offset.store(i64::MIN, Ordering::SeqCst);
-        pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|e| format!("Failed to set state to Playing: {:?}", e))?;
+        pipeline.set_state(gst::State::Playing).map_err(|e| {
+            error!("Failed to resume playback: {:?}", e);
+            "Failed to resume playback".to_string()
+        })?;
         self.is_paused.store(false, Ordering::SeqCst);
         Ok(())
     }
@@ -229,10 +269,18 @@ impl MediaPlayerState {
         let pipeline = pipeline_guard
             .as_ref()
             .ok_or("Internal pipeline not created")?;
-        pipeline
-            .set_state(gst::State::Paused)
-            .map_err(|e| format!("Failed to set state to Paused: {:?}", e))?;
+        pipeline.set_state(gst::State::Paused).map_err(|e| {
+            error!("Failed to pause playback: {:?}", e);
+            "Failed to pause playback".to_string()
+        })?;
         self.is_paused.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Stop playback: pause and seek to the beginning.
+    pub fn stop(&self) -> Result<(), String> {
+        self.pause()?;
+        self.seek(0)?;
         Ok(())
     }
 
@@ -271,7 +319,7 @@ impl MediaPlayerState {
             }
             Err(e) => {
                 error!("Seek failed: {:?}", e);
-                Err(format!("Seek failed: {:?}", e))
+                Err("Seek failed".to_string())
             }
         }
     }
@@ -282,14 +330,22 @@ impl MediaPlayerState {
             if let Some(position) = source.query_position::<gst::ClockTime>() {
                 return Some(position.nseconds());
             }
+            debug!(
+                "Media Player {}: Source element position query failed",
+                self.block_id
+            );
         }
 
         // Fallback: query internal pipeline
         if let Ok(guard) = self.internal_pipeline.read() {
             if let Some(ref pipeline) = *guard {
-                return pipeline
-                    .query_position::<gst::ClockTime>()
-                    .map(|t| t.nseconds());
+                if let Some(position) = pipeline.query_position::<gst::ClockTime>() {
+                    return Some(position.nseconds());
+                }
+                debug!(
+                    "Media Player {}: Internal pipeline position query also failed",
+                    self.block_id
+                );
             }
         }
         None
@@ -316,14 +372,15 @@ impl MediaPlayerState {
         None
     }
 
-    /// Get the current playback state as a string.
-    pub fn state_string(&self) -> String {
+    /// Get the current playback state.
+    pub fn state(&self) -> strom_types::mediaplayer::PlayerState {
+        use strom_types::mediaplayer::PlayerState;
         if self.is_paused.load(Ordering::SeqCst) {
-            "paused".to_string()
+            PlayerState::Paused
         } else if self.playlist_len() == 0 {
-            "stopped".to_string()
+            PlayerState::Stopped
         } else {
-            "playing".to_string()
+            PlayerState::Playing
         }
     }
 }
@@ -376,6 +433,21 @@ impl MediaPlayerRegistry {
             .ok()
             .map(|p| p.contains_key(key))
             .unwrap_or(false)
+    }
+
+    /// Remove all media player entries for a given flow.
+    pub fn unregister_flow(&self, flow_id: &FlowId) {
+        if let Ok(mut players) = self.players.write() {
+            let before = players.len();
+            players.retain(|k, _| k.flow_id != *flow_id);
+            let removed = before - players.len();
+            if removed > 0 {
+                info!(
+                    "Unregistered {} media player(s) for flow {}",
+                    removed, flow_id
+                );
+            }
+        }
     }
 }
 

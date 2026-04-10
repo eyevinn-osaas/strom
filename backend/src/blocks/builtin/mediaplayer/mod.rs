@@ -65,10 +65,10 @@ pub fn normalize_uri(path: &str, media_path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::blocks::builtin::mediaplayer::state::{
-        MediaPlayerKey, MediaPlayerRegistry, MediaPlayerState,
+        MediaPlayerKey, MediaPlayerRegistry, MediaPlayerState, Playlist,
     };
     use gstreamer as gst;
-    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use std::sync::{Arc, RwLock};
     use strom_types::block::PropertyType;
     use strom_types::PropertyValue;
@@ -82,12 +82,15 @@ mod tests {
             internal_pipeline: RwLock::new(None),
             video_appsrc: None,
             audio_appsrc: None,
-            playlist: RwLock::new(playlist),
-            current_index: AtomicUsize::new(0),
+            playlist: RwLock::new(Playlist {
+                files: playlist,
+                current_index: 0,
+            }),
             is_paused: AtomicBool::new(false),
             loop_playlist: AtomicBool::new(true),
             block_id: block_id.to_string(),
             flow_id,
+            switching_file: AtomicBool::new(false),
             video_linked: AtomicBool::new(false),
             audio_linked: AtomicBool::new(false),
             decode: false,
@@ -173,15 +176,17 @@ mod tests {
     }
 
     #[test]
-    fn test_state_string() {
+    fn test_player_state() {
+        use strom_types::mediaplayer::PlayerState;
+
         let state = test_state(Uuid::new_v4(), "t", vec![]);
-        assert_eq!(state.state_string(), "stopped");
+        assert_eq!(state.state(), PlayerState::Stopped);
 
         state.set_playlist(vec!["file.mp4".into()]);
-        assert_eq!(state.state_string(), "playing");
+        assert_eq!(state.state(), PlayerState::Playing);
 
         state.is_paused.store(true, Ordering::SeqCst);
-        assert_eq!(state.state_string(), "paused");
+        assert_eq!(state.state(), PlayerState::Paused);
     }
 
     #[test]

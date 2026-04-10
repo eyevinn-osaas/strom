@@ -11,7 +11,7 @@ use gstreamer as gst;
 use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::sync::{Arc, RwLock};
 use strom_types::element::ElementPadRef;
 use strom_types::{FlowId, PropertyValue, StromEvent};
@@ -178,12 +178,15 @@ fn build_media_player(
         internal_pipeline: RwLock::new(None),
         video_appsrc: Some(appsrc_video.clone()),
         audio_appsrc: Some(appsrc_audio.clone()),
-        playlist: RwLock::new(initial_playlist.clone()),
-        current_index: AtomicUsize::new(0),
+        playlist: RwLock::new(super::state::Playlist {
+            files: initial_playlist.clone(),
+            current_index: 0,
+        }),
         is_paused: AtomicBool::new(false),
         loop_playlist: AtomicBool::new(loop_playlist),
         block_id: block_id.to_string(),
         flow_id,
+        switching_file: AtomicBool::new(false),
         video_linked: AtomicBool::new(false),
         audio_linked: AtomicBool::new(false),
         decode,
@@ -372,7 +375,7 @@ fn connect_main_pipeline_handler(
 
             let position = state_for_timer.position().unwrap_or(0);
             let duration = state_for_timer.duration().unwrap_or(0);
-            let current_index = state_for_timer.current_index.load(Ordering::SeqCst);
+            let current_index = state_for_timer.current_index();
             let total_files = state_for_timer.playlist_len();
 
             events_for_timer.broadcast(StromEvent::MediaPlayerPosition {
