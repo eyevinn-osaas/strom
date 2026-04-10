@@ -389,9 +389,11 @@ impl StromApp {
         egui::Window::new(format!("{} {} - Properties", egui_phosphor::regular::GEAR, flow_name))
             .collapsible(false)
             .resizable(true)
+            .movable(true)
             .default_width(400.0)
             .default_height(500.0)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ui.ctx().content_rect().center())
             .show(ui.ctx(), |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(ui.available_height() - 50.0) // Leave room for buttons
