@@ -176,6 +176,23 @@ mod tests {
     }
 
     #[test]
+    fn test_set_playlist_clamps_index() {
+        let state = test_state(
+            Uuid::new_v4(),
+            "t",
+            vec!["a.mp4".into(), "b.mp4".into(), "c.mp4".into()],
+        );
+        // Advance index to 2 (last file)
+        state.playlist.write().unwrap().current_index = 2;
+        assert_eq!(state.current_file(), Some("c.mp4".to_string()));
+
+        // Replace with shorter playlist — index should clamp to 0
+        state.set_playlist(vec!["x.mp4".into()]);
+        assert_eq!(state.current_index(), 0);
+        assert_eq!(state.current_file(), Some("x.mp4".to_string()));
+    }
+
+    #[test]
     fn test_player_state() {
         use strom_types::mediaplayer::PlayerState;
 

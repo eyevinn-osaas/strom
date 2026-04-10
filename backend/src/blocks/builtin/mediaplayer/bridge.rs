@@ -432,10 +432,12 @@ fn link_pad_through_clocksync(
                                 buf_ref.set_dts(gst::ClockTime::from_nseconds(adj_dts));
                             }
                         }
-                        let new_sample = gst::Sample::builder()
-                            .buffer(&new_buf)
-                            .caps(&sample.caps().unwrap().to_owned())
-                            .build();
+                        let owned_caps = sample.caps().map(|c| c.to_owned());
+                        let mut builder = gst::Sample::builder().buffer(&new_buf);
+                        if let Some(ref caps) = owned_caps {
+                            builder = builder.caps(caps);
+                        }
+                        let new_sample = builder.build();
                         appsrc
                             .push_sample(&new_sample)
                             .map_err(|_| gst::FlowError::Error)?;

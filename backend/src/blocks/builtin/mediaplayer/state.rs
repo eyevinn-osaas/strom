@@ -95,9 +95,12 @@ impl MediaPlayerState {
             .unwrap_or_default()
     }
 
-    /// Set the playlist, keeping the current index unchanged.
+    /// Set the playlist, clamping current index to remain valid.
     pub fn set_playlist(&self, files: Vec<String>) {
         if let Ok(mut pl) = self.playlist.write() {
+            if !files.is_empty() && pl.current_index >= files.len() {
+                pl.current_index = 0;
+            }
             pl.files = files;
         }
     }
