@@ -1,14 +1,15 @@
 //! WebSocket endpoint for real-time bidirectional updates.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::response::Response;
 use futures::{sink::SinkExt, stream::StreamExt};
+use std::net::SocketAddr;
 use std::time::Duration;
 use strom_types::StromEvent;
 use tokio::select;
 use tokio::time::interval;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, Instrument};
 
 use crate::state::AppState;
 
@@ -38,16 +39,26 @@ use crate::state::AppState;
         (status = 401, description = "Authentication required (use auth_token query param)")
     )
 )]
-pub async fn websocket_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
+pub async fn websocket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> Response {
     info!(
-        "New WebSocket client connecting (total subscribers: {})",
+        peer = %peer,
+        "WebSocket client connecting (total subscribers: {})",
         state.events().subscriber_count() + 1
     );
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.on_upgrade(move |socket| handle_socket(socket, state, peer))
 }
 
 /// Handle an individual WebSocket connection.
-async fn handle_socket(socket: WebSocket, state: AppState) {
+async fn handle_socket(socket: WebSocket, state: AppState, peer: SocketAddr) {
+    let span = tracing::info_span!("ws", %peer);
+    handle_socket_inner(socket, state).instrument(span).await;
+}
+
+async fn handle_socket_inner(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
     // Subscribe to the event broadcaster
