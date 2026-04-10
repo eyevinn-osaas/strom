@@ -99,7 +99,8 @@ pub async fn create_app_with_config(
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::hours(24)))
-        .with_secure(false);
+        .with_secure(false)
+        .with_always_save(true);
 
     // Build protected API router (requires authentication)
     let protected_api_router = Router::new()
