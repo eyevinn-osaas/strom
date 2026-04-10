@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.4.6"
+    "version": "0.4.7"
   },
   "paths": {
     "/api/auth/status": {
@@ -6378,6 +6378,15 @@
           }
         }
       },
+      "PlayerState": {
+        "type": "string",
+        "description": "Playback state of a media player.",
+        "enum": [
+          "playing",
+          "paused",
+          "stopped"
+        ]
+      },
       "PlayerStateResponse": {
         "type": "object",
         "description": "Response with the current player state.",
@@ -6427,8 +6436,8 @@
             "minimum": 0
           },
           "state": {
-            "type": "string",
-            "description": "Current playback state: \"playing\", \"paused\", \"stopped\""
+            "$ref": "#/components/schemas/PlayerState",
+            "description": "Current playback state"
           },
           "total_files": {
             "type": "integer",
@@ -8519,8 +8528,8 @@
                     "format": "uuid"
                   },
                   "state": {
-                    "type": "string",
-                    "description": "Playback state: \"playing\", \"paused\", \"stopped\", \"buffering\""
+                    "$ref": "#/components/schemas/PlayerState",
+                    "description": "Playback state"
                   }
                 }
               },

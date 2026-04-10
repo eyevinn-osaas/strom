@@ -7,6 +7,38 @@ use egui::CentralPanel;
 
 use super::APP_SETTINGS_KEY;
 use super::*;
+
+impl StromApp {
+    /// Spawn an async seek API call on the appropriate runtime.
+    fn spawn_seek(
+        api: crate::api::ApiClient,
+        flow_id: strom_types::FlowId,
+        block_id: String,
+        position_ns: u64,
+    ) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm_bindgen_futures::spawn_local(async move {
+                if let Err(e) = api.seek_player(flow_id, &block_id, position_ns).await {
+                    tracing::error!("Failed to seek player: {}", e);
+                }
+            });
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let rt = tokio::runtime::Handle::try_current();
+            if let Ok(handle) = rt {
+                handle.spawn(async move {
+                    if let Err(e) = api.seek_player(flow_id, &block_id, position_ns).await {
+                        tracing::error!("Failed to seek player: {}", e);
+                    }
+                });
+            }
+        }
+    }
+}
+
 impl eframe::App for StromApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // Check shutdown flag (Ctrl+C handler for native mode)
@@ -1657,7 +1689,7 @@ impl eframe::App for StromApp {
                     tracing::info!("Sending action to flow {}", flow_id);
 
                     match action {
-                        "play" | "pause" | "next" | "previous" => {
+                        "play" | "pause" | "stop" | "next" | "previous" => {
                             let action_str = action.to_string();
                             #[cfg(target_arch = "wasm32")]
                             {
@@ -1687,30 +1719,10 @@ impl eframe::App for StromApp {
                         }
                         "seek" if parts.len() >= 3 => {
                             if let Ok(position_ns) = parts[2].parse::<u64>() {
-                                #[cfg(target_arch = "wasm32")]
+                                if let Some(pos) =
+                                    self.seek_throttle.request(&block_id, position_ns)
                                 {
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        if let Err(e) =
-                                            api.seek_player(flow_id, &block_id, position_ns).await
-                                        {
-                                            tracing::error!("Failed to seek player: {}", e);
-                                        }
-                                    });
-                                }
-
-                                #[cfg(not(target_arch = "wasm32"))]
-                                {
-                                    let rt = tokio::runtime::Handle::try_current();
-                                    if let Ok(handle) = rt {
-                                        handle.spawn(async move {
-                                            if let Err(e) = api
-                                                .seek_player(flow_id, &block_id, position_ns)
-                                                .await
-                                            {
-                                                tracing::error!("Failed to seek player: {}", e);
-                                            }
-                                        });
-                                    }
+                                    Self::spawn_seek(api, flow_id, block_id, pos);
                                 }
                             }
                         }
@@ -1738,6 +1750,15 @@ impl eframe::App for StromApp {
                         }
                     }
                 }
+            }
+        }
+
+        // Flush any throttled seek that is now ready to send
+        if let Some((block_id, position_ns)) = self.seek_throttle.flush() {
+            if let Some(flow) = self.current_flow() {
+                let flow_id = flow.id;
+                let api = self.api.clone();
+                Self::spawn_seek(api, flow_id, block_id, position_ns);
             }
         }
 

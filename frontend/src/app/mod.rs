@@ -24,7 +24,7 @@ use crate::compositor_editor::CompositorEditor;
 use crate::graph::GraphEditor;
 use crate::latency::LatencyDataStore;
 use crate::loudness::LoudnessDataStore;
-use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor};
+use crate::mediaplayer::{MediaPlayerDataStore, PlaylistEditor, SeekThrottle};
 use crate::meter::MeterDataStore;
 use crate::mixer::MixerEditor;
 use crate::palette::ElementPalette;
@@ -613,6 +613,8 @@ pub struct StromApp {
     latency_data: LatencyDataStore,
     /// Media player data storage for all media player blocks
     mediaplayer_data: MediaPlayerDataStore,
+    /// Seek throttle to avoid flooding the API during drags
+    seek_throttle: SeekThrottle,
     /// WebRTC stats storage for all WebRTC connections
     webrtc_stats: WebRtcStatsStore,
     /// System monitoring statistics

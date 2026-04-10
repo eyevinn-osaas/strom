@@ -450,6 +450,7 @@ impl PropertyInspector {
         spectrum_data_store: &crate::spectrum::SpectrumDataStore,
         loudness_data_store: &crate::loudness::LoudnessDataStore,
         latency_data_store: &crate::latency::LatencyDataStore,
+        mediaplayer_data_store: &crate::mediaplayer::MediaPlayerDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
@@ -942,6 +943,34 @@ impl PropertyInspector {
                                 Color32::from_rgb(200, 200, 100),
                                 "No flow selected",
                             );
+                        }
+                    }
+
+                    // Show media player controls for media player blocks
+                    if definition.id == "builtin.media_player" {
+                        ui.separator();
+                        if let Some(flow_id) = flow_id {
+                            if let Some(player_data) =
+                                mediaplayer_data_store.get(&flow_id, &block.id)
+                            {
+                                if let Some(action) =
+                                    crate::mediaplayer::show_full(ui, player_data)
+                                {
+                                    let value = if let Some(pos) = action.1 {
+                                        format!("{}:{}:{}", block.id, action.0, pos)
+                                    } else {
+                                        format!("{}:{}", block.id, action.0)
+                                    };
+                                    crate::app::set_local_storage("player_action", &value);
+                                }
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "No media player data available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Player controls will appear when the flow is running.");
+                            }
                         }
                     }
 

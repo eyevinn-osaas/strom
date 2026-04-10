@@ -5,6 +5,26 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
+/// Playback state of a media player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum PlayerState {
+    Playing,
+    Paused,
+    Stopped,
+}
+
+impl std::fmt::Display for PlayerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Playing => write!(f, "playing"),
+            Self::Paused => write!(f, "paused"),
+            Self::Stopped => write!(f, "stopped"),
+        }
+    }
+}
+
 /// Player control action.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -54,8 +74,8 @@ pub struct GotoRequest {
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct PlayerStateResponse {
-    /// Current playback state: "playing", "paused", "stopped"
-    pub state: String,
+    /// Current playback state
+    pub state: PlayerState,
     /// Current position in nanoseconds
     pub position_ns: u64,
     /// Total duration in nanoseconds

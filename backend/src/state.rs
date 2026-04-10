@@ -1150,6 +1150,9 @@ impl AppState {
                 .await;
         }
 
+        // Unregister media player instances for this flow
+        crate::blocks::builtin::mediaplayer::MEDIA_PLAYER_REGISTRY.unregister_flow(id);
+
         // Stop the pipeline
         let state = manager.stop()?;
 
