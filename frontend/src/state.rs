@@ -51,6 +51,8 @@ pub enum AppMessage {
     AuthStatusLoaded(crate::api::AuthStatusResponse),
     /// Logout completed
     LogoutComplete,
+    /// Session expired (received 401 from API)
+    SessionExpired,
 
     /// WebRTC stats loaded for a flow
     WebRtcStatsLoaded {

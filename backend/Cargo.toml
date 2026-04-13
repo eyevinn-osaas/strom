@@ -146,9 +146,5 @@ http-body-util = "0.1"
 serial_test = "3.3"
 
 [[bin]]
-name = "mediaplayer-test"
-path = "src/bin/mediaplayer_test/main.rs"
-
-[[bin]]
 name = "gen-icons"
 path = "src/bin/gen_icons.rs"

@@ -24,6 +24,7 @@ impl StromApp {
             {
                 let api = self.api.clone();
                 let eid = element_id.to_string();
+                let tx = self.channels.sender();
                 let ctx = ui.ctx().clone();
                 crate::app::spawn_task(async move {
                     match api.activate_probe(&flow_id, &eid, Some(1), Some(300)).await {
@@ -32,6 +33,10 @@ impl StromApp {
                         }
                         Err(e) => {
                             tracing::error!("Failed to activate probe on {}: {}", eid, e);
+                            let _ = tx.send(crate::state::AppMessage::FlowOperationError(format!(
+                                "Probe failed: {}",
+                                e
+                            )));
                         }
                     }
                     ctx.request_repaint();

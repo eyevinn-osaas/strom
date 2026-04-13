@@ -1185,7 +1185,7 @@ impl StromApp {
             .max_size(max_width)
             .resizable(true)
             .show_inside(ui, |ui| {
-            egui::ScrollArea::both().show(ui, |ui| {
+            egui::ScrollArea::both().id_salt("palette_properties_scroll").show(ui, |ui| {
                 // Check if an element is selected and trigger property loading if needed
                 // Do this BEFORE getting mutable reference to avoid borrow checker issues
                 if let Some((selected_element_type, active_tab)) = self
@@ -1419,6 +1419,7 @@ impl StromApp {
                             &self.spectrum_data,
                             &self.loudness_data,
                             &self.latency_data,
+                            &self.mediaplayer_data,
                             &self.webrtc_stats,
                             rtp_stats,
                             &self.network_interfaces,

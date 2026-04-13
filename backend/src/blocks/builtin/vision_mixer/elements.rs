@@ -1,6 +1,7 @@
 //! GStreamer element factory helpers for the vision mixer block.
 
 use crate::blocks::BlockBuildError;
+use crate::gpu;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use tracing::{debug, info};
@@ -26,12 +27,14 @@ pub fn select_backend(preference: &str) -> Result<CompositorBackend, BlockBuildE
         }
         "cpu" => Ok(CompositorBackend::Software),
         _ => {
-            // Auto: prefer GPU, fallback to CPU
-            if gst::ElementFactory::find("glvideomixerelement").is_some() {
+            // Auto: prefer GPU, but only if a real hardware GL renderer is available.
+            // Mesa software renderers (llvmpipe) are slower than the CPU compositor.
+            if gst::ElementFactory::find("glvideomixerelement").is_some() && gpu::has_hardware_gl()
+            {
                 info!("Vision mixer: using GPU (OpenGL) backend");
                 Ok(CompositorBackend::OpenGL)
             } else {
-                info!("Vision mixer: GPU unavailable, falling back to CPU backend");
+                info!("Vision mixer: no hardware GL, using CPU backend");
                 Ok(CompositorBackend::Software)
             }
         }

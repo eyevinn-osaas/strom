@@ -19,8 +19,12 @@ impl StromApp {
                     let _ = tx.send(AppMessage::ElementsLoaded(elements));
                 }
                 Err(e) => {
-                    tracing::error!("Failed to load elements: {}", e);
-                    let _ = tx.send(AppMessage::ElementsError(e.to_string()));
+                    if e.is_unauthorized() {
+                        let _ = tx.send(AppMessage::SessionExpired);
+                    } else {
+                        tracing::error!("Failed to load elements: {}", e);
+                        let _ = tx.send(AppMessage::ElementsError(e.to_string()));
+                    }
                 }
             }
             ctx.request_repaint();
@@ -43,8 +47,12 @@ impl StromApp {
                     let _ = tx.send(AppMessage::BlocksLoaded(blocks));
                 }
                 Err(e) => {
-                    tracing::error!("Failed to load blocks: {}", e);
-                    let _ = tx.send(AppMessage::BlocksError(e.to_string()));
+                    if e.is_unauthorized() {
+                        let _ = tx.send(AppMessage::SessionExpired);
+                    } else {
+                        tracing::error!("Failed to load blocks: {}", e);
+                        let _ = tx.send(AppMessage::BlocksError(e.to_string()));
+                    }
                 }
             }
             ctx.request_repaint();
@@ -235,13 +243,18 @@ impl StromApp {
                     let _ = tx.send(AppMessage::AuthStatusLoaded(status));
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to check auth status: {}", e);
-                    // Assume auth is not required if check fails
-                    let _ = tx.send(AppMessage::AuthStatusLoaded(AuthStatusResponse {
-                        authenticated: true,
-                        auth_required: false,
-                        methods: vec![],
-                    }));
+                    if e.is_unauthorized() {
+                        tracing::warn!("Auth status check returned 401 - session expired");
+                        let _ = tx.send(AppMessage::SessionExpired);
+                    } else {
+                        tracing::warn!("Failed to check auth status: {}", e);
+                        // Assume auth is not required if check fails (network error, etc.)
+                        let _ = tx.send(AppMessage::AuthStatusLoaded(AuthStatusResponse {
+                            authenticated: true,
+                            auth_required: false,
+                            methods: vec![],
+                        }));
+                    }
                 }
             }
             ctx.request_repaint();

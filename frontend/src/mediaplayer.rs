@@ -4,16 +4,73 @@ use egui::{Color32, CornerRadius, Rect, Stroke, Ui, Vec2};
 use instant::Instant;
 use std::collections::HashMap;
 use std::time::Duration;
+use strom_types::mediaplayer::PlayerState;
 use strom_types::FlowId;
 
 /// Time-to-live for media player data before it's considered stale.
 const PLAYER_DATA_TTL: Duration = Duration::from_millis(1000);
 
+/// Minimum interval between seek API calls during drag.
+const SEEK_THROTTLE_INTERVAL: Duration = Duration::from_millis(150);
+
+/// Jump size for skip forward/backward buttons.
+const JUMP_SECONDS: u64 = 15;
+const JUMP_NS: u64 = JUMP_SECONDS * 1_000_000_000;
+
+/// Throttle state for seek operations to avoid flooding the API during drags.
+#[derive(Debug, Clone, Default)]
+pub struct SeekThrottle {
+    /// Last time a seek was actually sent to the API.
+    last_sent: Option<Instant>,
+    /// Pending seek that hasn't been dispatched yet (block_id, position_ns).
+    pending: Option<(String, u64)>,
+}
+
+impl SeekThrottle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a seek request. Returns `Some(position_ns)` if it should be sent now.
+    pub fn request(&mut self, block_id: &str, position_ns: u64) -> Option<u64> {
+        let now = Instant::now();
+        let should_send = match self.last_sent {
+            None => true,
+            Some(t) => now.duration_since(t) >= SEEK_THROTTLE_INTERVAL,
+        };
+        if should_send {
+            self.last_sent = Some(now);
+            self.pending = None;
+            Some(position_ns)
+        } else {
+            self.pending = Some((block_id.to_string(), position_ns));
+            None
+        }
+    }
+
+    /// Flush any pending seek whose throttle interval has elapsed.
+    /// Call this every frame to ensure the final drag position is sent.
+    pub fn flush(&mut self) -> Option<(String, u64)> {
+        self.pending.as_ref()?;
+        let now = Instant::now();
+        let should_flush = match self.last_sent {
+            None => true,
+            Some(t) => now.duration_since(t) >= SEEK_THROTTLE_INTERVAL,
+        };
+        if should_flush {
+            self.last_sent = Some(now);
+            self.pending.take()
+        } else {
+            None
+        }
+    }
+}
+
 /// Media player data for a specific block.
 #[derive(Debug, Clone)]
 pub struct MediaPlayerData {
-    /// Current playback state: "playing", "paused", "stopped", "buffering"
-    pub state: String,
+    /// Current playback state
+    pub state: PlayerState,
     /// Current position in nanoseconds
     pub position_ns: u64,
     /// Total duration in nanoseconds
@@ -29,7 +86,7 @@ pub struct MediaPlayerData {
 impl Default for MediaPlayerData {
     fn default() -> Self {
         Self {
-            state: "stopped".to_string(),
+            state: PlayerState::Stopped,
             position_ns: 0,
             duration_ns: 0,
             current_file_index: 0,
@@ -93,7 +150,7 @@ impl MediaPlayerDataStore {
                 key,
                 TimestampedPlayerData {
                     data: MediaPlayerData {
-                        state: "stopped".to_string(),
+                        state: PlayerState::Stopped,
                         position_ns,
                         duration_ns,
                         current_file_index,
@@ -111,7 +168,7 @@ impl MediaPlayerDataStore {
         &mut self,
         flow_id: FlowId,
         block_id: String,
-        state: String,
+        state: PlayerState,
         current_file: Option<String>,
     ) {
         let key = MediaPlayerKey {
@@ -178,8 +235,6 @@ pub fn calculate_compact_height() -> f32 {
 /// Returns a tuple of (action, seek_position) if user interacted with controls.
 /// Action can be: "play", "pause", "prev", "next", "seek", or "playlist".
 pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, Option<u64>)> {
-    let available_width = ui.available_width().max(100.0);
-
     // Show current file name (if any), truncated with hover for full path
     if let Some(ref file) = player_data.current_file {
         let filename = std::path::Path::new(file)
@@ -198,7 +253,7 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
         player_data.state, player_data.total_files
     ));
 
-    // Control buttons row - capture action from inner response
+    // Control buttons row: Playlist | Prev | Play/Pause | Next | file count
     let button_action = ui
         .horizontal(|ui| {
             // Playlist button
@@ -222,12 +277,12 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
             }
 
             // Play/Pause button
-            let play_pause_text = if player_data.state == "playing" {
+            let play_pause_text = if player_data.state == PlayerState::Playing {
                 egui_phosphor::regular::PAUSE
             } else {
                 egui_phosphor::regular::PLAY
             };
-            let play_hover = if player_data.state == "playing" {
+            let play_hover = if player_data.state == PlayerState::Playing {
                 "Pause"
             } else {
                 "Play"
@@ -238,7 +293,7 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
                 .clicked()
             {
                 tracing::debug!("Play/Pause button clicked, state={}", player_data.state);
-                if player_data.state == "playing" {
+                if player_data.state == PlayerState::Playing {
                     return Some(("pause".to_string(), None));
                 } else {
                     return Some(("play".to_string(), None));
@@ -275,47 +330,88 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
         return button_action;
     }
 
-    // Progress bar / seek slider
-    let progress = if player_data.duration_ns > 0 {
-        player_data.position_ns as f32 / player_data.duration_ns as f32
-    } else {
-        0.0
-    };
+    // Seek row: -15s | [progress bar] | +15s
+    let seek_action = ui
+        .horizontal(|ui| {
+            // Jump back 15s
+            if ui
+                .button(egui_phosphor::regular::REWIND)
+                .on_hover_text(format!("-{}s", JUMP_SECONDS))
+                .clicked()
+            {
+                let pos = player_data.position_ns.saturating_sub(JUMP_NS);
+                return Some(("seek".to_string(), Some(pos)));
+            }
 
-    let (rect, response) = ui.allocate_exact_size(
-        Vec2::new(available_width - 10.0, 12.0),
-        egui::Sense::click_and_drag(),
-    );
+            // Progress bar
+            let progress = if player_data.duration_ns > 0 {
+                player_data.position_ns as f32 / player_data.duration_ns as f32
+            } else {
+                0.0
+            };
 
-    let painter = ui.painter();
+            let bar_width = ui.available_width() - 30.0; // leave room for +15s button
+            let (rect, response) = ui.allocate_exact_size(
+                Vec2::new(bar_width.max(20.0), 12.0),
+                egui::Sense::click_and_drag(),
+            );
 
-    // Background
-    painter.rect_filled(rect, CornerRadius::same(2), Color32::from_gray(40));
+            let painter = ui.painter();
 
-    // Progress fill
-    if progress > 0.0 {
-        let fill_rect =
-            Rect::from_min_size(rect.min, Vec2::new(rect.width() * progress, rect.height()));
-        painter.rect_filled(
-            fill_rect,
-            CornerRadius::same(2),
-            Color32::from_rgb(80, 120, 200),
-        );
-    }
+            // Background
+            painter.rect_filled(rect, CornerRadius::same(2), Color32::from_gray(40));
 
-    // Border
-    painter.rect(
-        rect,
-        CornerRadius::same(2),
-        Color32::TRANSPARENT,
-        Stroke::new(1.0, Color32::from_gray(80)),
-        egui::epaint::StrokeKind::Inside,
-    );
+            // Progress fill
+            if progress > 0.0 {
+                let fill_rect = Rect::from_min_size(
+                    rect.min,
+                    Vec2::new(rect.width() * progress, rect.height()),
+                );
+                painter.rect_filled(
+                    fill_rect,
+                    CornerRadius::same(2),
+                    Color32::from_rgb(80, 120, 200),
+                );
+            }
 
-    // Seek is disabled - doesn't work properly with live sinks (sync=true)
-    // Show tooltip explaining why seek is disabled
-    if response.hovered() {
-        response.on_hover_text("Seek disabled: not supported with live streaming output");
+            // Border
+            painter.rect(
+                rect,
+                CornerRadius::same(2),
+                Color32::TRANSPARENT,
+                Stroke::new(1.0, Color32::from_gray(80)),
+                egui::epaint::StrokeKind::Inside,
+            );
+
+            // Seek: click or drag on the progress bar
+            if response.clicked() || response.dragged() {
+                if let Some(pointer_pos) = response.interact_pointer_pos() {
+                    let seek_progress =
+                        ((pointer_pos.x - rect.min.x) / rect.width()).clamp(0.0, 1.0);
+                    let seek_ns = (seek_progress as f64 * player_data.duration_ns as f64) as u64;
+                    return Some(("seek".to_string(), Some(seek_ns)));
+                }
+            }
+
+            // Jump forward 15s
+            if ui
+                .button(egui_phosphor::regular::FAST_FORWARD)
+                .on_hover_text(format!("+{}s", JUMP_SECONDS))
+                .clicked()
+            {
+                let pos = player_data
+                    .position_ns
+                    .saturating_add(JUMP_NS)
+                    .min(player_data.duration_ns);
+                return Some(("seek".to_string(), Some(pos)));
+            }
+
+            None
+        })
+        .inner;
+
+    if seek_action.is_some() {
+        return seek_action;
     }
 
     // Time display
@@ -331,15 +427,7 @@ pub fn show_compact(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(Strin
 }
 
 /// Render a full media player widget (for property inspector).
-///
-/// TODO: This function is currently unused (dead code). Consider removing it,
-/// or integrating it into the properties panel like meter and webrtc_stats blocks.
-#[allow(dead_code)]
-pub fn show_full(
-    ui: &mut Ui,
-    block_id: &str,
-    player_data: &MediaPlayerData,
-) -> Option<(String, Option<u64>)> {
+pub fn show_full(ui: &mut Ui, player_data: &MediaPlayerData) -> Option<(String, Option<u64>)> {
     let mut action: Option<(String, Option<u64>)> = None;
 
     ui.heading("Media Player");
@@ -348,12 +436,12 @@ pub fn show_full(
     // Status
     ui.horizontal(|ui| {
         ui.label("Status:");
-        let status_color = match player_data.state.as_str() {
-            "playing" => Color32::GREEN,
-            "paused" => Color32::YELLOW,
-            _ => Color32::GRAY,
+        let status_color = match player_data.state {
+            PlayerState::Playing => Color32::GREEN,
+            PlayerState::Paused => Color32::YELLOW,
+            PlayerState::Stopped => Color32::GRAY,
         };
-        ui.colored_label(status_color, &player_data.state);
+        ui.colored_label(status_color, player_data.state.to_string());
     });
 
     // Current file
@@ -383,26 +471,33 @@ pub fn show_full(
 
     ui.add_space(10.0);
 
-    // Control buttons
+    // Transport buttons row: Prev | Play/Pause | Stop | Next
     ui.horizontal(|ui| {
         if ui
             .button(format!("{} Prev", egui_phosphor::regular::SKIP_BACK))
             .clicked()
         {
-            action = Some(("prev".to_string(), None));
+            action = Some(("previous".to_string(), None));
         }
 
-        let play_pause_text = if player_data.state == "playing" {
+        let play_pause_text = if player_data.state == PlayerState::Playing {
             format!("{} Pause", egui_phosphor::regular::PAUSE)
         } else {
             format!("{} Play", egui_phosphor::regular::PLAY)
         };
         if ui.button(play_pause_text).clicked() {
-            if player_data.state == "playing" {
+            if player_data.state == PlayerState::Playing {
                 action = Some(("pause".to_string(), None));
             } else {
                 action = Some(("play".to_string(), None));
             }
+        }
+
+        if ui
+            .button(format!("{} Stop", egui_phosphor::regular::STOP))
+            .clicked()
+        {
+            action = Some(("stop".to_string(), None));
         }
 
         if ui
@@ -413,32 +508,58 @@ pub fn show_full(
         }
     });
 
-    ui.add_space(10.0);
+    // Seek row: -15s | seek slider | +15s
+    ui.horizontal(|ui| {
+        if ui
+            .button(format!(
+                "{} -{}s",
+                egui_phosphor::regular::REWIND,
+                JUMP_SECONDS
+            ))
+            .clicked()
+        {
+            let pos = player_data.position_ns.saturating_sub(JUMP_NS);
+            action = Some(("seek".to_string(), Some(pos)));
+        }
+
+        let mut progress = if player_data.duration_ns > 0 {
+            player_data.position_ns as f32 / player_data.duration_ns as f32
+        } else {
+            0.0
+        };
+
+        let slider = egui::Slider::new(&mut progress, 0.0..=1.0)
+            .show_value(false)
+            .text("");
+        if ui.add(slider).changed() && player_data.duration_ns > 0 {
+            let seek_ns = (progress as f64 * player_data.duration_ns as f64) as u64;
+            action = Some(("seek".to_string(), Some(seek_ns)));
+        }
+
+        if ui
+            .button(format!(
+                "+{}s {}",
+                JUMP_SECONDS,
+                egui_phosphor::regular::FAST_FORWARD
+            ))
+            .clicked()
+        {
+            let pos = player_data
+                .position_ns
+                .saturating_add(JUMP_NS)
+                .min(player_data.duration_ns);
+            action = Some(("seek".to_string(), Some(pos)));
+        }
+    });
 
     // Time display
     ui.horizontal(|ui| {
-        ui.label("Time:");
         ui.label(format!(
             "{} / {}",
             format_time(player_data.position_ns),
             format_time(player_data.duration_ns)
         ));
     });
-
-    // Progress bar (seek disabled - doesn't work properly with live sinks)
-    let progress = if player_data.duration_ns > 0 {
-        player_data.position_ns as f32 / player_data.duration_ns as f32
-    } else {
-        0.0
-    };
-
-    // Show progress as a read-only bar instead of interactive slider
-    let progress_bar = egui::ProgressBar::new(progress).show_percentage();
-    ui.add(progress_bar)
-        .on_hover_text("Seek disabled: not supported with live streaming output");
-
-    ui.add_space(5.0);
-    ui.label(format!("Block: {}", block_id));
 
     action
 }
@@ -701,13 +822,10 @@ impl PlaylistEditor {
                         self.browser_needs_refresh = true;
                     }
 
-                    // Handle file add
+                    // Handle file add (duplicates allowed — same file can appear multiple times)
                     if let Some(file_path) = add_file {
-                        // Store as path relative to media root; the backend resolves it
-                        if !self.playlist.contains(&file_path) {
-                            self.playlist.push(file_path);
-                            self.dirty = true;
-                        }
+                        self.playlist.push(file_path);
+                        self.dirty = true;
                     }
                 });
         }

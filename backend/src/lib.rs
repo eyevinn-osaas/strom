@@ -2,7 +2,7 @@
 //!
 //! This module exposes the application builder for use in tests.
 
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{ConnectInfo, DefaultBodyLimit};
 use axum::http::HeaderValue;
 use axum::http::{header, HeaderName, Method};
 use axum::{
@@ -10,8 +10,10 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Extension, Router,
 };
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 use tower_sessions::{cookie::time::Duration, Expiry, MemoryStore, SessionManagerLayer};
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -99,7 +101,8 @@ pub async fn create_app_with_config(
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::hours(24)))
-        .with_secure(false);
+        .with_secure(false)
+        .with_always_save(true);
 
     // Build protected API router (requires authentication)
     let protected_api_router = Router::new()
@@ -471,6 +474,20 @@ pub async fn create_app_with_config(
                 cors.allow_origin(origins).allow_credentials(true)
             }
         })
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|req: &axum::http::Request<_>| {
+                let peer = req
+                    .extensions()
+                    .get::<ConnectInfo<SocketAddr>>()
+                    .map(|ci| ci.0);
+                tracing::info_span!(
+                    "http",
+                    method = %req.method(),
+                    path = %req.uri().path(),
+                    peer = %peer.map_or_else(|| "unknown".to_string(), |a| a.to_string()),
+                )
+            }),
+        )
         .with_state(state)
         // Serve embedded frontend for all other routes
         .fallback(assets::serve_static)

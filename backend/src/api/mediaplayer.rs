@@ -11,7 +11,7 @@ pub use strom_types::mediaplayer::{
     SetPlaylistRequest,
 };
 use strom_types::{api::ErrorResponse, element::PropertyValue, FlowId};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::blocks::builtin::mediaplayer::{MediaPlayerKey, MEDIA_PLAYER_REGISTRY};
 use crate::state::AppState;
@@ -41,19 +41,14 @@ pub async fn get_player_state(
         Json(ErrorResponse::new("Media player not found")),
     ))?;
 
-    let playlist = player
-        .playlist
-        .read()
-        .map(|p| p.clone())
-        .unwrap_or_default();
+    let playlist = player.playlist_files();
+    let current_index = player.current_index();
 
     Ok(Json(PlayerStateResponse {
-        state: player.state_string(),
+        state: player.state(),
         position_ns: player.position().unwrap_or(0),
         duration_ns: player.duration().unwrap_or(0),
-        current_file_index: player
-            .current_index
-            .load(std::sync::atomic::Ordering::SeqCst),
+        current_file_index: current_index,
         total_files: playlist.len(),
         current_file: player.current_file(),
         playlist,
@@ -125,10 +120,11 @@ pub async fn set_playlist(
     };
 
     if let Some(player) = MEDIA_PLAYER_REGISTRY.get(&key) {
+        let was_stopped = player.state() == strom_types::mediaplayer::PlayerState::Stopped;
         player.set_playlist(req.files);
 
-        // Load the first file if playlist is not empty
-        if player.playlist_len() > 0 {
+        // Only auto-start from the beginning if the player was stopped
+        if was_stopped && player.playlist_len() > 0 {
             let _ = player.goto(0);
         }
     }
@@ -172,7 +168,7 @@ pub async fn control_player(
     let result = match req.action {
         PlayerAction::Play => player.play(),
         PlayerAction::Pause => player.pause(),
-        PlayerAction::Stop => player.pause(), // TODO: Implement proper stop (pause + seek to beginning)
+        PlayerAction::Stop => player.stop(),
         PlayerAction::Next => player.next(),
         PlayerAction::Previous => player.previous(),
     };
@@ -218,13 +214,23 @@ pub async fn seek_player(
         Json(ErrorResponse::new("Media player not found")),
     ))?;
 
-    info!("Player {} seek to {} ns", block_id, req.position_ns);
-    warn!(
-        "Seek may not work correctly with live streaming outputs (sync=true). \
-         This is a known limitation. See docs/MEDIAPLAYER_TEST_HARNESS.md for details."
-    );
+    // Validate seek position against duration (if known)
+    if let Some(duration) = player.duration() {
+        if duration > 0 && req.position_ns > duration {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Seek position out of range",
+                    format!(
+                        "Position {} ns exceeds duration {} ns",
+                        req.position_ns, duration
+                    ),
+                )),
+            ));
+        }
+    }
 
-    // Seek is now scheduled on GLib main loop, so this returns immediately
+    info!("Player {} seek to {} ns", block_id, req.position_ns);
     player.seek(req.position_ns).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
