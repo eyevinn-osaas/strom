@@ -443,6 +443,7 @@ fn run_with_gui(config: Config, no_auto_restart: bool) -> anyhow::Result<()> {
             state.clone(),
             auth_config,
             config.cors_allowed_origins.clone(),
+            config.port,
         )
         .await;
 
@@ -581,6 +582,7 @@ async fn run_headless(config: Config, no_auto_restart: bool) -> anyhow::Result<(
         state.clone(),
         auth::AuthConfig::from_env(),
         config.cors_allowed_origins.clone(),
+        config.port,
     )
     .await;
 

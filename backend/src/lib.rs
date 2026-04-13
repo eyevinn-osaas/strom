@@ -67,17 +67,20 @@ pub async fn create_app_with_state_and_auth(
     state: AppState,
     auth_config: auth::AuthConfig,
 ) -> Router {
-    create_app_with_config(state, auth_config, Vec::new()).await
+    create_app_with_config(state, auth_config, Vec::new(), 0).await
 }
 
 /// Create the Axum application router with a given state, auth configuration, and CORS origins.
 ///
 /// If `cors_allowed_origins` is empty, any origin is allowed.
 /// Otherwise, only the specified origins are allowed.
+/// The `port` is embedded in the session cookie name (`strom_session_{port}`) so that
+/// multiple instances on the same host with different ports do not overwrite each other's cookies.
 pub async fn create_app_with_config(
     state: AppState,
     auth_config: auth::AuthConfig,
     cors_allowed_origins: Vec<String>,
+    port: u16,
 ) -> Router {
     // Note: GStreamer is already initialized in main.rs before this is called.
     // DO NOT call gst::init() here - it can corrupt internal state if pipelines
@@ -98,8 +101,10 @@ pub async fn create_app_with_config(
     }
 
     // Create session store (in-memory, sessions lost on restart)
+    // Cookie name includes the port so multiple instances on the same host don't collide
     let session_store = MemoryStore::default();
     let session_layer = SessionManagerLayer::new(session_store)
+        .with_name(format!("strom_session_{}", port))
         .with_expiry(Expiry::OnInactivity(Duration::hours(24)))
         .with_secure(false)
         .with_always_save(true);

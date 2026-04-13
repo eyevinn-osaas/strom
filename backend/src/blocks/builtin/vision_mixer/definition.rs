@@ -50,31 +50,8 @@ fn vision_mixer_definition() -> BlockDefinition {
             name: "num_inputs".to_string(),
             label: "Number of Inputs".to_string(),
             description: "Number of video inputs (2-10)".to_string(),
-            property_type: PropertyType::Enum {
-                values: vec![
-                    EnumValue {
-                        value: "2".to_string(),
-                        label: Some("2".to_string()),
-                    },
-                    EnumValue {
-                        value: "4".to_string(),
-                        label: Some("4".to_string()),
-                    },
-                    EnumValue {
-                        value: "6".to_string(),
-                        label: Some("6".to_string()),
-                    },
-                    EnumValue {
-                        value: "8".to_string(),
-                        label: Some("8".to_string()),
-                    },
-                    EnumValue {
-                        value: "10".to_string(),
-                        label: Some("10".to_string()),
-                    },
-                ],
-            },
-            default_value: Some(PropertyValue::String(DEFAULT_NUM_INPUTS.to_string())),
+            property_type: PropertyType::UInt,
+            default_value: Some(PropertyValue::UInt(DEFAULT_NUM_INPUTS as u64)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "num_inputs".to_string(),
