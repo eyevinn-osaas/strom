@@ -344,7 +344,7 @@ fn link_pad_through_clocksync(
 
     let appsink = gst_app::AppSink::builder()
         .name(appsink_name)
-        .sync(false) // clocksync handles pacing
+        .sync(false)
         .build();
 
     let appsink_element = appsink.upcast_ref::<gst::Element>();
@@ -353,21 +353,22 @@ fn link_pad_through_clocksync(
         .add_many([&clocksync, appsink_element])
         .map_err(|e| format!("add elements: {}", e))?;
 
-    // Link: src_pad → clocksync → appsink
-    let clocksync_sink = clocksync
-        .static_pad("sink")
-        .ok_or("clocksync has no sink pad")?;
-    src_pad
-        .link(&clocksync_sink)
-        .map_err(|e| format!("link pad to clocksync: {:?}", e))?;
+    // Link downstream first: clocksync → appsink (no data flows yet)
     clocksync
         .link(appsink_element)
         .map_err(|e| format!("link clocksync to appsink: {:?}", e))?;
 
-    // Sync state with parent so elements start in the same state as the pipeline
+    // Start elements BEFORE linking upstream. urisourcebin's internal
+    // multiqueue pushes buffered data the instant the upstream pad is
+    // linked — elements must be ready to accept it.
+    //
+    // clocksync must reach PLAYING explicitly: its internal flushing
+    // flag is only cleared during PAUSED→PLAYING. sync_state_with_parent
+    // would leave it in PAUSED (matching the pipeline during preroll),
+    // which silently drops all buffers via FLUSHING.
     clocksync
-        .sync_state_with_parent()
-        .map_err(|e| format!("sync clocksync state: {:?}", e))?;
+        .set_state(gst::State::Playing)
+        .map_err(|e| format!("set clocksync to Playing: {:?}", e))?;
     appsink_element
         .sync_state_with_parent()
         .map_err(|e| format!("sync appsink state: {:?}", e))?;
@@ -377,6 +378,7 @@ fn link_pad_through_clocksync(
     let media_type_owned = media_type.to_string();
     let ts_offset = Arc::clone(&state.ts_offset);
     let main_pipeline_weak = state.main_pipeline.clone();
+    let pushed_count = Arc::new(std::sync::atomic::AtomicU64::new(0));
 
     appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
@@ -419,8 +421,8 @@ fn link_pad_through_clocksync(
                     }
                 };
 
-                // Apply offset to buffer PTS
-                if offset_ns != 0 {
+                // Build the sample to push, applying timestamp offset if needed
+                let push_result = if offset_ns != 0 {
                     if let Some(pts_val) = pts {
                         let adjusted = (pts_val.nseconds() as i64 + offset_ns).max(0) as u64;
                         let mut new_buf = buffer.copy();
@@ -437,25 +439,50 @@ fn link_pad_through_clocksync(
                         if let Some(ref caps) = owned_caps {
                             builder = builder.caps(caps);
                         }
-                        let new_sample = builder.build();
-                        appsrc
-                            .push_sample(&new_sample)
-                            .map_err(|_| gst::FlowError::Error)?;
+                        appsrc.push_sample(&builder.build())
                     } else {
-                        appsrc
-                            .push_sample(&sample)
-                            .map_err(|_| gst::FlowError::Error)?;
+                        appsrc.push_sample(&sample)
                     }
                 } else {
-                    appsrc
-                        .push_sample(&sample)
-                        .map_err(|_| gst::FlowError::Error)?;
-                }
+                    appsrc.push_sample(&sample)
+                };
 
-                Ok(gst::FlowSuccess::Ok)
+                // Don't kill the appsink on transient errors (e.g. FLUSHING while
+                // the main pipeline is still starting). Drop the sample and retry
+                // on the next one — the appsrc will accept data once it's ready.
+                match push_result {
+                    Ok(_) => {
+                        if pushed_count.fetch_add(1, Ordering::Relaxed) == 0 {
+                            info!(
+                                "Media Player bridge: {} first sample delivered, pts={:?}",
+                                media_type_owned, pts
+                            );
+                        }
+                        Ok(gst::FlowSuccess::Ok)
+                    }
+                    Err(e) => {
+                        if pushed_count.load(Ordering::Relaxed) == 0 {
+                            debug!(
+                                "Media Player bridge: {} push_sample failed ({:?}), waiting for appsrc",
+                                media_type_owned, e
+                            );
+                        }
+                        Ok(gst::FlowSuccess::Ok)
+                    }
+                }
             })
             .build(),
     );
+
+    // Link upstream LAST: this triggers data flow from urisourcebin's
+    // multiqueue. All downstream elements are now started and the
+    // callback is installed, so the first buffer will be handled correctly.
+    let clocksync_sink = clocksync
+        .static_pad("sink")
+        .ok_or("clocksync has no sink pad")?;
+    src_pad
+        .link(&clocksync_sink)
+        .map_err(|e| format!("link pad to clocksync: {:?}", e))?;
 
     debug!(
         "Media Player: Created {} bridge chain: clocksync(sync={}) -> appsink -> appsrc",
