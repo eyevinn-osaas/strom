@@ -112,6 +112,33 @@ impl TransitionController {
             .ok_or(TransitionError::PadNotFound(pad_name))
     }
 
+    /// Get the current stream-time for scheduling control binding keyframes.
+    ///
+    /// GstVideoAggregator evaluates control bindings using **stream-time**
+    /// (via `gst_segment_to_stream_time`), not running-time. We query the
+    /// mixer element directly for its current position, which returns the
+    /// stream-time of the output frame it is currently producing.
+    fn query_stream_time(
+        &self,
+        pipeline: &gst::Pipeline,
+    ) -> Result<gst::ClockTime, TransitionError> {
+        let mixer_position = self.mixer.query_position::<gst::ClockTime>();
+
+        let pipeline_position = pipeline.query_position::<gst::ClockTime>();
+
+        info!(
+            "Transition timing: mixer_position={:?}, pipeline_position={:?}",
+            mixer_position.display(),
+            pipeline_position.display(),
+        );
+
+        // Use mixer position — this is the correct stream-time for control bindings.
+        // pipeline_position drifts behind over time as downstream sinks buffer,
+        // causing keyframes to land in the past (hard cuts).
+        // Any perceived transition delay is real transport time (encoder + webrtc).
+        mixer_position.ok_or(TransitionError::PositionQueryFailed)
+    }
+
     /// Trigger a transition from one input to another.
     ///
     /// # Arguments
@@ -143,11 +170,8 @@ impl TransitionController {
             transitions.clear();
         }
 
-        // Get current pipeline time
-        let current_time = pipeline
-            .query_position::<gst::ClockTime>()
-            .ok_or(TransitionError::PositionQueryFailed)?;
-
+        // Adjust for pipeline latency so keyframes align with compositor processing
+        let current_time = self.query_stream_time(pipeline)?;
         let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
 
         debug!(
@@ -652,9 +676,8 @@ impl TransitionController {
             transitions.clear();
         }
 
-        let current_time = pipeline
-            .query_position::<gst::ClockTime>()
-            .ok_or(TransitionError::PositionQueryFailed)?;
+        // Adjust for pipeline latency so keyframes align with compositor processing
+        let current_time = self.query_stream_time(pipeline)?;
         let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
 
         let mut control_sources = Vec::new();
@@ -718,10 +741,8 @@ impl TransitionController {
         }
         self.clear_control_bindings(&pad);
 
-        // Get current pipeline time
-        let current_time = pipeline
-            .query_position::<gst::ClockTime>()
-            .ok_or(TransitionError::PositionQueryFailed)?;
+        // Adjust for pipeline latency so keyframes align with compositor processing
+        let current_time = self.query_stream_time(pipeline)?;
         let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
 
         let mut control_sources = Vec::new();

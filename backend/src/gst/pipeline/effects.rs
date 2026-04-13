@@ -778,8 +778,9 @@ impl PipelineManager {
         let pgm_group = state.pgm_group();
         let now_active = !was_active;
 
-        let current_time = self
-            .pipeline
+        // Use mixer position for stream-time (same as transitions).
+        // pipeline.query_position() drifts behind the compositor over time.
+        let current_time = mixer
             .query_position::<gst::ClockTime>()
             .unwrap_or(gst::ClockTime::ZERO);
         let end_time = current_time + gst::ClockTime::from_mseconds(duration_ms);
