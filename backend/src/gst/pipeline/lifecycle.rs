@@ -28,6 +28,15 @@ impl PipelineManager {
         self.thread_priority_state = Some(priority_state);
         info!("Thread priority handler installed");
 
+        // Populate session thread config so consumer-added callbacks can install
+        // sync handlers on dynamically created session pipelines (WHEP/WebRTC)
+        self.session_thread_config.populate(
+            self.properties.thread_priority,
+            self.assigned_cpus.clone(),
+            self.flow_id,
+            self.thread_registry.clone(),
+        );
+
         // Set up bus watch before starting
         info!("Setting up bus watch...");
         self.setup_bus_watch();
@@ -196,6 +205,10 @@ impl PipelineManager {
         if let Some(task) = self.thumbnail_deactivation_task.take() {
             task.abort();
         }
+
+        // Drop cached volume control sources. The bindings themselves are
+        // owned by the elements and released when the pipeline goes to NULL.
+        self.volume_ramps.clear();
 
         // Run set_state on a dedicated OS thread to avoid "Cannot start a runtime
         // from within a runtime" panics. Some GStreamer elements (e.g. whipserversrc)

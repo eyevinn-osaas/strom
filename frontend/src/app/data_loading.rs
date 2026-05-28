@@ -1,5 +1,6 @@
 use super::*;
 use crate::api::AuthStatusResponse;
+use crate::srt_stats::is_srt_block_def;
 use crate::state::AppMessage;
 use egui::Context;
 impl StromApp {
@@ -112,9 +113,196 @@ impl StromApp {
         });
     }
 
+    /// Load log level from the backend.
+    pub(super) fn load_log_level(&mut self, ctx: egui::Context) {
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.get_log_level().await {
+                Ok(resp) => {
+                    let _ = tx.send(AppMessage::LogLevelLoaded {
+                        current: resp.current,
+                        default: resp.default,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load log level: {}", e);
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Set the log level on the backend.
+    pub(super) fn set_log_level(&mut self, filter: String, ctx: egui::Context) {
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.set_log_level(&filter).await {
+                Ok(resp) => {
+                    let _ = tx.send(AppMessage::LogLevelLoaded {
+                        current: resp.current,
+                        default: resp.default,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to set log level: {}", e);
+                    let _ = tx.send(AppMessage::LogLevelError(e.to_string()));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Load GStreamer debug level from the backend.
+    pub(super) fn load_gst_log_level(&mut self, ctx: egui::Context) {
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.get_gst_log_level().await {
+                Ok(resp) => {
+                    let _ = tx.send(AppMessage::GstLogLevelLoaded {
+                        current: resp.current,
+                        default: resp.default,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load GStreamer debug level: {}", e);
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Set the GStreamer debug level on the backend.
+    pub(super) fn set_gst_log_level(&mut self, filter: String, ctx: egui::Context) {
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        spawn_task(async move {
+            match api.set_gst_log_level(&filter).await {
+                Ok(resp) => {
+                    let _ = tx.send(AppMessage::GstLogLevelLoaded {
+                        current: resp.current,
+                        default: resp.default,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to set GStreamer debug level: {}", e);
+                    let _ = tx.send(AppMessage::GstLogLevelError(e.to_string()));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Get cached network interfaces (for property inspector).
     pub fn network_interfaces(&self) -> &[strom_types::NetworkInterfaceInfo] {
         &self.network_interfaces
+    }
+
+    /// Load local capture devices (cameras + microphones) from the backend
+    /// when the cache is empty or older than `ttl`. Triggered from the
+    /// properties panel when a `Device { category }` field is rendered.
+    /// `force` bypasses the TTL (used by the refresh button).
+    ///
+    /// `devices_last_loaded` is *not* set here — it is updated when the
+    /// `LocalDevicesLoaded` message arrives (see `app::update`), so a
+    /// failing fetch doesn't lock out retries for the TTL window.
+    pub(crate) fn load_local_devices(
+        &mut self,
+        ctx: egui::Context,
+        force: bool,
+        ttl: std::time::Duration,
+    ) {
+        let fresh = self
+            .devices_last_loaded
+            .map(|t| t.elapsed() < ttl)
+            .unwrap_or(false);
+        if !force && fresh {
+            return;
+        }
+        if self.video_devices_loading && self.audio_devices_loading {
+            return;
+        }
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+
+        if force {
+            let api_refresh = api.clone();
+            spawn_task(async move {
+                if let Err(e) = api_refresh.refresh_devices().await {
+                    tracing::warn!("refresh_devices failed: {}", e);
+                }
+            });
+        }
+
+        if !self.video_devices_loading {
+            self.video_devices_loading = true;
+            let api = api.clone();
+            let tx = tx.clone();
+            let ctx = ctx.clone();
+            spawn_task(async move {
+                match api.list_devices("video_source").await {
+                    Ok(devices) => {
+                        let _ = tx.send(AppMessage::LocalDevicesLoaded {
+                            category: strom_types::discovery::DeviceCategory::VideoSource,
+                            devices,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("list_devices(video_source) failed: {}", e);
+                        let _ = tx.send(AppMessage::LocalDevicesLoaded {
+                            category: strom_types::discovery::DeviceCategory::VideoSource,
+                            devices: Vec::new(),
+                        });
+                    }
+                }
+                ctx.request_repaint();
+            });
+        }
+
+        if !self.audio_devices_loading {
+            self.audio_devices_loading = true;
+            spawn_task(async move {
+                match api.list_devices("audio_source").await {
+                    Ok(devices) => {
+                        let _ = tx.send(AppMessage::LocalDevicesLoaded {
+                            category: strom_types::discovery::DeviceCategory::AudioSource,
+                            devices,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("list_devices(audio_source) failed: {}", e);
+                        let _ = tx.send(AppMessage::LocalDevicesLoaded {
+                            category: strom_types::discovery::DeviceCategory::AudioSource,
+                            devices: Vec::new(),
+                        });
+                    }
+                }
+                ctx.request_repaint();
+            });
+        }
+    }
+
+    /// Whether a local-device fetch is in flight for either category —
+    /// used by the picker UI to distinguish "loading" from "empty".
+    pub fn local_devices_loading(&self) -> bool {
+        self.video_devices_loading || self.audio_devices_loading
+    }
+
+    /// Get cached local video capture devices.
+    pub fn video_devices(&self) -> &[strom_types::discovery::DeviceResponse] {
+        &self.video_devices
+    }
+
+    /// Get cached local audio capture devices.
+    pub fn audio_devices(&self) -> &[strom_types::discovery::DeviceResponse] {
+        &self.audio_devices
     }
 
     /// Load available inter channels from the backend (for InterInput channel dropdown).
@@ -214,6 +402,53 @@ impl StromApp {
                 Err(e) => {
                     // Don't log errors for flows without WebRTC elements
                     tracing::trace!("No WebRTC stats for flow {}: {}", flow_id, e);
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Poll SRT stats for the currently selected flow if it has SRT input/output blocks.
+    /// Called periodically (every second) — mirrors `poll_webrtc_stats`.
+    pub(super) fn poll_srt_stats(&mut self, ctx: &Context) {
+        let flow_id = match self.selected_flow_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let flow = self.flows.iter().find(|f| f.id == flow_id);
+        let is_running = flow.map(|f| f.running).unwrap_or(false);
+        if !is_running {
+            return;
+        }
+
+        let has_srt_blocks = flow
+            .map(|f| {
+                f.blocks
+                    .iter()
+                    .any(|b| is_srt_block_def(&b.block_definition_id))
+            })
+            .unwrap_or(false);
+        if !has_srt_blocks {
+            return;
+        }
+
+        let api = self.api.clone();
+        let tx = self.channels.sender();
+        let ctx = ctx.clone();
+
+        spawn_task(async move {
+            match api.get_srt_stats(flow_id).await {
+                Ok(stats) => {
+                    tracing::debug!(
+                        "Fetched SRT stats for flow {}: {} connections",
+                        flow_id,
+                        stats.connections.len()
+                    );
+                    let _ = tx.send(AppMessage::SrtStatsLoaded { flow_id, stats });
+                }
+                Err(e) => {
+                    tracing::trace!("No SRT stats for flow {}: {}", flow_id, e);
                 }
             }
             ctx.request_repaint();

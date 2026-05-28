@@ -4,7 +4,7 @@ use crate::blocks::BlockBuildError;
 use crate::gpu;
 use gstreamer as gst;
 use gstreamer::prelude::*;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// Compositor backend selection result.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,12 +143,62 @@ pub fn make_queue(name: &str) -> Result<gst::Element, BlockBuildError> {
         .map_err(|e| BlockBuildError::ElementCreation(format!("queue: {}", e)))
 }
 
+/// Create a `level` audio-metering element configured with the standard interval.
+pub fn make_level(name: &str) -> Result<gst::Element, BlockBuildError> {
+    gst::ElementFactory::make("level")
+        .name(name)
+        .property("interval", strom_types::vision_mixer::VU_METER_INTERVAL_NS)
+        .property("post-messages", true)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("level: {}", e)))
+}
+
+/// Create a terminating `fakesink` for an audio metering branch.
+///
+/// `sync=false` and `async=false` so an unconnected audio input doesn't stall
+/// preroll — the level element still posts messages when data flows.
+pub fn make_meter_fakesink(name: &str) -> Result<gst::Element, BlockBuildError> {
+    gst::ElementFactory::make("fakesink")
+        .name(name)
+        .property("sync", false)
+        .property("async", false)
+        .property("silent", true)
+        .property("enable-last-sample", false)
+        .build()
+        .map_err(|e| BlockBuildError::ElementCreation(format!("fakesink: {}", e)))
+}
+
 /// Create a simple GStreamer element by factory name.
 pub fn make_element(factory: &str, name: &str) -> Result<gst::Element, BlockBuildError> {
     gst::ElementFactory::make(factory)
         .name(name)
         .build()
         .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", factory, e)))
+}
+
+/// Suppress upstream latency queries on the sink pad of a queue element.
+///
+/// The PGM feed from the distribution compositor (mixer) is tee'd into the
+/// multiview compositor (mv_comp). Without this probe the latency query from
+/// mv_comp traverses back through mixer, causing the two compositors' latencies
+/// to stack. The probe answers the LATENCY query directly with min=0 so that
+/// mv_comp's peer latency is determined by its direct input paths instead.
+pub fn suppress_latency_query(queue: &gst::Element) {
+    let pad = queue
+        .static_pad("sink")
+        .expect("queue must have a sink pad");
+    pad.add_probe(gst::PadProbeType::QUERY_UPSTREAM, |_pad, info| {
+        if let Some(query) = info.query_mut() {
+            if let gst::QueryViewMut::Latency(latency) = query.view_mut() {
+                trace!(
+                    "Suppressed latency query on PGM->MV path (preventing compositor latency stacking)"
+                );
+                latency.set(true, gst::ClockTime::ZERO, None::<gst::ClockTime>);
+                return gst::PadProbeReturn::Handled;
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
 }
 
 fn backend_name(backend: CompositorBackend) -> &'static str {

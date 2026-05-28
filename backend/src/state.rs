@@ -21,6 +21,11 @@ use strom_types::element::{ElementInfo, PropertyValue};
 use strom_types::{Flow, FlowId, PipelineState, StromEvent};
 use tokio::sync::RwLock;
 use tracing::{debug, error, info, trace, warn};
+use tracing_subscriber::reload;
+use tracing_subscriber::EnvFilter;
+
+/// Handle for reloading the log filter at runtime.
+pub type LogReloadHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -71,6 +76,35 @@ struct AppStateInner {
     ice_transport_policy: String,
     /// Flows pending save (debounced to avoid excessive disk writes)
     pending_saves: RwLock<HashSet<FlowId>>,
+    /// Handle for reloading the tracing EnvFilter at runtime
+    log_reload_handle: parking_lot::Mutex<Option<LogReloadHandle>>,
+    /// The log filter string the server was started with
+    default_log_filter: parking_lot::Mutex<String>,
+    /// The currently active GStreamer debug filter string (tracked by us)
+    gst_debug_filter: parking_lot::Mutex<String>,
+    /// The GStreamer debug filter the server started with
+    default_gst_debug_filter: parking_lot::Mutex<String>,
+    /// Authoritative solo intent for each mixer block instance: the set of
+    /// `chN_pfl` / `chN_afl` exposed property names that the user has currently
+    /// engaged. Updated as a side effect of every `update_block_properties`
+    /// call that touches PFL/AFL bools, and consulted by the monitor-gate
+    /// refresh — never derived from element values (which would race with the
+    /// per-channel volume ramp). PFL/AFL bools are `persist: false`, so the
+    /// per-flow entry is cleared on `stop_flow`; a fresh start sees an empty
+    /// set, which matches the build-time element defaults (gates closed).
+    mixer_solo_state: RwLock<HashMap<FlowId, HashMap<String, HashSet<String>>>>,
+}
+
+/// Pick the ramp_ms that should apply to a single property in a batched
+/// `update_block_properties` call. A per-name entry in `overrides` wins over
+/// the batch-level `global` default; absent both, returns `None` so the
+/// pipeline layer falls back to its own per-route default.
+fn resolve_ramp_ms(
+    name: &str,
+    overrides: Option<&HashMap<String, u32>>,
+    global: Option<u32>,
+) -> Option<u32> {
+    overrides.and_then(|m| m.get(name).copied()).or(global)
 }
 
 impl AppState {
@@ -109,8 +143,107 @@ impl AppState {
                 ice_servers,
                 ice_transport_policy,
                 pending_saves: RwLock::new(HashSet::new()),
+                log_reload_handle: parking_lot::Mutex::new(None),
+                default_log_filter: parking_lot::Mutex::new("info".to_string()),
+                gst_debug_filter: parking_lot::Mutex::new(String::new()),
+                default_gst_debug_filter: parking_lot::Mutex::new(String::new()),
+                mixer_solo_state: RwLock::new(HashMap::new()),
             }),
         }
+    }
+
+    /// Set the log reload handle and default filter (called once from main after init_logging).
+    pub fn set_log_reload_handle(&self, handle: LogReloadHandle, default_filter: String) {
+        *self.inner.default_log_filter.lock() = default_filter;
+        *self.inner.log_reload_handle.lock() = Some(handle);
+    }
+
+    /// Get the current log filter string.
+    pub fn current_log_filter(&self) -> String {
+        let guard = self.inner.log_reload_handle.lock();
+        if let Some(handle) = guard.as_ref() {
+            handle
+                .with_current(|f| format!("{}", f))
+                .unwrap_or_else(|_| "unknown".to_string())
+        } else {
+            "unknown".to_string()
+        }
+    }
+
+    /// Get the default log filter string.
+    pub fn default_log_filter(&self) -> String {
+        self.inner.default_log_filter.lock().clone()
+    }
+
+    /// Reload the log filter at runtime. Returns an error if the filter string is invalid.
+    pub fn reload_log_filter(&self, filter: &str) -> Result<(), String> {
+        let new_filter = EnvFilter::try_new(filter)
+            .map_err(|e| format!("Invalid filter '{}': {}", filter, e))?;
+        let guard = self.inner.log_reload_handle.lock();
+        if let Some(handle) = guard.as_ref() {
+            handle
+                .reload(new_filter)
+                .map_err(|e| format!("Failed to reload filter: {}", e))
+        } else {
+            Err("Log reload handle not initialized".to_string())
+        }
+    }
+
+    /// Initialize GStreamer debug level tracking (called once after gst::init).
+    pub fn init_gst_debug_filter(&self) {
+        let initial = std::env::var("GST_DEBUG").unwrap_or_default();
+        let filter = if initial.is_empty() {
+            let level = gst_level_to_int(gstreamer::log::get_default_threshold());
+            format!("*:{}", level)
+        } else {
+            initial
+        };
+        *self.inner.default_gst_debug_filter.lock() = filter.clone();
+        *self.inner.gst_debug_filter.lock() = filter;
+    }
+
+    /// Get the current GStreamer debug filter string.
+    pub fn current_gst_debug_filter(&self) -> String {
+        self.inner.gst_debug_filter.lock().clone()
+    }
+
+    /// Get the default GStreamer debug filter string.
+    pub fn default_gst_debug_filter(&self) -> String {
+        self.inner.default_gst_debug_filter.lock().clone()
+    }
+
+    /// Apply a new GStreamer debug filter at runtime.
+    pub fn set_gst_debug_filter(&self, filter: &str) -> Result<(), String> {
+        let filter = filter.trim();
+        if filter.is_empty() {
+            return Err("Filter string must not be empty".to_string());
+        }
+
+        // First reset default threshold to none, then apply the new filter.
+        // This ensures previously set per-category overrides from a prior
+        // filter string don't linger when switching to a simpler filter.
+        gstreamer::log::set_default_threshold(gstreamer::DebugLevel::None);
+
+        for part in filter.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if let Some((cat, level_str)) = part.split_once(':') {
+                let level = parse_gst_level(level_str.trim())?;
+                if cat.trim() == "*" {
+                    gstreamer::log::set_default_threshold(level);
+                } else {
+                    gstreamer::log::set_threshold_for_name(cat.trim(), level);
+                }
+            } else {
+                let level = parse_gst_level(part)?;
+                gstreamer::log::set_default_threshold(level);
+            }
+        }
+
+        *self.inner.gst_debug_filter.lock() = filter.to_string();
+        Ok(())
     }
 
     /// Get the WHEP endpoint registry.
@@ -235,12 +368,63 @@ impl AppState {
         ))
     }
 
+    /// Strip block properties marked `persist: false` from a flow.
+    ///
+    /// Transient state (currently `chN_pfl` / `chN_afl` on the audio mixer)
+    /// should never reach the in-memory flow definition or disk — otherwise an
+    /// explicit flow save would re-engage solo on the next restart, and the
+    /// runtime-only intent of `persist: false` would silently leak.
+    ///
+    /// Called at two boundaries:
+    ///   * `load_from_storage` — cleans up legacy flow JSON that may carry
+    ///     transient values from before this guard existed.
+    ///   * `upsert_flow` — filters everything coming in from the flow PATCH /
+    ///     PUT handlers and the create-flow path.
+    ///
+    /// Live PATCHes via `update_block_properties` already skip `persist: false`
+    /// at write time, so no additional filtering is needed on that path.
+    async fn strip_transient_properties(&self, flow: &mut Flow) {
+        for block in &mut flow.blocks {
+            let Some(def) = self
+                .inner
+                .block_registry
+                .get_by_id(&block.block_definition_id)
+                .await
+            else {
+                continue;
+            };
+            for prop in &def.exposed_properties {
+                if !prop.persist() {
+                    block.properties.remove(&prop.name);
+                }
+            }
+        }
+    }
+
     /// Load flows from storage into memory.
     pub async fn load_from_storage(&self) -> anyhow::Result<()> {
         info!("Loading flows from storage...");
         match self.inner.storage.load_all().await {
             Ok(mut flows) => {
                 let count = flows.len();
+
+                // Strip transient (persist: false) properties from any legacy
+                // flow JSON that stored them before this guard existed.
+                for flow in flows.values_mut() {
+                    self.strip_transient_properties(flow).await;
+                }
+
+                // Migrate legacy `mode` on WHEP Output blocks to explicit track
+                // counts so the property panel and the computed pads agree.
+                for flow in flows.values_mut() {
+                    for block in &mut flow.blocks {
+                        if block.block_definition_id == "builtin.whep_output" {
+                            crate::blocks::builtin::whep::migrate_legacy_mode(
+                                &mut block.properties,
+                            );
+                        }
+                    }
+                }
 
                 // Reset all flow states to None on server restart since pipelines aren't running
                 // This prevents showing stale "Playing" states from before the server stopped
@@ -411,6 +595,7 @@ impl AppState {
                         ptp_info.restart_needed = configured_domain != ptp_info.domain;
                         flow.properties.ptp_info = Some(ptp_info);
                     }
+                    flow.properties.ntp_info = pipeline.get_ntp_info();
                     flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
                 } else {
                     // Clear runtime-only status when no pipeline is running
@@ -418,6 +603,7 @@ impl AppState {
                     flow.properties.thread_priority_status = None;
                     flow.properties.clock_sync_status = None;
                     flow.properties.ptp_info = None;
+                    flow.properties.ntp_info = None;
                 }
                 // Compute external pads for dynamic blocks
                 Self::compute_flow_external_pads(&mut flow);
@@ -443,6 +629,7 @@ impl AppState {
                     ptp_info.restart_needed = configured_domain != ptp_info.domain;
                     flow.properties.ptp_info = Some(ptp_info);
                 }
+                flow.properties.ntp_info = pipeline.get_ntp_info();
                 flow.properties.thread_priority_status = pipeline.get_thread_priority_status();
             } else {
                 // Clear runtime-only status when no pipeline is running
@@ -450,6 +637,7 @@ impl AppState {
                 flow.properties.thread_priority_status = None;
                 flow.properties.clock_sync_status = None;
                 flow.properties.ptp_info = None;
+                flow.properties.ntp_info = None;
             }
             // Compute external pads for dynamic blocks
             Self::compute_flow_external_pads(&mut flow);
@@ -458,11 +646,17 @@ impl AppState {
     }
 
     /// Add or update a flow and persist to storage.
-    pub async fn upsert_flow(&self, flow: Flow) -> anyhow::Result<()> {
+    pub async fn upsert_flow(&self, mut flow: Flow) -> anyhow::Result<()> {
         let is_new = {
             let flows = self.inner.flows.read().await;
             !flows.contains_key(&flow.id)
         };
+
+        // Filter out transient (persist: false) block properties before this
+        // flow definition reaches either the in-memory map or disk. Without
+        // this, an explicit save from the frontend would re-engage transient
+        // state (e.g. PFL/AFL solo) on the next restart.
+        self.strip_transient_properties(&mut flow).await;
 
         // Update in-memory state
         {
@@ -514,6 +708,22 @@ impl AppState {
 
         if !exists {
             return Ok(false);
+        }
+
+        // Stop the pipeline first if it is still running. Without this, the
+        // PipelineManager stays in self.inner.pipelines after the flow record
+        // is gone, with no API path left to reach it.
+        let pipeline_active = {
+            let pipelines = self.inner.pipelines.read().await;
+            pipelines.contains_key(id)
+        };
+        if pipeline_active {
+            if let Err(e) = self.stop_flow(id).await {
+                error!(
+                    "Failed to stop flow {} before delete: {} — pipeline resources may leak",
+                    id, e
+                );
+            }
         }
 
         // Delete from storage first (skip for ephemeral flows)
@@ -670,6 +880,12 @@ impl AppState {
             }
         }
 
+        // Snapshot the live local-device map so the Local Input block can
+        // resolve a chosen device id without starting a transient
+        // DeviceMonitor inside its build() (which crashes inside
+        // gst_device_provider_stop on macOS).
+        let local_devices = self.inner.discovery.local_device_map().await;
+
         // Create pipeline with event broadcaster and block registry
         info!("Creating PipelineManager (this may block)...");
         let mut manager = PipelineManager::new(
@@ -680,6 +896,7 @@ impl AppState {
             self.inner.ice_transport_policy.clone(),
             Some(self.inner.whip_registry.clone()),
             self.inner.media_path.clone(),
+            local_devices,
         )?;
         info!("PipelineManager created successfully");
 
@@ -721,11 +938,12 @@ impl AppState {
             let mut endpoints: Vec<(String, String)> = Vec::new();
             for whep_info in manager.whep_endpoints() {
                 info!(
-                    "Registering WHEP endpoint '{}' (block {}) on port {} mode={:?}",
+                    "Registering WHEP endpoint '{}' (block {}) on port {} audio_tracks={} video_tracks={}",
                     whep_info.endpoint_id,
                     whep_info.block_id,
                     whep_info.internal_port,
-                    whep_info.mode
+                    whep_info.num_audio_tracks,
+                    whep_info.num_video_tracks,
                 );
                 if let Err(e) = self
                     .inner
@@ -733,7 +951,8 @@ impl AppState {
                     .register(
                         whep_info.endpoint_id.clone(),
                         whep_info.internal_port,
-                        whep_info.mode,
+                        whep_info.num_audio_tracks,
+                        whep_info.num_video_tracks,
                     )
                     .await
                 {
@@ -1070,6 +1289,13 @@ impl AppState {
     pub async fn stop_flow(&self, id: &FlowId) -> Result<PipelineState, PipelineError> {
         info!("Stopping flow: {}", id);
 
+        // Drop any cached mixer solo intent — PFL/AFL bools are `persist: false`
+        // and the rebuilt pipeline will start with the no-solo defaults.
+        {
+            let mut state = self.inner.mixer_solo_state.write().await;
+            state.remove(id);
+        }
+
         // Get and remove the pipeline
         let manager = {
             let mut pipelines = self.inner.pipelines.write().await;
@@ -1250,6 +1476,12 @@ impl AppState {
                     crate::blocks::builtin::vision_mixer::overlay::unregister_overlay_state(
                         &block.id,
                     );
+                    // Without this, the overlay-timer-* thread keeps polling the
+                    // renderer registry, holds a strong AppSrc ref, and prevents
+                    // the pipeline (and its NiceAgent) from finalizing.
+                    crate::blocks::builtin::vision_mixer::overlay::unregister_overlay_renderer(
+                        &block.id,
+                    );
                 }
             }
         }
@@ -1292,16 +1524,20 @@ impl AppState {
     }
 
     /// Update a property on a running pipeline element.
+    ///
+    /// `ramp_ms` is honored for properties that support smooth interpolation
+    /// (currently audio `volume`-element `volume`); ignored for others.
     pub async fn update_element_property(
         &self,
         flow_id: &FlowId,
         element_id: &str,
         property_name: &str,
         value: PropertyValue,
+        ramp_ms: Option<u32>,
     ) -> Result<(), PipelineError> {
         info!(
-            "Updating property {}.{} in flow {}",
-            element_id, property_name, flow_id
+            "Updating property {}.{} in flow {} (ramp_ms={:?})",
+            element_id, property_name, flow_id, ramp_ms
         );
 
         let pipelines = self.inner.pipelines.read().await;
@@ -1310,7 +1546,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        manager.update_element_property(element_id, property_name, &value)?;
+        manager.update_element_property(element_id, property_name, &value, ramp_ms)?;
 
         // Broadcast property change event
         self.inner.events.broadcast(StromEvent::PropertyChanged {
@@ -1323,6 +1559,380 @@ impl AppState {
         Ok(())
     }
 
+    /// Apply a batch of exposed block-level properties to the running pipeline live.
+    ///
+    /// Each requested property is looked up in the block's `ExposedProperty` list, its
+    /// declared `transform` (e.g. `bool_to_volume`) is applied, and the result is
+    /// written to the resolved underlying element via [`Self::update_element_property`]
+    /// — so all the existing anti-click / ramp behaviour is inherited.
+    ///
+    /// Block-specific derived state: for the audio mixer, any chN_pfl /
+    /// chN_afl / auxN_afl / groupN_afl write in the batch triggers a
+    /// post-step that recomputes "any solo active" and writes the two
+    /// monitor-source gates (`solo_to_mon` / `main_to_mon`) with the same
+    /// `ramp_ms`. Those gates are pure derived state — clients must never
+    /// touch them directly.
+    ///
+    /// Returns `(current_values, rejected)`:
+    /// - `current_values`: block-level (inverse-transformed) values after the writes.
+    /// - `rejected`: per-property reason strings for entries that could not be applied
+    ///   (unknown name, non-live, transform mismatch). The overall call still succeeds —
+    ///   only flow/block-not-found is a hard `Err`.
+    pub async fn update_block_properties(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        properties: HashMap<String, PropertyValue>,
+        ramp_ms: Option<u32>,
+        ramp_ms_overrides: Option<HashMap<String, u32>>,
+    ) -> Result<(HashMap<String, PropertyValue>, HashMap<String, String>), PipelineError> {
+        // Resolve block instance → definition_id → BlockDefinition.
+        let definition_id = {
+            let flows = self.inner.flows.read().await;
+            let flow = flows.get(flow_id).ok_or_else(|| {
+                PipelineError::InvalidFlow(format!("Flow not found: {}", flow_id))
+            })?;
+            flow.blocks
+                .iter()
+                .find(|b| b.id == block_instance_id)
+                .map(|b| b.block_definition_id.clone())
+                .ok_or_else(|| {
+                    PipelineError::InvalidFlow(format!(
+                        "Block instance not found in flow: {}",
+                        block_instance_id
+                    ))
+                })?
+        };
+        let definition = self
+            .inner
+            .block_registry
+            .get_by_id(&definition_id)
+            .await
+            .ok_or_else(|| {
+                PipelineError::InvalidFlow(format!("Block definition not found: {}", definition_id))
+            })?;
+
+        let mut rejected: HashMap<String, String> = HashMap::new();
+        let mut to_persist: Vec<(String, PropertyValue)> = Vec::new();
+        // True iff this batch successfully applied at least one solo write
+        // (channel chN_pfl / chN_afl, aux auxN_afl, or group groupN_afl).
+        // We update the per-block solo-intent cache below as those writes
+        // succeed, then run the monitor-gate refresh once.
+        let mut mixer_solo_changed = false;
+
+        for (name, value) in properties {
+            let Some(exposed) = definition
+                .exposed_properties
+                .iter()
+                .find(|p| p.name == name)
+            else {
+                rejected.insert(name, "unknown exposed property".to_string());
+                continue;
+            };
+
+            if !exposed.live {
+                rejected.insert(
+                    name,
+                    "property is not live (requires flow restart)".to_string(),
+                );
+                continue;
+            }
+
+            // The `_block` element_id marker is a virtual element for properties that
+            // get baked into the block at build time — they have no underlying element
+            // to write to live.
+            if exposed.mapping.element_id == "_block" {
+                rejected.insert(name, "property has no underlying live element".to_string());
+                continue;
+            }
+
+            let transform = crate::blocks::transforms::lookup(exposed.mapping.transform.as_deref());
+            let Some(transformed) = (transform.forward)(value.clone()) else {
+                rejected.insert(name, "value type does not match transform".to_string());
+                continue;
+            };
+
+            // Element IDs in block definitions are relative to the instance — prepend.
+            let full_element_id = format!("{}:{}", block_instance_id, exposed.mapping.element_id);
+
+            let effective_ramp_ms = resolve_ramp_ms(&name, ramp_ms_overrides.as_ref(), ramp_ms);
+
+            if let Err(e) = self
+                .update_element_property(
+                    flow_id,
+                    &full_element_id,
+                    &exposed.mapping.property_name,
+                    transformed,
+                    effective_ramp_ms,
+                )
+                .await
+            {
+                rejected.insert(name, format!("pipeline write failed: {}", e));
+                continue;
+            }
+
+            if definition.id == crate::blocks::builtin::mixer::MIXER_BLOCK_ID
+                && crate::blocks::builtin::mixer::is_solo_property_name(&name)
+            {
+                if let PropertyValue::Bool(b) = &value {
+                    self.set_mixer_solo_intent(flow_id, block_instance_id, &name, *b)
+                        .await;
+                    mixer_solo_changed = true;
+                }
+            }
+
+            if exposed.persist() {
+                to_persist.push((name, value));
+            }
+        }
+
+        // Mixer: PFL/AFL bools are the only public API for solo. The two
+        // monitor-source gates (solo_to_mon / main_to_mon) are pure derived
+        // state — any chN_pfl / chN_afl / auxN_afl / groupN_afl currently
+        // engaged → solo bus to monitor; otherwise main bus to monitor. We
+        // apply this exactly once per batch so the two gates are atomic
+        // relative to the bool writes that triggered them.
+        if mixer_solo_changed {
+            self.refresh_mixer_monitor_gates(flow_id, block_instance_id, ramp_ms)
+                .await;
+        }
+
+        // Sync persisted values back to the block instance so they survive a
+        // pipeline restart. Done after the pipeline writes so we don't store
+        // values that failed to apply.
+        if !to_persist.is_empty() {
+            {
+                let mut flows = self.inner.flows.write().await;
+                if let Some(flow) = flows.get_mut(flow_id) {
+                    if let Some(block) = flow.blocks.iter_mut().find(|b| b.id == block_instance_id)
+                    {
+                        for (name, value) in to_persist {
+                            block.properties.insert(name, value);
+                        }
+                    }
+                }
+            }
+            self.mark_flow_dirty(*flow_id).await;
+        }
+
+        let current = self
+            .get_block_properties_inner(flow_id, block_instance_id, &definition)
+            .await?;
+        Ok((current, rejected))
+    }
+
+    /// Read the current block-level (user-facing) values of all live exposed properties
+    /// from the running pipeline. Non-live properties and those without a transform
+    /// match are silently skipped.
+    pub async fn get_block_properties(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+    ) -> Result<HashMap<String, PropertyValue>, PipelineError> {
+        let definition_id = {
+            let flows = self.inner.flows.read().await;
+            let flow = flows.get(flow_id).ok_or_else(|| {
+                PipelineError::InvalidFlow(format!("Flow not found: {}", flow_id))
+            })?;
+            flow.blocks
+                .iter()
+                .find(|b| b.id == block_instance_id)
+                .map(|b| b.block_definition_id.clone())
+                .ok_or_else(|| {
+                    PipelineError::InvalidFlow(format!(
+                        "Block instance not found in flow: {}",
+                        block_instance_id
+                    ))
+                })?
+        };
+        let definition = self
+            .inner
+            .block_registry
+            .get_by_id(&definition_id)
+            .await
+            .ok_or_else(|| {
+                PipelineError::InvalidFlow(format!("Block definition not found: {}", definition_id))
+            })?;
+        self.get_block_properties_inner(flow_id, block_instance_id, &definition)
+            .await
+    }
+
+    /// Record a single solo-affecting write (chN_pfl / chN_afl / auxN_afl /
+    /// groupN_afl) in the per-block solo-intent cache. `true` adds the
+    /// property name to the set, `false` removes it. The empty-set case is
+    /// the no-solo state and matches the build-time gate defaults, so we
+    /// clean up empty inner / outer maps.
+    async fn set_mixer_solo_intent(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        property_name: &str,
+        value: bool,
+    ) {
+        let mut state = self.inner.mixer_solo_state.write().await;
+        let by_block = state.entry(*flow_id).or_default();
+        let set = by_block.entry(block_instance_id.to_string()).or_default();
+        if value {
+            set.insert(property_name.to_string());
+        } else {
+            set.remove(property_name);
+        }
+        if set.is_empty() {
+            by_block.remove(block_instance_id);
+        }
+        if by_block.is_empty() {
+            state.remove(flow_id);
+        }
+    }
+
+    /// True iff at least one channel / aux / group PFL or AFL is currently
+    /// engaged on the given mixer block instance. Reads only the in-memory
+    /// intent cache — never touches the running pipeline, so it is immune
+    /// to mid-ramp races.
+    async fn mixer_any_solo_active(&self, flow_id: &FlowId, block_instance_id: &str) -> bool {
+        let state = self.inner.mixer_solo_state.read().await;
+        state
+            .get(flow_id)
+            .and_then(|by_block| by_block.get(block_instance_id))
+            .map(|set| !set.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Mixer-specific derived state: refresh the monitor-source gates after a
+    /// batch that contained one or more chN_pfl / chN_afl / auxN_afl /
+    /// groupN_afl writes.
+    ///
+    /// "Any solo active" is computed purely from the in-memory solo-intent
+    /// cache (see [`Self::set_mixer_solo_intent`]) — the running element
+    /// values are not consulted, so a long volume ramp on one channel cannot
+    /// race with a release on another. Both gates are written with the
+    /// caller's `ramp_ms` so they stay in sync with the PFL/AFL ramps that
+    /// just kicked off.
+    ///
+    /// Gate-write failures are logged but never bubble up — a transient
+    /// element-not-found shouldn't fail the user's solo toggle. Note that a
+    /// partial failure (one gate written, the other not) leaves both buses
+    /// audible on the monitor until the next solo write retries — an
+    /// acceptable degraded mode but worth knowing about when debugging.
+    async fn refresh_mixer_monitor_gates(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        ramp_ms: Option<u32>,
+    ) {
+        let any_solo = self.mixer_any_solo_active(flow_id, block_instance_id).await;
+        let (solo_vol, main_vol) = if any_solo { (1.0, 0.0) } else { (0.0, 1.0) };
+        let solo_id = format!(
+            "{}:{}",
+            block_instance_id,
+            crate::blocks::builtin::mixer::SOLO_TO_MON_ELEMENT
+        );
+        let main_id = format!(
+            "{}:{}",
+            block_instance_id,
+            crate::blocks::builtin::mixer::MAIN_TO_MON_ELEMENT
+        );
+        if let Err(e) = self
+            .update_element_property(
+                flow_id,
+                &solo_id,
+                "volume",
+                PropertyValue::Float(solo_vol),
+                ramp_ms,
+            )
+            .await
+        {
+            warn!(
+                "Mixer {} solo_to_mon gate update failed (any_solo={}): {}",
+                block_instance_id, any_solo, e
+            );
+        }
+        if let Err(e) = self
+            .update_element_property(
+                flow_id,
+                &main_id,
+                "volume",
+                PropertyValue::Float(main_vol),
+                ramp_ms,
+            )
+            .await
+        {
+            warn!(
+                "Mixer {} main_to_mon gate update failed (any_solo={}): {}",
+                block_instance_id, any_solo, e
+            );
+        }
+    }
+
+    /// Read the current block-level values of all live exposed properties from
+    /// the running pipeline.
+    ///
+    /// A block definition is generated for the block type's MAX sizing (e.g. the
+    /// mixer's 128 channels / 32 aux / 32 groups), so a smaller instance has no
+    /// backing element for the vast majority of its exposed properties. We take
+    /// the pipelines lock once and resolve which elements the instance actually
+    /// built, then skip every property whose element is absent before touching
+    /// GStreamer — instead of re-acquiring the lock and walking the
+    /// element-not-found path thousands of times per call. The output is
+    /// identical to reading each property individually (a property is only
+    /// readable when its element exists), this just avoids the per-property
+    /// lock churn and error-path allocations. Generic: any block that builds
+    /// elements conditionally (mixer, audiorouter, …) benefits.
+    async fn get_block_properties_inner(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        definition: &strom_types::BlockDefinition,
+    ) -> Result<HashMap<String, PropertyValue>, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+        let Some(manager) = pipelines.get(flow_id) else {
+            // Pipeline not running: every read would fail and be skipped, so the
+            // historical behaviour here is an empty map rather than an error.
+            return Ok(HashMap::new());
+        };
+
+        // Element IDs that exist for this instance, with the "{instance}:" prefix
+        // stripped so the definition's bare `element_id` can be tested without
+        // allocating a full id per property.
+        let prefix_len = block_instance_id.len() + 1;
+        let existing: std::collections::HashSet<&str> = manager
+            .find_block_elements(block_instance_id)
+            .into_iter()
+            .map(|(id, _)| &id[prefix_len..])
+            .collect();
+
+        let mut out = HashMap::new();
+        for exposed in &definition.exposed_properties {
+            if !exposed.live || exposed.mapping.element_id == "_block" {
+                continue;
+            }
+            if !existing.contains(exposed.mapping.element_id.as_str()) {
+                continue;
+            }
+            let full_element_id = format!("{}:{}", block_instance_id, exposed.mapping.element_id);
+            let raw = match manager
+                .get_element_property(&full_element_id, &exposed.mapping.property_name)
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    trace!(
+                        "Skipping {} (could not read {}.{}): {}",
+                        exposed.name,
+                        full_element_id,
+                        exposed.mapping.property_name,
+                        e
+                    );
+                    continue;
+                }
+            };
+            let transform = crate::blocks::transforms::lookup(exposed.mapping.transform.as_deref());
+            if let Some(v) = (transform.inverse)(raw) {
+                out.insert(exposed.name.clone(), v);
+            }
+        }
+        Ok(out)
+    }
+
     /// Trigger a transition on a compositor/mixer block.
     pub async fn trigger_transition(
         &self,
@@ -1332,7 +1942,7 @@ impl AppState {
         to_input: usize,
         transition_type: &str,
         duration_ms: u64,
-    ) -> Result<(), PipelineError> {
+    ) -> Result<String, PipelineError> {
         debug!(
             "Triggering {} transition on block {} in flow {} ({} -> {}, {}ms)",
             transition_type, block_instance_id, flow_id, from_input, to_input, duration_ms
@@ -1344,7 +1954,7 @@ impl AppState {
             PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
         })?;
 
-        let (ftb_cancelled, old_pgm_group, new_pgm_group) = manager.trigger_transition(
+        let (ftb_cancelled, old_pgm, new_pgm, actual_kind) = manager.trigger_transition(
             block_instance_id,
             from_input,
             to_input,
@@ -1366,7 +1976,7 @@ impl AppState {
         }
 
         // Sync final alpha values back to flow definition for persistence
-        // Clear ALL input alphas to 0.0, then set active group inputs to 1.0
+        // Clear ALL input alphas to 0.0, then set the active input to 1.0
         if let Some(block_id) = block_instance_id.split(':').next() {
             let mut flows = self.inner.flows.write().await;
             if let Some(flow) = flows.get_mut(flow_id) {
@@ -1381,15 +1991,15 @@ impl AppState {
                     for key in alpha_keys {
                         block.properties.insert(key, PropertyValue::Float(0.0));
                     }
-                    // Set the active inputs (new PGM group)
-                    for &idx in &new_pgm_group {
+                    // Set the active input (new PGM, if any)
+                    if let Some(idx) = new_pgm {
                         block
                             .properties
                             .insert(format!("input_{}_alpha", idx), PropertyValue::Float(1.0));
                     }
                     trace!(
-                        "Synced transition alpha values: all -> 0.0, inputs {:?} -> 1.0",
-                        new_pgm_group
+                        "Synced transition alpha values: all -> 0.0, input {:?} -> 1.0",
+                        new_pgm
                     );
                 }
             }
@@ -1400,7 +2010,7 @@ impl AppState {
         }
 
         // Check if this is a vision mixer block and update multiview accordingly
-        // After take: new PGM = old PVW group, new PVW = old PGM group (swap)
+        // After take: new PGM = old PVW, new PVW = old PGM (swap)
         if let Some(block_id) = block_instance_id.split(':').next() {
             let flows = self.inner.flows.read().await;
             let is_vision_mixer = flows
@@ -1412,32 +2022,34 @@ impl AppState {
 
             if is_vision_mixer {
                 let num_inputs = self.get_vision_mixer_num_inputs(flow_id, block_id).await;
-                let new_pvw_group = old_pgm_group.clone();
+                let new_pvw = old_pgm;
                 let pipelines = self.inner.pipelines.read().await;
                 if let Some(manager) = pipelines.get(flow_id) {
-                    let _ = manager.update_vision_mixer_after_take(
-                        block_id,
-                        &new_pgm_group,
-                        &new_pvw_group,
-                        num_inputs,
-                    );
+                    let _ = manager
+                        .update_vision_mixer_after_take(block_id, new_pgm, new_pvw, num_inputs);
                 }
                 drop(pipelines);
 
-                // Broadcast vision mixer state change
+                // Broadcast vision mixer state change. Reads authoritative
+                // post-take state from the overlay so PiP-aware takes are
+                // reflected (the local new_pgm/new_pvw are input-centric and
+                // don't carry PiP info).
+                let overlay = crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(
+                    block_instance_id,
+                );
+                let preview_input = overlay.as_ref().and_then(|s| s.pvw_input());
+                let program_input = overlay.as_ref().and_then(|s| s.pgm_input());
+                let preview_pip = overlay.as_ref().and_then(|s| s.pvw_pip());
+                let program_pip = overlay.as_ref().and_then(|s| s.pgm_pip());
                 self.inner
                     .events
                     .broadcast(StromEvent::VisionMixerStateChanged {
                         flow_id: *flow_id,
                         block_id: block_id.to_string(),
-                        preview_input: strom_types::vision_mixer::group_first(
-                            strom_types::vision_mixer::pack_source_group(&new_pvw_group),
-                        ),
-                        program_input: strom_types::vision_mixer::group_first(
-                            strom_types::vision_mixer::pack_source_group(&new_pgm_group),
-                        ),
-                        preview_inputs: new_pvw_group,
-                        program_inputs: new_pgm_group.clone(),
+                        preview_input,
+                        program_input,
+                        preview_pip,
+                        program_pip,
                     });
             }
         }
@@ -1454,22 +2066,21 @@ impl AppState {
                 duration_ms,
             });
 
-        Ok(())
+        Ok(actual_kind)
     }
 
     /// Select a preview input on a vision mixer block.
     ///
-    /// If `multi` is false, replaces PVW group with a single source.
-    /// If `multi` is true, toggles the input in/out of the PVW group.
+    /// Replaces the PVW source with `input` (clearing any PiP-on-PVW mode).
     ///
-    /// Returns (pvw_group, pgm_group).
+    /// Returns `(new_pvw, current_pgm)`. Either is `None` when the bus is on
+    /// a PiP source.
     pub async fn select_vision_mixer_preview(
         &self,
         flow_id: &FlowId,
         block_instance_id: &str,
         input: usize,
-        multi: bool,
-    ) -> Result<(Vec<usize>, Vec<usize>), PipelineError> {
+    ) -> Result<(Option<usize>, Option<usize>), PipelineError> {
         let pipelines = self.inner.pipelines.read().await;
 
         let manager = pipelines.get(flow_id).ok_or_else(|| {
@@ -1481,24 +2092,61 @@ impl AppState {
             .get_vision_mixer_num_inputs(flow_id, block_instance_id)
             .await;
 
-        let (pvw_group, pgm_group) =
-            manager.select_vision_mixer_preview(block_instance_id, input, num_inputs, multi)?;
+        let (new_pvw, pgm) =
+            manager.select_vision_mixer_preview(block_instance_id, input, num_inputs)?;
 
         drop(pipelines);
 
-        // Broadcast state change event
+        // Broadcast state change event. Reads authoritative state from the
+        // overlay so PiP visibility is reflected alongside the inputs.
+        let overlay =
+            crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(block_instance_id);
+        let preview_pip = overlay.as_ref().and_then(|s| s.pvw_pip());
+        let program_pip = overlay.as_ref().and_then(|s| s.pgm_pip());
         self.inner
             .events
             .broadcast(StromEvent::VisionMixerStateChanged {
                 flow_id: *flow_id,
                 block_id: block_instance_id.to_string(),
-                preview_input: pvw_group.first().copied().unwrap_or(0),
-                program_input: pgm_group.first().copied().unwrap_or(0),
-                preview_inputs: pvw_group.clone(),
-                program_inputs: pgm_group.clone(),
+                preview_input: new_pvw,
+                program_input: pgm,
+                preview_pip,
+                program_pip,
             });
 
-        Ok((pvw_group, pgm_group))
+        Ok((new_pvw, pgm))
+    }
+
+    /// Select a PiP composition as the preview source on a vision mixer block.
+    pub async fn select_vision_mixer_pip_for_preview(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        pip_idx: usize,
+    ) -> Result<(), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.select_vision_mixer_pip_for_preview(block_instance_id, pip_idx)?;
+        Ok(())
+    }
+
+    /// Update a PiP composition (bg + overlays) on a vision mixer block at runtime.
+    pub async fn apply_vision_mixer_pip_config(
+        &self,
+        flow_id: &FlowId,
+        block_instance_id: &str,
+        pip_idx: usize,
+        bg: Option<usize>,
+        zones: Vec<strom_types::vision_mixer::Zone>,
+    ) -> Result<(), PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+        manager.apply_vision_mixer_pip_config(block_instance_id, pip_idx, bg, zones)?;
+        Ok(())
     }
 
     /// Get num_inputs for a vision mixer block from the flow definition.
@@ -1514,31 +2162,6 @@ impl AppState {
             .and_then(|flow| flow.blocks.iter().find(|b| b.id == block_instance_id))
             .map(|block| vm_props::parse_num_inputs(&block.properties))
             .unwrap_or(4)
-    }
-
-    /// Set or clear the background source on a vision mixer block.
-    pub async fn set_vision_mixer_background(
-        &self,
-        flow_id: &FlowId,
-        block_instance_id: &str,
-        input: Option<usize>,
-    ) -> Result<Option<usize>, PipelineError> {
-        let pipelines = self.inner.pipelines.read().await;
-        let manager = pipelines.get(flow_id).ok_or_else(|| {
-            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
-        })?;
-        manager.set_vision_mixer_background(block_instance_id, input)?;
-        drop(pipelines);
-
-        self.inner
-            .events
-            .broadcast(StromEvent::VisionMixerBackgroundChanged {
-                flow_id: *flow_id,
-                block_id: block_instance_id.to_string(),
-                background_input: input,
-            });
-
-        Ok(input)
     }
 
     /// Toggle a DSK (Downstream Keyer) layer on a vision mixer block.
@@ -1895,6 +2518,23 @@ impl AppState {
         Ok(stats)
     }
 
+    /// Get SRT statistics from a running flow's pipeline.
+    ///
+    /// Returns curated stats for every `srtsink`/`srtsrc` element in the pipeline.
+    pub async fn get_srt_stats(
+        &self,
+        flow_id: &FlowId,
+    ) -> Result<strom_types::api::SrtStats, PipelineError> {
+        let pipelines = self.inner.pipelines.read().await;
+
+        let manager = pipelines.get(flow_id).ok_or_else(|| {
+            PipelineError::InvalidFlow(format!("Pipeline not running for flow: {}", flow_id))
+        })?;
+
+        let stats = manager.get_srt_stats();
+        Ok(stats)
+    }
+
     /// Query the latency of a running pipeline.
     /// Returns (min_latency_ns, max_latency_ns, live) if query succeeds.
     pub async fn get_flow_latency(&self, flow_id: &FlowId) -> Option<(u64, u64, bool)> {
@@ -1986,5 +2626,209 @@ impl Default for AppState {
             "all".to_string(),
             vec!["239.255.255.255".to_string(), "224.2.127.254".to_string()],
         )
+    }
+}
+
+/// Convert a GStreamer debug level to its numeric value.
+fn gst_level_to_int(level: gstreamer::DebugLevel) -> u32 {
+    match level {
+        gstreamer::DebugLevel::None => 0,
+        gstreamer::DebugLevel::Error => 1,
+        gstreamer::DebugLevel::Warning => 2,
+        gstreamer::DebugLevel::Fixme => 3,
+        gstreamer::DebugLevel::Info => 4,
+        gstreamer::DebugLevel::Debug => 5,
+        gstreamer::DebugLevel::Log => 6,
+        gstreamer::DebugLevel::Trace => 7,
+        gstreamer::DebugLevel::Memdump => 9,
+        _ => 0,
+    }
+}
+
+/// Parse a GStreamer debug level from a string (number 0-9).
+fn parse_gst_level(s: &str) -> Result<gstreamer::DebugLevel, String> {
+    let n: u32 = s
+        .parse()
+        .map_err(|_| format!("Invalid GStreamer debug level '{}': expected 0-9", s))?;
+    match n {
+        0 => Ok(gstreamer::DebugLevel::None),
+        1 => Ok(gstreamer::DebugLevel::Error),
+        2 => Ok(gstreamer::DebugLevel::Warning),
+        3 => Ok(gstreamer::DebugLevel::Fixme),
+        4 => Ok(gstreamer::DebugLevel::Info),
+        5 => Ok(gstreamer::DebugLevel::Debug),
+        6 => Ok(gstreamer::DebugLevel::Log),
+        7 => Ok(gstreamer::DebugLevel::Trace),
+        9 => Ok(gstreamer::DebugLevel::Memdump),
+        _ => Err(format!(
+            "Invalid GStreamer debug level '{}': expected 0-7 or 9",
+            n
+        )),
+    }
+}
+
+#[cfg(test)]
+mod mixer_solo_intent_tests {
+    use super::*;
+    use crate::storage::JsonFileStorage;
+    use std::sync::Once;
+    use tempfile::NamedTempFile;
+
+    static GST_INIT: Once = Once::new();
+
+    fn new_state() -> AppState {
+        // AppState construction touches GStreamer registries; init once.
+        GST_INIT.call_once(|| {
+            gstreamer::init().expect("gstreamer init failed in test");
+        });
+        let storage_file = NamedTempFile::new().unwrap();
+        let blocks_file = NamedTempFile::new().unwrap();
+        let storage = JsonFileStorage::new(storage_file.path());
+        AppState::new(
+            storage,
+            blocks_file.path(),
+            std::env::temp_dir(),
+            vec![],
+            "all".to_string(),
+            vec![],
+        )
+    }
+
+    #[tokio::test]
+    async fn solo_intent_starts_empty_and_records_writes() {
+        let state = new_state();
+        let flow = FlowId::new_v4();
+        assert!(!state.mixer_any_solo_active(&flow, "mix1").await);
+
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch1_pfl", true)
+            .await;
+        assert!(state.mixer_any_solo_active(&flow, "mix1").await);
+
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch1_pfl", false)
+            .await;
+        assert!(!state.mixer_any_solo_active(&flow, "mix1").await);
+    }
+
+    #[tokio::test]
+    async fn solo_intent_tracks_multiple_channels_independently() {
+        let state = new_state();
+        let flow = FlowId::new_v4();
+        // Two channels engaged on the same block.
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch1_pfl", true)
+            .await;
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch2_afl", true)
+            .await;
+        assert!(state.mixer_any_solo_active(&flow, "mix1").await);
+
+        // Releasing only one channel must not flip the gate.
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch1_pfl", false)
+            .await;
+        assert!(
+            state.mixer_any_solo_active(&flow, "mix1").await,
+            "monitor should stay on solo while ch2_afl is still engaged"
+        );
+
+        // Releasing the last engaged channel returns to no-solo.
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch2_afl", false)
+            .await;
+        assert!(!state.mixer_any_solo_active(&flow, "mix1").await);
+    }
+
+    #[tokio::test]
+    async fn solo_intent_is_scoped_per_block_and_per_flow() {
+        let state = new_state();
+        let flow_a = FlowId::new_v4();
+        let flow_b = FlowId::new_v4();
+        state
+            .set_mixer_solo_intent(&flow_a, "mixA", "ch1_pfl", true)
+            .await;
+        assert!(state.mixer_any_solo_active(&flow_a, "mixA").await);
+        assert!(!state.mixer_any_solo_active(&flow_a, "mixB").await);
+        assert!(!state.mixer_any_solo_active(&flow_b, "mixA").await);
+    }
+
+    #[tokio::test]
+    async fn solo_intent_is_cleared_on_stop_flow() {
+        let state = new_state();
+        let flow = FlowId::new_v4();
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch1_pfl", true)
+            .await;
+        assert!(state.mixer_any_solo_active(&flow, "mix1").await);
+
+        // stop_flow on an unknown flow is a no-op for the pipeline map but
+        // still drops the solo intent — matches the `persist: false`
+        // semantics of the underlying PFL/AFL bools.
+        let _ = state.stop_flow(&flow).await;
+        assert!(
+            !state.mixer_any_solo_active(&flow, "mix1").await,
+            "stop_flow must purge cached solo intent so a restart starts clean"
+        );
+    }
+
+    #[tokio::test]
+    async fn solo_intent_set_false_is_idempotent_when_empty() {
+        // Writing false to a channel that was never engaged should leave
+        // the cache empty (no spurious entry).
+        let state = new_state();
+        let flow = FlowId::new_v4();
+        state
+            .set_mixer_solo_intent(&flow, "mix1", "ch1_pfl", false)
+            .await;
+        assert!(!state.mixer_any_solo_active(&flow, "mix1").await);
+        let map = state.inner.mixer_solo_state.read().await;
+        assert!(map.is_empty(), "no flow entry should be created for false");
+    }
+}
+
+#[cfg(test)]
+mod ramp_ms_resolution_tests {
+    use super::resolve_ramp_ms;
+    use std::collections::HashMap;
+
+    #[test]
+    fn override_wins_over_global() {
+        let mut overrides = HashMap::new();
+        overrides.insert("ch1_fader_db".to_string(), 500);
+        assert_eq!(
+            resolve_ramp_ms("ch1_fader_db", Some(&overrides), Some(50)),
+            Some(500)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_global_when_no_override_for_name() {
+        let mut overrides = HashMap::new();
+        overrides.insert("ch2_fader_db".to_string(), 500);
+        assert_eq!(
+            resolve_ramp_ms("ch1_fader_db", Some(&overrides), Some(50)),
+            Some(50)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_global_when_overrides_absent() {
+        assert_eq!(resolve_ramp_ms("ch1_fader_db", None, Some(50)), Some(50));
+    }
+
+    #[test]
+    fn returns_none_when_neither_set() {
+        assert_eq!(resolve_ramp_ms("ch1_fader_db", None, None), None);
+    }
+
+    #[test]
+    fn override_used_even_when_global_is_none() {
+        let mut overrides = HashMap::new();
+        overrides.insert("ch1_fader_db".to_string(), 500);
+        assert_eq!(
+            resolve_ramp_ms("ch1_fader_db", Some(&overrides), None),
+            Some(500)
+        );
     }
 }

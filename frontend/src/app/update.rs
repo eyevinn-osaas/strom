@@ -301,6 +301,7 @@ impl eframe::App for StromApp {
                             self.qos_stats.clear_flow(&flow_id);
                             self.buffer_age_data.clear_flow(&flow_id);
                             self.webrtc_stats.clear_flow(&flow_id);
+                            self.srt_stats.clear_flow(&flow_id);
                             self.flow_start_times.remove(&flow_id);
                             self.needs_refresh = true;
                         }
@@ -310,6 +311,7 @@ impl eframe::App for StromApp {
                             self.qos_stats.clear_flow(&flow_id);
                             self.buffer_age_data.clear_flow(&flow_id);
                             self.webrtc_stats.clear_flow(&flow_id);
+                            self.srt_stats.clear_flow(&flow_id);
                             self.recorder_filenames
                                 .retain(|(fid, _), _| *fid != flow_id);
                             self.recorder_start_times
@@ -1075,6 +1077,14 @@ impl eframe::App for StromApp {
                     );
                     self.webrtc_stats.update(flow_id, stats);
                 }
+                AppMessage::SrtStatsLoaded { flow_id, stats } => {
+                    tracing::debug!(
+                        "SRT stats loaded for flow {}: {} connections",
+                        flow_id,
+                        stats.connections.len()
+                    );
+                    self.srt_stats.update(flow_id, stats);
+                }
                 AppMessage::FlowOperationSuccess(message) => {
                     tracing::info!("Flow operation succeeded: {}", message);
                     self.status = message;
@@ -1149,6 +1159,51 @@ impl eframe::App for StromApp {
                 AppMessage::NetworkInterfacesLoaded(interfaces) => {
                     tracing::info!("Network interfaces loaded: {} interfaces", interfaces.len());
                     self.network_interfaces = interfaces;
+                }
+                AppMessage::LocalDevicesLoaded { category, devices } => {
+                    match category {
+                        strom_types::discovery::DeviceCategory::VideoSource => {
+                            tracing::info!("Video devices loaded: {} device(s)", devices.len());
+                            self.video_devices = devices;
+                            self.video_devices_loading = false;
+                        }
+                        strom_types::discovery::DeviceCategory::AudioSource => {
+                            tracing::info!("Audio devices loaded: {} device(s)", devices.len());
+                            self.audio_devices = devices;
+                            self.audio_devices_loading = false;
+                        }
+                        _ => {}
+                    }
+                    // Mark caches as fresh once both fetches have settled.
+                    // This way a failing fetch (which now sends an empty
+                    // result rather than dropping silently) doesn't lock
+                    // the TTL retry window — the timestamp only advances
+                    // when no fetch is in flight.
+                    if !self.video_devices_loading && !self.audio_devices_loading {
+                        self.devices_last_loaded = Some(instant::Instant::now());
+                    }
+                }
+                AppMessage::SystemClockLoaded(info) => {
+                    self.system_clock_info = Some(info);
+                    self.system_clock_unsupported = false;
+                }
+                AppMessage::SystemClockUnsupported => {
+                    self.system_clock_unsupported = true;
+                    self.system_clock_info = None;
+                }
+                AppMessage::LogLevelLoaded { current, default } => {
+                    self.log_level_current = Some(current);
+                    self.log_level_default = Some(default);
+                }
+                AppMessage::LogLevelError(e) => {
+                    tracing::warn!("Log level error: {}", e);
+                }
+                AppMessage::GstLogLevelLoaded { current, default } => {
+                    self.gst_log_level_current = Some(current);
+                    self.gst_log_level_default = Some(default);
+                }
+                AppMessage::GstLogLevelError(e) => {
+                    tracing::warn!("GStreamer log level error: {}", e);
                 }
                 AppMessage::AvailableChannelsLoaded(mut channels) => {
                     // Sort by flow name, then by description/name
@@ -1302,6 +1357,13 @@ impl eframe::App for StromApp {
                         .evict_stale(std::time::Duration::from_secs(3));
                     self.last_webrtc_poll = instant::Instant::now();
                 }
+
+                if self.last_srt_poll.elapsed() >= poll_interval {
+                    self.poll_srt_stats(ui.ctx());
+                    self.srt_stats
+                        .evict_stale(std::time::Duration::from_secs(3));
+                    self.last_srt_poll = instant::Instant::now();
+                }
             }
 
             // Periodically fetch latency for selected flow (every 3 seconds)
@@ -1319,6 +1381,18 @@ impl eframe::App for StromApp {
             // Poll thumbnail blocks in running flows
             self.poll_block_thumbnails(ui.ctx());
             self.check_block_thumbnails(ui.ctx());
+        }
+
+        // Periodically fetch system clock state while the Clocks page is visible.
+        // Skip polling if we've already learned the backend doesn't support it.
+        if matches!(self.current_page, AppPage::Clocks)
+            && !self.system_clock_unsupported
+            && self
+                .last_system_clock_fetch
+                .is_none_or(|t| t.elapsed() > std::time::Duration::from_secs(2))
+        {
+            self.last_system_clock_fetch = Some(instant::Instant::now());
+            self.fetch_system_clock_info(ui.ctx());
         }
 
         // Handle keyboard shortcuts
@@ -1422,11 +1496,11 @@ impl eframe::App for StromApp {
         }
 
         // Check for vision mixer control page open signal (double-click on Vision Mixer)
-        if let Some(_block_id) = get_local_storage("open_vision_mixer") {
+        if let Some(block_id) = get_local_storage("open_vision_mixer") {
             remove_local_storage("open_vision_mixer");
 
             if let Some(flow) = self.current_flow() {
-                let url = self.api.get_vision_mixer_url(&flow.id);
+                let url = self.api.get_vision_mixer_url(&flow.id, &block_id);
                 ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
             }
         }
@@ -1819,7 +1893,13 @@ impl eframe::App for StromApp {
                     }
                     AppPage::Clocks => {
                         CentralPanel::default().show_inside(ui, |ui| {
-                            self.clocks_page.render(ui, &self.ptp_stats, &self.flows);
+                            self.clocks_page.render(
+                                ui,
+                                &self.ptp_stats,
+                                &self.flows,
+                                self.system_clock_info.as_ref(),
+                                self.system_clock_unsupported,
+                            );
                         });
                     }
                     AppPage::Media => {
@@ -1835,17 +1915,46 @@ impl eframe::App for StromApp {
                             self.network_interfaces_loaded = false;
                             self.load_network_interfaces(ui.ctx().clone());
                         }
+                        // Auto-load log level when Info page is shown
+                        if self.info_page.should_load_log_level() {
+                            self.load_log_level(ui.ctx().clone());
+                            self.load_gst_log_level(ui.ctx().clone());
+                        }
 
-                        CentralPanel::default().show_inside(ui, |ui| {
-                            self.info_page.render(
-                                ui,
-                                self.system_info.as_ref(),
-                                &self.system_monitor,
-                                &self.network_interfaces,
-                                &self.flows,
-                                &self.renderer_info,
-                            );
-                        });
+                        let log_action = CentralPanel::default()
+                            .show_inside(ui, |ui| {
+                                self.info_page.render(
+                                    ui,
+                                    self.system_info.as_ref(),
+                                    &self.system_monitor,
+                                    &self.network_interfaces,
+                                    &self.flows,
+                                    &self.renderer_info,
+                                    self.log_level_current.as_deref(),
+                                    self.log_level_default.as_deref(),
+                                    self.gst_log_level_current.as_deref(),
+                                    self.gst_log_level_default.as_deref(),
+                                )
+                            })
+                            .inner;
+
+                        if let Some(action) = log_action {
+                            use crate::info_page::InfoPageAction;
+                            match action {
+                                InfoPageAction::LoadStromLog => {
+                                    self.load_log_level(ui.ctx().clone());
+                                }
+                                InfoPageAction::ApplyStromFilter(filter) => {
+                                    self.set_log_level(filter, ui.ctx().clone());
+                                }
+                                InfoPageAction::LoadGstLog => {
+                                    self.load_gst_log_level(ui.ctx().clone());
+                                }
+                                InfoPageAction::ApplyGstFilter(filter) => {
+                                    self.set_gst_log_level(filter, ui.ctx().clone());
+                                }
+                            }
+                        }
                     }
                     AppPage::Links => {
                         CentralPanel::default().show_inside(ui, |ui| {

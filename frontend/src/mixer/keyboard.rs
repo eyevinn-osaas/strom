@@ -59,6 +59,14 @@ impl MixerEditor {
             }
         }
 
+        // A = AFL selected channel
+        if ui.input(|i| i.key_pressed(egui::Key::A)) {
+            if let Some(ch) = selected_ch {
+                self.channels[ch].afl = !self.channels[ch].afl;
+                self.update_channel_property(ctx, ch, "afl");
+            }
+        }
+
         // Up/Down = Adjust fader (1 dB steps in dB space)
         if let Some(ch) = selected_ch {
             let db_step: f64 = 1.0;

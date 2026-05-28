@@ -1,13 +1,19 @@
 //! Block builder trait for runtime GStreamer element creation.
 
+use crate::discovery::device::GstDeviceMap;
 use crate::events::EventBroadcaster;
+use crate::gst::SessionThreadConfig;
 use crate::whip_registry::WhipRegistry;
 use crate::whip_session_manager::WhipEndpointConfig;
 use gstreamer as gst;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use strom_types::{block::ExternalPads, element::ElementPadRef, FlowId, PropertyValue};
+use strom_types::{
+    block::{ExternalPads, StreamMode},
+    element::ElementPadRef,
+    FlowId, PropertyValue,
+};
 use thiserror::Error;
 
 /// Storage for dynamically created webrtcbin elements (e.g., from webrtcsink/whepserversink).
@@ -54,44 +60,6 @@ pub type BusWatchSetupFn = BusMessageConnectFn;
 /// The GStreamer element(s) to connect signals on are captured in the closure during build time.
 pub type ElementSetupFn = Box<dyn FnOnce(FlowId, EventBroadcaster) + Send + Sync>;
 
-/// Stream mode for WHEP endpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum WhepStreamMode {
-    /// Audio only
-    Audio,
-    /// Video only
-    #[default]
-    Video,
-    /// Both audio and video
-    AudioVideo,
-}
-
-impl WhepStreamMode {
-    pub fn has_audio(&self) -> bool {
-        matches!(self, WhepStreamMode::Audio | WhepStreamMode::AudioVideo)
-    }
-
-    pub fn has_video(&self) -> bool {
-        matches!(self, WhepStreamMode::Video | WhepStreamMode::AudioVideo)
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            WhepStreamMode::Audio => "audio",
-            WhepStreamMode::Video => "video",
-            WhepStreamMode::AudioVideo => "audio_video",
-        }
-    }
-
-    pub fn parse(s: &str) -> Self {
-        match s {
-            "audio" => WhepStreamMode::Audio,
-            "audio_video" => WhepStreamMode::AudioVideo,
-            _ => WhepStreamMode::Video,
-        }
-    }
-}
-
 /// WHIP endpoint registration info (for WHIP Input blocks).
 #[derive(Debug, Clone)]
 pub struct WhipEndpointInfo {
@@ -102,7 +70,7 @@ pub struct WhipEndpointInfo {
     /// The internal localhost port where whipserversrc is listening
     pub internal_port: u16,
     /// Stream mode (audio, video, or both)
-    pub mode: WhepStreamMode,
+    pub mode: StreamMode,
 }
 
 /// WHEP endpoint registration info.
@@ -114,8 +82,10 @@ pub struct WhepEndpointInfo {
     pub endpoint_id: String,
     /// The internal localhost port where whepserversink is listening
     pub internal_port: u16,
-    /// Stream mode (audio, video, or both)
-    pub mode: WhepStreamMode,
+    /// Number of independent audio tracks exposed by this endpoint (0 = no audio)
+    pub num_audio_tracks: usize,
+    /// Number of independent video tracks exposed by this endpoint (0 = no video)
+    pub num_video_tracks: usize,
 }
 
 /// Context provided to block builders during build.
@@ -142,6 +112,13 @@ pub struct BlockBuildContext {
     whip_registry: Option<WhipRegistry>,
     /// Element signal setup functions queued for connection at pipeline start
     element_setups: RefCell<Vec<ElementSetupFn>>,
+    /// Thread priority config for dynamically created session pipelines (WHEP/WebRTC)
+    session_thread_config: SessionThreadConfig,
+    /// Live `gst::Device` map shared with the long-running `DeviceDiscovery`.
+    /// Builders look up local capture devices through this instead of
+    /// starting transient `DeviceMonitor` instances (which crash on
+    /// macOS — see Local Input block).
+    local_devices: GstDeviceMap,
 }
 
 impl BlockBuildContext {
@@ -156,6 +133,8 @@ impl BlockBuildContext {
             dynamic_webrtcbins: Arc::new(Mutex::new(HashMap::new())),
             whip_registry: None,
             element_setups: RefCell::new(Vec::new()),
+            session_thread_config: SessionThreadConfig::new(),
+            local_devices: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -165,6 +144,8 @@ impl BlockBuildContext {
         ice_transport_policy: String,
         dynamic_webrtcbins: DynamicWebrtcbinStore,
         whip_registry: Option<WhipRegistry>,
+        session_thread_config: SessionThreadConfig,
+        local_devices: GstDeviceMap,
     ) -> Self {
         Self {
             whep_endpoints: RefCell::new(Vec::new()),
@@ -175,7 +156,16 @@ impl BlockBuildContext {
             dynamic_webrtcbins,
             whip_registry,
             element_setups: RefCell::new(Vec::new()),
+            session_thread_config,
+            local_devices,
         }
+    }
+
+    /// Look up a live local `gst::Device` (Video/Source or Audio/Source) by
+    /// the same id that `/api/discovery/devices` returns.
+    /// Returns `None` if no such device is currently known.
+    pub fn local_device(&self, id: &str) -> Option<gst::Device> {
+        self.local_devices.lock().ok()?.get(id).cloned()
     }
 
     /// Get the shared dynamic webrtcbin store.
@@ -187,6 +177,11 @@ impl BlockBuildContext {
     /// Get the WHIP endpoint registry (if available).
     pub fn whip_registry(&self) -> Option<&WhipRegistry> {
         self.whip_registry.as_ref()
+    }
+
+    /// Get the session thread config for installing thread priority on session pipelines.
+    pub fn session_thread_config(&self) -> SessionThreadConfig {
+        self.session_thread_config.clone()
     }
 
     /// Register a dynamically created webrtcbin (called from consumer-added callbacks).
@@ -263,13 +258,15 @@ impl BlockBuildContext {
         block_id: &str,
         endpoint_id: &str,
         port: u16,
-        mode: WhepStreamMode,
+        num_audio_tracks: usize,
+        num_video_tracks: usize,
     ) {
         self.whep_endpoints.borrow_mut().push(WhepEndpointInfo {
             block_id: block_id.to_string(),
             endpoint_id: endpoint_id.to_string(),
             internal_port: port,
-            mode,
+            num_audio_tracks,
+            num_video_tracks,
         });
     }
 
@@ -288,7 +285,7 @@ impl BlockBuildContext {
         block_id: &str,
         endpoint_id: &str,
         port: u16,
-        mode: WhepStreamMode,
+        mode: StreamMode,
     ) {
         self.whip_endpoints.borrow_mut().push(WhipEndpointInfo {
             block_id: block_id.to_string(),

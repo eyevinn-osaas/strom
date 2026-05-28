@@ -8,11 +8,18 @@ use strom_types::{
     BlockDefinition, BlockInstance, Element, FlowId, PropertyValue,
 };
 
-/// A live property update to send to a running pipeline element.
+/// A live update for one block-level exposed property.
+///
+/// Always sent through `PATCH /flows/{id}/blocks/{block_id}/properties` so the
+/// backend applies the property's declared transform (`bool_to_volume`,
+/// `db_to_linear`, …) before writing to the underlying GStreamer element.
+/// Values here are therefore in user-facing units (Bool, dB, Hz, …) — never
+/// the post-transform element value.
 pub struct LivePropertyUpdate {
     pub flow_id: FlowId,
-    /// Full element ID: "{block_id}:{element_suffix}"
-    pub element_id: String,
+    /// Block instance ID.
+    pub block_id: String,
+    /// Exposed property name (e.g. `ch1_pfl`, `fader_db`).
     pub property_name: String,
     pub value: PropertyValue,
 }
@@ -52,7 +59,7 @@ pub fn drain_live_updates(
 
     // Process incoming updates
     for update in incoming {
-        let key = (update.element_id.clone(), update.property_name.clone());
+        let key = (update.block_id.clone(), update.property_name.clone());
         touched_keys.insert(key.clone());
 
         let entry = debounce_map
@@ -127,10 +134,24 @@ pub struct BlockInspectorResult {
     pub recorder_split_requested: Option<(FlowId, String)>,
     /// Recorder file download requested - contains relative path
     pub recorder_download_requested: Option<String>,
-    /// Vision mixer control page requested - contains flow_id
-    pub vision_mixer_url: Option<FlowId>,
+    /// Vision mixer control page requested - contains (flow_id, block_id)
+    pub vision_mixer_url: Option<(FlowId, String)>,
     /// Live property updates to send to running pipeline elements
     pub live_property_updates: Vec<LivePropertyUpdate>,
+    /// Inspector rendered a VideoDevice/AudioDevice property — caller should
+    /// trigger device discovery if the cache is stale (TTL handled in the app).
+    pub local_devices_needed: bool,
+    /// Inspector requested a forced re-scan of capture devices (↻ button).
+    pub local_devices_refresh_requested: bool,
+}
+
+/// Side-channel collected by the property editor when it renders a
+/// VideoDevice / AudioDevice picker — bubbled back up so the App can
+/// trigger device discovery and ↻ refresh calls.
+#[derive(Default)]
+pub(crate) struct DevicePickerActions {
+    pub needed: bool,
+    pub refresh_requested: bool,
 }
 
 /// Property inspector panel.
@@ -452,9 +473,13 @@ impl PropertyInspector {
         latency_data_store: &crate::latency::LatencyDataStore,
         mediaplayer_data_store: &crate::mediaplayer::MediaPlayerDataStore,
         webrtc_stats_store: &crate::webrtc_stats::WebRtcStatsStore,
+        srt_stats_store: &crate::srt_stats::SrtStatsStore,
         rtp_stats: Option<&strom_types::api::FlowStatsResponse>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
+        video_devices: &[strom_types::discovery::DeviceResponse],
+        audio_devices: &[strom_types::discovery::DeviceResponse],
+        local_devices_loading: bool,
         qr_inline: &mut Option<(String, String)>,
         qr_cache: &mut crate::qr::QrCache,
         recorder_filename: Option<&str>,
@@ -464,6 +489,7 @@ impl PropertyInspector {
     ) -> BlockInspectorResult {
         let block_id = block.id.clone();
         let mut result = BlockInspectorResult::default();
+        let mut device_picker_actions = DevicePickerActions::default();
 
         ui.push_id("selected_inspector", |ui| {
             // Outer scroll area for entire block inspector
@@ -694,7 +720,7 @@ impl PropertyInspector {
                         .on_hover_text("Open vision mixer control page in browser")
                         .clicked()
                     {
-                        result.vision_mixer_url = Some(fid);
+                        result.vision_mixer_url = Some((fid, block.id.clone()));
                     }
                 }
             }
@@ -788,17 +814,33 @@ impl PropertyInspector {
                                 network_interfaces,
                                 available_channels,
                             );
+                        } else if definition.id == "builtin.mixer" {
+                            Self::show_mixer_properties(
+                                ui,
+                                block,
+                                definition,
+                                flow_id,
+                                network_interfaces,
+                                available_channels,
+                                video_devices,
+                                audio_devices,
+                                local_devices_loading,
+                                taken_endpoint_ids,
+                                &mut device_picker_actions,
+                                &mut result,
+                            );
                         } else {
-                            // Build skip-set for mixer blocks: skip properties for
-                            // channels/aux/groups beyond the configured count.
-                            let mixer_skip = if definition.id == "builtin.mixer" {
-                                Some(Self::mixer_skip_set(block))
+                            // Build skip-set for blocks whose property panel
+                            // grows with a count property: hide entries for
+                            // slots beyond the configured count.
+                            let skip_set = if definition.id == "builtin.vision_mixer" {
+                                Some(Self::vision_mixer_skip_set(block))
                             } else {
                                 None
                             };
 
                             for exposed_prop in &definition.exposed_properties {
-                                if let Some(ref skip) = mixer_skip {
+                                if let Some(ref skip) = skip_set {
                                     if skip.contains(exposed_prop.name.as_str()) {
                                         continue;
                                     }
@@ -811,17 +853,18 @@ impl PropertyInspector {
                                     flow_id,
                                     network_interfaces,
                                     available_channels,
+                                    video_devices,
+                                    audio_devices,
+                                    local_devices_loading,
                                     taken_endpoint_ids,
+                                    &mut device_picker_actions,
                                 );
 
-                                // For live properties, send updates directly to the pipeline
+                                // For live properties, route the block-level value
+                                // through the block-properties endpoint so the backend
+                                // applies the declared transform.
                                 if changed && exposed_prop.live {
                                     if let Some(fid) = flow_id {
-                                        let element_id = format!(
-                                            "{}:{}",
-                                            block.id, exposed_prop.mapping.element_id
-                                        );
-                                        // Use the current value (or default) for the update
                                         let value = block
                                             .properties
                                             .get(&exposed_prop.name)
@@ -831,11 +874,8 @@ impl PropertyInspector {
                                             result.live_property_updates.push(
                                                 LivePropertyUpdate {
                                                     flow_id: fid,
-                                                    element_id,
-                                                    property_name: exposed_prop
-                                                        .mapping
-                                                        .property_name
-                                                        .clone(),
+                                                    block_id: block.id.clone(),
+                                                    property_name: exposed_prop.name.clone(),
                                                     value,
                                                 },
                                             );
@@ -1135,6 +1175,45 @@ impl PropertyInspector {
                         }
                     }
 
+                    // Show SRT statistics for SRT input/output blocks
+                    if crate::srt_stats::is_srt_block_def(&definition.id) {
+                        ui.separator();
+                        ui.heading("📊 SRT Statistics");
+                        ui.add_space(4.0);
+
+                        if let Some(flow_id) = flow_id {
+                            if let Some((block_stats, filtered_rates)) =
+                                srt_stats_store.snapshot_for_block(&flow_id, &block.id)
+                            {
+                                let rates_opt = if filtered_rates.is_empty() {
+                                    None
+                                } else {
+                                    Some(&filtered_rates)
+                                };
+                                crate::srt_stats::show_full(ui, &block_stats, rates_opt);
+                            } else if srt_stats_store.get(&flow_id).is_some() {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "⚠ No SRT element data yet",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("SRT statistics appear once the pipeline is running.");
+                            } else {
+                                ui.colored_label(
+                                    Color32::from_rgb(200, 200, 100),
+                                    "⚠ SRT statistics not available",
+                                );
+                                ui.add_space(4.0);
+                                ui.small("Start the flow to see SRT statistics.");
+                            }
+                        } else {
+                            ui.colored_label(
+                                Color32::from_rgb(200, 200, 100),
+                                "⚠ No flow selected",
+                            );
+                        }
+                    }
+
                     // Show RTP statistics for AES67 input blocks
                     if definition.id == "builtin.aes67_input" {
                         ui.separator();
@@ -1237,14 +1316,60 @@ impl PropertyInspector {
             }); // outer ScrollArea
         });
 
+        result.local_devices_needed = device_picker_actions.needed;
+        result.local_devices_refresh_requested = device_picker_actions.refresh_requested;
         result
     }
 
-    /// Build a set of mixer property names to skip based on current config.
+    /// Skip per-input labels for slots beyond the configured `num_inputs`
+    /// so the property panel shows just the inputs in use.
+    fn vision_mixer_skip_set(block: &BlockInstance) -> std::collections::HashSet<String> {
+        use strom_types::vision_mixer::{DEFAULT_NUM_INPUTS, MAX_NUM_INPUTS};
+
+        let num_inputs = block
+            .properties
+            .get("num_inputs")
+            .and_then(|v| match v {
+                PropertyValue::String(s) => s.parse().ok(),
+                PropertyValue::UInt(n) => Some(*n as usize),
+                PropertyValue::Int(n) => Some(*n as usize),
+                _ => None,
+            })
+            .unwrap_or(DEFAULT_NUM_INPUTS);
+
+        let mut skip = std::collections::HashSet::new();
+        for i in num_inputs..MAX_NUM_INPUTS {
+            skip.insert(format!("input_{}_label", i));
+        }
+        skip
+    }
+
+    /// Show mixer properties grouped into collapsing sections.
     ///
-    /// Properties for channels beyond `num_channels`, aux buses beyond
-    /// `num_aux_buses`, and groups beyond `num_groups` are excluded.
-    fn mixer_skip_set(block: &BlockInstance) -> std::collections::HashSet<String> {
+    /// Properties are bucketed by name pattern into Config / Main Bus /
+    /// per-Channel / per-Aux / per-Group sections. Channel sections also have
+    /// nested sub-sections for Gate, Compressor, EQ, Aux Sends and Group
+    /// Routing. Children of closed `CollapsingHeader`s are not rendered, which
+    /// is what avoids the per-frame cost of drawing every property for
+    /// high-channel-count configurations.
+    ///
+    /// Properties for inactive channels/aux/groups (beyond the configured
+    /// counts) are filtered out during bucketing.
+    #[allow(clippy::too_many_arguments)]
+    fn show_mixer_properties(
+        ui: &mut Ui,
+        block: &mut BlockInstance,
+        definition: &BlockDefinition,
+        flow_id: Option<strom_types::FlowId>,
+        network_interfaces: &[strom_types::NetworkInterfaceInfo],
+        available_channels: &[strom_types::api::AvailableOutput],
+        video_devices: &[strom_types::discovery::DeviceResponse],
+        audio_devices: &[strom_types::discovery::DeviceResponse],
+        local_devices_loading: bool,
+        taken_endpoint_ids: &std::collections::HashSet<String>,
+        device_picker_actions: &mut DevicePickerActions,
+        result: &mut BlockInspectorResult,
+    ) {
         use strom_types::mixer::{MAX_AUX_BUSES, MAX_CHANNELS, MAX_GROUPS};
 
         let get_uint = |key: &str, default: usize| -> usize {
@@ -1259,81 +1384,497 @@ impl PropertyInspector {
                 })
                 .unwrap_or(default)
         };
+        let num_ch = get_uint("num_channels", 8).min(MAX_CHANNELS);
+        let num_aux = get_uint("num_aux_buses", 0).min(MAX_AUX_BUSES);
+        let num_grp = get_uint("num_groups", 0).min(MAX_GROUPS);
 
-        let num_ch = get_uint("num_channels", 8);
-        let num_aux = get_uint("num_aux_buses", 0);
-        let num_grp = get_uint("num_groups", 0);
+        // Index buckets into definition.exposed_properties
+        let mut config_idx: Vec<usize> = Vec::new();
+        let mut main_idx: Vec<usize> = Vec::new();
+        let mut ch_basic: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut ch_hpf: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut ch_gate: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut ch_comp: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut ch_eq: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut ch_aux_sends: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut ch_groups: Vec<Vec<usize>> = vec![Vec::new(); num_ch];
+        let mut aux_buckets: Vec<Vec<usize>> = vec![Vec::new(); num_aux];
+        let mut grp_buckets: Vec<Vec<usize>> = vec![Vec::new(); num_grp];
 
-        let mut skip = std::collections::HashSet::new();
+        // Extract leading digits after `prefix`. Returns None if prefix doesn't match.
+        fn extract_index(s: &str, prefix: &str) -> Option<usize> {
+            let rest = s.strip_prefix(prefix)?;
+            let end = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
+            rest[..end].parse().ok()
+        }
 
-        for ch in (num_ch + 1)..=MAX_CHANNELS {
-            for name in [
-                format!("ch{}_label", ch),
-                format!("ch{}_gain", ch),
-                format!("ch{}_pan", ch),
-                format!("ch{}_fader", ch),
-                format!("ch{}_mute", ch),
-                format!("ch{}_pfl", ch),
-                format!("ch{}_to_main", ch),
-                format!("ch{}_hpf_enabled", ch),
-                format!("ch{}_hpf_freq", ch),
-                format!("ch{}_gate_enabled", ch),
-                format!("ch{}_gate_threshold", ch),
-                format!("ch{}_gate_attack", ch),
-                format!("ch{}_gate_release", ch),
-                format!("ch{}_comp_enabled", ch),
-                format!("ch{}_comp_threshold", ch),
-                format!("ch{}_comp_ratio", ch),
-                format!("ch{}_comp_attack", ch),
-                format!("ch{}_comp_release", ch),
-                format!("ch{}_comp_makeup", ch),
-                format!("ch{}_comp_knee", ch),
-                format!("ch{}_eq_enabled", ch),
-            ] {
-                skip.insert(name);
+        for (i, prop) in definition.exposed_properties.iter().enumerate() {
+            let name = prop.name.as_str();
+
+            // Mixer-level configuration
+            if matches!(
+                name,
+                "num_channels"
+                    | "num_aux_buses"
+                    | "num_groups"
+                    | "dsp_backend"
+                    | "force_live"
+                    | "latency"
+                    | "min_upstream_latency"
+                    | "monitor_fader"
+            ) {
+                config_idx.push(i);
+                continue;
             }
-            for band in 1..=4 {
-                for suffix in ["freq", "gain", "q"] {
-                    skip.insert(format!("ch{}_eq{}_{}", ch, band, suffix));
+
+            // Main bus (compressor, EQ, limiter, fader)
+            if name.starts_with("main_") {
+                main_idx.push(i);
+                continue;
+            }
+
+            // ch{N}_...  — channel-scoped property
+            if let Some(rest) = name.strip_prefix("ch") {
+                if let Some(underscore) = rest.find('_') {
+                    if let Ok(n) = rest[..underscore].parse::<usize>() {
+                        // Recognized as a channel property: always consume (drop
+                        // it entirely if the channel is inactive — never let it
+                        // fall through into Configuration).
+                        if !(1..=num_ch).contains(&n) {
+                            continue;
+                        }
+                        let ch_i = n - 1;
+                        let suffix = &rest[underscore + 1..];
+
+                        let bucket = if suffix.starts_with("aux") {
+                            // ch{N}_aux{M}_*  — only include if aux M is active
+                            match extract_index(suffix, "aux") {
+                                Some(m) if (1..=num_aux).contains(&m) => &mut ch_aux_sends[ch_i],
+                                _ => continue,
+                            }
+                        } else if suffix.starts_with("to_grp") {
+                            // ch{N}_to_grp{M} — only include if group M is active
+                            match extract_index(suffix, "to_grp") {
+                                Some(m) if (1..=num_grp).contains(&m) => &mut ch_groups[ch_i],
+                                _ => continue,
+                            }
+                        } else if suffix.starts_with("gate") {
+                            &mut ch_gate[ch_i]
+                        } else if suffix.starts_with("comp") {
+                            &mut ch_comp[ch_i]
+                        } else if suffix.starts_with("eq") {
+                            &mut ch_eq[ch_i]
+                        } else if suffix.starts_with("hpf") {
+                            &mut ch_hpf[ch_i]
+                        } else {
+                            &mut ch_basic[ch_i]
+                        };
+                        bucket.push(i);
+                        continue;
+                    }
                 }
             }
-            for aux in 1..=MAX_AUX_BUSES {
-                skip.insert(format!("ch{}_aux{}_level", ch, aux));
-                skip.insert(format!("ch{}_aux{}_pre", ch, aux));
+
+            // aux{N}_*  — aux master property
+            if let Some(rest) = name.strip_prefix("aux") {
+                if let Some(underscore) = rest.find('_') {
+                    if let Ok(n) = rest[..underscore].parse::<usize>() {
+                        // Recognized as aux property: consume regardless of range.
+                        if (1..=num_aux).contains(&n) {
+                            aux_buckets[n - 1].push(i);
+                        }
+                        continue;
+                    }
+                }
             }
-            for grp in 1..=MAX_GROUPS {
-                skip.insert(format!("ch{}_to_grp{}", ch, grp));
+
+            // group{N}_*  — group master property
+            if let Some(rest) = name.strip_prefix("group") {
+                if let Some(underscore) = rest.find('_') {
+                    if let Ok(n) = rest[..underscore].parse::<usize>() {
+                        // Recognized as group property: consume regardless of range.
+                        if (1..=num_grp).contains(&n) {
+                            grp_buckets[n - 1].push(i);
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            // Truly unrecognized — surface it under Configuration so a newly
+            // added property is never silently hidden from the user.
+            config_idx.push(i);
+        }
+
+        // Channel header labels: use the user-set ch{N}_label if present,
+        // otherwise fall back to "Channel {N}". Precomputed so the immutable
+        // borrow of `block.properties` is released before we re-borrow it
+        // mutably to render properties.
+        let channel_labels: Vec<String> = (1..=num_ch)
+            .map(|ch| {
+                let key = format!("ch{}_label", ch);
+                match block.properties.get(&key) {
+                    Some(PropertyValue::String(s)) if !s.is_empty() => {
+                        format!("Channel {} — {}", ch, s)
+                    }
+                    _ => format!("Channel {}", ch),
+                }
+            })
+            .collect();
+
+        // --- Render ---
+
+        // Configuration: open by default (small, always relevant)
+        if !config_idx.is_empty() {
+            egui::CollapsingHeader::new("Configuration")
+                .id_salt("mixer_config")
+                .default_open(true)
+                .show(ui, |ui| {
+                    Self::render_mixer_bucket(
+                        ui,
+                        block,
+                        &config_idx,
+                        definition,
+                        flow_id,
+                        network_interfaces,
+                        available_channels,
+                        video_devices,
+                        audio_devices,
+                        local_devices_loading,
+                        taken_endpoint_ids,
+                        device_picker_actions,
+                        result,
+                    );
+                });
+        }
+
+        // Main bus
+        if !main_idx.is_empty() {
+            egui::CollapsingHeader::new("Main Bus")
+                .id_salt("mixer_main")
+                .default_open(false)
+                .show(ui, |ui| {
+                    Self::render_mixer_bucket(
+                        ui,
+                        block,
+                        &main_idx,
+                        definition,
+                        flow_id,
+                        network_interfaces,
+                        available_channels,
+                        video_devices,
+                        audio_devices,
+                        local_devices_loading,
+                        taken_endpoint_ids,
+                        device_picker_actions,
+                        result,
+                    );
+                });
+        }
+
+        // Channels — one collapsing header per channel, with nested sub-sections
+        if num_ch > 0 {
+            egui::CollapsingHeader::new(format!("Channels ({})", num_ch))
+                .id_salt("mixer_channels")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for ch in 1..=num_ch {
+                        let ch_i = ch - 1;
+                        egui::CollapsingHeader::new(&channel_labels[ch_i])
+                            .id_salt(format!("mixer_ch_{}", ch))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                // Basic controls (label, gain, pan, fader, mute, pfl, to_main)
+                                Self::render_mixer_bucket(
+                                    ui,
+                                    block,
+                                    &ch_basic[ch_i],
+                                    definition,
+                                    flow_id,
+                                    network_interfaces,
+                                    available_channels,
+                                    video_devices,
+                                    audio_devices,
+                                    local_devices_loading,
+                                    taken_endpoint_ids,
+                                    device_picker_actions,
+                                    result,
+                                );
+
+                                // High-pass filter
+                                if !ch_hpf[ch_i].is_empty() {
+                                    egui::CollapsingHeader::new("High-Pass Filter")
+                                        .id_salt(format!("mixer_ch_{}_hpf", ch))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            Self::render_mixer_bucket(
+                                                ui,
+                                                block,
+                                                &ch_hpf[ch_i],
+                                                definition,
+                                                flow_id,
+                                                network_interfaces,
+                                                available_channels,
+                                                video_devices,
+                                                audio_devices,
+                                                local_devices_loading,
+                                                taken_endpoint_ids,
+                                                device_picker_actions,
+                                                result,
+                                            );
+                                        });
+                                }
+
+                                // Gate
+                                if !ch_gate[ch_i].is_empty() {
+                                    egui::CollapsingHeader::new("Gate")
+                                        .id_salt(format!("mixer_ch_{}_gate", ch))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            Self::render_mixer_bucket(
+                                                ui,
+                                                block,
+                                                &ch_gate[ch_i],
+                                                definition,
+                                                flow_id,
+                                                network_interfaces,
+                                                available_channels,
+                                                video_devices,
+                                                audio_devices,
+                                                local_devices_loading,
+                                                taken_endpoint_ids,
+                                                device_picker_actions,
+                                                result,
+                                            );
+                                        });
+                                }
+
+                                // Compressor
+                                if !ch_comp[ch_i].is_empty() {
+                                    egui::CollapsingHeader::new("Compressor")
+                                        .id_salt(format!("mixer_ch_{}_comp", ch))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            Self::render_mixer_bucket(
+                                                ui,
+                                                block,
+                                                &ch_comp[ch_i],
+                                                definition,
+                                                flow_id,
+                                                network_interfaces,
+                                                available_channels,
+                                                video_devices,
+                                                audio_devices,
+                                                local_devices_loading,
+                                                taken_endpoint_ids,
+                                                device_picker_actions,
+                                                result,
+                                            );
+                                        });
+                                }
+
+                                // EQ
+                                if !ch_eq[ch_i].is_empty() {
+                                    egui::CollapsingHeader::new("EQ")
+                                        .id_salt(format!("mixer_ch_{}_eq", ch))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            Self::render_mixer_bucket(
+                                                ui,
+                                                block,
+                                                &ch_eq[ch_i],
+                                                definition,
+                                                flow_id,
+                                                network_interfaces,
+                                                available_channels,
+                                                video_devices,
+                                                audio_devices,
+                                                local_devices_loading,
+                                                taken_endpoint_ids,
+                                                device_picker_actions,
+                                                result,
+                                            );
+                                        });
+                                }
+
+                                // Aux sends
+                                if !ch_aux_sends[ch_i].is_empty() {
+                                    egui::CollapsingHeader::new("Aux Sends")
+                                        .id_salt(format!("mixer_ch_{}_aux", ch))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            Self::render_mixer_bucket(
+                                                ui,
+                                                block,
+                                                &ch_aux_sends[ch_i],
+                                                definition,
+                                                flow_id,
+                                                network_interfaces,
+                                                available_channels,
+                                                video_devices,
+                                                audio_devices,
+                                                local_devices_loading,
+                                                taken_endpoint_ids,
+                                                device_picker_actions,
+                                                result,
+                                            );
+                                        });
+                                }
+
+                                // Group routing
+                                if !ch_groups[ch_i].is_empty() {
+                                    egui::CollapsingHeader::new("Group Routing")
+                                        .id_salt(format!("mixer_ch_{}_groups", ch))
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            Self::render_mixer_bucket(
+                                                ui,
+                                                block,
+                                                &ch_groups[ch_i],
+                                                definition,
+                                                flow_id,
+                                                network_interfaces,
+                                                available_channels,
+                                                video_devices,
+                                                audio_devices,
+                                                local_devices_loading,
+                                                taken_endpoint_ids,
+                                                device_picker_actions,
+                                                result,
+                                            );
+                                        });
+                                }
+                            });
+                    }
+                });
+        }
+
+        // Aux Buses
+        if num_aux > 0 {
+            egui::CollapsingHeader::new(format!("Aux Buses ({})", num_aux))
+                .id_salt("mixer_aux")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for aux in 1..=num_aux {
+                        let bucket = &aux_buckets[aux - 1];
+                        if bucket.is_empty() {
+                            continue;
+                        }
+                        egui::CollapsingHeader::new(format!("Aux {}", aux))
+                            .id_salt(format!("mixer_aux_{}", aux))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                Self::render_mixer_bucket(
+                                    ui,
+                                    block,
+                                    bucket,
+                                    definition,
+                                    flow_id,
+                                    network_interfaces,
+                                    available_channels,
+                                    video_devices,
+                                    audio_devices,
+                                    local_devices_loading,
+                                    taken_endpoint_ids,
+                                    device_picker_actions,
+                                    result,
+                                );
+                            });
+                    }
+                });
+        }
+
+        // Groups
+        if num_grp > 0 {
+            egui::CollapsingHeader::new(format!("Groups ({})", num_grp))
+                .id_salt("mixer_groups")
+                .default_open(false)
+                .show(ui, |ui| {
+                    for grp in 1..=num_grp {
+                        let bucket = &grp_buckets[grp - 1];
+                        if bucket.is_empty() {
+                            continue;
+                        }
+                        egui::CollapsingHeader::new(format!("Group {}", grp))
+                            .id_salt(format!("mixer_grp_{}", grp))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                Self::render_mixer_bucket(
+                                    ui,
+                                    block,
+                                    bucket,
+                                    definition,
+                                    flow_id,
+                                    network_interfaces,
+                                    available_channels,
+                                    video_devices,
+                                    audio_devices,
+                                    local_devices_loading,
+                                    taken_endpoint_ids,
+                                    device_picker_actions,
+                                    result,
+                                );
+                            });
+                    }
+                });
+        }
+    }
+
+    /// Render a list of property indices into `definition.exposed_properties`,
+    /// collecting any live-update events into `result`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_mixer_bucket(
+        ui: &mut Ui,
+        block: &mut BlockInstance,
+        indices: &[usize],
+        definition: &BlockDefinition,
+        flow_id: Option<strom_types::FlowId>,
+        network_interfaces: &[strom_types::NetworkInterfaceInfo],
+        available_channels: &[strom_types::api::AvailableOutput],
+        video_devices: &[strom_types::discovery::DeviceResponse],
+        audio_devices: &[strom_types::discovery::DeviceResponse],
+        local_devices_loading: bool,
+        taken_endpoint_ids: &std::collections::HashSet<String>,
+        device_picker_actions: &mut DevicePickerActions,
+        result: &mut BlockInspectorResult,
+    ) {
+        for &i in indices {
+            let exposed_prop = &definition.exposed_properties[i];
+            let changed = Self::show_exposed_property(
+                ui,
+                block,
+                exposed_prop,
+                definition,
+                flow_id,
+                network_interfaces,
+                available_channels,
+                video_devices,
+                audio_devices,
+                local_devices_loading,
+                taken_endpoint_ids,
+                device_picker_actions,
+            );
+
+            if changed && exposed_prop.live {
+                if let Some(fid) = flow_id {
+                    let value = block
+                        .properties
+                        .get(&exposed_prop.name)
+                        .or(exposed_prop.default_value.as_ref())
+                        .cloned();
+                    if let Some(value) = value {
+                        result.live_property_updates.push(LivePropertyUpdate {
+                            flow_id: fid,
+                            block_id: block.id.clone(),
+                            property_name: exposed_prop.name.clone(),
+                            value,
+                        });
+                    }
+                }
             }
         }
-
-        // Skip aux bus master properties beyond configured count
-        for aux in (num_aux + 1)..=MAX_AUX_BUSES {
-            skip.insert(format!("aux{}_fader", aux));
-            skip.insert(format!("aux{}_mute", aux));
-        }
-
-        // Skip per-channel aux send properties for unconfigured aux buses
-        for ch in 1..=num_ch {
-            for aux in (num_aux + 1)..=MAX_AUX_BUSES {
-                skip.insert(format!("ch{}_aux{}_level", ch, aux));
-                skip.insert(format!("ch{}_aux{}_pre", ch, aux));
-            }
-        }
-
-        // Skip group properties beyond configured count
-        for grp in (num_grp + 1)..=MAX_GROUPS {
-            skip.insert(format!("group{}_fader", grp));
-            skip.insert(format!("group{}_mute", grp));
-        }
-
-        // Skip per-channel group routing for unconfigured groups
-        for ch in 1..=num_ch {
-            for grp in (num_grp + 1)..=MAX_GROUPS {
-                skip.insert(format!("ch{}_to_grp{}", ch, grp));
-            }
-        }
-
-        skip
     }
 
     /// Show Audio Router properties with filtered view.
@@ -1380,6 +1921,7 @@ impl PropertyInspector {
             .iter()
             .find(|p| p.name == "num_inputs")
         {
+            let mut sink = DevicePickerActions::default();
             Self::show_exposed_property(
                 ui,
                 block,
@@ -1388,7 +1930,11 @@ impl PropertyInspector {
                 flow_id,
                 network_interfaces,
                 available_channels,
+                &[],
+                &[],
+                false,
                 &std::collections::HashSet::new(),
+                &mut sink,
             );
         }
 
@@ -1400,6 +1946,7 @@ impl PropertyInspector {
                 .iter()
                 .find(|p| p.name == prop_name)
             {
+                let mut sink = DevicePickerActions::default();
                 Self::show_exposed_property(
                     ui,
                     block,
@@ -1408,7 +1955,11 @@ impl PropertyInspector {
                     flow_id,
                     network_interfaces,
                     available_channels,
+                    &[],
+                    &[],
+                    false,
                     &std::collections::HashSet::new(),
+                    &mut sink,
                 );
             }
         }
@@ -1423,6 +1974,7 @@ impl PropertyInspector {
             .iter()
             .find(|p| p.name == "num_outputs")
         {
+            let mut sink = DevicePickerActions::default();
             Self::show_exposed_property(
                 ui,
                 block,
@@ -1431,7 +1983,11 @@ impl PropertyInspector {
                 flow_id,
                 network_interfaces,
                 available_channels,
+                &[],
+                &[],
+                false,
                 &std::collections::HashSet::new(),
+                &mut sink,
             );
         }
 
@@ -1443,6 +1999,7 @@ impl PropertyInspector {
                 .iter()
                 .find(|p| p.name == prop_name)
             {
+                let mut sink = DevicePickerActions::default();
                 Self::show_exposed_property(
                     ui,
                     block,
@@ -1451,7 +2008,11 @@ impl PropertyInspector {
                     flow_id,
                     network_interfaces,
                     available_channels,
+                    &[],
+                    &[],
+                    false,
                     &std::collections::HashSet::new(),
+                    &mut sink,
                 );
             }
         }
@@ -1470,7 +2031,11 @@ impl PropertyInspector {
         _flow_id: Option<strom_types::FlowId>,
         network_interfaces: &[strom_types::NetworkInterfaceInfo],
         available_channels: &[strom_types::api::AvailableOutput],
+        video_devices: &[strom_types::discovery::DeviceResponse],
+        audio_devices: &[strom_types::discovery::DeviceResponse],
+        local_devices_loading: bool,
         taken_endpoint_ids: &std::collections::HashSet<String>,
+        device_picker_actions: &mut DevicePickerActions,
     ) -> bool {
         let prop_name = &exposed_prop.name;
         let display_label = &exposed_prop.label;
@@ -1604,6 +2169,33 @@ impl PropertyInspector {
                                     ui,
                                     &mut value,
                                     network_interfaces,
+                                )
+                            }
+                            strom_types::block::PropertyType::Device { category } => {
+                                device_picker_actions.needed = true;
+                                use strom_types::discovery::DeviceCategory;
+                                let (devices, kind_label): (&[_], &str) = match category {
+                                    DeviceCategory::VideoSource => {
+                                        (video_devices, "video source")
+                                    }
+                                    DeviceCategory::AudioSource => {
+                                        (audio_devices, "audio source")
+                                    }
+                                    // No UI lists for these yet — picker will
+                                    // show an empty list with the refresh
+                                    // button, which is intentional until we
+                                    // wire up extra fetches.
+                                    DeviceCategory::AudioSink
+                                    | DeviceCategory::NetworkSource
+                                    | DeviceCategory::Other => (&[], "device"),
+                                };
+                                Self::show_local_device_editor(
+                                    ui,
+                                    &mut value,
+                                    devices,
+                                    kind_label,
+                                    local_devices_loading,
+                                    device_picker_actions,
                                 )
                             }
                             _ => {
@@ -2048,6 +2640,80 @@ impl PropertyInspector {
         } else {
             false
         }
+    }
+
+    /// Show a picker for a local capture/playback device (Video/Source,
+    /// Audio/Source, ...). Empty string = OS default
+    /// (autovideosrc/autoaudiosrc on the backend).
+    #[allow(clippy::too_many_arguments)]
+    fn show_local_device_editor(
+        ui: &mut Ui,
+        value: &mut PropertyValue,
+        devices: &[strom_types::discovery::DeviceResponse],
+        kind_label: &str,
+        loading: bool,
+        actions: &mut DevicePickerActions,
+    ) -> bool {
+        let PropertyValue::String(s) = value else {
+            return false;
+        };
+        let mut changed = false;
+
+        ui.horizontal(|ui| {
+            let selected_display = if s.is_empty() {
+                format!("OS default ({})", kind_label)
+            } else {
+                devices
+                    .iter()
+                    .find(|d| d.id == *s)
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| format!("{} (not found — refresh)", s))
+            };
+
+            egui::ComboBox::from_id_salt(ui.next_auto_id())
+                .selected_text(selected_display)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(s.is_empty(), format!("OS default ({})", kind_label))
+                        .clicked()
+                    {
+                        s.clear();
+                        changed = true;
+                    }
+                    if devices.is_empty() {
+                        if loading {
+                            ui.add_enabled(false, egui::Label::new("Scanning…"));
+                        } else {
+                            ui.add_enabled(
+                                false,
+                                egui::Label::new(format!("(no {} devices found)", kind_label)),
+                            );
+                        }
+                    }
+                    for d in devices {
+                        if ui.selectable_label(*s == d.id, &d.name).clicked() {
+                            *s = d.id.clone();
+                            changed = true;
+                        }
+                    }
+                });
+
+            let refresh = ui
+                .add_enabled(
+                    !loading,
+                    egui::Button::new(egui_phosphor::regular::ARROWS_CLOCKWISE).small(),
+                )
+                .on_hover_text(if loading {
+                    "Scanning local devices…"
+                } else {
+                    "Re-scan local devices"
+                });
+            if refresh.clicked() {
+                actions.refresh_requested = true;
+            }
+        });
+
+        changed
     }
 
     /// Show a dB gain slider for the AudioGain block.

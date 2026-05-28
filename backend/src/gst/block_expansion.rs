@@ -5,6 +5,7 @@ use crate::blocks::{
     BlockBuildContext, BusMessageConnectFn, DynamicWebrtcbinStore, ElementSetupFn,
     WhepEndpointInfo, WhipEndpointInfo,
 };
+use crate::gst::SessionThreadConfig;
 use crate::whip_registry::WhipRegistry;
 use crate::whip_session_manager::WhipEndpointConfig;
 use gstreamer as gst;
@@ -57,6 +58,8 @@ pub async fn expand_blocks(
     ice_transport_policy: String,
     dynamic_webrtcbins: DynamicWebrtcbinStore,
     whip_registry: Option<WhipRegistry>,
+    session_thread_config: SessionThreadConfig,
+    local_devices: crate::discovery::device::GstDeviceMap,
 ) -> Result<ExpandedPipeline, PipelineError> {
     let mut gst_elements = Vec::new();
     let mut all_links = Vec::new();
@@ -70,6 +73,8 @@ pub async fn expand_blocks(
         ice_transport_policy,
         dynamic_webrtcbins,
         whip_registry,
+        session_thread_config,
+        local_devices,
     );
 
     debug!("Expanding {} block instance(s)", blocks.len());
@@ -350,6 +355,8 @@ mod tests {
             ice_transport_policy,
             dynamic_webrtcbins,
             None,
+            crate::gst::SessionThreadConfig::new(),
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         )
         .await;
         assert!(result.is_ok());

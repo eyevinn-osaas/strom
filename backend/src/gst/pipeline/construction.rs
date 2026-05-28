@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 impl PipelineManager {
     /// Create a new pipeline from a flow definition.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         flow: &Flow,
         events: EventBroadcaster,
@@ -21,6 +22,7 @@ impl PipelineManager {
         ice_transport_policy: String,
         whip_registry: Option<WhipRegistry>,
         media_path: std::path::PathBuf,
+        local_devices: crate::discovery::device::GstDeviceMap,
     ) -> Result<Self, PipelineError> {
         info!("Creating pipeline for flow: {} ({})", flow.name, flow.id);
         info!(
@@ -38,6 +40,9 @@ impl PipelineManager {
         // Create shared storage for dynamically created webrtcbins (from consumer-added callbacks)
         let dynamic_webrtcbins: crate::blocks::DynamicWebrtcbinStore =
             Arc::new(Mutex::new(HashMap::new()));
+
+        // Create shared thread config for session pipelines (populated in start())
+        let session_thread_config = crate::gst::SessionThreadConfig::new();
 
         let probe_manager =
             crate::gst::buffer_age_probe::ProbeManager::new(flow.id, events.clone());
@@ -57,11 +62,13 @@ impl PipelineManager {
             thread_priority_state: None,
             thread_registry: None,
             assigned_cpus: None,
+            session_thread_config: session_thread_config.clone(),
             cached_state: std::sync::Arc::new(std::sync::RwLock::new(PipelineState::Null)),
             qos_aggregator: QoSAggregator::new(),
             qos_broadcast_task: None,
             ptp_clock: None,
             ptp_stats: std::sync::Arc::new(std::sync::RwLock::new(None)),
+            ntp_clock: None,
             ptp_stats_callback: None,
             dynamic_pad_tees: std::sync::Arc::new(std::sync::RwLock::new(HashMap::new())),
             whep_endpoints: Vec::new(),
@@ -73,6 +80,7 @@ impl PipelineManager {
             probe_manager,
             blocks: flow.blocks.clone(),
             block_definitions: HashMap::new(),
+            volume_ramps: crate::gst::volume_ramp::VolumeRampManager::new(),
         };
 
         // Expand blocks into GStreamer elements
@@ -93,6 +101,8 @@ impl PipelineManager {
                     ice_transport_policy,
                     dynamic_webrtcbins,
                     whip_registry,
+                    session_thread_config,
+                    local_devices,
                 )
                 .await;
                 info!("expand_blocks completed");
@@ -311,7 +321,10 @@ impl PipelineManager {
             );
         }
         for (prop_name, prop_value) in &element_def.properties {
-            self.set_property(&element, &element_def.id, prop_name, prop_value)?;
+            // Pipeline isn't running yet — no stream-time available — so any
+            // volume_ramp routing inside set_property falls back to a direct
+            // set. Pass None to make that explicit.
+            self.set_property(&element, &element_def.id, prop_name, prop_value, None)?;
         }
 
         // Store pad properties for later application (after pads are created)
@@ -486,49 +499,80 @@ impl PipelineManager {
                 );
                 self.ptp_stats_callback = Some(stats_callback);
                 info!("PTP statistics callback registered for domain {}", domain);
-
-                // For PTP clock with direct media timing (AES67 / RFC 7273):
-                // Set base_time to 0 and start_time to NONE.
-                // This makes RTP timestamps directly correspond to the PTP reference clock,
-                // which is required for mediaclk:direct=0 signaling.
-                //
-                // Combined with timestamp-offset=0 on the RTP payloader (set in aes67.rs),
-                // this ensures GStreamer generates RTP timestamps that directly reflect
-                // the pipeline clock time.
-                self.pipeline.set_base_time(gst::ClockTime::ZERO);
-                self.pipeline.set_start_time(gst::ClockTime::NONE);
-                info!(
-                    "Pipeline '{}' configured for PTP direct media timing: base_time=0, start_time=None",
-                    self.flow_name
-                );
             }
             GStreamerClockType::Monotonic => {
                 info!("Using Monotonic clock for pipeline '{}'", self.flow_name);
+                // SystemClock::obtain() returns the global singleton (default clock-type=MONOTONIC).
+                // Safe to reuse here because we never modify clock-type on the singleton —
+                // other clock types create fresh SystemClock instances below.
                 let clock = gst::SystemClock::obtain();
                 self.pipeline.use_clock(Some(&clock));
             }
             GStreamerClockType::Realtime => {
-                info!("Using Realtime clock for pipeline '{}'", self.flow_name);
-                // For realtime, we'd need a custom clock implementation
-                // For now, use the system clock which is close to realtime
-                let clock = gst::SystemClock::obtain();
+                info!(
+                    "Using Realtime (UTC) clock for pipeline '{}'",
+                    self.flow_name
+                );
+                // Create a NEW SystemClock instance instead of using the singleton;
+                // setting `clock-type` on the singleton would break every other pipeline
+                // that holds a reference to it (Monotonic flows would suddenly see UTC).
+                let clock: gst::SystemClock = glib::Object::builder()
+                    .property("clock-type", gst::ClockType::Realtime)
+                    .build();
+                self.pipeline.use_clock(Some(&clock));
+            }
+            GStreamerClockType::Tai => {
+                info!("Using TAI clock for pipeline '{}'", self.flow_name);
+                // Create a NEW SystemClock instance; see Realtime branch for rationale.
+                let clock: gst::SystemClock = glib::Object::builder()
+                    .property("clock-type", gst::ClockType::Tai)
+                    .build();
                 self.pipeline.use_clock(Some(&clock));
             }
             GStreamerClockType::Ntp => {
+                let server = self
+                    .properties
+                    .ntp_server
+                    .clone()
+                    .unwrap_or_else(|| "pool.ntp.org".to_string());
+                let port = self.properties.ntp_port.unwrap_or(123);
                 info!(
-                    "NTP clock requested for pipeline '{}' - using system clock as fallback",
-                    self.flow_name
+                    "Using NTP clock for pipeline '{}' (server={}, port={})",
+                    self.flow_name, server, port
                 );
-                // NTP clock implementation would require additional setup
-                // For now, fall back to system clock
-                let clock = gst::SystemClock::obtain();
-                self.pipeline.use_clock(Some(&clock));
-                warn!("NTP clock not yet fully implemented, using system clock");
+
+                let ntp_clock = gst_net::NtpClock::new(
+                    Some(&format!("strom-ntp-{}", self.flow_name)),
+                    &server,
+                    port as i32,
+                    gst::ClockTime::ZERO,
+                );
+                self.pipeline.use_clock(Some(&ntp_clock));
+                self.ntp_clock = Some(ntp_clock);
             }
         }
 
-        // Note: For non-PTP clocks, we let GStreamer manage base_time and start_time automatically.
-        // Only PTP clock (above) sets base_time=0 and start_time=None for AES67 direct media timing.
+        // Direct media timing (opt-in per flow). When enabled, the pipeline's
+        // base_time is forced to zero and start_time disabled so buffer PTS
+        // corresponds directly to the selected pipeline clock — required for
+        // AES67 (`mediaclk:direct=0`) whether the reference is PTP or a
+        // `phc2sys`-disciplined TAI system clock. Not appropriate for pipelines
+        // that include elements assuming `running_time` starts near zero
+        // (MPEG-TS demuxers, WHEP session sinks, etc.).
+        if self.properties.effective_direct_media_timing() {
+            if !self.properties.clock_type.supports_wall_clock_pts() {
+                warn!(
+                    "Pipeline '{}': direct_media_timing=true but clock_type={:?} does not expose a wall-clock; direct timing is unlikely to be useful here",
+                    self.flow_name, self.properties.clock_type
+                );
+            }
+            self.pipeline.set_base_time(gst::ClockTime::ZERO);
+            self.pipeline.set_start_time(gst::ClockTime::NONE);
+            info!(
+                "Pipeline '{}' configured for direct media timing: base_time=0, start_time=None",
+                self.flow_name
+            );
+        }
 
         Ok(())
     }

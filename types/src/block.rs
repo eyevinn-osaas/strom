@@ -1,6 +1,6 @@
 //! Block definitions and instances for reusable element groupings.
 
-use crate::{MediaType, PropertyValue};
+use crate::{discovery::DeviceCategory, MediaType, PropertyValue};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 
@@ -14,6 +14,51 @@ pub struct EnumValue {
     /// Optional human-readable label for UI display
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// Stream content selector for blocks that handle both audio and video.
+///
+/// Used by blocks like WHEP, WHIP, and DeckLink Input to indicate which
+/// kinds of media tracks the block should expose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum StreamMode {
+    /// Audio only
+    Audio,
+    /// Video only
+    Video,
+    /// Both audio and video
+    #[default]
+    AudioVideo,
+}
+
+impl StreamMode {
+    pub fn has_audio(&self) -> bool {
+        matches!(self, StreamMode::Audio | StreamMode::AudioVideo)
+    }
+
+    pub fn has_video(&self) -> bool {
+        matches!(self, StreamMode::Video | StreamMode::AudioVideo)
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StreamMode::Audio => "audio",
+            StreamMode::Video => "video",
+            StreamMode::AudioVideo => "audio_video",
+        }
+    }
+
+    /// Parse a stream mode from a string. Unknown values fall back to `Video`
+    /// (preserves the historical WHEP default).
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "audio" => StreamMode::Audio,
+            "audio_video" => StreamMode::AudioVideo,
+            _ => StreamMode::Video,
+        }
+    }
 }
 
 /// Property type enumeration for exposed properties
@@ -33,6 +78,14 @@ pub enum PropertyType {
     },
     /// Network interface selector - frontend fetches available interfaces from API
     NetworkInterface,
+    /// Local capture/playback device selector. Frontend fetches the live
+    /// device list from `/api/discovery/devices?category=<category>` and
+    /// renders a dropdown of `DeviceResponse`s.
+    Device {
+        /// Which `DeviceCategory` to fetch and display (video source,
+        /// audio source, audio sink, network source).
+        category: DeviceCategory,
+    },
 }
 
 /// Block definition - metadata for creating block instances.
@@ -95,6 +148,26 @@ pub struct ExposedProperty {
     /// Live properties show a LIVE badge in the UI and send updates directly to running elements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub live: bool,
+
+    /// Whether live writes to this property should also be persisted to the
+    /// block instance's properties map (so they survive pipeline restart).
+    ///
+    /// `None` (default) means persist. Set explicitly to `Some(false)` for
+    /// transient properties — e.g. solo states like `chN_pfl`/`chN_afl` —
+    /// that should reset on restart and not dirty the flow on every toggle.
+    ///
+    /// `Option` is used here (rather than a bare `bool` with a serde default)
+    /// to keep existing struct-literal call sites compiling — they get the
+    /// default behaviour without an added field. Read via `persist()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persist: Option<bool>,
+}
+
+impl ExposedProperty {
+    /// Effective persist flag (defaults to `true` when unset).
+    pub fn persist(&self) -> bool {
+        self.persist.unwrap_or(true)
+    }
 }
 
 /// Maps an exposed property to one or more internal element properties
@@ -307,6 +380,27 @@ pub const DEFAULT_SRT_INPUT_URI: &str = "srt://127.0.0.1:5000?mode=caller";
 /// Default SRT latency in milliseconds.
 pub const DEFAULT_SRT_LATENCY_MS: i32 = 125;
 
+/// Default for the SRT `keep-listening` property on inputs/outputs:
+/// stay alive across peer disconnects so reconnects don't need a flow restart.
+pub const DEFAULT_SRT_KEEP_LISTENING: bool = true;
+
+/// Default for the SRT `auto-reconnect` property on inputs/outputs:
+/// reconnect automatically on connection failure.
+pub const DEFAULT_SRT_AUTO_RECONNECT: bool = true;
+
+/// Default for the SRT `wait-for-connection` property on inputs/outputs:
+/// do NOT block pipeline state changes waiting for a peer. Upstream srtsrc
+/// defaults to `true` but that deadlocks PAUSED→PLAYING when the peer is
+/// offline; we override to `false` consistently across all SRT blocks.
+pub const DEFAULT_SRT_WAIT_FOR_CONNECTION: bool = false;
+
+/// Default tsdemux latency in milliseconds.
+/// GStreamer's default is 700ms (for PCR synchronization). We use 0ms for
+/// live pipelines because this property only affects the reported latency in
+/// GStreamer's latency query, not internal buffering. SRT already handles
+/// jitter, so tsdemux doesn't need to add additional latency margin.
+pub const DEFAULT_TSDEMUX_LATENCY_MS: i32 = 0;
+
 /// Default MTU for EFP fragmentation (bytes).
 pub const DEFAULT_EFP_MTU: u32 = 1400;
 
@@ -458,6 +552,32 @@ pub fn common_video_framerate_enum_values(include_empty: bool) -> Vec<EnumValue>
     }
 
     values
+}
+
+/// Pixel formats accepted by `decklinkvideosrc` and `decklinkvideosink`'s
+/// `video-format` property. These are GstDecklinkVideoFormat enum nicks, not
+/// GStreamer caps `format=` strings — see `COMMON_VIDEO_PIXEL_FORMATS` for the
+/// caps-format equivalents.
+pub const DECKLINK_VIDEO_FORMATS: &[(&str, &str)] = &[
+    ("auto", "Auto"),
+    ("8bit-yuv", "8-bit YUV (UYVY)"),
+    ("10bit-yuv", "10-bit YUV (v210)"),
+    ("8bit-argb", "8-bit ARGB"),
+    ("8bit-bgra", "8-bit BGRA"),
+    ("10bit-rgb", "10-bit RGB (r210)"),
+    ("12bit-rgb", "12-bit RGB"),
+    ("12bit-rgble", "12-bit RGB LE"),
+];
+
+/// Get DeckLink video formats as `EnumValue` list for block properties.
+pub fn decklink_video_format_enum_values() -> Vec<EnumValue> {
+    DECKLINK_VIDEO_FORMATS
+        .iter()
+        .map(|(value, label)| EnumValue {
+            value: (*value).to_string(),
+            label: Some((*label).to_string()),
+        })
+        .collect()
 }
 
 /// Parse a resolution string like "1920x1080" into (width, height).

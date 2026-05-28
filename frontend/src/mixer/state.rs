@@ -18,6 +18,7 @@ impl MixerEditor {
             active_control: ActiveControl::None,
             main_fader: DEFAULT_FADER,
             main_mute: false,
+            monitor_fader: DEFAULT_FADER,
             main_comp_enabled: false,
             main_comp_threshold: DEFAULT_COMP_THRESHOLD,
             main_comp_ratio: DEFAULT_COMP_RATIO,
@@ -33,6 +34,7 @@ impl MixerEditor {
             status: String::new(),
             error: None,
             live_updates: true,
+            fade_ms: strom_types::mixer::DEFAULT_VOLUME_RAMP_MS,
             last_update: instant::Instant::now(),
             save_requested: false,
             is_reset: false,
@@ -50,6 +52,11 @@ impl MixerEditor {
         }
         if let Some(PropertyValue::Bool(b)) = properties.get("main_mute") {
             self.main_mute = *b;
+        }
+
+        // Monitor bus master fader
+        if let Some(PropertyValue::Float(f)) = properties.get("monitor_fader") {
+            self.monitor_fader = *f as f32;
         }
 
         // Load main bus processing
@@ -137,6 +144,10 @@ impl MixerEditor {
                 {
                     sg.mute = *b;
                 }
+                if let Some(PropertyValue::Bool(b)) = properties.get(&format!("group{}_afl", i + 1))
+                {
+                    sg.afl = *b;
+                }
                 sg
             })
             .collect();
@@ -153,6 +164,9 @@ impl MixerEditor {
                 if let Some(PropertyValue::Bool(b)) = properties.get(&format!("aux{}_mute", i + 1))
                 {
                     aux.mute = *b;
+                }
+                if let Some(PropertyValue::Bool(b)) = properties.get(&format!("aux{}_afl", i + 1)) {
+                    aux.afl = *b;
                 }
                 aux
             })
@@ -181,6 +195,9 @@ impl MixerEditor {
             }
             if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_pfl", ch_num)) {
                 ch.pfl = *b;
+            }
+            if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_afl", ch_num)) {
+                ch.afl = *b;
             }
             // Routing to main
             if let Some(PropertyValue::Bool(b)) = properties.get(&format!("ch{}_to_main", ch_num)) {
@@ -341,6 +358,13 @@ impl MixerEditor {
         // Main bus
         set_f!("main_fader".to_string(), self.main_fader, DEFAULT_FADER);
         set_b!("main_mute".to_string(), self.main_mute, false);
+
+        // Monitor bus master fader
+        set_f!(
+            "monitor_fader".to_string(),
+            self.monitor_fader,
+            DEFAULT_FADER
+        );
         set_b!(
             "main_comp_enabled".to_string(),
             self.main_comp_enabled,
@@ -400,6 +424,7 @@ impl MixerEditor {
             let n = aux.index + 1;
             set_f!(format!("aux{}_fader", n), aux.fader, DEFAULT_FADER);
             set_b!(format!("aux{}_mute", n), aux.mute, false);
+            set_b!(format!("aux{}_afl", n), aux.afl, false);
         }
 
         // Groups
@@ -407,6 +432,7 @@ impl MixerEditor {
             let n = sg.index + 1;
             set_f!(format!("group{}_fader", n), sg.fader, DEFAULT_FADER);
             set_b!(format!("group{}_mute", n), sg.mute, false);
+            set_b!(format!("group{}_afl", n), sg.afl, false);
         }
 
         // Per-channel
@@ -424,6 +450,7 @@ impl MixerEditor {
             set_f!(format!("ch{}_fader", n), ch.fader, DEFAULT_FADER);
             set_b!(format!("ch{}_mute", n), ch.mute, false);
             set_b!(format!("ch{}_pfl", n), ch.pfl, false);
+            set_b!(format!("ch{}_afl", n), ch.afl, false);
             set_b!(format!("ch{}_to_main", n), ch.to_main, true);
             for (sg, &enabled) in ch.to_grp.iter().enumerate().take(self.num_groups) {
                 set_b!(format!("ch{}_to_grp{}", n, sg + 1), enabled, false);
@@ -513,6 +540,7 @@ impl MixerEditor {
         // Main bus
         self.main_fader = DEFAULT_FADER;
         self.main_mute = false;
+        self.monitor_fader = DEFAULT_FADER;
         self.main_comp_enabled = false;
         self.main_comp_threshold = DEFAULT_COMP_THRESHOLD;
         self.main_comp_ratio = DEFAULT_COMP_RATIO;
@@ -529,12 +557,14 @@ impl MixerEditor {
         for aux in &mut self.aux_masters {
             aux.fader = DEFAULT_FADER;
             aux.mute = false;
+            aux.afl = false;
         }
 
         // Groups
         for sg in &mut self.groups {
             sg.fader = DEFAULT_FADER;
             sg.mute = false;
+            sg.afl = false;
         }
 
         // Channels
@@ -544,6 +574,7 @@ impl MixerEditor {
             ch.fader = DEFAULT_FADER;
             ch.mute = false;
             ch.pfl = false;
+            ch.afl = false;
             ch.to_main = true;
             ch.to_grp = [false; MAX_GROUPS];
             ch.aux_sends = [0.0; MAX_AUX_BUSES];

@@ -134,23 +134,21 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
             })
             .unwrap_or(DEFAULT_SRT_LATENCY_MS);
 
-        // Get wait_for_connection (optional, default false per notes.txt)
         let wait_for_connection = properties
             .get("wait_for_connection")
             .and_then(|v| match v {
                 PropertyValue::Bool(b) => Some(*b),
                 _ => None,
             })
-            .unwrap_or(false);
+            .unwrap_or(DEFAULT_SRT_WAIT_FOR_CONNECTION);
 
-        // Get auto_reconnect (optional, default true per notes.txt)
         let auto_reconnect = properties
             .get("auto_reconnect")
             .and_then(|v| match v {
                 PropertyValue::Bool(b) => Some(*b),
                 _ => None,
             })
-            .unwrap_or(true);
+            .unwrap_or(DEFAULT_SRT_AUTO_RECONNECT);
 
         // Get sync (optional, default true)
         // sync=false is useful for transcoding workloads where timestamps may be discontinuous
@@ -233,6 +231,10 @@ impl BlockBuilder for MpegTsSrtOutputBuilder {
         // Fixed: 2025-12-01
         srtsink.set_property("sync", sync);
         srtsink.set_property("qos", true);
+        // async=false: don't block pipeline preroll waiting for the first buffer.
+        // In listener mode without a connected client, the sink would otherwise
+        // hold PAUSED->PLAYING indefinitely. Matches WHEP/WHIP/AES67 sinks.
+        srtsink.set_property("async", false);
 
         if has_auto_reconnect {
             info!(
@@ -854,6 +856,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "num_audio_tracks".to_string(),
@@ -867,6 +870,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "srt_uri".to_string(),
@@ -880,6 +884,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "latency".to_string(),
@@ -893,32 +898,35 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "wait_for_connection".to_string(),
                 label: "Wait For Connection".to_string(),
-                description: "Block the stream until a client connects (default: false)".to_string(),
+                description: "Block the stream until a peer connects (default: false). Same default across all SRT input/output blocks.".to_string(),
                 property_type: PropertyType::Bool,
-                default_value: Some(PropertyValue::Bool(false)),
+                default_value: Some(PropertyValue::Bool(DEFAULT_SRT_WAIT_FOR_CONNECTION)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "wait_for_connection".to_string(),
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "auto_reconnect".to_string(),
                 label: "Auto Reconnect".to_string(),
-                description: "Automatically reconnect when connection fails (default: true)".to_string(),
+                description: "Automatically reconnect when connection fails (default: true). Same default across all SRT input/output blocks.".to_string(),
                 property_type: PropertyType::Bool,
-                default_value: Some(PropertyValue::Bool(true)),
+                default_value: Some(PropertyValue::Bool(DEFAULT_SRT_AUTO_RECONNECT)),
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: "auto_reconnect".to_string(),
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "sync".to_string(),
@@ -932,6 +940,7 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
         ],
         // External pads are now computed dynamically based on num_video_tracks and num_audio_tracks properties
@@ -943,6 +952,13 @@ fn mpegtssrt_output_definition() -> BlockDefinition {
                     name: "video_in".to_string(),
                     media_type: MediaType::Video,
                     internal_element_id: "video_input".to_string(),
+                    internal_pad_name: "sink".to_string(),
+                },
+                ExternalPad {
+                    label: Some("A0".to_string()),
+                    name: "audio_in_0".to_string(),
+                    media_type: MediaType::Audio,
+                    internal_element_id: "audio_input_0".to_string(),
                     internal_pad_name: "sink".to_string(),
                 },
             ],

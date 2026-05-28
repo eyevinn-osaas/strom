@@ -4,7 +4,7 @@ members = ["types", "backend", "frontend", "mcp-server"]
 default-members = ["backend"]
 
 [workspace.package]
-version = "0.4.9"
+version = "0.6.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Per Enstedt <per.enstedt@eyevinn.se>"]
@@ -19,9 +19,9 @@ serde_json = "1.0"
 uuid = { version = "1.23", features = ["serde", "v4", "js"] }
 
 # Backend
-axum = { version = "0.8.8", features = ["ws", "multipart"] }
+axum = { version = "0.8.9", features = ["ws", "multipart"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
-tokio = { version = "1.51", features = ["full"] }
+tokio = { version = "1.52", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
@@ -32,6 +32,9 @@ gstreamer-controller = { version = "0.25", features = ["v1_20"] }
 gstreamer-net = { version = "0.25", features = ["v1_20"] }
 gstreamer-gl = { version = "0.25", features = ["v1_20"] }
 gstreamer-video = { version = "0.25", features = ["v1_20"] }
+# gio 0.22 matches the glib 0.22 transitive that gstreamer 0.25 pulls in.
+# Used by the SRT stats parser to format peer GSocketAddress fields.
+gio = "0.22"
 gst-plugin-webrtc = { version = "0.15", features = ["whep", "whip"] }
 gst-plugin-webrtchttp = { version = "0.15", default-features = false }
 gst-plugin-audiofx = "0.15"
@@ -40,10 +43,10 @@ gst-plugin-rtp = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 time = { version = "0.3", features = ["formatting", "local-offset"] }
-tracing-appender = "0.2.4"
-utoipa = { version = "5.4", features = ["axum_extras", "uuid"] }
+tracing-appender = "0.2.5"
+utoipa = { version = "5.5", features = ["axum_extras", "uuid"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
-garde = { version = "0.22", features = ["derive"] }
+garde = { version = "0.23", features = ["derive"] }
 
 # Frontend
 egui = "0.34"

@@ -1,24 +1,73 @@
 use super::{PipelineError, PipelineManager};
+use crate::gst::volume_ramp::VolumeRampManager;
 use gstreamer as gst;
 use gstreamer::glib;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
+use strom_types::mixer::{DEFAULT_VOLUME_RAMP_MS, MUTE_ANTICLICK_RAMP_MS};
 use strom_types::{PipelineState, PropertyValue};
 use tracing::{debug, info};
 
 impl PipelineManager {
     /// Set a property on an element.
+    ///
+    /// `ramp_ms` is consulted only for routes that support smooth interpolation
+    /// (currently audio `volume`-element `volume` and `mute`). Other properties
+    /// are set immediately regardless. `None` selects the per-route default
+    /// ramp (short anti-zipper for `volume`, short anti-click for `mute`); a
+    /// caller can request a longer broadcast-style fade by passing an explicit
+    /// duration (e.g. 500 ms for a route mute on-air/off-air).
     pub(super) fn set_property(
         &self,
         element: &gst::Element,
         element_id: &str,
         prop_name: &str,
         prop_value: &PropertyValue,
+        ramp_ms: Option<u32>,
     ) -> Result<(), PipelineError> {
         debug!(
-            "Setting property: {}.{} = {:?}",
-            element_id, prop_name, prop_value
+            "Setting property: {}.{} = {:?} (ramp_ms={:?})",
+            element_id, prop_name, prop_value, ramp_ms
         );
+
+        // Audio volume element: route through the ramp manager to avoid
+        // zipper noise (volume) and click artifacts (mute). The short-circuit
+        // installs a control source / schedules the mute toggle and returns;
+        // on failure (e.g. pipeline not yet running) we fall through to the
+        // direct `set_property` path below. Volume accepts any numeric
+        // PropertyValue (Float/Int/UInt) since clients sometimes send an
+        // integer 0/1 — the underlying property is `gdouble`.
+        if VolumeRampManager::is_volume_element(element) {
+            if prop_name == "volume" {
+                let target: Option<f64> = match prop_value {
+                    PropertyValue::Float(v) => Some(*v),
+                    PropertyValue::Int(v) => Some(*v as f64),
+                    PropertyValue::UInt(v) => Some(*v as f64),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    if self.volume_ramps.apply_volume_ramp(
+                        element,
+                        element_id,
+                        target,
+                        ramp_ms.unwrap_or(DEFAULT_VOLUME_RAMP_MS),
+                    ) {
+                        return Ok(());
+                    }
+                }
+            } else if prop_name == "mute" {
+                if let PropertyValue::Bool(v) = prop_value {
+                    if self.volume_ramps.apply_mute(
+                        element,
+                        element_id,
+                        *v,
+                        ramp_ms.unwrap_or(MUTE_ANTICLICK_RAMP_MS),
+                    ) {
+                        return Ok(());
+                    }
+                }
+            }
+        }
 
         // Set property based on type
         match prop_value {
@@ -80,6 +129,12 @@ impl PipelineManager {
                     } else if type_name == "gint64" {
                         // Property expects i64
                         element.set_property(prop_name, *v);
+                    } else if type_name == "gdouble" {
+                        // Property expects f64 — coerce (e.g. volume sent as int)
+                        element.set_property(prop_name, *v as f64);
+                    } else if type_name == "gfloat" {
+                        // Property expects f32 — coerce
+                        element.set_property(prop_name, *v as f32);
                     } else {
                         // Try i64, might work
                         element.set_property(prop_name, *v);
@@ -107,6 +162,12 @@ impl PipelineManager {
                     } else if type_name == "guint64" {
                         // Property expects u64
                         element.set_property(prop_name, *v);
+                    } else if type_name == "gdouble" {
+                        // Property expects f64 — coerce
+                        element.set_property(prop_name, *v as f64);
+                    } else if type_name == "gfloat" {
+                        // Property expects f32 — coerce
+                        element.set_property(prop_name, *v as f32);
                     } else {
                         // Try u64, might work
                         element.set_property(prop_name, *v);
@@ -142,15 +203,20 @@ impl PipelineManager {
 
     /// Update a property on a live element in the pipeline.
     /// Validates that the property can be changed in the current pipeline state.
+    ///
+    /// `ramp_ms` is consulted only for routes that support smooth interpolation
+    /// (currently audio `volume`-element `volume` and `mute`). For other
+    /// properties it is silently ignored.
     pub fn update_element_property(
         &self,
         element_id: &str,
         property_name: &str,
         value: &PropertyValue,
+        ramp_ms: Option<u32>,
     ) -> Result<(), PipelineError> {
         debug!(
-            "Updating property {}.{} to {:?} on running pipeline",
-            element_id, property_name, value
+            "Updating property {}.{} to {:?} on running pipeline (ramp_ms={:?})",
+            element_id, property_name, value, ramp_ms
         );
 
         // Get element reference
@@ -161,6 +227,20 @@ impl PipelineManager {
 
         // Get current pipeline state
         let state = self.get_state();
+
+        // Time Offset block: `offset_ms` is not an element property but a
+        // pad-offset. Intercept and apply directly, then trigger a latency
+        // recalc so downstream sinks resync. The interceptor logs the new
+        // value at debug; we don't double-log here.
+        if crate::blocks::builtin::time_offset::try_apply_live_offset(
+            element,
+            element_id,
+            property_name,
+            value,
+        ) {
+            let _ = self.pipeline.recalculate_latency();
+            return Ok(());
+        }
 
         // Translate property name/value for elements that need conversion.
         // Mixer lsp-rs elements use different property names than LV2 conventions.
@@ -181,7 +261,7 @@ impl PipelineManager {
         if translations.is_empty() {
             // No translation needed, use original property
             self.validate_property_mutability(element, element_id, property_name, state)?;
-            self.set_property(element, element_id, property_name, value)?;
+            self.set_property(element, element_id, property_name, value, ramp_ms)?;
         } else {
             for (translated_name, translated_value) in &translations {
                 debug!(
@@ -189,7 +269,13 @@ impl PipelineManager {
                     element_id, property_name, element_id, translated_name
                 );
                 self.validate_property_mutability(element, element_id, translated_name, state)?;
-                self.set_property(element, element_id, translated_name, translated_value)?;
+                self.set_property(
+                    element,
+                    element_id,
+                    translated_name,
+                    translated_value,
+                    ramp_ms,
+                )?;
             }
         }
 
@@ -211,6 +297,17 @@ impl PipelineManager {
             .elements
             .get(element_id)
             .ok_or_else(|| PipelineError::ElementNotFound(element_id.to_string()))?;
+
+        // Time Offset block: `offset_ms` is a pad-offset rather than an
+        // element property — mirror the write-path interceptor so the value
+        // can be read back via the same API.
+        if let Some(v) = crate::blocks::builtin::time_offset::try_read_live_offset(
+            element,
+            element_id,
+            property_name,
+        ) {
+            return Ok(v);
+        }
 
         // Get property spec to determine type
         let pspec =
@@ -341,6 +438,14 @@ impl PipelineManager {
             if let Ok(value) = self.get_element_property(element_id, &name) {
                 properties.insert(name, value);
             }
+        }
+
+        // Surface synthetic block properties that don't live on the element
+        // itself (e.g. Time Offset's `offset_ms`, which is a pad-offset).
+        if let Some((name, value)) =
+            crate::blocks::builtin::time_offset::live_offset_property_entry(element, element_id)
+        {
+            properties.insert(name, value);
         }
 
         Ok(properties)

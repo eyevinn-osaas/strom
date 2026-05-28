@@ -60,6 +60,12 @@ pub enum AppMessage {
         stats: strom_types::api::WebRtcStats,
     },
 
+    /// SRT stats loaded for a flow
+    SrtStatsLoaded {
+        flow_id: strom_types::FlowId,
+        stats: strom_types::api::SrtStats,
+    },
+
     /// Flow operation completed successfully
     FlowOperationSuccess(String),
     /// Flow operation failed
@@ -98,6 +104,17 @@ pub enum AppMessage {
     /// Network interfaces loaded from API
     NetworkInterfacesLoaded(Vec<strom_types::NetworkInterfaceInfo>),
 
+    /// Local capture devices loaded from API (one category at a time).
+    LocalDevicesLoaded {
+        category: strom_types::discovery::DeviceCategory,
+        devices: Vec<strom_types::discovery::DeviceResponse>,
+    },
+
+    /// System clock info loaded from backend
+    SystemClockLoaded(crate::api::SystemClockInfo),
+    /// System clock info not supported on this platform (backend returned 501)
+    SystemClockUnsupported,
+
     /// Available inter channels loaded from API
     AvailableChannelsLoaded(Vec<strom_types::api::AvailableOutput>),
 
@@ -123,6 +140,16 @@ pub enum AppMessage {
     MediaError(String),
     /// Request media page refresh
     MediaRefresh,
+
+    /// Log level loaded from API
+    LogLevelLoaded { current: String, default: String },
+    /// Log level update failed
+    LogLevelError(String),
+
+    /// GStreamer debug level loaded from API
+    GstLogLevelLoaded { current: String, default: String },
+    /// GStreamer debug level update failed
+    GstLogLevelError(String),
 }
 
 /// WebSocket connection state.

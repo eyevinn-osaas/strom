@@ -10,52 +10,24 @@ pub fn get_blocks() -> Vec<BlockDefinition> {
 pub(super) fn mixer_definition() -> BlockDefinition {
     // Generate channel properties
     let mut exposed_properties = vec![
-        // Global: number of channels
+        // Global: number of channels — construction-time only, defines how the
+        // block is built. Changing it requires a flow restart.
         ExposedProperty {
             name: "num_channels".to_string(),
             label: "Channels".to_string(),
-            description: "Number of input channels".to_string(),
-            property_type: PropertyType::Enum {
-                values: vec![
-                    EnumValue {
-                        value: "2".to_string(),
-                        label: Some("2".to_string()),
-                    },
-                    EnumValue {
-                        value: "4".to_string(),
-                        label: Some("4".to_string()),
-                    },
-                    EnumValue {
-                        value: "8".to_string(),
-                        label: Some("8".to_string()),
-                    },
-                    EnumValue {
-                        value: "12".to_string(),
-                        label: Some("12".to_string()),
-                    },
-                    EnumValue {
-                        value: "16".to_string(),
-                        label: Some("16".to_string()),
-                    },
-                    EnumValue {
-                        value: "24".to_string(),
-                        label: Some("24".to_string()),
-                    },
-                    EnumValue {
-                        value: "32".to_string(),
-                        label: Some("32".to_string()),
-                    },
-                ],
-            },
-            default_value: Some(PropertyValue::String("8".to_string())),
+            description: format!("Number of input channels (1 to {})", MAX_CHANNELS),
+            property_type: PropertyType::UInt,
+            default_value: Some(PropertyValue::UInt(DEFAULT_CHANNELS as u64)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "num_channels".to_string(),
                 transform: None,
             },
             live: false,
+            persist: None,
         },
-        // DSP Backend selection
+        // DSP Backend selection — construction-time only; switches which set of
+        // LV2/Rust DSP elements the builder instantiates.
         ExposedProperty {
             name: "dsp_backend".to_string(),
             label: "DSP Backend".to_string(),
@@ -80,6 +52,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Main fader
         ExposedProperty {
@@ -93,120 +66,71 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         },
-        // Number of aux buses
+        // Main mute — independent Bool on the same GstVolume element. Built-in
+        // anti-click on the `mute` property handles the on/off fade.
+        ExposedProperty {
+            name: "main_mute".to_string(),
+            label: "Main Mute".to_string(),
+            description: "Mute main output".to_string(),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: "main_volume".to_string(),
+                property_name: "mute".to_string(),
+                transform: None,
+            },
+            live: true,
+            persist: None,
+        },
+        // Number of aux buses — construction-time only.
         ExposedProperty {
             name: "num_aux_buses".to_string(),
             label: "Aux Buses".to_string(),
-            description: "Number of aux send buses (0-4)".to_string(),
-            property_type: PropertyType::Enum {
-                values: vec![
-                    EnumValue {
-                        value: "0".to_string(),
-                        label: Some("None".to_string()),
-                    },
-                    EnumValue {
-                        value: "1".to_string(),
-                        label: Some("1".to_string()),
-                    },
-                    EnumValue {
-                        value: "2".to_string(),
-                        label: Some("2".to_string()),
-                    },
-                    EnumValue {
-                        value: "3".to_string(),
-                        label: Some("3".to_string()),
-                    },
-                    EnumValue {
-                        value: "4".to_string(),
-                        label: Some("4".to_string()),
-                    },
-                ],
-            },
-            default_value: Some(PropertyValue::String("0".to_string())),
+            description: format!("Number of aux send buses (0 to {})", MAX_AUX_BUSES),
+            property_type: PropertyType::UInt,
+            default_value: Some(PropertyValue::UInt(0)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "num_aux_buses".to_string(),
                 transform: None,
             },
             live: false,
+            persist: None,
         },
-        // Number of groups
+        // Number of groups — construction-time only.
         ExposedProperty {
             name: "num_groups".to_string(),
             label: "Groups".to_string(),
-            description: "Number of group buses (0-4)".to_string(),
-            property_type: PropertyType::Enum {
-                values: vec![
-                    EnumValue {
-                        value: "0".to_string(),
-                        label: Some("None".to_string()),
-                    },
-                    EnumValue {
-                        value: "1".to_string(),
-                        label: Some("1".to_string()),
-                    },
-                    EnumValue {
-                        value: "2".to_string(),
-                        label: Some("2".to_string()),
-                    },
-                    EnumValue {
-                        value: "3".to_string(),
-                        label: Some("3".to_string()),
-                    },
-                    EnumValue {
-                        value: "4".to_string(),
-                        label: Some("4".to_string()),
-                    },
-                ],
-            },
-            default_value: Some(PropertyValue::String("0".to_string())),
+            description: format!("Number of group buses (0 to {})", MAX_GROUPS),
+            property_type: PropertyType::UInt,
+            default_value: Some(PropertyValue::UInt(0)),
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "num_groups".to_string(),
                 transform: None,
             },
             live: false,
+            persist: None,
         },
-        // PFL master level
+        // Monitor master level — drives the Monitor bus output. The Monitor
+        // bus follows Main when no channel has PFL or AFL active, and
+        // switches to the solo mix as soon as any PFL/AFL is engaged.
         ExposedProperty {
-            name: "pfl_level".to_string(),
-            label: "PFL Level".to_string(),
-            description: "PFL/AFL bus master level (0.0 to 2.0)".to_string(),
+            name: "monitor_fader".to_string(),
+            label: "Monitor Fader".to_string(),
+            description: "Monitor bus master level (0.0 to 2.0)".to_string(),
             property_type: PropertyType::Float,
             default_value: Some(PropertyValue::Float(1.0)),
             mapping: PropertyMapping {
-                element_id: "pfl_master_vol".to_string(),
+                element_id: "monitor_master_vol".to_string(),
                 property_name: "volume".to_string(),
                 transform: None,
             },
-            live: false,
-        },
-        // Solo mode (PFL or AFL)
-        ExposedProperty {
-            name: "solo_mode".to_string(),
-            label: "Solo Mode".to_string(),
-            description: "Solo listen mode: PFL (pre-fader) or AFL (after-fader)".to_string(),
-            property_type: PropertyType::Enum {
-                values: vec![
-                    EnumValue {
-                        value: "pfl".to_string(),
-                        label: Some("PFL".to_string()),
-                    },
-                    EnumValue {
-                        value: "afl".to_string(),
-                        label: Some("AFL".to_string()),
-                    },
-                ],
-            },
-            default_value: Some(PropertyValue::String("pfl".to_string())),
-            mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: "solo_mode".to_string(),
-                transform: None,
-            },
-            live: false,
+            live: true,
+            persist: None,
         },
     ];
 
@@ -225,6 +149,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             transform: None,
         },
         live: false,
+        persist: None,
     });
     exposed_properties.push(ExposedProperty {
         name: "latency".to_string(),
@@ -238,6 +163,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             transform: None,
         },
         live: false,
+        persist: None,
     });
     exposed_properties.push(ExposedProperty {
         name: "min_upstream_latency".to_string(),
@@ -251,6 +177,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             transform: None,
         },
         live: false,
+        persist: None,
     });
 
     // ========================================================================
@@ -267,7 +194,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "enabled".to_string(),
             transform: None,
         },
-        live: false,
+        live: true,
+        persist: None,
     });
     for (prop_suffix, label, gst_prop, default, desc, transform) in [
         (
@@ -310,6 +238,14 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             "Main bus compressor makeup gain in dB (0 to 24)",
             Some("db_to_linear"),
         ),
+        (
+            "main_comp_knee",
+            "Main Comp Knee",
+            "kn",
+            DEFAULT_COMP_KNEE as f64,
+            "Main bus compressor knee in dB (-24 to 0)",
+            Some("db_to_linear"),
+        ),
     ] {
         exposed_properties.push(ExposedProperty {
             name: prop_suffix.to_string(),
@@ -322,7 +258,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: gst_prop.to_string(),
                 transform: transform.map(|s| s.to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
     }
 
@@ -338,7 +275,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "enabled".to_string(),
             transform: None,
         },
-        live: false,
+        live: true,
+        persist: None,
     });
     let eq_band_names = ["Low", "Low-Mid", "Hi-Mid", "High"];
     for (band, band_name) in eq_band_names.iter().enumerate() {
@@ -358,7 +296,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: format!("f-{}", band),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
         exposed_properties.push(ExposedProperty {
             name: format!("main_eq{}_gain", band_num),
@@ -371,7 +310,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: format!("g-{}", band),
                 transform: Some("db_to_linear".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
         exposed_properties.push(ExposedProperty {
             name: format!("main_eq{}_q", band_num),
@@ -384,7 +324,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: format!("q-{}", band),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
     }
 
@@ -400,7 +341,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "enabled".to_string(),
             transform: None,
         },
-        live: false,
+        live: true,
+        persist: None,
     });
     exposed_properties.push(ExposedProperty {
         name: "main_limiter_threshold".to_string(),
@@ -413,7 +355,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_name: "th".to_string(),
             transform: Some("db_to_linear".to_string()),
         },
-        live: false,
+        live: true,
+        persist: None,
     });
 
     // Add aux bus master properties
@@ -429,7 +372,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
         exposed_properties.push(ExposedProperty {
             name: format!("aux{}_mute", aux),
@@ -438,11 +382,30 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_type: PropertyType::Bool,
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: format!("aux{}_mute", aux),
+                element_id: format!("aux{}_volume", aux - 1),
+                property_name: "mute".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
+        });
+
+        // AFL on the aux master — taps post-master, post-mute and sums into
+        // the solo bus alongside per-channel PFL/AFL. Transient: never
+        // persisted across restarts.
+        exposed_properties.push(ExposedProperty {
+            name: format!("aux{}_afl", aux),
+            label: format!("Aux {} AFL", aux),
+            description: format!("Enable AFL (After-Fader Listen) on aux bus {}", aux),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: format!("aux{}_afl_volume", aux - 1),
+                property_name: "volume".to_string(),
+                transform: Some("bool_to_volume".to_string()),
+            },
+            live: true,
+            persist: Some(false),
         });
     }
 
@@ -459,7 +422,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
         exposed_properties.push(ExposedProperty {
             name: format!("group{}_mute", sg),
@@ -468,11 +432,30 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_type: PropertyType::Bool,
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: format!("group{}_mute", sg),
+                element_id: format!("group{}_volume", sg - 1),
+                property_name: "mute".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
+        });
+
+        // AFL on the group master — taps post-master, post-mute and sums
+        // into the solo bus alongside per-channel PFL/AFL. Transient: never
+        // persisted across restarts.
+        exposed_properties.push(ExposedProperty {
+            name: format!("group{}_afl", sg),
+            label: format!("Group {} AFL", sg),
+            description: format!("Enable AFL (After-Fader Listen) on group {}", sg),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: format!("group{}_afl_volume", sg - 1),
+                property_name: "volume".to_string(),
+                transform: Some("bool_to_volume".to_string()),
+            },
+            live: true,
+            persist: Some(false),
         });
     }
 
@@ -491,6 +474,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         });
 
         // Input gain
@@ -505,7 +489,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: Some("db_to_linear".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -519,7 +504,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "panorama".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -533,7 +519,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -543,14 +530,15 @@ pub(super) fn mixer_definition() -> BlockDefinition {
             property_type: PropertyType::Bool,
             default_value: Some(PropertyValue::Bool(false)),
             mapping: PropertyMapping {
-                element_id: "_block".to_string(),
-                property_name: format!("ch{}_mute", ch),
+                element_id: format!("volume_{}", ch - 1),
+                property_name: "mute".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
-        // PFL (Pre-Fader Listen)
+        // PFL (Pre-Fader Listen) — transient solo state, not persisted.
         exposed_properties.push(ExposedProperty {
             name: format!("ch{}_pfl", ch),
             label: format!("Ch {} PFL", ch),
@@ -562,7 +550,24 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: Some("bool_to_volume".to_string()),
             },
-            live: false,
+            live: true,
+            persist: Some(false),
+        });
+
+        // AFL (After-Fader Listen) — transient solo state, not persisted.
+        exposed_properties.push(ExposedProperty {
+            name: format!("ch{}_afl", ch),
+            label: format!("Ch {} AFL", ch),
+            description: format!("Enable AFL (After-Fader Listen) on channel {}", ch),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(false)),
+            mapping: PropertyMapping {
+                element_id: format!("afl_volume_{}", ch - 1),
+                property_name: "volume".to_string(),
+                transform: Some("bool_to_volume".to_string()),
+            },
+            live: true,
+            persist: Some(false),
         });
 
         // Routing to main
@@ -577,7 +582,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "volume".to_string(),
                 transform: Some("bool_to_volume".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         // Routing to groups
@@ -593,7 +599,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     property_name: "volume".to_string(),
                     transform: Some("bool_to_volume".to_string()),
                 },
-                live: false,
+                live: true,
+                persist: None,
             });
         }
 
@@ -610,7 +617,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     property_name: "volume".to_string(),
                     transform: None,
                 },
-                live: false,
+                live: true,
+                persist: None,
             });
             exposed_properties.push(ExposedProperty {
                 name: format!("ch{}_aux{}_pre", ch, aux),
@@ -620,13 +628,14 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     ch, aux
                 ),
                 property_type: PropertyType::Bool,
-                default_value: Some(PropertyValue::Bool(aux <= 2)), // aux 1-2 pre, 3-4 post
+                default_value: Some(PropertyValue::Bool(false)), // all aux sends default post-fader
                 mapping: PropertyMapping {
                     element_id: "_block".to_string(),
                     property_name: format!("ch{}_aux{}_pre", ch, aux),
                     transform: None,
                 },
                 live: false,
+                persist: None,
             });
         }
 
@@ -645,6 +654,7 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -661,7 +671,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "cutoff".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         // ============================================================
@@ -678,7 +689,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "enabled".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -692,7 +704,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "gt".to_string(),
                 transform: Some("db_to_linear".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -706,7 +719,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "at".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -720,7 +734,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "rt".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         // Note: LSP gate has no settable range property
@@ -740,7 +755,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "enabled".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -754,7 +770,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "al".to_string(),
                 transform: Some("db_to_linear".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -768,7 +785,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "cr".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -782,7 +800,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "at".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -796,7 +815,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "rt".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -810,7 +830,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "mk".to_string(),
                 transform: Some("db_to_linear".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         exposed_properties.push(ExposedProperty {
@@ -824,7 +845,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "kn".to_string(),
                 transform: Some("db_to_linear".to_string()),
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         // ============================================================
@@ -841,7 +863,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                 property_name: "enabled".to_string(),
                 transform: None,
             },
-            live: false,
+            live: true,
+            persist: None,
         });
 
         // 4 EQ bands with default frequencies from shared constants
@@ -864,7 +887,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     property_name: format!("f-{}", band),
                     transform: None,
                 },
-                live: false,
+                live: true,
+                persist: None,
             });
 
             exposed_properties.push(ExposedProperty {
@@ -881,7 +905,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     property_name: format!("g-{}", band),
                     transform: Some("db_to_linear".to_string()),
                 },
-                live: false,
+                live: true,
+                persist: None,
             });
 
             exposed_properties.push(ExposedProperty {
@@ -895,7 +920,8 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     property_name: format!("q-{}", band),
                     transform: None,
                 },
-                live: false,
+                live: true,
+                persist: None,
             });
         }
     }
@@ -927,10 +953,10 @@ pub(super) fn mixer_definition() -> BlockDefinition {
                     internal_pad_name: "src_%u".to_string(),
                 },
                 ExternalPad {
-                    name: "pfl_out".to_string(),
-                    label: Some("PFL".to_string()),
+                    name: "monitor_out".to_string(),
+                    label: Some("Monitor".to_string()),
                     media_type: MediaType::Audio,
-                    internal_element_id: "pfl_out_tee".to_string(),
+                    internal_element_id: "monitor_out_tee".to_string(),
                     internal_pad_name: "src_%u".to_string(),
                 },
             ],

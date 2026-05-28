@@ -12,11 +12,12 @@ use serde::Deserialize;
 use std::process::{Command, Stdio};
 use strom_types::{
     api::{
-        AnimateInputRequest, AvailableOutput, AvailableSourcesResponse, DynamicPadsResponse,
-        ElementPropertiesResponse, ErrorResponse, FlowDebugInfo, FlowListResponse, FlowResponse,
-        FlowStatsResponse, LatencyResponse, PadPropertiesResponse, SourceFlowInfo,
-        TransitionResponse, TriggerTransitionRequest, UpdateFlowPropertiesRequest,
-        UpdatePadPropertyRequest, UpdatePropertyRequest, WebRtcStatsResponse,
+        AnimateInputRequest, AvailableOutput, AvailableSourcesResponse, BlockPropertiesResponse,
+        DynamicPadsResponse, ElementPropertiesResponse, ErrorResponse, FlowDebugInfo,
+        FlowListResponse, FlowResponse, FlowStatsResponse, LatencyResponse, PadPropertiesResponse,
+        SourceFlowInfo, SrtStatsResponse, TransitionResponse, TriggerTransitionRequest,
+        UpdateBlockPropertiesRequest, UpdateFlowPropertiesRequest, UpdatePadPropertyRequest,
+        UpdatePropertyRequest, WebRtcStatsResponse,
     },
     Flow, FlowId,
 };
@@ -206,6 +207,15 @@ fn prepare_flow(flow: &mut Flow) {
         }
     }
 
+    // Migrate legacy `mode` enum on WHEP Output blocks to explicit track counts.
+    // Old flows had `mode: "audio"|"video"|"audio_video"`; the property panel now
+    // exposes `num_audio_tracks` / `num_video_tracks` instead.
+    for block in &mut flow.blocks {
+        if block.block_definition_id == "builtin.whep_output" {
+            crate::blocks::builtin::whep::migrate_legacy_mode(&mut block.properties);
+        }
+    }
+
     // Compute external pads for all block instances based on their properties
     for block in &mut flow.blocks {
         if let Some(builder) = crate::blocks::builtin::get_builder(&block.block_definition_id) {
@@ -306,6 +316,7 @@ pub async fn create_flow(
     }
 
     info!("Received create flow request: name='{}'", flow.name);
+    debug!("Create flow request body: {:?}", flow);
 
     // Assign a new ID to avoid collisions with imported flows
     flow.id = FlowId::new_v4();
@@ -375,6 +386,7 @@ pub async fn update_flow(
     ))?;
 
     info!("Updating flow: {} ({})", flow.name, flow.id);
+    debug!("Update flow request body: {:?}", flow);
 
     prepare_flow(&mut flow);
 
@@ -956,7 +968,13 @@ pub async fn update_element_property(
     ValidatedJson(req): ValidatedJson<UpdatePropertyRequest>,
 ) -> Result<Json<ElementPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
-        .update_element_property(&flow_id, &element_id, &req.property_name, req.value)
+        .update_element_property(
+            &flow_id,
+            &element_id,
+            &req.property_name,
+            req.value,
+            req.ramp_ms,
+        )
         .await
         .map_err(|e| {
             error!("Failed to update property: {}", e);
@@ -1119,6 +1137,108 @@ pub async fn update_pad_property(
     }))
 }
 
+/// Get current block-level exposed property values from a running pipeline.
+///
+/// Returns each live exposed property's current value in block-level (user-facing)
+/// units — e.g. a `ch1_pfl` bool, a `fader_db` float in dB — by reading the
+/// underlying GStreamer element and applying the declared inverse transform.
+/// Non-live properties and those bound to the `_block` virtual element are
+/// omitted.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/properties",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID")
+    ),
+    responses(
+        (status = 200, description = "Block properties retrieved", body = BlockPropertiesResponse),
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse),
+    )
+)]
+pub async fn get_block_properties(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<Json<BlockPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let properties = state
+        .get_block_properties(&flow_id, &block_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::with_details(
+                    "Failed to get block properties",
+                    e.to_string(),
+                )),
+            )
+        })?;
+    Ok(Json(BlockPropertiesResponse {
+        block_id,
+        properties,
+        rejected: Default::default(),
+    }))
+}
+
+/// Update one or more exposed properties on a block instance live.
+///
+/// Properties are expressed in block-level (user-facing) units — e.g.
+/// `{"ch1_pfl": true, "fader_db": -3.0}`. The backend resolves each name to its
+/// underlying GStreamer element via the block definition's PropertyMapping,
+/// applies the declared transform (`bool_to_volume`, `db_to_linear`, …), and
+/// writes through the standard live-property path (so `ramp_ms` produces the
+/// usual anti-click fade where applicable). `ramp_ms_overrides` lets the
+/// caller pin a different ramp duration for individual properties in the same
+/// batch — useful for crossfades where one fader rises while another falls at
+/// the same rate but other properties move instantly.
+///
+/// Only properties marked `live: true` are accepted. Unknown, non-live, or
+/// type-mismatched entries are returned in the `rejected` map without aborting
+/// the rest of the batch.
+#[utoipa::path(
+    patch,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/properties",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Block instance ID")
+    ),
+    request_body = UpdateBlockPropertiesRequest,
+    responses(
+        (status = 200, description = "Block properties applied (see `rejected` for partial failures)", body = BlockPropertiesResponse),
+        (status = 404, description = "Flow not running or block not found", body = ErrorResponse),
+    )
+)]
+pub async fn update_block_properties(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    ValidatedJson(req): ValidatedJson<UpdateBlockPropertiesRequest>,
+) -> Result<Json<BlockPropertiesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let (properties, rejected) = state
+        .update_block_properties(
+            &flow_id,
+            &block_id,
+            req.properties,
+            req.ramp_ms,
+            req.ramp_ms_overrides,
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::with_details(
+                    "Failed to update block properties",
+                    e.to_string(),
+                )),
+            )
+        })?;
+    Ok(Json(BlockPropertiesResponse {
+        block_id,
+        properties,
+        rejected,
+    }))
+}
+
 /// Update flow properties (description, clock type, etc.).
 ///
 /// Updates the configuration properties of a flow. The flow must be stopped
@@ -1143,6 +1263,7 @@ pub async fn update_flow_properties(
     JsonBody(req): JsonBody<UpdateFlowPropertiesRequest>,
 ) -> Result<Json<FlowResponse>, (StatusCode, Json<ErrorResponse>)> {
     info!("Updating properties for flow {}", id);
+    debug!("Update flow properties request body: {:?}", req);
 
     // Get the flow
     let mut flow = state.get_flow(&id).await.ok_or_else(|| {
@@ -1209,6 +1330,41 @@ pub async fn get_webrtc_stats(
     })?;
 
     Ok(Json(WebRtcStatsResponse { flow_id: id, stats }))
+}
+
+/// Get SRT statistics from a running flow.
+///
+/// Returns statistics for every `srtsink` (output) and `srtsrc` (input) element in
+/// the pipeline. Each entry is keyed by element name (e.g. `<block_id>:srtsink`),
+/// so the frontend can filter the response per SRT block.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{id}/srt-stats",
+    tag = "flows",
+    params(
+        ("id" = String, Path, description = "Flow ID (UUID)")
+    ),
+    responses(
+        (status = 200, description = "SRT statistics retrieved", body = SrtStatsResponse),
+        (status = 404, description = "Flow not running", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub async fn get_srt_stats(
+    State(state): State<AppState>,
+    Path(id): Path<FlowId>,
+) -> Result<Json<SrtStatsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let stats = state.get_srt_stats(&id).await.map_err(|e| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::with_details(
+                "Pipeline not running",
+                e.to_string(),
+            )),
+        )
+    })?;
+
+    Ok(Json(SrtStatsResponse { flow_id: id, stats }))
 }
 
 /// Get pipeline latency for a running flow.
@@ -1427,7 +1583,7 @@ pub async fn trigger_transition(
         req.transition_type, block_id, flow_id, req.from_input, req.to_input, req.duration_ms
     );
 
-    state
+    let actual_transition_type = state
         .trigger_transition(
             &flow_id,
             &block_id,
@@ -1454,13 +1610,14 @@ pub async fn trigger_transition(
             req.transition_type, req.from_input, req.to_input
         ),
         transition_type: req.transition_type,
+        actual_transition_type,
         duration_ms: req.duration_ms,
     }))
 }
 
 /// Select a preview source on a vision mixer block.
 #[utoipa::path(
-    post,
+    put,
     path = "/api/flows/{flow_id}/blocks/{block_id}/preview",
     tag = "flows",
     params(
@@ -1479,13 +1636,49 @@ pub async fn select_preview(
     Path((flow_id, block_id)): Path<(FlowId, String)>,
     Json(req): Json<strom_types::api::SelectPreviewRequest>,
 ) -> Result<Json<strom_types::api::SelectPreviewResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use strom_types::vision_mixer::Source;
+
+    if let Source::Pip(pip_idx) = req.source {
+        info!(
+            "Selecting preview to PiP {} on vision mixer {} in flow {}",
+            pip_idx, block_id, flow_id
+        );
+        state
+            .select_vision_mixer_pip_for_preview(&flow_id, &block_id, pip_idx)
+            .await
+            .map_err(|e| {
+                error!("Failed to select PiP preview: {}", e);
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::with_details(
+                        "Failed to select PiP preview",
+                        e.to_string(),
+                    )),
+                )
+            })?;
+
+        // Read back authoritative state for response.
+        let overlay = crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id);
+        return Ok(Json(strom_types::api::SelectPreviewResponse {
+            message: format!("Preview set to PiP {}", pip_idx),
+            preview_input: overlay.as_ref().and_then(|s| s.pvw_input()),
+            program_input: overlay.as_ref().and_then(|s| s.pgm_input()),
+            preview_pip: Some(pip_idx),
+            program_pip: overlay.as_ref().and_then(|s| s.pgm_pip()),
+        }));
+    }
+
+    let Source::Input(input) = req.source else {
+        unreachable!("Source::Pip handled above");
+    };
+
     info!(
-        "Selecting preview input {} (multi={}) on vision mixer {} in flow {}",
-        req.input, req.multi, block_id, flow_id
+        "Selecting preview input {} on vision mixer {} in flow {}",
+        input, block_id, flow_id
     );
 
-    let (pvw_group, pgm_group) = state
-        .select_vision_mixer_preview(&flow_id, &block_id, req.input, req.multi)
+    let (new_pvw, pgm) = state
+        .select_vision_mixer_preview(&flow_id, &block_id, input)
         .await
         .map_err(|e| {
             error!("Failed to select preview: {}", e);
@@ -1498,66 +1691,165 @@ pub async fn select_preview(
             )
         })?;
 
+    let pgm_pip = crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id)
+        .as_ref()
+        .and_then(|s| s.pgm_pip());
+
     Ok(Json(strom_types::api::SelectPreviewResponse {
-        message: format!("Preview set to {:?}", pvw_group),
-        preview_input: pvw_group.first().copied().unwrap_or(0),
-        program_input: pgm_group.first().copied().unwrap_or(0),
-        preview_inputs: pvw_group,
-        program_inputs: pgm_group,
+        message: format!("Preview set to input {}", input),
+        preview_input: new_pvw,
+        program_input: pgm,
+        preview_pip: None,
+        program_pip: pgm_pip,
     }))
 }
 
-/// Set or clear the background source on a vision mixer block.
+/// Update a PiP composition (background + overlay inputs) on a vision mixer block.
+///
+/// The change is applied live to all places where the PiP is currently visible:
+/// the multiview PiP thumbnail tile, plus PGM/PVW if either bus is showing this PiP.
 #[utoipa::path(
-    post,
-    path = "/api/flows/{flow_id}/blocks/{block_id}/background",
+    put,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/pip/{pip_idx}",
     tag = "flows",
     params(
         ("flow_id" = String, Path, description = "Flow ID (UUID)"),
-        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+        ("block_id" = String, Path, description = "Vision mixer block instance ID"),
+        ("pip_idx" = usize, Path, description = "PiP index (0-based)")
     ),
-    request_body = strom_types::api::SetBackgroundRequest,
+    request_body = strom_types::api::UpdatePipConfigRequest,
     responses(
-        (status = 200, description = "Background source set/cleared", body = strom_types::api::SetBackgroundResponse),
+        (status = 200, description = "PiP config updated", body = strom_types::api::UpdatePipConfigResponse),
         (status = 400, description = "Invalid request", body = ErrorResponse),
+        (status = 404, description = "Flow or block not found", body = ErrorResponse),
     )
 )]
-pub async fn set_background(
+pub async fn update_pip_config(
     State(state): State<AppState>,
-    Path((flow_id, block_id)): Path<(FlowId, String)>,
-    Json(req): Json<strom_types::api::SetBackgroundRequest>,
-) -> Result<Json<strom_types::api::SetBackgroundResponse>, (StatusCode, Json<ErrorResponse>)> {
-    info!(
-        "Setting background {:?} on vision mixer {} in flow {}",
-        req.input, block_id, flow_id
-    );
+    Path((flow_id, block_id, pip_idx)): Path<(FlowId, String, usize)>,
+    Json(req): Json<strom_types::api::UpdatePipConfigRequest>,
+) -> Result<Json<strom_types::api::UpdatePipConfigResponse>, (StatusCode, Json<ErrorResponse>)> {
+    use strom_types::vision_mixer::MAX_PIP_OVERLAYS;
+    let total_sources: usize = req.zones.iter().map(|z| z.sources.len()).sum();
+    if total_sources > MAX_PIP_OVERLAYS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::with_details(
+                "Too many PiP overlay sources",
+                format!(
+                    "Got {} total sources across {} zones, but MAX_PIP_OVERLAYS is {}",
+                    total_sources,
+                    req.zones.len(),
+                    MAX_PIP_OVERLAYS
+                ),
+            )),
+        ));
+    }
 
-    let bg = state
-        .set_vision_mixer_background(&flow_id, &block_id, req.input)
+    info!(
+        "Updating PiP {} on vision mixer {} in flow {}: bg={:?}, zones={:?}",
+        pip_idx, block_id, flow_id, req.bg, req.zones
+    );
+    state
+        .apply_vision_mixer_pip_config(&flow_id, &block_id, pip_idx, req.bg, req.zones.clone())
         .await
         .map_err(|e| {
-            error!("Failed to set background: {}", e);
+            error!("Failed to update PiP config: {}", e);
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::with_details(
-                    "Failed to set background",
+                    "Failed to update PiP config",
                     e.to_string(),
                 )),
             )
         })?;
 
-    Ok(Json(strom_types::api::SetBackgroundResponse {
-        message: match bg {
-            Some(idx) => format!("Background set to input {}", idx),
-            None => "Background cleared".to_string(),
-        },
-        background_input: bg,
+    // Read back authoritative state. Validation runs in
+    // `apply_vision_mixer_pip_config`, so the only mutation vs. the request
+    // is rect clamping (NormRect → [0,1]).
+    let (bg, zones) = if let Some(s) =
+        crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id)
+    {
+        (s.pip_bg_input(pip_idx), s.pip_zones(pip_idx))
+    } else {
+        (req.bg, req.zones)
+    };
+
+    Ok(Json(strom_types::api::UpdatePipConfigResponse {
+        message: format!("PiP {} updated", pip_idx),
+        pip_idx,
+        bg,
+        zones,
+    }))
+}
+
+/// Get the current runtime state of a vision mixer block.
+///
+/// Reflects the live overlay state — bus inputs, PiP visibility, FTB, DSK,
+/// overlay alpha, per-PiP composition. Clients use this on (re)connect to
+/// reconcile state; subsequent changes flow over the `VisionMixerStateChanged`
+/// WebSocket event.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/state",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    responses(
+        (status = 200, description = "Current vision mixer state", body = strom_types::api::VisionMixerState),
+        (status = 404, description = "Block has no live state (pipeline not running)", body = ErrorResponse),
+    )
+)]
+pub async fn get_vision_mixer_state(
+    State(_state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+) -> Result<Json<strom_types::api::VisionMixerState>, (StatusCode, Json<ErrorResponse>)> {
+    let overlay = crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::with_details(
+                    "Vision mixer state not available",
+                    format!(
+                        "No live overlay state for block {} in flow {} (pipeline not running)",
+                        block_id, flow_id
+                    ),
+                )),
+            )
+        })?;
+
+    let pips: Vec<strom_types::api::PipState> = (0..overlay.num_pips)
+        .map(|i| strom_types::api::PipState {
+            bg: overlay.pip_bg_input(i),
+            zones: overlay.pip_zones(i),
+        })
+        .collect();
+
+    let dsk_enabled: Vec<bool> = overlay
+        .dsk_enabled
+        .iter()
+        .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+        .collect();
+
+    Ok(Json(strom_types::api::VisionMixerState {
+        program_input: overlay.pgm_input(),
+        preview_input: overlay.pvw_input(),
+        program_pip: overlay.pgm_pip(),
+        preview_pip: overlay.pvw_pip(),
+        ftb_active: overlay
+            .ftb_active
+            .load(std::sync::atomic::Ordering::Relaxed),
+        dsk_enabled,
+        overlay_alpha: overlay.overlay_alpha(),
+        pips,
     }))
 }
 
 /// Set the multiview overlay alpha on a vision mixer block.
 #[utoipa::path(
-    post,
+    put,
     path = "/api/flows/{flow_id}/blocks/{block_id}/overlay-alpha",
     tag = "flows",
     params(

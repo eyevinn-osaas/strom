@@ -9,6 +9,16 @@
 # strom-full uses Xvfb (X11) for CEF, so we need to adjust GL settings:
 # - With GPU: Keep egl-device for GStreamer GL (CUDA-GL interop), fully isolate CEF from GPU
 # - Without GPU: Override to x11/glx so GStreamer GL falls back via Xvfb/Mesa
+#
+# CEF GPU mode (opt-in via STROM_CEF_GPU=1):
+# Default is software rendering — safe, portable, near-zero CPU for idle/static
+# pages. Set STROM_CEF_GPU=1 to route CEF through ANGLE/Vulkan on the NVIDIA GPU.
+# GPU mode has a ~50% CPU floor per 1080p30 cefsrc regardless of page content
+# but greatly reduces renderer CPU for heavy canvas/WebGL work (e.g. 95% → 57%
+# on a 1080p30 canvas-heavy page). Recommended only for such workloads.
+# Requires host + docker run:
+#   --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all
+#   -v /usr/share/vulkan/icd.d/nvidia_icd.json:/usr/share/vulkan/icd.d/nvidia_icd.json:ro
 
 # Start dbus and avahi-daemon for NDI network discovery
 # NDI uses mDNS (Avahi) to discover streams on the local network.
@@ -25,32 +35,33 @@ rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null
 Xvfb :99 -screen 0 1920x1080x24 &
 export DISPLAY=:99
 
-# Detect GPU availability and configure GL accordingly
-if nvidia-smi > /dev/null 2>&1; then
-    echo "GPU detected - GStreamer will use egl-device, CEF uses software rendering"
-    # Keep GST_GL_WINDOW=egl-device and GST_GL_PLATFORM=egl from base image
-    # GStreamer GL elements (glvideomixer, glupload, etc.) use NVIDIA EGL directly
+# Detect GPU availability (container must be launched with --gpus all)
+HAS_GPU=no
+if nvidia-smi > /dev/null 2>&1; then HAS_GPU=yes; fi
 
+# Opt-in CEF GPU path via ANGLE/Vulkan.
+# ANGLE-over-Vulkan bypasses X11/DRI3 (which Xvfb lacks); it needs NVIDIA's
+# Vulkan ICD visible in the container (see header comment for the bind-mount).
+if [ "${STROM_CEF_GPU:-0}" = "1" ] && [ "$HAS_GPU" = "yes" ]; then
+    echo "CEF GPU mode enabled (STROM_CEF_GPU=1) - ANGLE/Vulkan on NVIDIA"
+    export GST_CEF_GPU_ENABLED=set
+    export GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,use-gl=angle,use-angle=vulkan,enable-gpu-rasterization,ignore-gpu-blocklist,enable-zero-copy,disable-features=BackgroundTracing,no-periodic-tasks,force-fieldtrials=,disable-field-trial-config,disable-breakpad,disable-crash-reporter,disable-dev-shm-usage,disable-background-networking,disable-component-update,enable-logging=stderr"
+elif [ "$HAS_GPU" = "yes" ]; then
+    if [ "${STROM_CEF_GPU:-0}" = "1" ]; then
+        echo "WARNING: STROM_CEF_GPU=1 but nvidia-smi unavailable - falling back to software"
+    else
+        echo "GPU detected - GStreamer uses egl-device; CEF in software (set STROM_CEF_GPU=1 to enable)"
+    fi
     # Fully isolate CEF from GPU to prevent SharedImageManager crashes.
     # disable-gpu alone is not enough - Chromium still starts a GPU subprocess that
     # probes the NVIDIA driver and initializes SharedImage mailboxes.
-    #
-    # Prevent MemoryInfra SIGILL crashes (exit code 132):
-    # Chromium's MemoryInfra thread periodically dumps PartitionAlloc stats;
-    # in long-running processes the allocator metadata can become inconsistent,
-    # causing a CHECK() failure (ud2/SIGILL).
-    #
-    # NOTE: "disable-background-tracing" does NOT exist as a Chromium switch
-    # (verified in Chromium 144 source and libcef.so binary). The correct
-    # approach is to disable the BackgroundTracing feature flag and prevent
-    # periodic tasks from scheduling memory dumps:
-    #   disable-features=BackgroundTracing  - disables the feature entirely
-    #   no-periodic-tasks                   - prevents periodic dump scheduling
-    #   force-fieldtrials=                  - clears all field trial configs
-    # See docs/CEF_SIGILL_CRASH.md for full investigation.
     export GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,disable-gpu,disable-gpu-compositing,use-gl=disabled,disable-features=BackgroundTracing,no-periodic-tasks,force-fieldtrials=,disable-field-trial-config,disable-breakpad,disable-crash-reporter,disable-dev-shm-usage,disable-background-networking,disable-component-update,enable-logging=stderr"
 else
-    echo "No GPU detected - using software rendering for both GStreamer and CEF"
+    if [ "${STROM_CEF_GPU:-0}" = "1" ]; then
+        echo "WARNING: STROM_CEF_GPU=1 but no GPU visible in container (pass --gpus all) - falling back to software"
+    else
+        echo "No GPU detected - using software rendering for both GStreamer and CEF"
+    fi
     # Override base image GL settings to use Xvfb (X11/Mesa software renderer)
     # Without GPU, egl-device will fail since there's no EGL device available
     export GST_GL_WINDOW=x11
@@ -66,6 +77,16 @@ mkdir -p /tmp/cef-cache
 
 # Enable CEF debug logging
 export GST_CEF_LOG_SEVERITY="verbose"
+
+# LD_PRELOAD the mallinfo shim to neutralise the MemoryInfra SIGILL crash.
+# libcef.so was built against an old sysroot and calls glibc's int-based
+# mallinfo(); when the CEF process arena exceeds 2 GiB, the ints overflow to
+# negative values, Chromium checked_casts them to size_t, and CHECK()s -> SIGILL.
+# The shim returns zeroed values so the cast succeeds harmlessly.
+# Reference: https://github.com/chromiumembedded/cef/issues/3963
+if [ -f /usr/local/lib/cef/libmallinfo_shim.so ]; then
+    export LD_PRELOAD="/usr/local/lib/cef/libmallinfo_shim.so${LD_PRELOAD:+:$LD_PRELOAD}"
+fi
 
 # Wait briefly for Xvfb to initialize
 sleep 0.5

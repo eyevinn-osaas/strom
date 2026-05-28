@@ -11,7 +11,8 @@
 //!   (appsrc → decodebin → convert → tee per slot).
 
 use crate::blocks::{
-    BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, WhepStreamMode,
+    BlockBuildContext, BlockBuildError, BlockBuildResult, BlockBuilder, APPSRC_MAX_BYTES_AUDIO,
+    APPSRC_MAX_BYTES_VIDEO, APPSRC_MAX_TIME,
 };
 use crate::whip_session_manager::{SessionCleanupRequest, WhipEndpointConfig};
 use gstreamer as gst;
@@ -23,6 +24,7 @@ use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
+use strom_types::block::StreamMode;
 use strom_types::{block::*, element::ElementPadRef, PropertyValue, *};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -80,10 +82,10 @@ impl BlockBuilder for WHIPInputBuilder {
         let mode = properties
             .get("mode")
             .and_then(|v| match v {
-                PropertyValue::String(s) => Some(WhepStreamMode::parse(s)),
+                PropertyValue::String(s) => Some(StreamMode::parse(s)),
                 _ => None,
             })
-            .unwrap_or(WhepStreamMode::AudioVideo);
+            .unwrap_or(StreamMode::AudioVideo);
 
         let max_sessions = properties
             .get("max_sessions")
@@ -158,10 +160,10 @@ fn build_whipserversrc(
     let mode = properties
         .get("mode")
         .and_then(|v| match v {
-            PropertyValue::String(s) => Some(WhepStreamMode::parse(s)),
+            PropertyValue::String(s) => Some(StreamMode::parse(s)),
             _ => None,
         })
-        .unwrap_or(WhepStreamMode::AudioVideo);
+        .unwrap_or(StreamMode::AudioVideo);
 
     let max_sessions = properties
         .get("max_sessions")
@@ -225,6 +227,8 @@ fn build_whipserversrc(
                 .format(gst::Format::Time)
                 .is_live(true)
                 .handle_segment_change(true)
+                .max_bytes(APPSRC_MAX_BYTES_AUDIO)
+                .max_time(APPSRC_MAX_TIME)
                 .leaky_type(gst_app::AppLeakyType::Downstream)
                 .automatic_eos(false)
                 .build();
@@ -326,6 +330,8 @@ fn build_whipserversrc(
                 .format(gst::Format::Time)
                 .is_live(true)
                 .handle_segment_change(true)
+                .max_bytes(APPSRC_MAX_BYTES_VIDEO)
+                .max_time(APPSRC_MAX_TIME)
                 .leaky_type(gst_app::AppLeakyType::Downstream)
                 .automatic_eos(false)
                 .build();
@@ -1293,6 +1299,7 @@ fn whip_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "whip_endpoint".to_string(),
@@ -1307,6 +1314,7 @@ fn whip_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "auth_token".to_string(),
@@ -1320,6 +1328,7 @@ fn whip_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "opus_complexity".to_string(),
@@ -1333,6 +1342,7 @@ fn whip_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "opus_bitrate".to_string(),
@@ -1346,6 +1356,7 @@ fn whip_output_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
         ],
         external_pads: ExternalPads {
@@ -1403,6 +1414,7 @@ fn whip_input_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "endpoint_id".to_string(),
@@ -1416,6 +1428,7 @@ fn whip_input_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "decode".to_string(),
@@ -1429,6 +1442,7 @@ fn whip_input_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "max_video_bitrate".to_string(),
@@ -1444,6 +1458,7 @@ fn whip_input_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "max_sessions".to_string(),
@@ -1457,6 +1472,7 @@ fn whip_input_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
         ],
         // Note: external_pads here are the static defaults for audio_video mode with max_sessions=1.

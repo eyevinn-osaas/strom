@@ -83,6 +83,17 @@ pub struct UpdatePropertyRequest {
     /// The new value for the property
     #[cfg_attr(feature = "validation", garde(skip))]
     pub value: PropertyValue,
+    /// Optional ramp duration in milliseconds. Currently honored for audio
+    /// `volume`-element `volume` and `mute` updates — when set, `volume` is
+    /// interpolated per-sample over the given duration (anti-zipper / fade)
+    /// and `mute=true` is preceded by a fade-out of the same length while
+    /// `mute=false` is followed by a 0→pre_mute fade-in. Useful for
+    /// broadcast-style on-air / off-air route transitions (e.g. 500 ms).
+    /// When omitted, a short default ramp is used for `volume`/`mute`; other
+    /// properties are set immediately.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(range(max = 60000)))]
+    pub ramp_ms: Option<u32>,
 }
 
 /// Request to trigger a transition on a compositor block.
@@ -115,13 +126,21 @@ fn default_transition_duration() -> u64 {
 }
 
 /// Response after triggering a transition.
+///
+/// Reports *what was done*, not the resulting bus state — for the latter,
+/// listen to the `VisionMixerStateChanged` WebSocket event, which is
+/// broadcast immediately after the take completes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct TransitionResponse {
     /// Success message
     pub message: String,
-    /// The type of transition that was triggered
+    /// The transition type requested by the client.
     pub transition_type: String,
+    /// The transition type that was actually executed. Differs from
+    /// `transition_type` when the engine downgraded the request — e.g.
+    /// Slide/Push across heterogeneous PiP/input sources downgrades to "fade".
+    pub actual_transition_type: String,
     /// Duration of the transition in milliseconds
     pub duration_ms: u64,
 }
@@ -189,6 +208,58 @@ pub struct PadPropertiesResponse {
     pub pad_name: String,
     /// Current property values
     pub properties: HashMap<String, PropertyValue>,
+}
+
+/// Request to update one or more exposed properties on a block instance live.
+///
+/// Values are expressed in the block-level (user-facing) units defined by the block
+/// — e.g. `ch1_pfl: true` (Bool), `fader_db: -3.0` (dB). The backend resolves each
+/// property to its underlying GStreamer element via the block's PropertyMapping and
+/// applies the declared transform (`bool_to_volume`, `db_to_linear`, …) before
+/// writing.
+///
+/// Only properties marked `live: true` in the block definition can be patched via
+/// this endpoint. Non-live properties must go through the regular flow update.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[cfg_attr(feature = "validation", derive(garde::Validate))]
+pub struct UpdateBlockPropertiesRequest {
+    /// Map of exposed property name → new value (in block-level units).
+    #[cfg_attr(feature = "validation", garde(skip))]
+    pub properties: HashMap<String, PropertyValue>,
+    /// Optional default ramp duration in ms applied to every property in this
+    /// batch (honored for volume-element writes — produces anti-click fades for
+    /// bool/dB toggles that map to a `volume` property). Acts as the fallback
+    /// when no per-property override is set in `ramp_ms_overrides`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(range(max = 60000)))]
+    pub ramp_ms: Option<u32>,
+    /// Optional per-property ramp duration overrides, keyed by exposed
+    /// property name. When a property in `properties` has an entry here, that
+    /// duration is used instead of the batch-level `ramp_ms`. Entries for
+    /// names not present in `properties` are silently ignored. Only effective
+    /// for properties whose underlying write goes through the ramp path
+    /// (currently audio `volume`-element `volume` and `mute`); for other
+    /// properties the override is accepted but has no effect, matching the
+    /// behavior of the batch-level `ramp_ms`. Enables crossfades where
+    /// individual faders ramp at different rates within a single PATCH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "validation", garde(skip))]
+    pub ramp_ms_overrides: Option<HashMap<String, u32>>,
+}
+
+/// Response containing current block-level exposed property values and any rejections.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct BlockPropertiesResponse {
+    /// The block instance ID
+    pub block_id: String,
+    /// Current values (in block-level units, inverse-transformed from the live elements)
+    pub properties: HashMap<String, PropertyValue>,
+    /// Names of properties that could not be applied, mapped to a short reason.
+    /// Empty on full success. Only populated on PATCH.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub rejected: HashMap<String, String>,
 }
 
 // ============================================================================
@@ -407,6 +478,169 @@ pub struct WebRtcStatsResponse {
 }
 
 // ============================================================================
+// SRT Stats Types
+// ============================================================================
+
+/// Direction in which an SRT element transports data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SrtRole {
+    /// Outgoing SRT (`srtsink` — this element sends data).
+    Sink,
+    /// Incoming SRT (`srtsrc` — this element receives data).
+    Source,
+}
+
+impl SrtRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SrtRole::Sink => "sink",
+            SrtRole::Source => "source",
+        }
+    }
+}
+
+impl std::fmt::Display for SrtRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// SRT connection mode (matches the `mode` enum nicks exposed by the SRT plugin).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SrtMode {
+    Caller,
+    Listener,
+    Rendezvous,
+}
+
+impl SrtMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SrtMode::Caller => "caller",
+            SrtMode::Listener => "listener",
+            SrtMode::Rendezvous => "rendezvous",
+        }
+    }
+
+    /// Parse from the enum nick the gst-plugins-bad SRT plugin exposes.
+    pub fn from_nick(nick: &str) -> Option<Self> {
+        match nick {
+            "caller" => Some(SrtMode::Caller),
+            "listener" => Some(SrtMode::Listener),
+            "rendezvous" => Some(SrtMode::Rendezvous),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for SrtMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// SRT statistics for a flow. Covers both srtsink (outputs) and srtsrc (inputs).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SrtStats {
+    /// Stats for each SRT element, keyed by element name (`block_id:srtsrc`/`block_id:srtsink`).
+    pub connections: HashMap<String, SrtConnectionStats>,
+}
+
+/// Stats for a single SRT element (srtsrc or srtsink).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SrtConnectionStats {
+    /// Element role — determines which side of `SrtCallerStats` is populated.
+    pub role: SrtRole,
+    /// Connection mode (`caller`/`listener`/`rendezvous`).
+    pub mode: Option<SrtMode>,
+    /// True when at least one caller is exchanging data.
+    pub connected: bool,
+    /// Per-caller stats. Always contains one entry for caller/rendezvous mode and the
+    /// single peer of a caller-mode srtsrc; may contain zero or many entries for
+    /// listener mode (one per connected caller).
+    pub callers: Vec<SrtCallerStats>,
+}
+
+impl Default for SrtConnectionStats {
+    fn default() -> Self {
+        Self {
+            role: SrtRole::Sink,
+            mode: None,
+            connected: false,
+            callers: Vec::new(),
+        }
+    }
+}
+
+/// Stats for a single SRT caller/peer.
+///
+/// Fields are grouped by direction so that consumers don't have to guess which
+/// counter applies to which role. A `srtsink` populates the sender-side fields
+/// and leaves the receiver-side ones empty; a `srtsrc` does the opposite. Link
+/// metrics (RTT, bandwidth, negotiated latency) apply to both directions.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SrtCallerStats {
+    /// Peer address (`ip:port`), when known.
+    pub address: Option<String>,
+
+    // ---- Link metrics (apply to both sender and receiver) ----
+    /// Smoothed round-trip time (ms).
+    pub rtt_ms: Option<f64>,
+    /// Estimated link bandwidth between the two endpoints (Mbps).
+    pub bandwidth_mbps: Option<f64>,
+    /// Negotiated SRT latency (ms).
+    pub negotiated_latency_ms: Option<u32>,
+
+    // ---- Sender metrics (populated by srtsink) ----
+    /// Total packets sent.
+    pub packets_sent: Option<u64>,
+    /// Packets lost on the wire and reported by NAK from the peer.
+    pub packets_sent_lost: Option<u64>,
+    /// Packets dropped locally before transmission (TLPKTDROP).
+    pub packets_sent_dropped: Option<u64>,
+    /// Packets the sender retransmitted in response to NAKs.
+    pub packets_retransmitted: Option<u64>,
+    /// Total bytes sent.
+    pub bytes_sent: Option<u64>,
+    /// Instantaneous send rate (Mbps).
+    pub send_rate_mbps: Option<f64>,
+    /// Sender buffer fill level (ms).
+    pub snd_buf_level_ms: Option<u32>,
+
+    // ---- Receiver metrics (populated by srtsrc) ----
+    /// Total packets received.
+    pub packets_received: Option<u64>,
+    /// Packets the receiver detected as missing.
+    pub packets_received_lost: Option<u64>,
+    /// Packets skipped by the receiver due to TSBPD timeout.
+    pub packets_received_dropped: Option<u64>,
+    /// Packets received that were retransmissions of earlier lost packets.
+    pub packets_received_retransmitted: Option<u64>,
+    /// Total bytes received.
+    pub bytes_received: Option<u64>,
+    /// Instantaneous receive rate (Mbps).
+    pub recv_rate_mbps: Option<f64>,
+    /// Receiver buffer fill level (ms).
+    pub recv_buf_level_ms: Option<u32>,
+}
+
+/// Response containing SRT statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SrtStatsResponse {
+    #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+    pub flow_id: FlowId,
+    pub stats: SrtStats,
+}
+
+// ============================================================================
 // Statistics API Types
 // ============================================================================
 
@@ -592,6 +826,37 @@ impl SystemInfo {
     }
 }
 
+/// System clock synchronization information.
+///
+/// Reads the kernel's `ntp_adjtime()` state (same information used by chrony,
+/// ntpd, systemd-timesyncd, etc.) and reports how the system clock is being
+/// disciplined. Relevant for flows using Realtime or TAI pipeline clocks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SystemClockInfo {
+    /// TAI - UTC offset in seconds (typically 37 as of 2026).
+    /// Set by the clock sync daemon so that `CLOCK_TAI` is correct.
+    pub tai_offset_sec: i32,
+    /// High-level state from `ntp_adjtime()` return value.
+    /// One of: `ok`, `ins` (leap insert pending), `del`, `oop`, `wait`, `error` (unsynced).
+    pub state: String,
+    /// Whether the kernel considers the clock synchronized (STA_UNSYNC not set).
+    pub synchronized: bool,
+    /// Whether PLL discipline is active (STA_PLL).
+    pub pll_active: bool,
+    /// Current time offset being applied to the clock, in nanoseconds.
+    pub offset_ns: i64,
+    /// Current frequency adjustment in parts-per-million.
+    pub frequency_ppm: f64,
+    /// Maximum error estimate, in microseconds.
+    pub max_error_us: i64,
+    /// Estimated error, in microseconds.
+    pub est_error_us: i64,
+    /// Timestamp when this info was read (Unix seconds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_update: Option<u64>,
+}
+
 /// Authentication status response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -631,6 +896,46 @@ impl ErrorResponse {
             details: Some(details.into()),
         }
     }
+}
+
+// ============================================================================
+// Logging API Types
+// ============================================================================
+
+/// Response for log level queries and updates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct LogLevelResponse {
+    /// The currently active log filter string (e.g. "info,strom::api=debug")
+    pub current: String,
+    /// The default filter the server started with
+    pub default: String,
+}
+
+/// Request to change the log level at runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetLogLevelRequest {
+    /// The new log filter string (e.g. "info,strom::api=debug")
+    pub filter: String,
+}
+
+/// Response for GStreamer debug level queries and updates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct GstLogLevelResponse {
+    /// The currently active GST_DEBUG filter string (e.g. "*:2,webrtcbin:5")
+    pub current: String,
+    /// The default GST_DEBUG filter the server started with
+    pub default: String,
+}
+
+/// Request to change the GStreamer debug level at runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetGstLogLevelRequest {
+    /// The new GST_DEBUG filter string (e.g. "*:2,webrtcbin:5")
+    pub filter: String,
 }
 
 // ============================================================================
@@ -832,12 +1137,38 @@ impl MediaOperationResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SelectPreviewRequest {
-    /// Index of the input to set as preview (0-based)
-    pub input: usize,
-    /// If true, toggle the input in/out of the current PVW group (shift+click).
-    /// If false (default), replace the PVW group with just this input.
+    /// Source to place on the PVW bus.
+    pub source: crate::vision_mixer::Source,
+}
+
+/// Request to update a PiP composition (background source + zones).
+///
+/// A PiP is a background source plus zero or more zones. Each zone is a
+/// sub-region with its own current sources (FIFO, oldest first) that
+/// auto-tile inside the zone's rect. See [`crate::vision_mixer::Zone`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct UpdatePipConfigRequest {
+    /// Background input index. Omit/null for no bg.
     #[serde(default)]
-    pub multi: bool,
+    pub bg: Option<usize>,
+    /// Zones in z-order (zone 0 lowest, last zone on top). Sources within a
+    /// zone are also in z-order (oldest first).
+    #[serde(default)]
+    pub zones: Vec<crate::vision_mixer::Zone>,
+}
+
+/// Response after updating a PiP composition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct UpdatePipConfigResponse {
+    pub message: String,
+    pub pip_idx: usize,
+    pub bg: Option<usize>,
+    /// Authoritative zone state. Identical to the request except that
+    /// `NormRect`s are clamped to `[0,1]`. Duplicate sources or out-of-range
+    /// indices are rejected with 400 rather than silently sanitized.
+    pub zones: Vec<crate::vision_mixer::Zone>,
 }
 
 /// Response after selecting a preview source.
@@ -845,43 +1176,54 @@ pub struct SelectPreviewRequest {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct SelectPreviewResponse {
     pub message: String,
-    /// First source in the PVW group (backward compat).
-    pub preview_input: usize,
-    /// First source in the PGM group (backward compat).
-    pub program_input: usize,
-    /// Full ordered PVW source group.
-    pub preview_inputs: Vec<usize>,
-    /// Full ordered PGM source group.
-    pub program_inputs: Vec<usize>,
+    /// Current PVW input. `None` when PVW is a PiP source.
+    #[serde(default)]
+    pub preview_input: Option<usize>,
+    /// Current PGM input. `None` when PGM is a PiP source.
+    #[serde(default)]
+    pub program_input: Option<usize>,
+    /// PiP index currently displayed on PVW, or `None` if PVW is an input.
+    #[serde(default)]
+    pub preview_pip: Option<usize>,
+    /// PiP index currently displayed on PGM, or `None` if PGM is an input.
+    #[serde(default)]
+    pub program_pip: Option<usize>,
 }
 
-/// Current state of a vision mixer block.
+/// One PiP composition's runtime state (background + zones).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct PipState {
+    /// Background input index, or `None` if no bg is set.
+    pub bg: Option<usize>,
+    /// Overlay zones (FIFO order, oldest first inside each zone).
+    pub zones: Vec<crate::vision_mixer::Zone>,
+}
+
+/// Current runtime state of a vision mixer block.
+///
+/// This is the snapshot a client uses to reconcile on (re)connect when WS
+/// events have not yet arrived. Static config (input count, labels, DSK
+/// count) is *not* included — that lives on the block resource itself.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 pub struct VisionMixerState {
-    pub preview_input: usize,
-    pub program_input: usize,
-    pub preview_inputs: Vec<usize>,
-    pub program_inputs: Vec<usize>,
-    pub num_inputs: usize,
-    pub input_labels: Vec<String>,
-}
-
-/// Request to set or clear the background source on a vision mixer block.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct SetBackgroundRequest {
-    /// Source index to use as background (0-based), or null to clear.
-    pub input: Option<usize>,
-}
-
-/// Response after setting/clearing the background source.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(ToSchema))]
-pub struct SetBackgroundResponse {
-    pub message: String,
-    /// Current background source index, or null if none.
-    pub background_input: Option<usize>,
+    /// Current PGM input. `None` when PGM is a PiP source.
+    pub program_input: Option<usize>,
+    /// Current PVW input. `None` when PVW is a PiP source.
+    pub preview_input: Option<usize>,
+    /// PiP index currently displayed on PGM, or `None` if PGM is an input.
+    pub program_pip: Option<usize>,
+    /// PiP index currently displayed on PVW, or `None` if PVW is an input.
+    pub preview_pip: Option<usize>,
+    /// Whether Fade to Black is currently active.
+    pub ftb_active: bool,
+    /// DSK on/off state, one entry per configured DSK input.
+    pub dsk_enabled: Vec<bool>,
+    /// Multiview overlay alpha (0.0–1.0).
+    pub overlay_alpha: f64,
+    /// Per-PiP runtime state (length = configured `num_pips`).
+    pub pips: Vec<PipState>,
 }
 
 /// Request to set the multiview overlay alpha on a vision mixer block.

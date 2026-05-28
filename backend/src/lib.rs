@@ -40,6 +40,7 @@ pub mod sharing;
 pub mod state;
 pub mod stats;
 pub mod storage;
+pub mod system_clock;
 pub mod system_monitor;
 pub mod thread_registry;
 pub mod tls;
@@ -136,6 +137,7 @@ pub async fn create_app_with_config(
             "/flows/{id}/webrtc-stats",
             get(api::flows::get_webrtc_stats),
         )
+        .route("/flows/{id}/srt-stats", get(api::flows::get_srt_stats))
         .route(
             "/flows/{flow_id}/blocks/{block_id}/sdp",
             get(api::flows::get_block_sdp),
@@ -157,6 +159,10 @@ pub async fn create_app_with_config(
             patch(api::flows::update_pad_property),
         )
         .route(
+            "/flows/{flow_id}/blocks/{block_id}/properties",
+            get(api::flows::get_block_properties).patch(api::flows::update_block_properties),
+        )
+        .route(
             "/flows/{flow_id}/blocks/{block_id}/loudness/reset",
             post(api::flows::reset_loudness),
         )
@@ -170,19 +176,23 @@ pub async fn create_app_with_config(
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/preview",
-            post(api::flows::select_preview),
+            put(api::flows::select_preview),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/pip/{pip_idx}",
+            put(api::flows::update_pip_config),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/state",
+            get(api::flows::get_vision_mixer_state),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/overlay-alpha",
-            post(api::flows::set_overlay_alpha),
+            put(api::flows::set_overlay_alpha),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/dsk",
             post(api::flows::toggle_dsk),
-        )
-        .route(
-            "/flows/{flow_id}/blocks/{block_id}/background",
-            post(api::flows::set_background),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/ftb",
@@ -226,6 +236,7 @@ pub async fn create_app_with_config(
             axum::routing::delete(api::blocks::delete_block),
         )
         .route("/version", get(api::version::get_version))
+        .route("/system/clock", get(api::system_clock::get_system_clock))
         .route("/ws", get(api::websocket::websocket_handler))
         // gst-launch-1.0 import/export
         .route("/gst-launch/parse", post(api::gst_launch::parse_gst_launch))
@@ -301,6 +312,11 @@ pub async fn create_app_with_config(
             "/flows/{flow_id}/blocks/{block_id}/player/goto",
             post(api::mediaplayer::goto_file),
         )
+        // Logging
+        .route("/log-level", get(api::logging::get_log_level))
+        .route("/log-level", put(api::logging::set_log_level))
+        .route("/gst-log-level", get(api::logging::get_gst_log_level))
+        .route("/gst-log-level", put(api::logging::set_gst_log_level))
         // Apply authentication middleware to all protected routes
         .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -333,6 +349,10 @@ pub async fn create_app_with_config(
         .route(
             "/vision-mixer/{flow_id}",
             get(api::vision_mixer_page::vision_mixer_page),
+        )
+        .route(
+            "/vision-mixer/{flow_id}/{block_id}",
+            get(api::vision_mixer_page::vision_mixer_page_for_block),
         )
         .with_state(state.clone());
 

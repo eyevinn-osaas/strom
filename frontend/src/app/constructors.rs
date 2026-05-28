@@ -7,6 +7,7 @@ use crate::mediaplayer::{MediaPlayerDataStore, SeekThrottle};
 use crate::meter::MeterDataStore;
 use crate::palette::ElementPalette;
 use crate::spectrum::SpectrumDataStore;
+use crate::srt_stats::SrtStatsStore;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
 use crate::thread_monitor::ThreadMonitorStore;
@@ -108,6 +109,9 @@ impl StromApp {
             properties_description_buffer: String::new(),
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
+            properties_ntp_server_buffer: String::new(),
+            properties_ntp_port_buffer: String::new(),
+            properties_direct_media_timing_buffer: None,
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             properties_cpu_affinity_buffer: strom_types::flow::CpuAffinity::default(),
             properties_ephemeral_buffer: false,
@@ -119,6 +123,7 @@ impl StromApp {
             mediaplayer_data: MediaPlayerDataStore::new(),
             seek_throttle: SeekThrottle::new(),
             webrtc_stats: WebRtcStatsStore::new(),
+            srt_stats: SrtStatsStore::new(),
             system_monitor: SystemMonitorStore::new(),
             thread_monitor: ThreadMonitorStore::new(),
             ptp_stats: crate::ptp_monitor::PtpStatsStore::new(),
@@ -131,6 +136,7 @@ impl StromApp {
             thread_sort_direction: crate::system_monitor::SortDirection::default(),
             pending_thread_nav_action: None,
             last_webrtc_poll: instant::Instant::now(),
+            last_srt_poll: instant::Instant::now(),
             settings: cc
                 .storage
                 .and_then(|s| eframe::get_value(s, APP_SETTINGS_KEY))
@@ -148,6 +154,9 @@ impl StromApp {
             last_latency_fetch: instant::Instant::now(),
             rtp_stats_cache: std::collections::HashMap::new(),
             last_rtp_stats_fetch: instant::Instant::now(),
+            system_clock_info: None,
+            system_clock_unsupported: false,
+            last_system_clock_fetch: None,
 
             compositor_editor: None,
             mixer_editor: None,
@@ -155,6 +164,15 @@ impl StromApp {
             routing_matrix_editor: None,
             network_interfaces: Vec::new(),
             network_interfaces_loaded: false,
+            video_devices: Vec::new(),
+            audio_devices: Vec::new(),
+            video_devices_loading: false,
+            audio_devices_loading: false,
+            devices_last_loaded: None,
+            log_level_current: None,
+            log_level_default: None,
+            gst_log_level_current: None,
+            gst_log_level_default: None,
             available_channels: Vec::new(),
             available_channels_loaded: false,
             last_inter_input_refresh: None,
@@ -268,6 +286,9 @@ impl StromApp {
             properties_description_buffer: String::new(),
             properties_clock_type_buffer: strom_types::flow::GStreamerClockType::Monotonic,
             properties_ptp_domain_buffer: String::new(),
+            properties_ntp_server_buffer: String::new(),
+            properties_ntp_port_buffer: String::new(),
+            properties_direct_media_timing_buffer: None,
             properties_thread_priority_buffer: strom_types::flow::ThreadPriority::High,
             properties_cpu_affinity_buffer: strom_types::flow::CpuAffinity::default(),
             properties_ephemeral_buffer: false,
@@ -283,6 +304,7 @@ impl StromApp {
             mediaplayer_data: MediaPlayerDataStore::new(),
             seek_throttle: SeekThrottle::new(),
             webrtc_stats: WebRtcStatsStore::new(),
+            srt_stats: SrtStatsStore::new(),
             system_monitor: SystemMonitorStore::new(),
             thread_monitor: ThreadMonitorStore::new(),
             ptp_stats: crate::ptp_monitor::PtpStatsStore::new(),
@@ -295,6 +317,7 @@ impl StromApp {
             thread_sort_direction: crate::system_monitor::SortDirection::default(),
             pending_thread_nav_action: None,
             last_webrtc_poll: instant::Instant::now(),
+            last_srt_poll: instant::Instant::now(),
             settings: cc
                 .storage
                 .and_then(|s| eframe::get_value(s, APP_SETTINGS_KEY))
@@ -312,6 +335,9 @@ impl StromApp {
             last_latency_fetch: instant::Instant::now(),
             rtp_stats_cache: std::collections::HashMap::new(),
             last_rtp_stats_fetch: instant::Instant::now(),
+            system_clock_info: None,
+            system_clock_unsupported: false,
+            last_system_clock_fetch: None,
 
             compositor_editor: None,
             mixer_editor: None,
@@ -319,6 +345,15 @@ impl StromApp {
             routing_matrix_editor: None,
             network_interfaces: Vec::new(),
             network_interfaces_loaded: false,
+            video_devices: Vec::new(),
+            audio_devices: Vec::new(),
+            video_devices_loading: false,
+            audio_devices_loading: false,
+            devices_last_loaded: None,
+            log_level_current: None,
+            log_level_default: None,
+            gst_log_level_current: None,
+            gst_log_level_default: None,
             available_channels: Vec::new(),
             available_channels_loaded: false,
             last_inter_input_refresh: None,

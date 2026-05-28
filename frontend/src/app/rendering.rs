@@ -127,7 +127,7 @@ impl StromApp {
                             self.current_page == AppPage::Clocks,
                             egui::RichText::new("Clocks").size(16.0),
                         )
-                        .on_hover_text("PTP clock synchronization")
+                        .on_hover_text("System, PTP, and NTP clock status")
                         .clicked()
                     {
                         self.current_page = AppPage::Clocks;
@@ -296,6 +296,18 @@ impl StromApp {
                 let flow_info = self.current_flow().map(|f| (f.id, f.running));
 
                 if let Some((flow_id, running)) = flow_info {
+                    if ui
+                        .button(format!("{} Debug Graph", egui_phosphor::regular::GRAPH))
+                        .on_hover_text(format!(
+                            "View pipeline debug graph ({})",
+                            Self::format_shortcut("Ctrl+D")
+                        ))
+                        .clicked()
+                    {
+                        let url = self.api.get_debug_graph_url(flow_id);
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
+                    }
+
                     ui.separator();
 
                     let (state_text, state_color) = if running {
@@ -384,18 +396,6 @@ impl StromApp {
                         self.stop_flow(ui.ctx());
                     }
 
-                    if ui
-                        .button(format!("{} Debug Graph", egui_phosphor::regular::GRAPH))
-                        .on_hover_text(format!(
-                            "View pipeline debug graph ({})",
-                            Self::format_shortcut("Ctrl+D")
-                        ))
-                        .clicked()
-                    {
-                        let url = self.api.get_debug_graph_url(flow_id);
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
-                    }
-
                     // Show flow uptime on the right side (only for running flows)
                     if let Some(flow) = self.flows.iter().find(|f| f.id == flow_id) {
                         if let Some(ref started_at) = flow.properties.started_at {
@@ -459,8 +459,6 @@ impl StromApp {
             .show_inside(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.label(egui::RichText::new("Clocks").heading());
-                    ui.separator();
-                    ui.label("PTP clocks are shared per domain");
                 });
             });
     }
@@ -579,8 +577,7 @@ impl StromApp {
                                         || f.name.to_lowercase().contains(&filter_lower)
                                 })
                                 .collect();
-                            sorted_flows
-                                .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                            sorted_flows.sort_by_key(|a| a.name.to_lowercase());
 
                             if sorted_flows.is_empty() {
                                 ui.label("No matching flows");
@@ -862,6 +859,16 @@ impl StromApp {
                                         ui.label(format!("PTP Domain: {}", domain));
                                     }
 
+                                    if matches!(
+                                        flow.properties.clock_type,
+                                        strom_types::flow::GStreamerClockType::Ntp
+                                    ) {
+                                        if let Some(server) = &flow.properties.ntp_server {
+                                            let port = flow.properties.ntp_port.unwrap_or(123);
+                                            ui.label(format!("NTP Server: {}:{}", server, port));
+                                        }
+                                    }
+
                                     if let Some(sync_status) = flow.properties.clock_sync_status {
                                         use strom_types::flow::ClockSyncStatus;
                                         let status_text = match sync_status {
@@ -971,6 +978,18 @@ impl StromApp {
                                                     .ptp_domain
                                                     .map(|d| d.to_string())
                                                     .unwrap_or_else(|| "0".to_string());
+                                                self.properties_ntp_server_buffer = flow
+                                                    .properties
+                                                    .ntp_server
+                                                    .clone()
+                                                    .unwrap_or_default();
+                                                self.properties_ntp_port_buffer = flow
+                                                    .properties
+                                                    .ntp_port
+                                                    .map(|p| p.to_string())
+                                                    .unwrap_or_else(|| "123".to_string());
+                                                self.properties_direct_media_timing_buffer =
+                                                    flow.properties.direct_media_timing;
                                                 self.properties_thread_priority_buffer =
                                                     flow.properties.thread_priority;
                                                 self.properties_cpu_affinity_buffer =
@@ -1396,6 +1415,11 @@ impl StromApp {
                         ids
                     };
 
+                    // Snapshot immutable state we'll pass into show_block
+                    // BEFORE taking the mutable borrow on self.graph below —
+                    // otherwise the borrow checker rejects the call.
+                    let local_devices_loading = self.local_devices_loading();
+
                     // Then get mutable reference to block
                     if let (Some(block), Some(def)) =
                         (self.graph.get_selected_block_mut(), definition_opt)
@@ -1421,9 +1445,13 @@ impl StromApp {
                             &self.latency_data,
                             &self.mediaplayer_data,
                             &self.webrtc_stats,
+                            &self.srt_stats,
                             rtp_stats,
                             &self.network_interfaces,
                             &self.available_channels,
+                            &self.video_devices,
+                            &self.audio_devices,
+                            local_devices_loading,
                             &mut self.qr_inline,
                             &mut self.qr_cache,
                             recorder_filename,
@@ -1431,6 +1459,24 @@ impl StromApp {
                             block_thumbnail,
                             &taken_endpoint_ids,
                         );
+
+                        // Trigger device discovery whenever a Local Input block's
+                        // properties are rendered. 10 s TTL keeps repeated panel
+                        // opens cheap; the ↻ button forces a re-scan.
+                        if result.local_devices_needed {
+                            self.load_local_devices(
+                                ui.ctx().clone(),
+                                false,
+                                std::time::Duration::from_secs(10),
+                            );
+                        }
+                        if result.local_devices_refresh_requested {
+                            self.load_local_devices(
+                                ui.ctx().clone(),
+                                true,
+                                std::time::Duration::from_secs(0),
+                            );
+                        }
 
                         // Handle deletion request
                         if result.delete_requested {
@@ -1519,8 +1565,8 @@ impl StromApp {
                         }
 
                         // Handle vision mixer control page request
-                        if let Some(flow_id) = result.vision_mixer_url {
-                            let url = self.api.get_vision_mixer_url(&flow_id);
+                        if let Some((flow_id, block_id)) = result.vision_mixer_url {
+                            let url = self.api.get_vision_mixer_url(&flow_id, &block_id);
                             ui.ctx().open_url(egui::OpenUrl::new_tab(&url));
                         }
 
@@ -1614,11 +1660,12 @@ impl StromApp {
                             let api = self.api.clone();
                             spawn_task(async move {
                                 if let Err(e) = api
-                                    .update_element_property(
+                                    .update_block_property(
                                         &update.flow_id,
-                                        &update.element_id,
+                                        &update.block_id,
                                         &update.property_name,
                                         update.value,
+                                        None,
                                     )
                                     .await
                                 {
@@ -1955,6 +2002,37 @@ impl StromApp {
                                 );
                             }
                         }
+                    }
+
+                    // Setup dynamic content for SRT input/output blocks.
+                    let srt_blocks: Vec<_> = self
+                        .graph
+                        .blocks
+                        .iter()
+                        .filter(|b| crate::srt_stats::is_srt_block_def(&b.block_definition_id))
+                        .map(|b| b.id.clone())
+                        .collect();
+
+                    for block_id in srt_blocks {
+                        let Some((stats_for_block, filtered_rates)) =
+                            self.srt_stats.snapshot_for_block(&flow_id, &block_id)
+                        else {
+                            continue;
+                        };
+                        self.graph.set_block_content(
+                            block_id,
+                            crate::graph::BlockContentInfo {
+                                additional_height: 25.0,
+                                render_callback: Some(Box::new(move |ui, _rect| {
+                                    let rates_opt = if filtered_rates.is_empty() {
+                                        None
+                                    } else {
+                                        Some(&filtered_rates)
+                                    };
+                                    crate::srt_stats::show_compact(ui, &stats_for_block, rates_opt);
+                                })),
+                            },
+                        );
                     }
 
                     // Setup dynamic content for Media Player blocks

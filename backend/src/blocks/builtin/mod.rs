@@ -7,6 +7,7 @@ pub mod audiogain;
 pub mod audiorouter;
 pub mod compositor;
 pub mod decklink;
+pub mod devicesrc;
 #[cfg(feature = "efp")]
 pub mod efpsrt;
 #[cfg(feature = "efp")]
@@ -23,6 +24,7 @@ pub mod ndi;
 pub mod recorder;
 pub mod spectrum;
 pub mod thumbnail;
+pub mod time_offset;
 pub mod videoenc;
 pub mod videoformat;
 pub mod vision_mixer;
@@ -57,6 +59,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
 
     // Add DeckLink blocks
     blocks.extend(decklink::get_blocks());
+
+    // Add Local Input block (local video/audio sources via native OS APIs)
+    blocks.extend(devicesrc::get_blocks());
 
     // Add EFP/SRT blocks
     #[cfg(feature = "efp")]
@@ -102,6 +107,9 @@ pub fn get_all_builtin_blocks() -> Vec<BlockDefinition> {
     // Add Thumbnail blocks
     blocks.extend(thumbnail::get_blocks());
 
+    // Add Time Offset block (generic timestamp shifter)
+    blocks.extend(time_offset::get_blocks());
+
     // Add VideoEncoder blocks
     blocks.extend(videoenc::get_blocks());
 
@@ -134,10 +142,9 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.audiogain" => Some(Arc::new(audiogain::AudioGainBuilder)),
         "builtin.audiorouter" => Some(Arc::new(audiorouter::AudioRouterBuilder)),
         "builtin.compositor" => Some(Arc::new(compositor::CompositorBuilder)),
-        "builtin.decklink_video_input" => Some(Arc::new(decklink::DeckLinkVideoInputBuilder)),
-        "builtin.decklink_audio_input" => Some(Arc::new(decklink::DeckLinkAudioInputBuilder)),
-        "builtin.decklink_video_output" => Some(Arc::new(decklink::DeckLinkVideoOutputBuilder)),
-        "builtin.decklink_audio_output" => Some(Arc::new(decklink::DeckLinkAudioOutputBuilder)),
+        "builtin.decklink_input" => Some(Arc::new(decklink::DeckLinkInputBuilder)),
+        "builtin.decklink_output" => Some(Arc::new(decklink::DeckLinkOutputBuilder)),
+        "builtin.local_input" => Some(Arc::new(devicesrc::LocalInputBuilder)),
         "builtin.inter_output" => Some(Arc::new(inter::InterOutputBuilder)),
         "builtin.inter_input" => Some(Arc::new(inter::InterInputBuilder)),
         "builtin.latency" => Some(Arc::new(latency::LatencyBuilder)),
@@ -156,6 +163,7 @@ pub fn get_builder(block_definition_id: &str) -> Option<Arc<dyn BlockBuilder>> {
         "builtin.recorder" => Some(Arc::new(recorder::RecorderBuilder)),
         "builtin.spectrum" => Some(Arc::new(spectrum::SpectrumBuilder)),
         "builtin.thumbnail" => Some(Arc::new(thumbnail::ThumbnailBuilder)),
+        "builtin.time_offset" => Some(Arc::new(time_offset::TimeOffsetBuilder)),
         "builtin.videoenc" => Some(Arc::new(videoenc::VideoEncBuilder)),
         "builtin.videoformat" => Some(Arc::new(videoformat::VideoFormatBuilder)),
         "builtin.vision_mixer" => Some(Arc::new(vision_mixer::VisionMixerBuilder)),

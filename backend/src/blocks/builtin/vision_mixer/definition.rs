@@ -44,12 +44,16 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Number of inputs
         ExposedProperty {
             name: "num_inputs".to_string(),
             label: "Number of Inputs".to_string(),
-            description: "Number of video inputs (2-10)".to_string(),
+            description: format!(
+                "Number of video inputs ({}-{})",
+                MIN_NUM_INPUTS, MAX_NUM_INPUTS
+            ),
             property_type: PropertyType::UInt,
             default_value: Some(PropertyValue::UInt(DEFAULT_NUM_INPUTS as u64)),
             mapping: PropertyMapping {
@@ -58,6 +62,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // PGM output resolution
         ExposedProperty {
@@ -74,6 +79,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Multiview output resolution
         ExposedProperty {
@@ -92,6 +98,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // PGM output framerate
         ExposedProperty {
@@ -110,6 +117,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Multiview output framerate
         ExposedProperty {
@@ -128,6 +136,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Latency
         ExposedProperty {
@@ -144,6 +153,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Min upstream latency
         ExposedProperty {
@@ -160,6 +170,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Initial PGM input
         ExposedProperty {
@@ -174,6 +185,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // Initial PVW input
         ExposedProperty {
@@ -188,6 +200,42 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
+        },
+        // Initial PGM source — overrides initial_pgm_input when non-empty.
+        // Format: "input:N" or "pip:N".
+        ExposedProperty {
+            name: "initial_pgm_source".to_string(),
+            label: "Initial PGM Source".to_string(),
+            description:
+                "Initial PGM source as 'input:N' or 'pip:N'. Empty falls back to Initial PGM Input."
+                    .to_string(),
+            property_type: PropertyType::String,
+            default_value: Some(PropertyValue::String(String::new())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "initial_pgm_source".to_string(),
+                transform: None,
+            },
+            live: false,
+            persist: None,
+        },
+        // Initial PVW source — overrides initial_pvw_input when non-empty.
+        ExposedProperty {
+            name: "initial_pvw_source".to_string(),
+            label: "Initial PVW Source".to_string(),
+            description:
+                "Initial PVW source as 'input:N' or 'pip:N'. Empty falls back to Initial Preview Input."
+                    .to_string(),
+            property_type: PropertyType::String,
+            default_value: Some(PropertyValue::String(String::new())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "initial_pvw_source".to_string(),
+                transform: None,
+            },
+            live: false,
+            persist: None,
         },
         // Output pixel format
         ExposedProperty {
@@ -212,6 +260,7 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
         // GL download (GPU path only)
         ExposedProperty {
@@ -226,6 +275,23 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
+        },
+        // Show VU meters in multiview overlay
+        ExposedProperty {
+            name: "show_vu_meters".to_string(),
+            label: "Show VU Meters".to_string(),
+            description:
+                "Render per-input and PGM audio VU meters on the multiview overlay".to_string(),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(DEFAULT_SHOW_VU_METERS)),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "show_vu_meters".to_string(),
+                transform: None,
+            },
+            live: false,
+            persist: None,
         },
         // Number of DSK inputs
         ExposedProperty {
@@ -263,10 +329,13 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         },
     ];
 
-    // Per-input labels
+    // Per-input labels. We expose one property per possible input slot
+    // (`MAX_NUM_INPUTS`); the frontend property panel hides entries for slots
+    // beyond the configured `num_inputs` (see `vision_mixer_skip_set`).
     for i in 0..MAX_NUM_INPUTS {
         exposed_properties.push(ExposedProperty {
             name: format!("input_{}_label", i),
@@ -280,8 +349,44 @@ fn vision_mixer_definition() -> BlockDefinition {
                 transform: None,
             },
             live: false,
+            persist: None,
         });
     }
+
+    // Number of PiP tiles
+    {
+        let mut pip_values = vec![EnumValue {
+            value: "0".to_string(),
+            label: Some("None".to_string()),
+        }];
+        for i in 1..=MAX_NUM_PIPS {
+            pip_values.push(EnumValue {
+                value: i.to_string(),
+                label: Some(format!("{} PiP", i)),
+            });
+        }
+        exposed_properties.push(ExposedProperty {
+            name: "num_pips".to_string(),
+            label: "PiP Tiles".to_string(),
+            description:
+                "Number of Picture-in-Picture tiles rendered virtually in the multiview grid"
+                    .to_string(),
+            property_type: PropertyType::Enum { values: pip_values },
+            default_value: Some(PropertyValue::String(DEFAULT_NUM_PIPS.to_string())),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "num_pips".to_string(),
+                transform: None,
+            },
+            live: false,
+            persist: None,
+        });
+    }
+
+    // PiP bg + overlay sources are not exposed as static block properties —
+    // they're configured at runtime through the operator HTML page (which
+    // POSTs `/pip/{idx}`). A freshly created PiP starts empty;
+    // the operator picks its bg and overlays from the dedicated PiP panel.
 
     BlockDefinition {
         id: "builtin.vision_mixer".to_string(),
@@ -293,7 +398,7 @@ fn vision_mixer_definition() -> BlockDefinition {
         exposed_properties,
         external_pads: ExternalPads {
             inputs: {
-                let mut pads: Vec<ExternalPad> = (0..MAX_NUM_INPUTS)
+                let mut pads: Vec<ExternalPad> = (0..DEFAULT_NUM_INPUTS)
                     .map(|i| {
                         ExternalPad::with_label(
                             format!("video_in_{}", i),
@@ -304,16 +409,22 @@ fn vision_mixer_definition() -> BlockDefinition {
                         )
                     })
                     .collect();
-                // DSK input pads
-                for i in 0..MAX_DSK_INPUTS {
+                for i in 0..DEFAULT_NUM_INPUTS {
                     pads.push(ExternalPad::with_label(
-                        format!("dsk_in_{}", i),
-                        format!("DSK{}", i + 1),
-                        MediaType::Video,
-                        format!("queue_dsk_{}", i),
+                        format!("audio_in_{}", i),
+                        format!("A{}", i),
+                        MediaType::Audio,
+                        format!("queue_audio_{}", i),
                         "sink".to_string(),
                     ));
                 }
+                pads.push(ExternalPad::with_label(
+                    "pgm_audio_in",
+                    "PGM Audio",
+                    MediaType::Audio,
+                    "queue_audio_pgm",
+                    "sink".to_string(),
+                ));
                 pads
             },
             outputs: vec![

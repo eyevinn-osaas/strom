@@ -45,12 +45,13 @@ impl BlockBuilder for MixerBuilder {
                 internal_element_id: "main_out_tee".to_string(),
                 internal_pad_name: "src_%u".to_string(),
             },
-            // PFL output (always present)
+            // Monitor output: follows Main when no PFL/AFL is active anywhere,
+            // and the solo mix the moment any channel engages PFL or AFL.
             ExternalPad {
-                name: "pfl_out".to_string(),
-                label: Some("PFL".to_string()),
+                name: "monitor_out".to_string(),
+                label: Some("Monitor".to_string()),
                 media_type: MediaType::Audio,
-                internal_element_id: "pfl_out_tee".to_string(),
+                internal_element_id: "monitor_out_tee".to_string(),
                 internal_pad_name: "src_%u".to_string(),
             },
         ];
@@ -103,14 +104,9 @@ impl BlockBuilder for MixerBuilder {
         } else {
             "rust"
         };
-        let solo_mode_afl = get_string_prop(properties, "solo_mode", "pfl") == "afl";
         info!(
-            "Mixer config: {} channels, {} aux buses, {} groups, solo={}, dsp={}",
-            num_channels,
-            num_aux_buses,
-            num_groups,
-            if solo_mode_afl { "afl" } else { "pfl" },
-            dsp_backend,
+            "Mixer config: {} channels, {} aux buses, {} groups, dsp={}",
+            num_channels, num_aux_buses, num_groups, dsp_backend,
         );
 
         let mut elements = Vec::new();
@@ -210,7 +206,9 @@ impl BlockBuilder for MixerBuilder {
             .build()
             .map_err(|e| BlockBuildError::ElementCreation(format!("main volume: {}", e)))?;
 
-        // Set main fader from properties, respecting mute state
+        // Fader and mute are independent properties on the GstVolume element —
+        // the native `mute` property handles anti-click via the volume_ramps
+        // manager so we don't need the legacy "volume = 0 if mute" trick.
         let main_fader = properties
             .get("main_fader")
             .and_then(|v| match v {
@@ -219,8 +217,8 @@ impl BlockBuilder for MixerBuilder {
             })
             .unwrap_or(1.0);
         let main_mute = get_bool_prop(properties, "main_mute", false);
-        let effective_main_volume = if main_mute { 0.0 } else { main_fader };
-        main_volume.set_property("volume", effective_main_volume);
+        main_volume.set_property("volume", main_fader);
+        main_volume.set_property("mute", main_mute);
         elements.push((main_volume_id.clone(), main_volume));
 
         // Main level meter (for main mix metering)
@@ -269,57 +267,137 @@ impl BlockBuilder for MixerBuilder {
         ));
 
         // ========================================================================
-        // Create PFL (Pre-Fader Listen) bus with master level
+        // Create solo bus (sums PFL pre-fader + AFL post-fader sends from every
+        // channel) and the Monitor bus that listens to either Main or solo.
+        //
+        // Routing rule (driven by the state layer as a side effect of any
+        // ch{N}_pfl/ch{N}_afl write, not by clients):
+        //   - no PFL/AFL active anywhere → main_to_mon=1, solo_to_mon=0
+        //   - any PFL/AFL active        → main_to_mon=0, solo_to_mon=1
+        // PFL/AFL bools are `persist: false`, so the build-time defaults below
+        // are always the no-solo case — no need to inspect properties here.
         // ========================================================================
-        let pfl_mixer_id = format!("{}:pfl_mixer", instance_id);
-        let pfl_mixer = make_audiomixer(
-            &pfl_mixer_id,
+        let solo_mixer_id = format!("{}:solo_mixer", instance_id);
+        let solo_mixer = make_audiomixer(
+            &solo_mixer_id,
             force_live,
             latency_ms,
             min_upstream_latency_ms,
         )?;
-        elements.push((pfl_mixer_id.clone(), pfl_mixer));
+        elements.push((solo_mixer_id.clone(), solo_mixer));
 
-        // PFL master volume
-        let pfl_master_vol_id = format!("{}:pfl_master_vol", instance_id);
-        let pfl_master_level = get_float_prop(properties, "pfl_level", 1.0);
-        let pfl_master_vol = gst::ElementFactory::make("volume")
-            .name(&pfl_master_vol_id)
-            .property("volume", pfl_master_level)
+        // Gates feeding monitor_mixer
+        let solo_to_mon_id = format!("{}:solo_to_mon", instance_id);
+        let solo_to_mon = gst::ElementFactory::make("volume")
+            .name(&solo_to_mon_id)
+            .property("volume", 0.0_f64)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl master vol: {}", e)))?;
-        elements.push((pfl_master_vol_id.clone(), pfl_master_vol));
+            .map_err(|e| BlockBuildError::ElementCreation(format!("solo_to_mon: {}", e)))?;
+        elements.push((solo_to_mon_id.clone(), solo_to_mon));
 
-        let pfl_level_id = format!("{}:pfl_level", instance_id);
-        let pfl_level = gst::ElementFactory::make("level")
-            .name(&pfl_level_id)
+        let main_to_mon_id = format!("{}:main_to_mon", instance_id);
+        let main_to_mon = gst::ElementFactory::make("volume")
+            .name(&main_to_mon_id)
+            .property("volume", 1.0_f64)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("main_to_mon: {}", e)))?;
+        elements.push((main_to_mon_id.clone(), main_to_mon));
+
+        // Small queues in front of monitor_mixer to decouple the two source
+        // chains and avoid backpressure across them.
+        let solo_to_mon_queue_id = format!("{}:solo_to_mon_queue", instance_id);
+        let solo_to_mon_queue = gst::ElementFactory::make("queue")
+            .name(&solo_to_mon_queue_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("solo_to_mon_queue: {}", e)))?;
+        elements.push((solo_to_mon_queue_id.clone(), solo_to_mon_queue));
+
+        let main_to_mon_queue_id = format!("{}:main_to_mon_queue", instance_id);
+        let main_to_mon_queue = gst::ElementFactory::make("queue")
+            .name(&main_to_mon_queue_id)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("main_to_mon_queue: {}", e)))?;
+        elements.push((main_to_mon_queue_id.clone(), main_to_mon_queue));
+
+        // Monitor summing mixer
+        let monitor_mixer_id = format!("{}:monitor_mixer", instance_id);
+        let monitor_mixer = make_audiomixer(
+            &monitor_mixer_id,
+            force_live,
+            latency_ms,
+            min_upstream_latency_ms,
+        )?;
+        elements.push((monitor_mixer_id.clone(), monitor_mixer));
+
+        // Monitor master volume (driven by `monitor_fader` exposed property)
+        let monitor_master_vol_id = format!("{}:monitor_master_vol", instance_id);
+        let monitor_master_level = get_float_prop(properties, "monitor_fader", 1.0);
+        let monitor_master_vol = gst::ElementFactory::make("volume")
+            .name(&monitor_master_vol_id)
+            .property("volume", monitor_master_level)
+            .build()
+            .map_err(|e| BlockBuildError::ElementCreation(format!("monitor master vol: {}", e)))?;
+        elements.push((monitor_master_vol_id.clone(), monitor_master_vol));
+
+        // Monitor level meter (broadcast as `{instance}:meter:monitor`)
+        let monitor_level_id = format!("{}:monitor_level", instance_id);
+        let monitor_level = gst::ElementFactory::make("level")
+            .name(&monitor_level_id)
             .property("interval", METER_INTERVAL_NS)
             .property("post-messages", true)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_level: {}", e)))?;
-        elements.push((pfl_level_id.clone(), pfl_level));
+            .map_err(|e| BlockBuildError::ElementCreation(format!("monitor_level: {}", e)))?;
+        elements.push((monitor_level_id.clone(), monitor_level));
 
-        // PFL output tee (allow-not-linked so unconnected pfl_out doesn't stall pipeline)
-        let pfl_out_tee_id = format!("{}:pfl_out_tee", instance_id);
-        let pfl_out_tee = gst::ElementFactory::make("tee")
-            .name(&pfl_out_tee_id)
+        // Monitor output tee (allow-not-linked so unconnected monitor_out
+        // doesn't stall the pipeline)
+        let monitor_out_tee_id = format!("{}:monitor_out_tee", instance_id);
+        let monitor_out_tee = gst::ElementFactory::make("tee")
+            .name(&monitor_out_tee_id)
             .property("allow-not-linked", true)
             .build()
-            .map_err(|e| BlockBuildError::ElementCreation(format!("pfl_out_tee: {}", e)))?;
-        elements.push((pfl_out_tee_id.clone(), pfl_out_tee));
+            .map_err(|e| BlockBuildError::ElementCreation(format!("monitor_out_tee: {}", e)))?;
+        elements.push((monitor_out_tee_id.clone(), monitor_out_tee));
 
-        // Link: pfl_mixer → pfl_master_vol → pfl_level → pfl_out_tee
+        // Wiring:
+        //   solo_mixer  → solo_to_mon  → solo_to_mon_queue ─┐
+        //                                                   ├→ monitor_mixer → monitor_master_vol → monitor_level → monitor_out_tee
+        //   main_out_tee→ main_to_mon  → main_to_mon_queue ─┘
         internal_links.push((
-            ElementPadRef::pad(&pfl_mixer_id, "src"),
-            ElementPadRef::pad(&pfl_master_vol_id, "sink"),
+            ElementPadRef::pad(&solo_mixer_id, "src"),
+            ElementPadRef::pad(&solo_to_mon_id, "sink"),
         ));
         internal_links.push((
-            ElementPadRef::pad(&pfl_master_vol_id, "src"),
-            ElementPadRef::pad(&pfl_level_id, "sink"),
+            ElementPadRef::pad(&solo_to_mon_id, "src"),
+            ElementPadRef::pad(&solo_to_mon_queue_id, "sink"),
         ));
         internal_links.push((
-            ElementPadRef::pad(&pfl_level_id, "src"),
-            ElementPadRef::pad(&pfl_out_tee_id, "sink"),
+            ElementPadRef::pad(&solo_to_mon_queue_id, "src"),
+            ElementPadRef::element(&monitor_mixer_id),
+        ));
+        internal_links.push((
+            ElementPadRef::element(&main_out_tee_id),
+            ElementPadRef::pad(&main_to_mon_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&main_to_mon_id, "src"),
+            ElementPadRef::pad(&main_to_mon_queue_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&main_to_mon_queue_id, "src"),
+            ElementPadRef::element(&monitor_mixer_id),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&monitor_mixer_id, "src"),
+            ElementPadRef::pad(&monitor_master_vol_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&monitor_master_vol_id, "src"),
+            ElementPadRef::pad(&monitor_level_id, "sink"),
+        ));
+        internal_links.push((
+            ElementPadRef::pad(&monitor_level_id, "src"),
+            ElementPadRef::pad(&monitor_out_tee_id, "sink"),
         ));
 
         // ========================================================================
@@ -337,12 +415,12 @@ impl BlockBuilder for MixerBuilder {
 
             let aux_fader = get_float_prop(properties, &format!("aux{}_fader", aux + 1), 1.0);
             let aux_mute = get_bool_prop(properties, &format!("aux{}_mute", aux + 1), false);
-            let aux_volume_val = if aux_mute { 0.0 } else { aux_fader };
 
             let aux_volume_id = format!("{}:aux{}_volume", instance_id, aux);
             let aux_volume = gst::ElementFactory::make("volume")
                 .name(&aux_volume_id)
-                .property("volume", aux_volume_val)
+                .property("volume", aux_fader)
+                .property("mute", aux_mute)
                 .build()
                 .map_err(|e| {
                     BlockBuildError::ElementCreation(format!("aux{}_volume: {}", aux, e))
@@ -384,6 +462,45 @@ impl BlockBuilder for MixerBuilder {
                 ElementPadRef::pad(&aux_level_id, "src"),
                 ElementPadRef::pad(&aux_out_tee_id, "sink"),
             ));
+
+            // AFL tap on the aux master. Taps from `aux_out_tee` (post-master,
+            // post-mute, post-meter) so the operator hears exactly what is
+            // leaving the aux send. Like channel PFL/AFL, the gate volume is
+            // either 0 or 1 — `bool_to_volume` transforms the public Bool
+            // property to the underlying volume value.
+            let aux_afl_enabled = get_bool_prop(properties, &format!("aux{}_afl", aux + 1), false);
+            let aux_afl_volume_id = format!("{}:aux{}_afl_volume", instance_id, aux);
+            let aux_afl_volume = gst::ElementFactory::make("volume")
+                .name(&aux_afl_volume_id)
+                .property("volume", if aux_afl_enabled { 1.0 } else { 0.0 })
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("aux{}_afl_volume: {}", aux, e))
+                })?;
+            elements.push((aux_afl_volume_id.clone(), aux_afl_volume));
+
+            let aux_afl_queue_id = format!("{}:aux{}_afl_queue", instance_id, aux);
+            let aux_afl_queue = gst::ElementFactory::make("queue")
+                .name(&aux_afl_queue_id)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("aux{}_afl_queue: {}", aux, e))
+                })?;
+            elements.push((aux_afl_queue_id.clone(), aux_afl_queue));
+
+            // aux_out_tee → aux_afl_volume → aux_afl_queue → solo_mixer
+            internal_links.push((
+                ElementPadRef::element(&aux_out_tee_id),
+                ElementPadRef::pad(&aux_afl_volume_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&aux_afl_volume_id, "src"),
+                ElementPadRef::pad(&aux_afl_queue_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&aux_afl_queue_id, "src"),
+                ElementPadRef::element(&solo_mixer_id),
+            ));
         }
 
         // ========================================================================
@@ -401,12 +518,12 @@ impl BlockBuilder for MixerBuilder {
 
             let sg_fader = get_float_prop(properties, &format!("group{}_fader", sg + 1), 1.0);
             let sg_mute = get_bool_prop(properties, &format!("group{}_mute", sg + 1), false);
-            let sg_volume_val = if sg_mute { 0.0 } else { sg_fader };
 
             let sg_volume_id = format!("{}:group{}_volume", instance_id, sg);
             let sg_volume = gst::ElementFactory::make("volume")
                 .name(&sg_volume_id)
-                .property("volume", sg_volume_val)
+                .property("volume", sg_fader)
+                .property("mute", sg_mute)
                 .build()
                 .map_err(|e| {
                     BlockBuildError::ElementCreation(format!("group{}_volume: {}", sg, e))
@@ -468,6 +585,44 @@ impl BlockBuilder for MixerBuilder {
             internal_links.push((
                 ElementPadRef::pad(&sg_to_main_queue_id, "src"),
                 ElementPadRef::element(&mixer_id), // Request pad from main audiomixer
+            ));
+
+            // AFL tap on the group master. Taps from `group_out_tee`
+            // (post-master, post-mute, post-meter) so the operator hears the
+            // summed group exactly as it leaves the bus. Gate volume is 0/1
+            // via `bool_to_volume`.
+            let sg_afl_enabled = get_bool_prop(properties, &format!("group{}_afl", sg + 1), false);
+            let sg_afl_volume_id = format!("{}:group{}_afl_volume", instance_id, sg);
+            let sg_afl_volume = gst::ElementFactory::make("volume")
+                .name(&sg_afl_volume_id)
+                .property("volume", if sg_afl_enabled { 1.0 } else { 0.0 })
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("group{}_afl_volume: {}", sg, e))
+                })?;
+            elements.push((sg_afl_volume_id.clone(), sg_afl_volume));
+
+            let sg_afl_queue_id = format!("{}:group{}_afl_queue", instance_id, sg);
+            let sg_afl_queue = gst::ElementFactory::make("queue")
+                .name(&sg_afl_queue_id)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("group{}_afl_queue: {}", sg, e))
+                })?;
+            elements.push((sg_afl_queue_id.clone(), sg_afl_queue));
+
+            // group_out_tee → group_afl_volume → group_afl_queue → solo_mixer
+            internal_links.push((
+                ElementPadRef::element(&sg_out_tee_id),
+                ElementPadRef::pad(&sg_afl_volume_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&sg_afl_volume_id, "src"),
+                ElementPadRef::pad(&sg_afl_queue_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&sg_afl_queue_id, "src"),
+                ElementPadRef::element(&solo_mixer_id),
             ));
         }
 
@@ -665,12 +820,12 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((pan_id.clone(), panorama));
 
-            // volume (channel fader + mute)
+            // Channel volume + mute as independent properties on GstVolume.
             let volume_id = format!("{}:volume_{}", instance_id, ch);
-            let effective_volume = if mute { 0.0 } else { fader };
             let volume = gst::ElementFactory::make("volume")
                 .name(&volume_id)
-                .property("volume", effective_volume)
+                .property("volume", fader)
+                .property("mute", mute)
                 .build()
                 .map_err(|e| {
                     BlockBuildError::ElementCreation(format!("volume ch{}: {}", ch_num, e))
@@ -690,7 +845,9 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((post_fader_tee_id.clone(), post_fader_tee));
 
-            // level (metering)
+            // level (pre-fader metering — taps post-EQ/dynamics, pre-fader/pan/mute
+            // so the meter reflects the input signal regardless of fader position).
+            // Built here, but linked in-path between `eq` and `pre_fader_tee` below.
             let level_id = format!("{}:level_{}", instance_id, ch);
             let level = gst::ElementFactory::make("level")
                 .name(&level_id)
@@ -703,7 +860,7 @@ impl BlockBuilder for MixerBuilder {
             elements.push((level_id.clone(), level));
 
             // ----------------------------------------------------------------
-            // Routing tee (after level, for multi-destination routing)
+            // Routing tee (after post_fader_tee, for multi-destination routing)
             // ----------------------------------------------------------------
             let routing_tee_id = format!("{}:routing_tee_{}", instance_id, ch);
             let routing_tee = gst::ElementFactory::make("tee")
@@ -716,9 +873,11 @@ impl BlockBuilder for MixerBuilder {
             elements.push((routing_tee_id.clone(), routing_tee));
 
             // ----------------------------------------------------------------
-            // PFL path (pre-fader listen)
+            // Solo bus sends: PFL taps pre-fader, AFL taps post-fader.
+            // Each is an independent volume-gate that sums into solo_mixer.
             // ----------------------------------------------------------------
             let pfl_enabled = get_bool_prop(properties, &format!("ch{}_pfl", ch_num), false);
+            let afl_enabled = get_bool_prop(properties, &format!("ch{}_afl", ch_num), false);
 
             let pfl_volume_id = format!("{}:pfl_volume_{}", instance_id, ch);
             let pfl_volume = gst::ElementFactory::make("volume")
@@ -739,6 +898,25 @@ impl BlockBuilder for MixerBuilder {
                 })?;
             elements.push((pfl_queue_id.clone(), pfl_queue));
 
+            let afl_volume_id = format!("{}:afl_volume_{}", instance_id, ch);
+            let afl_volume = gst::ElementFactory::make("volume")
+                .name(&afl_volume_id)
+                .property("volume", if afl_enabled { 1.0 } else { 0.0 })
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("afl_volume ch{}: {}", ch_num, e))
+                })?;
+            elements.push((afl_volume_id.clone(), afl_volume));
+
+            let afl_queue_id = format!("{}:afl_queue_{}", instance_id, ch);
+            let afl_queue = gst::ElementFactory::make("queue")
+                .name(&afl_queue_id)
+                .build()
+                .map_err(|e| {
+                    BlockBuildError::ElementCreation(format!("afl_queue ch{}: {}", ch_num, e))
+                })?;
+            elements.push((afl_queue_id.clone(), afl_queue));
+
             // ----------------------------------------------------------------
             // Aux send paths (pre or post fader)
             // ----------------------------------------------------------------
@@ -751,7 +929,7 @@ impl BlockBuilder for MixerBuilder {
                 let aux_pre = get_bool_prop(
                     properties,
                     &format!("ch{}_aux{}_pre", ch_num, aux + 1),
-                    aux < 2, // Default: aux 1-2 pre-fader, aux 3-4 post-fader
+                    false, // All aux sends default post-fader (matches definition.rs)
                 );
 
                 let aux_send_id = format!("{}:aux_send_{}_{}", instance_id, ch, aux);
@@ -809,7 +987,9 @@ impl BlockBuilder for MixerBuilder {
             // ----------------------------------------------------------------
             // Main chain links
             // ----------------------------------------------------------------
-            // Chain: convert → caps → gain → hpf → gate → comp → eq → pre_fader_tee
+            // Chain: convert → caps → gain → hpf → gate → comp → eq → level → pre_fader_tee
+            // The channel `level` element sits pre-fader (after EQ/dynamics, before
+            // pan/fader/mute) so the meter reflects the signal hitting the fader.
             internal_links.push((
                 ElementPadRef::pad(&convert_id, "src"),
                 ElementPadRef::pad(&caps_id, "sink"),
@@ -836,10 +1016,14 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::pad(&eq_id, "src"),
+                ElementPadRef::pad(&level_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&level_id, "src"),
                 ElementPadRef::pad(&pre_fader_tee_id, "sink"),
             ));
 
-            // pre_fader_tee → pan → volume → post_fader_tee → level → routing_tee
+            // pre_fader_tee → pan → volume → post_fader_tee → routing_tee
             internal_links.push((
                 ElementPadRef::element(&pre_fader_tee_id), // Request pad from tee
                 ElementPadRef::pad(&pan_id, "sink"),
@@ -854,21 +1038,12 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::element(&post_fader_tee_id), // Request pad from tee
-                ElementPadRef::pad(&level_id, "sink"),
-            ));
-            internal_links.push((
-                ElementPadRef::pad(&level_id, "src"),
                 ElementPadRef::pad(&routing_tee_id, "sink"),
             ));
 
-            // Solo path: PFL (pre-fader) or AFL (post-fader) based on solo_mode
-            let solo_source_tee_id = if solo_mode_afl {
-                &post_fader_tee_id
-            } else {
-                &pre_fader_tee_id
-            };
+            // PFL path: pre_fader_tee → pfl_volume → pfl_queue → solo_mixer
             internal_links.push((
-                ElementPadRef::element(solo_source_tee_id),
+                ElementPadRef::element(&pre_fader_tee_id),
                 ElementPadRef::pad(&pfl_volume_id, "sink"),
             ));
             internal_links.push((
@@ -877,7 +1052,21 @@ impl BlockBuilder for MixerBuilder {
             ));
             internal_links.push((
                 ElementPadRef::pad(&pfl_queue_id, "src"),
-                ElementPadRef::element(&pfl_mixer_id), // Request pad from pfl_mixer
+                ElementPadRef::element(&solo_mixer_id),
+            ));
+
+            // AFL path: post_fader_tee → afl_volume → afl_queue → solo_mixer
+            internal_links.push((
+                ElementPadRef::element(&post_fader_tee_id),
+                ElementPadRef::pad(&afl_volume_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&afl_volume_id, "src"),
+                ElementPadRef::pad(&afl_queue_id, "sink"),
+            ));
+            internal_links.push((
+                ElementPadRef::pad(&afl_queue_id, "src"),
+                ElementPadRef::element(&solo_mixer_id),
             ));
 
             // ----------------------------------------------------------------
@@ -975,8 +1164,8 @@ impl BlockBuilder for MixerBuilder {
             }
 
             debug!(
-                "Channel {} created: gain={:.1}dB, pan={}, fader={}, mute={}, pfl={}, to_main={}",
-                ch_num, gain_db, pan, fader, mute, pfl_enabled, to_main_enabled
+                "Channel {} created: gain={:.1}dB, pan={}, fader={}, mute={}, pfl={}, afl={}, to_main={}",
+                ch_num, gain_db, pan, fader, mute, pfl_enabled, afl_enabled, to_main_enabled
             );
         }
 

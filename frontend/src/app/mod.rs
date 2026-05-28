@@ -29,6 +29,7 @@ use crate::meter::MeterDataStore;
 use crate::mixer::MixerEditor;
 use crate::palette::ElementPalette;
 use crate::spectrum::SpectrumDataStore;
+use crate::srt_stats::SrtStatsStore;
 use crate::state::{AppStateChannels, ConnectionState};
 use crate::system_monitor::SystemMonitorStore;
 use crate::thread_monitor::ThreadMonitorStore;
@@ -573,6 +574,13 @@ pub struct StromApp {
     properties_clock_type_buffer: strom_types::flow::GStreamerClockType,
     /// Temporary PTP domain buffer for properties dialog
     properties_ptp_domain_buffer: String,
+    /// Temporary NTP server buffer for properties dialog
+    properties_ntp_server_buffer: String,
+    /// Temporary NTP port buffer for properties dialog
+    properties_ntp_port_buffer: String,
+    /// Temporary direct media timing selection for properties dialog.
+    /// None = inherit from clock_type default; Some = explicit override.
+    properties_direct_media_timing_buffer: Option<bool>,
     /// Temporary thread priority for properties dialog
     properties_thread_priority_buffer: strom_types::flow::ThreadPriority,
     /// Temporary CPU affinity for properties dialog
@@ -595,6 +603,24 @@ pub struct StromApp {
     network_interfaces: Vec<strom_types::NetworkInterfaceInfo>,
     /// Whether network interfaces have been loaded
     network_interfaces_loaded: bool,
+    /// Cached local video capture devices (Local Input block picker)
+    video_devices: Vec<strom_types::discovery::DeviceResponse>,
+    /// Cached local audio capture devices (Local Input block picker)
+    audio_devices: Vec<strom_types::discovery::DeviceResponse>,
+    /// In-flight flag for video device fetch
+    video_devices_loading: bool,
+    /// In-flight flag for audio device fetch
+    audio_devices_loading: bool,
+    /// Last time the device lists were fetched (used as a TTL to avoid spamming the API)
+    devices_last_loaded: Option<instant::Instant>,
+    /// Current log filter string from backend
+    log_level_current: Option<String>,
+    /// Default log filter string the server started with
+    log_level_default: Option<String>,
+    /// Current GStreamer debug filter string from backend
+    gst_log_level_current: Option<String>,
+    /// Default GStreamer debug filter string the server started with
+    gst_log_level_default: Option<String>,
     /// Cached available inter channels (for InterInput channel dropdown)
     available_channels: Vec<strom_types::api::AvailableOutput>,
     /// Whether available channels have been loaded
@@ -617,6 +643,8 @@ pub struct StromApp {
     seek_throttle: SeekThrottle,
     /// WebRTC stats storage for all WebRTC connections
     webrtc_stats: WebRtcStatsStore,
+    /// SRT stats storage for all SRT inputs/outputs
+    srt_stats: SrtStatsStore,
     /// System monitoring statistics
     system_monitor: SystemMonitorStore,
     /// Thread CPU monitoring statistics
@@ -641,6 +669,8 @@ pub struct StromApp {
     pending_thread_nav_action: Option<crate::system_monitor::ThreadNavigationAction>,
     /// Last time WebRTC stats were polled
     last_webrtc_poll: instant::Instant,
+    /// Last time SRT stats were polled
+    last_srt_poll: instant::Instant,
     /// Persisted settings (theme, zoom, etc.)
     settings: AppSettings,
     /// Whether we need to apply settings in the first update frame (workaround for iOS)
@@ -673,6 +703,14 @@ pub struct StromApp {
     rtp_stats_cache: std::collections::HashMap<String, strom_types::api::FlowStatsResponse>,
     /// Last time stats was fetched (for periodic refresh)
     last_rtp_stats_fetch: instant::Instant,
+    /// Cached system clock state from kernel adjtimex
+    system_clock_info: Option<crate::api::SystemClockInfo>,
+    /// True if the backend reported the system clock endpoint is unsupported on
+    /// this platform (non-Linux). Drives the "not available" message.
+    system_clock_unsupported: bool,
+    /// Last time system clock was fetched (for periodic refresh while Clocks page is open).
+    /// `None` means never fetched — triggers an immediate fetch on first Clocks page visit.
+    last_system_clock_fetch: Option<instant::Instant>,
     /// Compositor layout editor (if open)
     compositor_editor: Option<CompositorEditor>,
     /// Mixer editor (if open)

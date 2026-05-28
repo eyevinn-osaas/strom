@@ -6,6 +6,7 @@ mod effects;
 mod lifecycle;
 mod linking;
 mod properties;
+mod srt;
 mod state;
 mod webrtc;
 
@@ -52,11 +53,13 @@ impl ElementQoSStats {
     }
 
     fn add_event(&mut self, proportion: f64, jitter: i64, processed: u64) {
-        self.event_count += 1;
+        self.event_count = self.event_count.saturating_add(1);
         self.sum_proportion += proportion;
         self.min_proportion = self.min_proportion.min(proportion);
         self.max_proportion = self.max_proportion.max(proportion);
-        self.sum_jitter += jitter;
+        // Saturating add: QoS jitter values can be huge when the pipeline clock is
+        // NTP/TAI (time since 1900/1970 in ns), and the running sum may overflow i64.
+        self.sum_jitter = self.sum_jitter.saturating_add(jitter);
         self.total_processed = processed; // Keep the latest value
     }
 
@@ -180,6 +183,9 @@ pub struct PipelineManager {
     /// CPU set assigned by AffinityManager for SingleCore affinity (None for Off).
     /// Contains all logical CPUs (hyperthreads) of the allocated physical core.
     assigned_cpus: Option<Vec<usize>>,
+    /// Shared thread config for dynamic session pipelines (WHEP/WebRTC).
+    /// Populated in start() so consumer-added callbacks can install sync handlers.
+    session_thread_config: crate::gst::SessionThreadConfig,
     /// Cached pipeline state to avoid querying async sinks during initialization
     cached_state: std::sync::Arc<std::sync::RwLock<PipelineState>>,
     /// QoS statistics aggregator (collects and periodically broadcasts QoS events)
@@ -193,6 +199,8 @@ pub struct PipelineManager {
     /// PTP statistics callback handle (must be kept alive)
     #[allow(dead_code)]
     ptp_stats_callback: Option<gst_net::PtpStatisticsCallback>,
+    /// NTP clock reference (stored for querying calibration and sync status)
+    ntp_clock: Option<gst_net::NtpClock>,
     /// Dynamic pads that were auto-linked to tees because no link was defined
     /// Maps element_id -> {pad_name -> tee_element_name}
     /// These tees have allow-not-linked=true so unlinked streams don't block the pipeline
@@ -216,6 +224,10 @@ pub struct PipelineManager {
     blocks: Vec<BlockInstance>,
     /// Block definitions for blocks used in this flow (resolved at construction time)
     block_definitions: HashMap<String, BlockDefinition>,
+    /// Per-element control sources for smooth volume/mute transitions on
+    /// audio `volume` elements. Eliminates zipper noise on fader drags and
+    /// click artifacts on mute toggles.
+    volume_ramps: crate::gst::volume_ramp::VolumeRampManager,
 }
 
 impl Drop for PipelineManager {
@@ -310,6 +322,7 @@ mod tests {
             "all".to_string(),
             None,
             std::path::PathBuf::from("./media"),
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         );
         assert!(manager.is_ok());
     }
@@ -328,6 +341,7 @@ mod tests {
             "all".to_string(),
             None,
             std::path::PathBuf::from("./media"),
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         )
         .unwrap();
 
@@ -364,6 +378,7 @@ mod tests {
             "all".to_string(),
             None,
             std::path::PathBuf::from("./media"),
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         );
         assert!(manager.is_err());
     }
@@ -418,6 +433,7 @@ mod tests {
             "all".to_string(),
             None,
             std::path::PathBuf::from("./media"),
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         );
         assert!(manager.is_ok());
 
@@ -444,6 +460,7 @@ mod tests {
             "all".to_string(),
             None,
             std::path::PathBuf::from("./media"),
+            std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
         )
         .unwrap();
 

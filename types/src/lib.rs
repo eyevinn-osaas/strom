@@ -24,6 +24,7 @@ pub mod state;
 pub mod stats;
 pub mod system_monitor;
 pub mod thread_stats;
+pub mod videoenc;
 pub mod vision_mixer;
 pub mod whep;
 pub mod whip;
@@ -31,12 +32,14 @@ pub mod whip;
 // Re-export commonly used types
 pub use block::{
     common_video_framerate_enum_values, common_video_pixel_format_enum_values,
-    common_video_resolution_enum_values, parse_resolution_string, BlockDefinition, BlockInstance,
-    BlockListResponse, BlockResponse, CreateBlockRequest, EnumValue, ExposedProperty, ExternalPad,
-    ExternalPads, PropertyMapping, PropertyType, COMMON_VIDEO_RESOLUTIONS,
+    common_video_resolution_enum_values, decklink_video_format_enum_values,
+    parse_resolution_string, BlockDefinition, BlockInstance, BlockListResponse, BlockResponse,
+    CreateBlockRequest, EnumValue, ExposedProperty, ExternalPad, ExternalPads, PropertyMapping,
+    PropertyType, COMMON_VIDEO_RESOLUTIONS, DECKLINK_VIDEO_FORMATS,
     DEFAULT_AES67_INPUT_BUFFER_DURATION_MS, DEFAULT_EFP_BUCKET_TIMEOUT, DEFAULT_EFP_HOL_TIMEOUT,
-    DEFAULT_EFP_MTU, DEFAULT_OPUS_BITRATE, DEFAULT_OPUS_COMPLEXITY, DEFAULT_SRT_INPUT_URI,
-    DEFAULT_SRT_LATENCY_MS, DEFAULT_SRT_OUTPUT_URI,
+    DEFAULT_EFP_MTU, DEFAULT_OPUS_BITRATE, DEFAULT_OPUS_COMPLEXITY, DEFAULT_SRT_AUTO_RECONNECT,
+    DEFAULT_SRT_INPUT_URI, DEFAULT_SRT_KEEP_LISTENING, DEFAULT_SRT_LATENCY_MS,
+    DEFAULT_SRT_OUTPUT_URI, DEFAULT_SRT_WAIT_FOR_CONNECTION,
 };
 pub use element::{Element, ElementId, Link, MediaType, PropertyValue};
 pub use events::StromEvent;

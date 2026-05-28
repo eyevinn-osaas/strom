@@ -21,7 +21,9 @@ use crate::gpu::video_convert_mode;
 use gstreamer as gst;
 use gstreamer::prelude::*;
 use std::collections::HashMap;
-use strom_types::{block::*, element::ElementPadRef, EnumValue, PropertyValue, *};
+use strom_types::{
+    block::*, element::ElementPadRef, videoenc::Profile, EnumValue, PropertyValue, *,
+};
 use tracing::{info, warn};
 
 /// Video Encoder block builder.
@@ -109,6 +111,8 @@ impl BlockBuilder for VideoEncBuilder {
             })
             .unwrap_or(60);
 
+        let profile = parse_profile(properties);
+
         // Create elements
         // Use detected video convert mode (autovideoconvert if GPU interop works, videoconvert otherwise)
         // Note: We always use "videoconvert" as the element ID for consistent external pad references,
@@ -156,7 +160,7 @@ impl BlockBuilder for VideoEncBuilder {
         info!("Added {} parser for proper stream formatting", parser_name);
 
         // Create capsfilter with codec-specific caps
-        let caps_str = get_codec_caps_string(codec);
+        let caps_str = get_codec_caps_string(codec, profile);
         let caps = caps_str.parse::<gst::Caps>().map_err(|_| {
             BlockBuildError::InvalidConfiguration(format!("Invalid caps: {}", caps_str))
         })?;
@@ -533,6 +537,15 @@ fn set_encoder_properties(
             let realtime = matches!(quality_preset, "ultrafast" | "fast");
             encoder.set_property_from_str("realtime", if realtime { "true" } else { "false" });
         }
+        // VideoToolbox defaults to allow-frame-reordering=true, which emits
+        // B-frames. B-frames cause non-monotonic PTS in decode order —
+        // rtph264pay uses PTS for RTP timestamps, so the RTP stream becomes
+        // invalid and WebRTC clients (Chrome desktop especially) fail to
+        // decode. Disable unconditionally: VT HW produces good quality at
+        // streaming bitrates without B-frames.
+        if encoder.has_property("allow-frame-reordering") {
+            encoder.set_property("allow-frame-reordering", false);
+        }
     } else if encoder_name.starts_with("v4l2") {
         // V4L2 encoders (Raspberry Pi, embedded Linux)
         // V4L2 encoders use extra-controls structure for bitrate (bits per second)
@@ -560,11 +573,34 @@ fn set_encoder_properties(
         let cpu_used = map_quality_preset_av1enc(quality_preset);
         encoder.set_property_from_str("cpu-used", &cpu_used.to_string());
     } else if encoder_name == "vp9enc" {
-        // libvpx VP9: target-bitrate in kbps
-        encoder.set_property_from_str("target-bitrate", &bitrate_str);
+        // libvpx VP9: target-bitrate is in BITS/SEC, not kbps —
+        // verified via `gst-inspect-1.0 vp9enc` on GStreamer 1.28:
+        //   target-bitrate : Target bitrate (in bits/sec) ... Default: 256000
+        // The block exposes bitrate in kbps so multiply by 1000.
+        let bitrate_bps = bitrate.saturating_mul(1000);
+        encoder.set_property_from_str("target-bitrate", &bitrate_bps.to_string());
         // VP9: cpu-used (0=slowest, 5=fastest for realtime)
         let cpu_used = map_quality_preset_vp9enc(quality_preset);
         encoder.set_property_from_str("cpu-used", &cpu_used.to_string());
+
+        // libvpx VP9 needs explicit realtime knobs — defaults are tuned for
+        // off-line "best quality" and burn entire CPUs on M1 / multi-core:
+        //  - deadline default = 1_000_000 µs ("best quality"). At 30 fps the
+        //    encoder gets up to 1 s per frame and uses it all → ~10–100×
+        //    slower than the realtime mode (deadline=1).
+        //  - lag-in-frames default = 25 → look-ahead adds ~833 ms latency
+        //    on 30 fps plus extra CPU for the look-ahead analysis.
+        //  - row-mt default = false → only frame-level parallelism even
+        //    with threads=8. Enabling row-mt gives ~2-3× speedup on
+        //    multi-core CPUs.
+        // For non-realtime presets we leave the defaults alone.
+        if matches!(quality_preset, "ultrafast" | "fast") {
+            encoder.set_property("deadline", 1i64);
+            encoder.set_property("lag-in-frames", 0i32);
+            if encoder.has_property("row-mt") {
+                encoder.set_property("row-mt", true);
+            }
+        }
     }
 
     // Keyframe interval (GOP size) - try different property names
@@ -702,14 +738,46 @@ fn map_quality_preset_vp9enc(quality_preset: &str) -> i32 {
     }
 }
 
-/// Get codec-specific caps string for capsfilter.
-fn get_codec_caps_string(codec: Codec) -> String {
+/// Get codec-specific caps string for capsfilter, given a profile selection.
+///
+/// For H.264/H.265: pins `profile=<name>` on the capsfilter unless `profile`
+/// is [`Profile::None`], in which case no profile field is added and the
+/// encoder negotiates freely with downstream.
+/// For AV1/VP9: profile is ignored — caps only contain the codec media type.
+fn get_codec_caps_string(codec: Codec, profile: Profile) -> String {
     match codec {
-        Codec::H264 => "video/x-h264,alignment=au".to_string(),
-        Codec::H265 => "video/x-h265,alignment=au".to_string(),
+        Codec::H264 => match profile.as_caps_str() {
+            None => "video/x-h264,alignment=au".to_string(),
+            Some(p) => format!("video/x-h264,alignment=au,profile={}", p),
+        },
+        Codec::H265 => match profile.as_caps_str() {
+            None => "video/x-h265,alignment=au".to_string(),
+            Some(p) => format!("video/x-h265,alignment=au,profile={}", p),
+        },
         Codec::AV1 => "video/x-av1".to_string(),
         Codec::VP9 => "video/x-vp9".to_string(),
     }
+}
+
+/// Parse the `profile` property. Unknown / missing values fall back to the
+/// enum's `Default` (no profile constraint).
+fn parse_profile(properties: &HashMap<String, PropertyValue>) -> Profile {
+    properties
+        .get("profile")
+        .and_then(|v| match v {
+            PropertyValue::String(s) => {
+                let parsed = Profile::from_property_str(s);
+                if parsed.is_none() {
+                    warn!(
+                        "videoenc: invalid profile value '{}', falling back to default",
+                        s
+                    );
+                }
+                parsed
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Get metadata for VideoEncoder block (for UI/API).
@@ -744,6 +812,25 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
+            },
+            ExposedProperty {
+                name: "profile".to_string(),
+                label: "Profile".to_string(),
+                description: "Codec profile pinned on the encoder's output capsfilter. \"none\" (default) omits the profile field, letting the encoder negotiate freely with downstream — works with any downstream and is the right choice unless something specifically requires a pinned profile. Pick an explicit profile only when the downstream needs it. H.264 profiles begin with baseline/main/high; H.265 profiles begin with main.".to_string(),
+                property_type: PropertyType::Enum {
+                    values: Profile::block_enum_values(),
+                },
+                default_value: Some(PropertyValue::String(
+                    Profile::default().as_property_str().to_string(),
+                )),
+                mapping: PropertyMapping {
+                    element_id: "_block".to_string(),
+                    property_name: "profile".to_string(),
+                    transform: None,
+                },
+                live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "encoder_preference".to_string(),
@@ -763,6 +850,7 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "bitrate".to_string(),
@@ -776,6 +864,7 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "quality_preset".to_string(),
@@ -797,6 +886,7 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "tune".to_string(),
@@ -819,6 +909,7 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "rate_control".to_string(),
@@ -838,6 +929,7 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
             ExposedProperty {
                 name: "keyframe_interval".to_string(),
@@ -851,6 +943,7 @@ fn videoenc_definition() -> BlockDefinition {
                     transform: None,
                 },
                 live: false,
+                persist: None,
             },
         ],
         external_pads: ExternalPads {
