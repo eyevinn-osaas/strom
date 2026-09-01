@@ -472,6 +472,13 @@ fn set_encoder_properties(
         encoder.set_property_from_str("speed-preset", preset_nick);
         // x264/x265: tune - optimize for specific use case
         encoder.set_property_from_str("tune", tune);
+        // VBV buffer capacity in ms. Set explicitly instead of relying on the
+        // upstream default (600 ms) so single frames cannot spike far above
+        // the target bitrate — large frame bursts overflow shallow buffers on
+        // constrained viewer paths (observed as bursty packet loss on WebRTC).
+        if encoder.has_property("vbv-buf-capacity") {
+            encoder.set_property_from_str("vbv-buf-capacity", "500");
+        }
     } else if encoder_name.starts_with("nv") {
         // NVENC encoders: bitrate in kbps
         encoder.set_property_from_str("bitrate", &bitrate_str);
@@ -497,6 +504,22 @@ fn set_encoder_properties(
             RateControl::CBR => "cbr",
         };
         encoder.set_property_from_str(rc_property, rc_nick);
+
+        // NVENC defaults leave VBR excursions unconstrained: max-bitrate is
+        // unset and vbv-buffer-size=0 ("NVENC default"), so single frames can
+        // spike to ~10x the average frame size. Those frames leave the NIC as
+        // line-rate packet bursts that overflow shallow buffers on constrained
+        // viewer paths (observed as bursty packet loss on WebRTC outputs).
+        // - max-bitrate: cap VBR at 1.2x target (ignored in CBR mode)
+        // - vbv-buffer-size (kbits): 0.5 s worth of target bitrate, bounding
+        //   how large any single frame can get
+        if encoder.has_property("max-bitrate") {
+            let max_bitrate = bitrate.saturating_mul(12) / 10;
+            encoder.set_property_from_str("max-bitrate", &max_bitrate.to_string());
+        }
+        if encoder.has_property("vbv-buffer-size") {
+            encoder.set_property_from_str("vbv-buffer-size", &(bitrate / 2).to_string());
+        }
 
         // NVENC: Disable adaptive I-frame insertion to respect gop-size
         if encoder.has_property("i-adapt") {
@@ -532,10 +555,65 @@ fn set_encoder_properties(
     } else if encoder_name.starts_with("vtenc") {
         // Apple VideoToolbox (macOS): bitrate property is in kbps
         encoder.set_property_from_str("bitrate", &bitrate_str);
-        // VideoToolbox: realtime mode for low-latency streaming
+        // VideoToolbox: realtime mode disables frame buffering / lookahead.
+        // That is a *latency* property, orthogonal to compression quality.
+        // Strom is a live mixer/streamer (WebRTC/SRT), so drive it from the
+        // low-latency tune (the same signal x264/x265 use), not the quality
+        // preset — otherwise picking medium/slow would silently add encoder
+        // latency in a live context.
         if encoder.has_property("realtime") {
-            let realtime = matches!(quality_preset, "ultrafast" | "fast");
+            let realtime = tune == "zerolatency";
             encoder.set_property_from_str("realtime", if realtime { "true" } else { "false" });
+        }
+        // VideoToolbox rate control. Measured on Apple Silicon hardware
+        // (GStreamer 1.28, 720p30, 5 Mbit/s target, noise content):
+        //
+        // - ABR does NOT follow the bitrate: vtenc unconditionally sets
+        //   kVTCompressionPropertyKey_Quality (property default 0.5) after
+        //   AverageBitRate, and the hardware then encodes at constant quality
+        //   and ignores the bitrate target entirely (~95 Mbit/s measured
+        //   against a 5 Mbit/s target; a direct VTCompressionSession with the
+        //   same settings minus Quality tracks the target fine). Upstream
+        //   GStreamer bug.
+        // - CBR uses a different VT key (ConstantBitRate) that IS honored in
+        //   steady state.
+        //
+        // So map VBR to CBR too: a user asking for VBR means "roughly the
+        // target bitrate", never "unbounded constant quality". CQP maps to
+        // ABR, whose constant-quality behavior is exactly what CQP requests
+        // (the encoder's `quality` property is the dial). Note: scene changes
+        // still produce a multi-frame overshoot (~2-4 MB at 720p30) that no
+        // exposed VT property bounds, in CBR as well — for strictly capped
+        // bursts (e.g. WebRTC on constrained paths) use a software encoder
+        // (x264 with VBV) via encoder_preference=software.
+        if encoder.has_property("rate-control") {
+            let rc = match rate_control {
+                RateControl::CBR | RateControl::VBR => "cbr",
+                RateControl::CQP => "abr",
+            };
+            encoder.set_property_from_str("rate-control", rc);
+        }
+        // data-rate-limits (the VT counterpart of a VBV cap, 1.2x target over
+        // a 0.5 s window). vtenc skips it in CBR mode, and on Apple Silicon
+        // hardware it is accepted (noErr) but measured to have no effect even
+        // in ABR. Still set it: it costs nothing where ignored and other
+        // VideoToolbox backends may honor it on the ABR (CQP) path.
+        if bitrate > 0 && encoder.has_property("data-rate-limits") {
+            let max_kbps = bitrate.saturating_mul(12) / 10;
+            encoder.set_property_from_str("data-rate-limits", &format!("{},0.5", max_kbps));
+        }
+        // VideoToolbox: cap the wall-clock gap between keyframes in addition
+        // to the frame-based max-keyframe-interval set below. WebRTC clients
+        // need a keyframe to start decoding when they join, so an unbounded
+        // wall-clock gap hurts join latency if the source runs slower than
+        // expected. keyframe_interval is in frames; the block's convention
+        // (see property docs) is "60 frames = 2 s at 30 fps", so derive the
+        // ns cap at the same nominal 30 fps. Above 30 fps the frame cap fires
+        // first (tighter); below it this duration holds the line.
+        if keyframe_interval > 0 && encoder.has_property("max-keyframe-interval-duration") {
+            let duration_ns = u64::from(keyframe_interval) * 1_000_000_000 / 30;
+            encoder
+                .set_property_from_str("max-keyframe-interval-duration", &duration_ns.to_string());
         }
         // VideoToolbox defaults to allow-frame-reordering=true, which emits
         // B-frames. B-frames cause non-monotonic PTS in decode order —
@@ -615,6 +693,20 @@ fn set_encoder_properties(
             // Apple VideoToolbox
             encoder.set_property_from_str("max-keyframe-interval", &keyframe_str);
         }
+    }
+
+    // Rate-limit force-keyunit requests (GstVideoEncoder base-class property,
+    // present on all encoders; default 0 = honor every request). WebRTC
+    // viewers send a PLI on picture loss and webrtcsink converts each one
+    // into a force-keyunit event. With no floor, a burst-induced loss spiral
+    // (big frame -> loss -> PLI -> outsized IDR -> more loss -> more PLIs)
+    // makes the encoder emit back-to-back keyframes and multiplies the burst
+    // it started from. A 1 s floor caps PLI-driven IDRs at one per second:
+    // new viewers and genuine recoveries still get their keyframe quickly,
+    // but a PLI storm can no longer drive the output to many times the
+    // target bitrate.
+    if encoder.has_property("min-force-key-unit-interval") {
+        encoder.set_property("min-force-key-unit-interval", 1_000_000_000u64);
     }
 
     info!(

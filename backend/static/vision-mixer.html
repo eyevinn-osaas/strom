@@ -17,6 +17,10 @@
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            /* Render native widget chrome (number-input spinners, scrollbars)
+               in dark theme — otherwise Chrome paints the spin buttons on a
+               white box inside our purple inputs. */
+            color-scheme: dark;
         }
 
         /* Multiview player */
@@ -40,10 +44,13 @@
             gap: 16px;
             align-items: stretch;
             transition: max-height 0.3s ease, padding 0.3s ease, opacity 0.2s ease;
-            max-height: 200px;
+            /* Cap, not a fixed height: the bar only grows past ~200px when a
+               wipe/FX picker is expanded (4 grid rows ≈ 270px worst case). */
+            max-height: 280px;
             overflow: hidden;
         }
-        body.editing-layout .controls {
+        body.editing-layout .controls,
+        body.fx-panel-open .controls {
             max-height: 70vh;
         }
 
@@ -109,6 +116,40 @@
         .src-btn:focus {
             outline: none;
         }
+        /* Indicator variant used by the PGM bus — display only, no click.
+           Removes the pointer cursor + hover affordance so it doesn't look
+           interactive. The active (red) tally still shows what's on air. */
+        .src-btn.indicator,
+        .pip-btn.indicator {
+            cursor: default;
+        }
+        .src-btn.indicator:hover {
+            border-color: #444;
+            color: #999;
+        }
+        .pip-btn.indicator:hover {
+            border-color: #555;
+            color: #999;
+        }
+
+        /* "Via PiP" tally: an input is visible on this bus indirectly because
+           the PiP currently on the bus uses it as bg or as a zone source.
+           Dimmer hue than the direct active tally so the eye still ranks
+           "direct > via-pip" at a glance. Matches the multiview thumbnail
+           rings in overlay.rs (PGM_VIA_PIP / PVW_VIA_PIP).
+           Declared BEFORE the direct .pgm-active / .pvw-active blocks so the
+           direct tally wins on equal specificity — JS keeps them mutually
+           exclusive today, but the source order is the safety net. */
+        .src-btn.pgm-via-pip {
+            background: #4a0000;
+            border-color: #8c0000;
+            color: #f0bbbb;
+        }
+        .src-btn.pvw-via-pip {
+            background: #002a00;
+            border-color: #008c00;
+            color: #bbf0bb;
+        }
 
         .src-btn.pgm-active {
             background: #cc0000;
@@ -129,7 +170,9 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
-            min-width: 180px;
+            /* Wide enough that the 6-column wipe/FX grids keep readable
+               labels and the type row breathes. */
+            min-width: 340px;
             flex-shrink: 0;
             border-left: 1px solid #444;
             padding-left: 16px;
@@ -219,6 +262,90 @@
             color: #fff;
         }
         .type-btn:hover { border-color: #666; }
+        .dir-row.hidden { display: none; }
+        .dir-btn { font-size: 13px; }
+        /* Wipe shape / master FX pickers: grids so the many buttons keep a
+           uniform, readable size instead of squeezing into one flex row. */
+        .wipe-grid, .fx-grid {
+            display: grid;
+            gap: 4px;
+        }
+        .wipe-grid, .fx-grid { grid-template-columns: repeat(6, 1fr); }
+        .wipe-grid.hidden, .fx-grid.hidden { display: none; }
+        .wipe-grid .type-btn, .fx-grid .type-btn {
+            font-size: 10px;
+            letter-spacing: 0;
+            padding: 0 2px;
+            min-width: 0;
+        }
+        /* Standard/More tiers: the broadcast-staple shapes are always visible;
+           novelty shapes sit behind a MORE toggle so the default picker reads
+           like a production switcher, not an effects demo. */
+        .wipe-grid .novelty, .fx-grid .novelty { display: none; }
+        .wipe-grid.expanded .novelty, .fx-grid.expanded .novelty { display: flex; }
+        .more-btn { color: #666; border-style: dashed; }
+        .more-btn:hover { color: #aaa; }
+        /* Shader looks panel */
+        .fx-looks-title {
+            font-weight: bold;
+            color: #ccc;
+            margin-bottom: 6px;
+        }
+        .fx-looks-hint {
+            font-weight: normal;
+            color: #777;
+            font-size: 11px;
+        }
+        .fx-look-row {
+            display: grid;
+            grid-template-columns: 110px 120px 1fr;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        .fx-look-row:last-child { border-bottom: none; }
+        .fx-look-label {
+            color: #aaa;
+            font-size: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .fx-look-row select {
+            background: #2a2a2a;
+            color: #ddd;
+            border: 1px solid #444;
+            border-radius: 3px;
+            height: 24px;
+            width: 100%;
+        }
+        .fx-look-params {
+            display: grid;
+            grid-template-columns: repeat(4, max-content);
+            align-items: center;
+            gap: 4px 12px;
+        }
+        .fx-param {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .fx-look-params label { color: #888; font-size: 11px; }
+        .fx-look-params input[type="range"] { width: 80px; }
+        .fx-look-params input[type="color"] {
+            width: 28px;
+            height: 22px;
+            padding: 0;
+            border: 1px solid #444;
+            border-radius: 3px;
+            background: #2a2a2a;
+        }
+        .fx-look-params .fx-val {
+            color: #888;
+            font-size: 11px;
+            min-width: 30px;
+        }
 
         /* Duration row */
         .duration-row {
@@ -348,13 +475,76 @@
         }
         .pip-editor {
             display: inline-flex;
-            align-items: flex-start;
-            gap: 16px;
+            flex-direction: column;
+            gap: 10px;
             padding: 12px;
             background: var(--pip-bg-elevated);
             border: 1px solid var(--pip-border);
             border-radius: 4px;
             align-self: flex-start;
+        }
+        /* Two equal columns — Zones and Crop/Zoom — each: header row with
+           its tools, the canvas, then compact control rows beneath. */
+        .pip-editor-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+        }
+        .pip-editor-col {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .pip-editor-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--pip-text);
+            min-height: 26px;
+        }
+        .pip-editor-title {
+            color: var(--pip-accent-bright);
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+        .pip-editor-ctrl {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--pip-text-dim);
+        }
+        .pip-editor-ctrl-label {
+            color: var(--pip-text);
+            font-weight: 700;
+        }
+        /* Narrower px inputs so X/Y/W/H (+cap) fit on a single control row. */
+        .pip-editor-ctrl .pip-zone-px-input {
+            width: 52px;
+        }
+        .pip-editor-ctrl .pip-zone-cap-input {
+            width: 40px;
+        }
+        /* Compact color swatch for the zone border. */
+        .pip-zone-border-color {
+            width: 28px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid var(--pip-border-strong);
+            border-radius: 3px;
+            background: var(--pip-bg-control);
+            cursor: pointer;
+        }
+        /* One shared one-line legend for the whole editor. */
+        .pip-editor-footer {
+            font-size: 10px;
+            color: var(--pip-text-muted);
+            max-width: 860px;
         }
         .pip-config-row {
             display: flex;
@@ -459,13 +649,16 @@
             opacity: 0.4;
             cursor: not-allowed;
         }
+        /* Source sits in another zone of this PiP: taken (dimmed fill),
+           clicking moves it to the active zone. */
+        .pip-overlay-chip.elsewhere {
+            background: var(--pip-bg-control);
+            border-color: var(--pip-accent);
+            border-style: dashed;
+            color: var(--pip-text-dim);
+        }
 
         /* PiP zone editor — visual canvas per PiP */
-        .pip-canvas-wrap {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-        }
         .pip-canvas {
             position: relative;
             width: 480px;
@@ -591,18 +784,112 @@
         .pip-canvas-zone .zone-handle.ne { right: -4px; top: -4px; cursor: nesw-resize; }
         .pip-canvas-zone .zone-handle.sw { left: -4px; bottom: -4px; cursor: nesw-resize; }
         .pip-canvas-zone .zone-handle.se { right: -4px; bottom: -4px; cursor: nwse-resize; }
-        .pip-canvas-toolbar {
+        /* Crop ("zoom"/punch-in) editor — a source-frame canvas with a
+           draggable/resizable crop window. Sits beside the zone canvas in
+           the layout editor. */
+        .pip-crop-wrap {
             display: flex;
             flex-direction: column;
-            align-items: flex-start;
             gap: 8px;
             font-size: 11px;
             font-weight: 600;
             color: var(--pip-text);
-            width: 220px;
+            width: 320px;
             flex-shrink: 0;
         }
-        .pip-canvas-toolbar > * { max-width: 100%; }
+        .pip-crop-select {
+            background: var(--pip-bg-control);
+            border: 1px solid var(--pip-border-strong);
+            border-radius: 3px;
+            color: var(--pip-text);
+            font-size: 11px;
+            font-weight: 600;
+            height: 24px;
+            padding: 0 4px;
+            flex: 1;
+            min-width: 0;
+        }
+        .pip-crop-canvas {
+            position: relative;
+            width: 320px;
+            height: 180px;
+            background: var(--pip-bg-panel);
+            border: 1px solid var(--pip-border);
+            border-radius: 3px;
+            overflow: hidden;
+            flex-shrink: 0;
+            user-select: none;
+        }
+        .pip-crop-canvas .pip-crop-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--pip-text-dim);
+            font-size: 11px;
+            text-align: center;
+            padding: 0 16px;
+            pointer-events: none;
+        }
+        .pip-crop-frame {
+            position: absolute;
+            border: 1px solid var(--pip-warn);
+            /* Dim everything outside the crop window. */
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+            box-sizing: border-box;
+            cursor: move;
+            z-index: 2;
+        }
+        .pip-crop-frame .zone-handle {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background: var(--pip-warn);
+            border: 1px solid var(--pip-border-strong);
+            z-index: 4;
+        }
+        .pip-crop-frame .zone-handle.nw { left: -4px; top: -4px; cursor: nwse-resize; }
+        .pip-crop-frame .zone-handle.ne { right: -4px; top: -4px; cursor: nesw-resize; }
+        .pip-crop-frame .zone-handle.sw { left: -4px; bottom: -4px; cursor: nesw-resize; }
+        .pip-crop-frame .zone-handle.se { right: -4px; bottom: -4px; cursor: nwse-resize; }
+        .pip-crop-zoom-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--pip-text-dim);
+        }
+        .pip-crop-zoom-row input[type="range"] {
+            flex: 1;
+            min-width: 0;
+            accent-color: var(--pip-accent);
+        }
+        .pip-crop-zoom-val {
+            width: 42px;
+            text-align: right;
+            color: var(--pip-text);
+            font-variant-numeric: tabular-nums;
+        }
+        .pip-crop-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .pip-crop-reset-btn {
+            background: var(--pip-bg-control);
+            border: 1px solid var(--pip-border-strong);
+            border-radius: 3px;
+            color: var(--pip-text);
+            font-size: 11px;
+            font-weight: 600;
+            height: 24px;
+            padding: 0 10px;
+            cursor: pointer;
+        }
+        .pip-crop-reset-btn:hover {
+            color: var(--pip-accent-bright);
+            border-color: var(--pip-accent);
+        }
         .pip-zone-add-btn {
             background: var(--pip-bg-control);
             border: 1px solid var(--pip-border-strong);
@@ -613,7 +900,11 @@
             padding: 6px 12px;
             cursor: pointer;
         }
-        .pip-zone-add-btn:hover {
+        .pip-zone-add-btn:disabled {
+            color: var(--pip-text-muted);
+            cursor: default;
+        }
+        .pip-zone-add-btn:hover:not(:disabled) {
             border-color: var(--pip-accent);
             color: #fff;
         }
@@ -634,13 +925,66 @@
             font-size: 11px;
             font-weight: 600;
         }
-        .pip-canvas-hint {
-            font-size: 10px;
-            font-weight: 400;
-            color: var(--pip-text-muted);
-            line-height: 1.5;
-            max-width: 220px;
+        /* Pixel-precise rect editor for the active zone. Two rows of two
+           inputs — X/Y above, W/H below — sized to fit the 220px toolbar. */
+        .pip-zone-px-label {
+            font-size: 11px;
+            font-weight: 600;
+            width: 10px;
+            text-align: center;
         }
+        .pip-zone-px-input {
+            width: 64px;
+            height: 24px;
+            background: var(--pip-bg-control);
+            border: 1px solid var(--pip-border-strong);
+            border-radius: 3px;
+            color: var(--pip-text);
+            padding: 0 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .pip-zone-px-input:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        /* Snap + grid toggle checkboxes for the layout editor. */
+        .pip-zone-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .pip-zone-toggle input[type="checkbox"] {
+            cursor: pointer;
+            margin: 0;
+        }
+        /* Grid overlay drawn on top of the canvas BG and under the zone rects.
+           Quarter lines stay subtle (white) so layouts dominate visually;
+           rule-of-thirds lines pop slightly (gold) to read at a glance. */
+        .pip-canvas-grid {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+        .pip-grid-line {
+            position: absolute;
+        }
+        .pip-grid-line.v { top: 0; bottom: 0; width: 1px; }
+        .pip-grid-line.h { left: 0; right: 0; height: 1px; }
+        .pip-grid-line.quarter { background: rgba(255, 255, 255, 0.14); }
+        .pip-grid-line.third { background: rgba(255, 200, 80, 0.45); }
+        /* Lit-up while a drag/resize/px-input lands on this line. Bumped to a
+           2px solid bright cyan with a faint glow so it pops above both the
+           subtle quarter and the gold third base colors. */
+        .pip-grid-line.active-snap {
+            background: rgba(120, 230, 255, 0.95);
+            box-shadow: 0 0 6px rgba(120, 230, 255, 0.7);
+        }
+        .pip-grid-line.active-snap.v { width: 2px; margin-left: -0.5px; }
+        .pip-grid-line.active-snap.h { height: 2px; margin-top: -0.5px; }
 
         /* Status bar */
         .status-bar {
@@ -814,17 +1158,66 @@
         <!-- PiP composition panel (populated when num_pips > 0) -->
         <div class="pip-config-panel" id="pipConfigPanel" style="display:none;"></div>
 
+        <!-- Shader FX (looks) panel (populated when the FX engine is available) -->
+        <div class="pip-config-panel" id="fxPanel" style="display:none;"></div>
+
         <!-- Transition controls -->
         <div class="transition-panel">
             <div class="transition-buttons">
                 <button class="take-btn cut" onclick="doCut()" title="Cut (X)">CUT</button>
                 <button class="take-btn auto" id="autoBtn" onclick="doAuto()" title="Auto transition (Space)">AUTO</button>
                 <button class="take-btn auto" id="ftbBtn" onclick="doFtb()" title="Fade to Black (F)">FTB</button>
+                <button class="take-btn auto fx-only" id="fxLooksBtn" onclick="toggleFxPanel()" title="Shader looks: chroma key, blur, VHS, ... (GPU FX engine)">LOOKS</button>
             </div>
             <div class="type-row">
                 <button class="type-btn active" data-type="fade" onclick="setTransitionType('fade')">MIX</button>
                 <button class="type-btn" data-type="dip_to_black" onclick="setTransitionType('dip_to_black')">DIP</button>
-                <button class="type-btn" data-type="push_left" onclick="setTransitionType('push_left')">PUSH</button>
+                <button class="type-btn" data-type="push" onclick="setTransitionType('push')" title="Push — both pictures move together">PUSH</button>
+                <button class="type-btn" data-type="slide" onclick="setTransitionType('slide')" title="Slide — new picture slides in over the old">SLIDE</button>
+                <button class="type-btn fx-only" data-type="wipe" onclick="setTransitionType('wipe')" title="Shader wipe (GPU FX engine)">WIPE</button>
+                <button class="type-btn fx-only" data-type="fx" onclick="setTransitionType('fx')" title="Master FX take (GPU FX engine)">FX</button>
+            </div>
+            <div class="type-row dir-row hidden" id="dirRow" title="Direction of motion">
+                <button class="type-btn dir-btn active" data-dir="left" onclick="setTransitionDir('left')">&#8592;</button>
+                <button class="type-btn dir-btn" data-dir="right" onclick="setTransitionDir('right')">&#8594;</button>
+                <button class="type-btn dir-btn" data-dir="up" onclick="setTransitionDir('up')">&#8593;</button>
+                <button class="type-btn dir-btn" data-dir="down" onclick="setTransitionDir('down')">&#8595;</button>
+            </div>
+            <div class="wipe-grid hidden" id="wipeRow" title="Wipe shape">
+                <button class="type-btn wipe-btn dir-btn active" data-wipe="wipe_left" onclick="setWipeShape('wipe_left')">&#8592;</button>
+                <button class="type-btn wipe-btn dir-btn" data-wipe="wipe_right" onclick="setWipeShape('wipe_right')">&#8594;</button>
+                <button class="type-btn wipe-btn dir-btn" data-wipe="wipe_up" onclick="setWipeShape('wipe_up')">&#8593;</button>
+                <button class="type-btn wipe-btn dir-btn" data-wipe="wipe_down" onclick="setWipeShape('wipe_down')">&#8595;</button>
+                <button class="type-btn wipe-btn" data-wipe="iris_open" onclick="setWipeShape('iris_open')" title="Circle grows from center">IRIS+</button>
+                <button class="type-btn wipe-btn" data-wipe="iris_close" onclick="setWipeShape('iris_close')" title="Reveals outside-in">IRIS&#8722;</button>
+                <button class="type-btn wipe-btn" data-wipe="barn_doors" onclick="setWipeShape('barn_doors')" title="Opens from a center seam outward">BARN</button>
+                <button class="type-btn wipe-btn" data-wipe="luma_wipe" onclick="setWipeShape('luma_wipe')" title="Dark areas hand over first">LUMA</button>
+                <button class="type-btn more-btn" id="wipeMoreBtn" onclick="toggleMore('wipeRow')" title="Show novelty wipe shapes">MORE&#9662;</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="clock_wipe" onclick="setWipeShape('clock_wipe')" title="Radial clock sweep">CLOCK</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="blinds" onclick="setWipeShape('blinds')">BLINDS</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="checker_wipe" onclick="setWipeShape('checker_wipe')">CHECK</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="noise_dissolve" onclick="setWipeShape('noise_dissolve')" title="Granular film dissolve">NOISE</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="melt" onclick="setWipeShape('melt')" title="Doom-style melt — the picture drips away in columns">MELT</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="heart_iris" onclick="setWipeShape('heart_iris')" title="Heart grows from the center">HEART</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="star_wipe" onclick="setWipeShape('star_wipe')" title="Five-point star grows from the center">STAR</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="pinwheel" onclick="setWipeShape('pinwheel')" title="Radial blades sweep around the center">PINWHL</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="crosshatch" onclick="setWipeShape('crosshatch')" title="Ink-sketch hatch dissolve">HATCH</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="hex_dissolve" onclick="setWipeShape('hex_dissolve')" title="Chunky hexagon cells">HEX</button>
+                <button class="type-btn wipe-btn novelty" data-wipe="warp_wipe" onclick="setWipeShape('warp_wipe')" title="Directional wipe with smear">WARP</button>
+            </div>
+            <div class="fx-grid hidden" id="fxRow" title="Master FX take">
+                <button class="type-btn fxk-btn active" data-fx="flash_dissolve" onclick="setFxKind('flash_dissolve')" title="White flash over a crossfade">FLASH</button>
+                <button class="type-btn more-btn" id="fxMoreBtn" onclick="toggleMore('fxRow')" title="Show novelty FX takes">MORE&#9662;</button>
+                <button class="type-btn fxk-btn novelty" data-fx="glitch_cut" onclick="setFxKind('glitch_cut')" title="Digital glitch hides a hard cut">GLITCH</button>
+                <button class="type-btn fxk-btn novelty" data-fx="whip_pan_left" onclick="setFxKind('whip_pan_left')" title="Camera whip with motion blur">WHIP&#8592;</button>
+                <button class="type-btn fxk-btn novelty" data-fx="whip_pan_right" onclick="setFxKind('whip_pan_right')" title="Camera whip with motion blur">WHIP&#8594;</button>
+                <button class="type-btn fxk-btn novelty" data-fx="punch_zoom" onclick="setFxKind('punch_zoom')" title="Zoom kick with shake">PUNCH</button>
+                <button class="type-btn fxk-btn novelty" data-fx="pixelate_take" onclick="setFxKind('pixelate_take')" title="Dissolve into coarse blocks and back">PIXEL</button>
+                <button class="type-btn fxk-btn novelty" data-fx="zoom_blur" onclick="setFxKind('zoom_blur')" title="Radial streak blur through the cut">ZOOM</button>
+                <button class="type-btn fxk-btn novelty" data-fx="spin" onclick="setFxKind('spin')" title="Frame twists through the cut">SPIN</button>
+                <button class="type-btn fxk-btn novelty" data-fx="tv_roll" onclick="setFxKind('tv_roll')" title="TV sync-loss vertical roll">ROLL</button>
+                <button class="type-btn fxk-btn novelty" data-fx="negative_flash" onclick="setFxKind('negative_flash')" title="Frame inverts through the crossfade">NEG</button>
+                <button class="type-btn fxk-btn novelty" data-fx="ripple" onclick="setFxKind('ripple')" title="Water ring ripples both pictures through a crossfade">RIPPLE</button>
             </div>
             <div class="duration-row">
                 <label>Duration:</label>
@@ -846,7 +1239,7 @@
             <span class="conn-dot" id="wsDot" title="WebSocket control">WS</span>
         </div>
         <span class="status-text" id="statusText">Connecting...</span>
-        <span class="shortcut-hint">v2.10-zones | 1-9,0 = PVW | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
+        <span class="shortcut-hint">v2.39-roll-punch-fix | 1-9,0 = PVW | Space = AUTO | X = CUT | F = FTB | M = Hide</span>
     </div>
 
     <!-- Server-injected configuration (safe JSON encoding) -->
@@ -864,6 +1257,18 @@
         const INPUT_LABELS = _cfg.input_labels;
         const NUM_DSK_INPUTS = _cfg.num_dsk_inputs || 0;
         const NUM_PIPS = _cfg.num_pips || 0;
+        // PGM canvas size in pixels. Zone rects are stored normalized (0..1) so
+        // they project cleanly into the multiview tile, big-PVW rect, and the
+        // PGM/PVW outputs alike. The pixel input fields display values in PGM
+        // coordinates because that's the broadcast canvas operators think in.
+        const PGM_W = (_cfg.pgm_w && _cfg.pgm_w > 0) ? _cfg.pgm_w : 1920;
+        const PGM_H = (_cfg.pgm_h && _cfg.pgm_h > 0) ? _cfg.pgm_h : 1080;
+        // Negotiated per-input resolutions ({width, height} or null). Inputs
+        // are NOT normalized to the PGM resolution — each source can have any
+        // resolution/aspect. Refreshed when the layout editor opens.
+        let INPUT_RESOLUTIONS = Array.isArray(_cfg.input_resolutions)
+            ? _cfg.input_resolutions
+            : [];
 
         // ---- State ----
         // PGM/PVW source: each bus shows either an input (number) or a PiP (currentPvwPip/currentPgmPip).
@@ -871,18 +1276,24 @@
         let currentPgm = (_cfg.initial_pgm != null) ? _cfg.initial_pgm : null;
         let currentPvw = (_cfg.initial_pvw != null) ? _cfg.initial_pvw : null;
         let dskEnabled = _cfg.dsk_states || [true, true, true, true];
-        // PiPs: { bg, zones: [{rect, capacity, sources}] } per configured PiP.
-        // A zone with rect=null fills the whole PiP region; sources in a zone
-        // auto-tile within its rect. capacity=null means unlimited.
+        // PiPs: { bg, zones: [{rect, capacity, sources}], transforms } per
+        // configured PiP. A zone with rect=null fills the whole PiP region;
+        // sources in a zone auto-tile within its rect. capacity=null means
+        // unlimited. transforms maps input index → normalized SourceCrop
+        // ({left, top, right, bottom} edge fractions) — the "zoom"/punch-in.
         let pipConfigs = (_cfg.pips || []).map(p => ({
             bg: (p && p.bg != null) ? p.bg : null,
             zones: (p && Array.isArray(p.zones))
                 ? p.zones.map(z => ({
                     rect: z && z.rect ? { ...z.rect } : null,
                     capacity: (z && z.capacity != null) ? z.capacity : null,
-                    sources: (z && Array.isArray(z.sources)) ? z.sources.slice() : []
+                    sources: (z && Array.isArray(z.sources)) ? z.sources.slice() : [],
+                    border: (z && z.border) ? { ...z.border } : null
                 }))
-                : []
+                : [],
+            transforms: (p && p.transforms && typeof p.transforms === 'object')
+                ? JSON.parse(JSON.stringify(p.transforms))
+                : {}
         }));
         // Active zone target per PiP — input-chip clicks push into this zone.
         // Defaults to zone 0; user clicks a zone in the canvas to change focus.
@@ -893,18 +1304,79 @@
 
         function toggleEditPip(pipIdx) {
             editingPipIdx = (editingPipIdx === pipIdx) ? null : pipIdx;
+            // Crop target is editor-scoped — reset when the editor opens/closes.
+            activeCropTarget = null;
             document.body.classList.toggle('editing-layout', editingPipIdx != null);
             buildPipConfigPanel();
+            // Sources negotiate caps after page load — refresh resolutions so
+            // the crop editor works with the real source aspect.
+            if (editingPipIdx != null) refreshInputResolutions();
+        }
+
+        // Re-fetch negotiated input resolutions from the live state endpoint.
+        // Rebuilds the open editor when they arrive.
+        async function refreshInputResolutions() {
+            try {
+                const resp = await fetch(API_BASE + '/state');
+                if (!resp.ok) return;
+                const st = await resp.json();
+                if (Array.isArray(st.input_resolutions)) {
+                    INPUT_RESOLUTIONS = st.input_resolutions;
+                    if (editingPipIdx != null) buildPipConfigPanel();
+                }
+            } catch {}
         }
         // Which PiP is currently shown on each bus (null = bus is showing an input, not a PiP).
         let currentPvwPip = (_cfg.pvw_pip != null) ? _cfg.pvw_pip : null;
         let currentPgmPip = (_cfg.pgm_pip != null) ? _cfg.pgm_pip : null;
-        let transitionType = 'fade';
+        // Transition selection: base type + direction (push/slide only),
+        // wipe shape (wipe base) or master FX kind (fx base).
+        let transitionBase = 'fade';
+        let transitionDir = 'left';
+        let wipeShape = 'wipe_left';
+        let fxKind = 'flash_dissolve';
         let transitionDurationMs = 1000;
+        function currentTransitionType() {
+            if (transitionBase === 'push' || transitionBase === 'slide')
+                return transitionBase + '_' + transitionDir;
+            if (transitionBase === 'wipe') return wipeShape;
+            if (transitionBase === 'fx') return fxKind;
+            return transitionBase;
+        }
+        // Shader FX engine availability (GPU backend with Shader FX enabled).
+        // Resolved from the /state endpoint; gates the WIPE/FX/LOOKS UI.
+        let FX_AVAILABLE = false;
+        let inputEffects = [];
+        let masterEffect = { type: 'none' };
         let transitioning = false;
         let ftbActive = _cfg.ftb_active || false;
         let overlayAlpha = _cfg.overlay_alpha != null ? _cfg.overlay_alpha : 1.0;
         let controlsMinimized = localStorage.getItem('vm-controls-minimized') === 'true';
+        // Snap & grid toggles for the zone layout editor. Snap defaults ON
+        // (preserves the original drag behavior); grid defaults OFF so the
+        // editor stays visually clean unless the operator wants the guides.
+        let snapEnabled = localStorage.getItem('vm-zone-snap') !== 'false';
+        let gridVisible = localStorage.getItem('vm-zone-grid') === 'true';
+        // Crop editor state: which input is being crop-edited in the open
+        // layout editor (null = none) and whether the crop frame keeps the
+        // destination box aspect (default ON so the crop fills the box).
+        let activeCropTarget = null;
+        let cropAspectLock = localStorage.getItem('vm-crop-aspect-lock') !== 'false';
+        function toggleCropAspectLock() {
+            cropAspectLock = !cropAspectLock;
+            localStorage.setItem('vm-crop-aspect-lock', cropAspectLock);
+            buildPipConfigPanel();
+        }
+        function toggleSnap() {
+            snapEnabled = !snapEnabled;
+            localStorage.setItem('vm-zone-snap', snapEnabled);
+            buildPipConfigPanel();
+        }
+        function toggleGrid() {
+            gridVisible = !gridVisible;
+            localStorage.setItem('vm-zone-grid', gridVisible);
+            buildPipConfigPanel();
+        }
 
         function toggleMinimize() {
             controlsMinimized = !controlsMinimized;
@@ -1004,7 +1476,7 @@
         }
 
         function doAuto() {
-            doTake(transitionType, transitionDurationMs);
+            doTake(currentTransitionType(), transitionDurationMs);
         }
 
         // ---- FTB (Fade to Black) ----
@@ -1088,11 +1560,265 @@
             document.getElementById('overlayAlphaValue').textContent = overlayAlpha.toFixed(2);
         }
 
+        // ---- Shader FX looks (per-source + master effects) ----
+        // Catalog mirrors strom_types::effects::VideoEffect. Param edits are
+        // throttled; the backend only swaps uniforms when the kind is
+        // unchanged, so sliders are cheap. `std: true` marks the production
+        // staples; the rest render under a "Stylized" optgroup.
+        const FX_CATALOG = [
+            { type: 'none', label: 'None', params: [], std: true },
+            { type: 'chroma_key', label: 'Chroma Key', std: true, params: [
+                { k: 'key_color', label: 'Key', t: 'color', d: '#00B140' },
+                { k: 'similarity', label: 'Similarity', t: 'range', min: 0, max: 1, step: 0.01, d: 0.35 },
+                { k: 'smoothness', label: 'Soft', t: 'range', min: 0, max: 1, step: 0.01, d: 0.1 },
+                { k: 'spill', label: 'Spill', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+            ]},
+            { type: 'pixelate', label: 'Pixelate', std: true, params: [
+                { k: 'block_size', label: 'Block', t: 'range', min: 2, max: 200, step: 1, d: 24 },
+            ]},
+            { type: 'blur', label: 'Blur', std: true, params: [
+                { k: 'radius', label: 'Radius', t: 'range', min: 0, max: 40, step: 0.5, d: 6 },
+            ]},
+            { type: 'color_correct', label: 'Color Correct', std: true, params: [
+                { k: 'brightness', label: 'Bright', t: 'range', min: -1, max: 1, step: 0.01, d: 0 },
+                { k: 'contrast', label: 'Contrast', t: 'range', min: 0, max: 2, step: 0.01, d: 1 },
+                { k: 'saturation', label: 'Sat', t: 'range', min: 0, max: 2, step: 0.01, d: 1 },
+                { k: 'hue', label: 'Hue', t: 'range', min: -1, max: 1, step: 0.01, d: 0 },
+                { k: 'gamma', label: 'Gamma', t: 'range', min: 0.1, max: 3, step: 0.01, d: 1 },
+                { k: 'temperature', label: 'Temp', t: 'range', min: -1, max: 1, step: 0.01, d: 0 },
+                { k: 'tint', label: 'Tint', t: 'range', min: -1, max: 1, step: 0.01, d: 0 },
+            ]},
+            { type: 'duotone', label: 'Duotone', params: [
+                { k: 'low', label: 'Low', t: 'color', d: '#000000' },
+                { k: 'high', label: 'High', t: 'color', d: '#FFFFFF' },
+                { k: 'mix', label: 'Mix', t: 'range', min: 0, max: 1, step: 0.01, d: 1 },
+            ]},
+            { type: 'vignette', label: 'Vignette', std: true, params: [
+                { k: 'amount', label: 'Amount', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+                { k: 'softness', label: 'Soft', t: 'range', min: 0.01, max: 1, step: 0.01, d: 0.5 },
+            ]},
+            { type: 'vhs', label: 'VHS', params: [
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+            ]},
+            { type: 'old_film', label: 'Old Film', params: [
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+            ]},
+            { type: 'edge_glow', label: 'Edge Glow', params: [
+                { k: 'color', label: 'Color', t: 'color', d: '#00FFD0' },
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+            ]},
+            { type: 'crt', label: 'CRT', params: [
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+            ]},
+            { type: 'halftone', label: 'Halftone', params: [
+                { k: 'dot_size', label: 'Dot', t: 'range', min: 3, max: 40, step: 1, d: 8 },
+            ]},
+            { type: 'thermal', label: 'Thermal', params: [
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 1 },
+            ]},
+            { type: 'night_vision', label: 'Night Vision', params: [
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 1 },
+            ]},
+            { type: 'posterize', label: 'Posterize', params: [
+                { k: 'levels', label: 'Levels', t: 'range', min: 2, max: 16, step: 1, d: 5 },
+            ]},
+            { type: 'underwater', label: 'Underwater', params: [
+                { k: 'intensity', label: 'Intensity', t: 'range', min: 0, max: 1, step: 0.01, d: 0.5 },
+            ]},
+        ];
+        let fxPanelOpen = false;
+        const fxPostTimers = {};
+
+        function fxTargetKey(target) {
+            return target === 'master' ? 'master' : 'input' + target.input;
+        }
+
+        function postEffect(target, effect) {
+            const key = fxTargetKey(target);
+            if (fxPostTimers[key]) clearTimeout(fxPostTimers[key]);
+            fxPostTimers[key] = setTimeout(() => {
+                delete fxPostTimers[key];
+                apiPost('/effect', { target: target, effect: effect })
+                    .then(r => setStatus(r.message))
+                    .catch(e => setStatus('Effect error: ' + e.message));
+            }, 80);
+        }
+
+        function effectFor(target) {
+            return target === 'master'
+                ? masterEffect
+                : (inputEffects[target.input] || { type: 'none' });
+        }
+
+        function setEffectLocal(target, effect) {
+            if (target === 'master') masterEffect = effect;
+            else inputEffects[target.input] = effect;
+        }
+
+        function defaultEffect(type) {
+            const def = FX_CATALOG.find(c => c.type === type);
+            const e = { type: type };
+            (def ? def.params : []).forEach(pr => { e[pr.k] = pr.d; });
+            return e;
+        }
+
+        function onFxTypeChange(target, type) {
+            const e = defaultEffect(type);
+            setEffectLocal(target, e);
+            postEffect(target, e);
+            buildFxPanel();
+        }
+
+        function onFxParamInput(target, key, value, isNumber) {
+            const e = Object.assign({}, effectFor(target));
+            e[key] = isNumber ? parseFloat(value) : value;
+            setEffectLocal(target, e);
+            postEffect(target, e);
+            const span = document.getElementById('fxval_' + fxTargetKey(target) + '_' + key);
+            if (span && isNumber) span.textContent = parseFloat(value);
+        }
+
+        function fxRowHtml(target, label) {
+            const e = effectFor(target);
+            const key = fxTargetKey(target);
+            const def = FX_CATALOG.find(c => c.type === e.type) || FX_CATALOG[0];
+            const tj = JSON.stringify(target).replace(/"/g, '&quot;');
+            let html = '<div class="fx-look-row">';
+            html += '<span class="fx-look-label" title="' + label + '">' + label + '</span>';
+            html += '<select onchange="onFxTypeChange(JSON.parse(this.dataset.t), this.value)" data-t="' + tj + '">';
+            const optionHtml = c =>
+                '<option value="' + c.type + '"' + (c.type === e.type ? ' selected' : '') + '>' + c.label + '</option>';
+            FX_CATALOG.filter(c => c.std).forEach(c => { html += optionHtml(c); });
+            html += '<optgroup label="Stylized">';
+            FX_CATALOG.filter(c => !c.std).forEach(c => { html += optionHtml(c); });
+            html += '</optgroup></select>';
+            html += '<div class="fx-look-params">';
+            def.params.forEach(pr => {
+                const v = (e[pr.k] != null) ? e[pr.k] : pr.d;
+                html += '<span class="fx-param"><label>' + pr.label + '</label>';
+                if (pr.t === 'color') {
+                    html += '<input type="color" value="' + v + '" data-t="' + tj + '"'
+                        + ' oninput="onFxParamInput(JSON.parse(this.dataset.t), \'' + pr.k + '\', this.value, false)">';
+                } else {
+                    html += '<input type="range" min="' + pr.min + '" max="' + pr.max + '" step="' + pr.step + '" value="' + v + '" data-t="' + tj + '"'
+                        + ' oninput="onFxParamInput(JSON.parse(this.dataset.t), \'' + pr.k + '\', this.value, true)">';
+                    html += '<span class="fx-val" id="fxval_' + key + '_' + pr.k + '">' + v + '</span>';
+                }
+                html += '</span>';
+            });
+            html += '</div></div>';
+            return html;
+        }
+
+        function buildFxPanel() {
+            const panel = document.getElementById('fxPanel');
+            const open = FX_AVAILABLE && fxPanelOpen;
+            // Same mechanism as the PiP layout editor: lift the panel's own
+            // 22vh cap (.editing -> 70vh) and the controls bar's cap with it,
+            // so the looks list shows all rows instead of scrolling.
+            panel.classList.toggle('editing', open);
+            document.body.classList.toggle('fx-panel-open', open);
+            if (!open) { panel.style.display = 'none'; return; }
+            let html = '<div class="fx-looks-title">Shader Looks'
+                + ' <span class="fx-looks-hint">'
+                + 'Source looks follow the source everywhere; the master look sits on PGM.'
+                + '</span></div>';
+            html += fxRowHtml('master', 'PGM MASTER');
+            for (let i = 0; i < NUM_INPUTS; i++) {
+                html += fxRowHtml({ input: i }, INPUT_LABELS[i] || ('Input ' + (i + 1)));
+            }
+            panel.innerHTML = html;
+            panel.style.display = '';
+        }
+
+        function toggleFxPanel() {
+            fxPanelOpen = !fxPanelOpen;
+            buildFxPanel();
+        }
+
+        // Resolve FX engine availability + current effects from /state.
+        async function fetchFxState() {
+            try {
+                const resp = await fetch(API_BASE + '/state');
+                if (!resp.ok) return;
+                const st = await resp.json();
+                FX_AVAILABLE = !!st.fx_available;
+                if (Array.isArray(st.input_effects) && st.input_effects.length) {
+                    inputEffects = st.input_effects;
+                }
+                if (st.master_effect) masterEffect = st.master_effect;
+                updateFxAvailabilityUi();
+                buildFxPanel();
+            } catch {}
+        }
+
         // ---- Transition type & duration ----
-        function setTransitionType(type) {
-            transitionType = type;
-            document.querySelectorAll('.type-btn').forEach(b => {
-                b.classList.toggle('active', b.dataset.type === type);
+        function setTransitionType(base) {
+            transitionBase = base;
+            document.querySelectorAll('.type-btn[data-type]').forEach(b => {
+                b.classList.toggle('active', b.dataset.type === base);
+            });
+            // Sub-pickers: direction (push/slide), wipe shape, master FX kind.
+            document.getElementById('dirRow')
+                .classList.toggle('hidden', base !== 'push' && base !== 'slide');
+            document.getElementById('wipeRow').classList.toggle('hidden', base !== 'wipe');
+            document.getElementById('fxRow').classList.toggle('hidden', base !== 'fx');
+        }
+
+        function setWipeShape(shape) {
+            wipeShape = shape;
+            document.querySelectorAll('.wipe-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.wipe === shape);
+            });
+        }
+
+        function setFxKind(kind) {
+            fxKind = kind;
+            document.querySelectorAll('.fxk-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.fx === kind);
+            });
+        }
+
+        // Standard/More tiers in the wipe and FX pickers. Expansion persists
+        // browser-wide (same pattern as the other vm-* UI prefs) so operators
+        // who use the novelty shapes keep them open across reloads.
+        const MORE_BTN = { wipeRow: 'wipeMoreBtn', fxRow: 'fxMoreBtn' };
+        function applyMoreState(gridId, expanded) {
+            document.getElementById(gridId).classList.toggle('expanded', expanded);
+            const btn = document.getElementById(MORE_BTN[gridId]);
+            btn.innerHTML = expanded ? 'LESS&#9652;' : 'MORE&#9662;';
+            // A collapsed grid hides the active button of a novelty selection;
+            // fall back to the tier default so the picker never lies.
+            if (!expanded) {
+                const active = document.querySelector('#' + gridId + ' .novelty.active');
+                if (active) {
+                    if (gridId === 'wipeRow') setWipeShape('wipe_left');
+                    else setFxKind('flash_dissolve');
+                }
+            }
+        }
+        function toggleMore(gridId) {
+            const expanded = !document.getElementById(gridId).classList.contains('expanded');
+            localStorage.setItem('vm-more-' + gridId, expanded);
+            applyMoreState(gridId, expanded);
+        }
+        for (const gridId of Object.keys(MORE_BTN)) {
+            if (localStorage.getItem('vm-more-' + gridId) === 'true') applyMoreState(gridId, true);
+        }
+
+        function updateFxAvailabilityUi() {
+            document.querySelectorAll('.fx-only').forEach(b => {
+                b.style.display = FX_AVAILABLE ? '' : 'none';
+            });
+            if (!FX_AVAILABLE && (transitionBase === 'wipe' || transitionBase === 'fx')) {
+                setTransitionType('fade');
+            }
+        }
+
+        function setTransitionDir(dir) {
+            transitionDir = dir;
+            document.querySelectorAll('.dir-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.dir === dir);
             });
         }
 
@@ -1115,12 +1841,46 @@
         }
 
         // ---- UI update ----
+        // Inputs that participate in a PiP composition (bg + every zone source).
+        // Mirrors `collect_pip_inputs` in overlay.rs so the bus buttons and the
+        // multiview status rings agree on what "visible via this PiP" means.
+        // Mirror Rust `Zone::effective_sources`: cap to `capacity`, keeping
+        // the newest entries, so the UI and the backend agree even if
+        // sources outgrow capacity.
+        function effectiveZoneSources(zone) {
+            return (zone.capacity != null && zone.capacity < zone.sources.length)
+                ? zone.sources.slice(zone.sources.length - zone.capacity)
+                : zone.sources;
+        }
+
+        function collectPipInputs(pipCfg) {
+            const set = new Set();
+            if (!pipCfg) return set;
+            if (pipCfg.bg != null) set.add(pipCfg.bg);
+            for (const zone of pipCfg.zones) {
+                for (const src of effectiveZoneSources(zone)) set.add(src);
+            }
+            return set;
+        }
+
         function updateButtons() {
+            // Inputs reachable through the PiP currently on each bus. Used to
+            // shade the input buttons with a dimmer tally — dark red on PGM,
+            // dark green on PVW — matching the multiview thumbnail rings.
+            const pgmViaPip = currentPgmPip != null
+                ? collectPipInputs(pipConfigs[currentPgmPip])
+                : new Set();
+            const pvwViaPip = currentPvwPip != null
+                ? collectPipInputs(pipConfigs[currentPvwPip])
+                : new Set();
+
             document.querySelectorAll('#pgmBus .src-btn').forEach((btn, i) => {
                 btn.classList.toggle('pgm-active', currentPgm === i && currentPgmPip == null);
+                btn.classList.toggle('pgm-via-pip', pgmViaPip.has(i));
             });
             document.querySelectorAll('#pvwBus .src-btn').forEach((btn, i) => {
                 btn.classList.toggle('pvw-active', currentPvwPip == null && currentPvw === i);
+                btn.classList.toggle('pvw-via-pip', pvwViaPip.has(i));
             });
             document.querySelectorAll('#pgmBus .pip-btn').forEach((btn, i) => {
                 btn.classList.toggle('pgm-active', currentPgmPip === i);
@@ -1153,11 +1913,14 @@
                 const btnText = String(i + 1);
                 const keyHint = i < 9 ? (i + 1) : (i === 9 ? '0' : '');
 
-                // PGM button (display only)
-                const pgmBtn = document.createElement('button');
-                pgmBtn.className = 'src-btn' + (currentPgm === i ? ' pgm-active' : '');
+                // PGM indicator (display only — PGM changes via Take/Cut/Auto,
+                // never via direct click). A <div> with the indicator modifier
+                // strips the button affordance: no pointer cursor, no hover
+                // state, no tab focus, no keyboard activation.
+                const pgmBtn = document.createElement('div');
+                pgmBtn.className = 'src-btn indicator' + (currentPgm === i ? ' pgm-active' : '');
                 pgmBtn.textContent = btnText;
-                pgmBtn.title = label + (keyHint ? ' (' + keyHint + ')' : '');
+                pgmBtn.title = label;
                 pgmBus.appendChild(pgmBtn);
 
                 // PVW button (single select). Multi-source layouts are built via PiPs.
@@ -1177,10 +1940,11 @@
                 const labelText = slotNum + ' - PiP' + (p + 1);
                 const keyHint = slotNum <= 10 ? (slotNum === 10 ? '0' : String(slotNum)) : '';
 
-                const pgmPipBtn = document.createElement('button');
-                pgmPipBtn.className = 'pip-btn' + (currentPgmPip === p ? ' pgm-active' : '');
+                // PGM PiP indicator (display only — see PGM input indicator above).
+                const pgmPipBtn = document.createElement('div');
+                pgmPipBtn.className = 'pip-btn indicator' + (currentPgmPip === p ? ' pgm-active' : '');
                 pgmPipBtn.textContent = labelText;
-                pgmPipBtn.title = 'PiP ' + (p + 1) + ' on PGM' + (keyHint ? ' (' + keyHint + ')' : '');
+                pgmPipBtn.title = 'PiP ' + (p + 1);
                 pgmBus.appendChild(pgmPipBtn);
 
                 const pvwPipBtn = document.createElement('button');
@@ -1206,19 +1970,54 @@
                 .catch(e => setStatus('Preview error: ' + e.message));
         }
 
+        // Replace any non-finite number (NaN/Infinity) in rects and crops.
+        // JSON.stringify turns NaN into null, which the backend rejects with
+        // 422 — and since the poison stays in pipConfigs, every later update
+        // for the PiP would fail too, freezing the editor until reload.
+        function sanitizePipConfig(cfg) {
+            const fin = (v, fb) => (Number.isFinite(v) ? v : fb);
+            cfg.zones.forEach(z => {
+                if (z.rect) {
+                    z.rect.x = fin(z.rect.x, 0);
+                    z.rect.y = fin(z.rect.y, 0);
+                    z.rect.w = fin(z.rect.w, 1);
+                    z.rect.h = fin(z.rect.h, 1);
+                }
+                if (z.border) z.border.width = fin(z.border.width, 0);
+            });
+            Object.keys(cfg.transforms || {}).forEach(k => {
+                const c = cfg.transforms[k];
+                if (!c) { delete cfg.transforms[k]; return; }
+                c.left = fin(c.left, 0);
+                c.top = fin(c.top, 0);
+                c.right = fin(c.right, 0);
+                c.bottom = fin(c.bottom, 0);
+            });
+        }
+
         function postPipConfig(pipIdx) {
             const cfg = pipConfigs[pipIdx];
+            sanitizePipConfig(cfg);
+            // Keep aspect-locked crops in sync with their destination boxes —
+            // a zone resize/move changes the box aspect, and a stale crop
+            // aspect would letterbox or distort the fill.
+            refitLockedCrops(cfg);
             return apiPut('/pip/' + pipIdx, {
                 bg: cfg.bg,
-                zones: cfg.zones
+                zones: cfg.zones,
+                transforms: cfg.transforms
             }).then(r => {
                 pipConfigs[pipIdx] = {
                     bg: r.bg,
                     zones: (r.zones || []).map(z => ({
                         rect: z.rect ? { ...z.rect } : null,
                         capacity: z.capacity != null ? z.capacity : null,
-                        sources: Array.isArray(z.sources) ? z.sources.slice() : []
-                    }))
+                        sources: Array.isArray(z.sources) ? z.sources.slice() : [],
+                        border: z.border ? { ...z.border } : null
+                    })),
+                    transforms: (r.transforms && typeof r.transforms === 'object')
+                        ? JSON.parse(JSON.stringify(r.transforms))
+                        : {}
                 };
                 // Keep activeZoneIdx within bounds after server-side cleanup.
                 const nz = pipConfigs[pipIdx].zones.length;
@@ -1228,6 +2027,9 @@
                     activeZoneIdx[pipIdx] = nz - 1;
                 }
                 buildPipConfigPanel();
+                // The via-pip tally on the input buttons depends on this PiP's
+                // bg + zone sources, so refresh the buses too.
+                updateButtons();
                 setStatus(r.message);
             }).catch(e => setStatus('PiP config error: ' + e.message));
         }
@@ -1244,26 +2046,40 @@
             postPipConfig(pipIdx);
         }
 
-        // Toggle an input on the active zone.
-        //  - Already in any zone → remove it.
-        //  - Otherwise → push into active zone (FIFO evicts oldest at capacity).
+        // Select a zone as the active push target and point Crop/Zoom at its
+        // first source — selecting a box usually means "work on this box".
+        // (Picking another crop target in the dropdown stays sticky until the
+        // next zone switch.)
+        function selectZone(pipIdx, zoneIdx) {
+            activeZoneIdx[pipIdx] = zoneIdx;
+            const z = pipConfigs[pipIdx] && pipConfigs[pipIdx].zones[zoneIdx];
+            const srcs = z ? effectiveZoneSources(z) : [];
+            activeCropTarget = srcs.length > 0 ? srcs[0] : null;
+        }
+
+        // Toggle an input on the ACTIVE zone (the chips act as that zone's
+        // checkboxes):
+        //  - In the active zone → remove it.
+        //  - In another zone → MOVE it to the active zone.
+        //  - Not in any zone → push into the active zone (FIFO evicts oldest
+        //    at capacity).
         // An input can only appear in one place at a time (single compositor pad).
         function toggleSourceOnActiveZone(pipIdx, input) {
             const cfg = pipConfigs[pipIdx];
             if (cfg.bg === input) return; // bg already occupies this input's pad
-            // If already in any zone, clicking again removes it.
-            let wasPresent = false;
+            const ziCur = Math.min(activeZoneIdx[pipIdx], Math.max(0, cfg.zones.length - 1));
+            const inActiveZone = !!(cfg.zones[ziCur] && cfg.zones[ziCur].sources.includes(input));
+            // Strip from every zone first (single pad — one place at a time).
             cfg.zones.forEach(z => {
-                if (z.sources.includes(input)) {
-                    z.sources = z.sources.filter(s => s !== input);
-                    wasPresent = true;
-                }
+                z.sources = z.sources.filter(s => s !== input);
             });
-            if (wasPresent) {
+            if (inActiveZone) {
+                // Unchecked: removed from the active zone.
                 postPipConfig(pipIdx);
                 return;
             }
-            // Not present anywhere — push into active zone, evicting oldest if full.
+            // Checked: push into the active zone (moving it if it sat in
+            // another zone), evicting oldest if full.
             if (cfg.zones.length === 0) {
                 cfg.zones.push({ rect: null, capacity: null, sources: [] });
                 activeZoneIdx[pipIdx] = 0;
@@ -1290,9 +2106,10 @@
             cfg.zones.push({
                 rect: { x: 0.55, y: 0.10, w: 0.42, h: 0.42 },
                 capacity: null,
-                sources: []
+                sources: [],
+                border: null
             });
-            activeZoneIdx[pipIdx] = cfg.zones.length - 1;
+            selectZone(pipIdx, cfg.zones.length - 1);
             postPipConfig(pipIdx);
         }
 
@@ -1301,6 +2118,27 @@
             if (activeZoneIdx[pipIdx] >= pipConfigs[pipIdx].zones.length) {
                 activeZoneIdx[pipIdx] = Math.max(0, pipConfigs[pipIdx].zones.length - 1);
             }
+            postPipConfig(pipIdx);
+        }
+
+        // Set or clear the active zone's border. Width 0 clears it; the
+        // border is the BOX's styling (it survives source swaps in the zone)
+        // and is drawn live on the PGM output around the actual source boxes.
+        function setZoneBorder(pipIdx, zoneIdx, color, width) {
+            const zone = pipConfigs[pipIdx].zones[zoneIdx];
+            if (!zone) return;
+            const w = parseFloat(width);
+            // The native color picker is 6-digit only; an API-set #RRGGBBAA
+            // would lose its alpha on any re-commit (e.g. a width edit).
+            // Keep the stored value while its RGB part is unchanged.
+            const prev = zone.border && zone.border.color;
+            if (prev && /^#[0-9a-fA-F]{8}$/.test(prev)
+                && prev.slice(0, 7).toLowerCase() === String(color).toLowerCase()) {
+                color = prev;
+            }
+            zone.border = (Number.isFinite(w) && w > 0)
+                ? { color: color, width: w }
+                : null;
             postPipConfig(pipIdx);
         }
 
@@ -1316,6 +2154,641 @@
             postPipConfig(pipIdx);
         }
 
+        // ---- Layout presets ----
+        // Named snapshots of a full PiP composition: zones (rect/capacity/
+        // border + sources by input index), bg, and all non-default crop
+        // transforms. Crops are included even for sources currently outside
+        // the PiP — strom retains those and re-applies them when the source
+        // returns (swap-zone workflow), so a preset carries them too.
+        // Stored browser-wide in localStorage so a preset saved on one
+        // PiP/flow can be loaded on any other. Loading is best-effort:
+        // sources, bg and crops whose input index does not exist on this
+        // mixer are silently skipped; everything else applies.
+        const PIP_PRESETS_KEY = 'vm-pip-layout-presets';
+        let selectedPipPreset = '';
+
+        function loadPipPresets() {
+            try {
+                const obj = JSON.parse(localStorage.getItem(PIP_PRESETS_KEY) || '{}');
+                return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function storePipPresets(presets) {
+            localStorage.setItem(PIP_PRESETS_KEY, JSON.stringify(presets));
+        }
+
+        function savePipLayoutPreset(pipIdx) {
+            const cfg = pipConfigs[pipIdx];
+            if (!cfg || cfg.zones.length === 0) {
+                setStatus('No zones to save as a layout preset');
+                return;
+            }
+            const name = (window.prompt('Layout preset name:', selectedPipPreset) || '').trim();
+            if (!name) return;
+            const presets = loadPipPresets();
+            // Keep every non-default crop — including ones for sources not
+            // currently in the PiP (strom retains those the same way).
+            const transforms = {};
+            Object.keys(cfg.transforms || {}).forEach(k => {
+                const c = cfg.transforms[k];
+                if (c && !cropIsZero(c)) transforms[k] = { ...c };
+            });
+            presets[name] = {
+                bg: cfg.bg != null ? cfg.bg : null,
+                zones: cfg.zones.map(z => ({
+                    rect: z.rect ? { ...z.rect } : null,
+                    capacity: z.capacity != null ? z.capacity : null,
+                    sources: z.sources.slice(),
+                    border: z.border ? { ...z.border } : null
+                })),
+                transforms: transforms
+            };
+            storePipPresets(presets);
+            selectedPipPreset = name;
+            buildPipConfigPanel();
+            setStatus('Layout preset "' + name + '" saved');
+        }
+
+        function applyPipLayoutPreset(pipIdx, name) {
+            const preset = loadPipPresets()[name];
+            if (!preset || !Array.isArray(preset.zones)) {
+                setStatus('Layout preset not found: ' + name);
+                return;
+            }
+            const cfg = pipConfigs[pipIdx];
+            // Best-effort: silently drop any input index that does not
+            // exist on this mixer (preset may come from a bigger one), the
+            // bg double-booked as a zone source, and cross-zone duplicates
+            // — the backend rejects all three for the whole request.
+            const validInput = i => Number.isInteger(i) && i >= 0 && i < NUM_INPUTS;
+            cfg.bg = validInput(preset.bg) ? preset.bg : null;
+            const seen = new Set();
+            cfg.zones = preset.zones.map(z => ({
+                rect: z.rect ? { ...z.rect } : null,
+                capacity: z.capacity != null ? z.capacity : null,
+                sources: (Array.isArray(z.sources) ? z.sources : [])
+                    .filter(s => validInput(s) && s !== cfg.bg && !seen.has(s) && seen.add(s)),
+                border: z.border ? { ...z.border } : null
+            }));
+            // Restore the full crop map — also entries for sources not in
+            // the PiP right now; they re-apply when the source is pushed in.
+            cfg.transforms = {};
+            Object.keys(preset.transforms || {}).forEach(k => {
+                const c = preset.transforms[k];
+                if (c && validInput(parseInt(k, 10))) cfg.transforms[k] = { ...c };
+            });
+            selectZone(pipIdx, 0);
+            postPipConfig(pipIdx);
+        }
+
+        function deletePipLayoutPreset(name) {
+            if (!name) return;
+            if (!window.confirm('Delete layout preset "' + name + '"?')) return;
+            const presets = loadPipPresets();
+            delete presets[name];
+            storePipPresets(presets);
+            if (selectedPipPreset === name) selectedPipPreset = '';
+            buildPipConfigPanel();
+            setStatus('Layout preset "' + name + '" deleted');
+        }
+
+        // Update one component of an explicit (non-auto) zone rect from a pixel
+        // value entered into the X/Y/W/H toolbar inputs. Pixel values are in PGM
+        // canvas coordinates (PGM_W × PGM_H); we divide by the same dimension
+        // the backend uses on the way back (NormRect::to_pixels), so a round-trip
+        // through px → norm → px lands on the same integer pixel.
+        //
+        // Position fields (x, y) preserve the current size; size fields (w, h)
+        // preserve the current position. Out-of-range entries are clamped to
+        // keep the rect inside [0,1].
+        function setZoneRectPx(pipIdx, zoneIdx, field, pixelValue) {
+            const zone = pipConfigs[pipIdx].zones[zoneIdx];
+            if (!zone || !zone.rect) return;
+            const parsed = parseFloat(pixelValue);
+            if (!Number.isFinite(parsed)) return;
+            const dim = (field === 'x' || field === 'w') ? PGM_W : PGM_H;
+            // Snap the input value to a nearby anchor when snap is on. The
+            // Detect variant also returns which anchor was hit so we can
+            // flash the matching grid line during the network roundtrip
+            // (postPipConfig rebuilds the panel on response and wipes the
+            // highlight naturally).
+            const res = snapEdgeDetect(parsed / dim);
+            const norm = res.value;
+            const next = { ...zone.rect };
+            if (field === 'x') {
+                next.x = Math.max(0, Math.min(1 - next.w, norm));
+            } else if (field === 'y') {
+                next.y = Math.max(0, Math.min(1 - next.h, norm));
+            } else if (field === 'w') {
+                next.w = Math.max(1 / PGM_W, Math.min(1 - next.x, norm));
+            } else if (field === 'h') {
+                next.h = Math.max(1 / PGM_H, Math.min(1 - next.y, norm));
+            }
+            zone.rect = next;
+            if (res.anchor != null) {
+                const canvas = document.querySelector('.pip-canvas[data-pip="' + pipIdx + '"]');
+                const axis = (field === 'x' || field === 'w') ? 'x' : 'y';
+                showSnapHighlight(canvas, axis, res.anchor);
+            }
+            postPipConfig(pipIdx);
+        }
+
+        // ---- Crop ("zoom"/punch-in) editor ----
+        // The backend stores a normalized SourceCrop (edge fractions). The
+        // editor works on the visible *window* instead: {x, y, w, h} in
+        // source-normalized coordinates — what remains after cropping. The
+        // window scales to fill the destination box, so window = punch-in.
+        //
+        // PGM aspect is only a *fallback* — every source can have its own
+        // resolution/aspect, so all window math goes through srcAspectFor().
+        const PGM_ASPECT = PGM_W / PGM_H;
+
+        // Real aspect of an input's frames (negotiated caps), falling back to
+        // the PGM aspect until caps are known.
+        function srcAspectFor(input) {
+            const r = INPUT_RESOLUTIONS[input];
+            return (r && r.width > 0 && r.height > 0) ? (r.width / r.height) : PGM_ASPECT;
+        }
+
+        function getCrop(cfg, input) {
+            const c = (cfg.transforms && cfg.transforms[input]) || {};
+            return {
+                left: c.left || 0, top: c.top || 0,
+                right: c.right || 0, bottom: c.bottom || 0
+            };
+        }
+        function cropIsZero(c) {
+            return (c.left || 0) < 1e-4 && (c.top || 0) < 1e-4
+                && (c.right || 0) < 1e-4 && (c.bottom || 0) < 1e-4;
+        }
+        function cropToWindow(c) {
+            return {
+                x: c.left, y: c.top,
+                w: Math.max(0.05, 1 - c.left - c.right),
+                h: Math.max(0.05, 1 - c.top - c.bottom)
+            };
+        }
+        function windowToCrop(w) {
+            const cl = v => Math.max(0, Math.min(1, v));
+            return {
+                left: cl(w.x), top: cl(w.y),
+                right: cl(1 - w.x - w.w), bottom: cl(1 - w.y - w.h)
+            };
+        }
+        function clampCropWindow(win) {
+            const w = Math.max(0.05, Math.min(1, win.w));
+            const h = Math.max(0.05, Math.min(1, win.h));
+            return {
+                x: Math.max(0, Math.min(1 - w, win.x)),
+                y: Math.max(0, Math.min(1 - h, win.y)),
+                w, h
+            };
+        }
+
+        // Destination box aspect (real pixels) for an input inside the PiP.
+        // A zone holding a single source fills its rect when cropped (mirrors
+        // the backend resolve_zone_pads rule); multi-source zones auto-tile
+        // into PGM-aspect cells, and the bg fills the PGM-aspect region.
+        // Drives the aspect lock so the cropped window fills its box exactly
+        // — nothing outside the box is visible.
+        function cropBoxAspect(cfg, input) {
+            for (const zone of cfg.zones) {
+                const srcs = effectiveZoneSources(zone);
+                if (!srcs.includes(input)) continue;
+                if (srcs.length === 1) {
+                    const r = zone.rect || { x: 0, y: 0, w: 1, h: 1 };
+                    const wpx = r.w * PGM_W, hpx = r.h * PGM_H;
+                    if (wpx > 0 && hpx > 0) return wpx / hpx;
+                }
+                return PGM_ASPECT;
+            }
+            return PGM_ASPECT; // bg (fills the region) or unplaced
+        }
+
+        // Window w/h ratio (in normalized source coords) that renders as the
+        // real-pixel aspect `boxAspect` for a source with aspect `srcAspect`,
+        // and the largest window with that ratio.
+        function cropWindowRatio(boxAspect, srcAspect) { return boxAspect / srcAspect; }
+        function maxCropWindow(ratio) {
+            return ratio >= 1 ? { w: 1, h: 1 / ratio } : { w: ratio, h: 1 };
+        }
+        // Re-fit a window to a target ratio, keeping its center.
+        function fitWindowToRatio(win, ratio) {
+            let w = Math.min(win.w, win.h * ratio);
+            let h = w / ratio;
+            const cx = win.x + win.w / 2, cy = win.y + win.h / 2;
+            return clampCropWindow({ x: cx - w / 2, y: cy - h / 2, w, h });
+        }
+
+        function commitCropWindow(pipIdx, input, win) {
+            const cfg = pipConfigs[pipIdx];
+            const crop = windowToCrop(clampCropWindow(win));
+            if (cropIsZero(crop)) delete cfg.transforms[input];
+            else cfg.transforms[input] = crop;
+            postPipConfig(pipIdx);
+        }
+
+        // Re-fit every aspect-locked crop to its current destination box.
+        // Single-source zones fill their rect when cropped, so the crop window
+        // must track the rect's aspect as the operator reshapes the zone.
+        // No-op when the lock is off or for windows that already fit.
+        function refitLockedCrops(cfg) {
+            if (!cropAspectLock || !cfg.transforms) return;
+            for (const zone of cfg.zones) {
+                const srcs = effectiveZoneSources(zone);
+                if (srcs.length !== 1) continue;
+                const input = srcs[0];
+                const c = cfg.transforms[input];
+                if (!c || cropIsZero(c)) continue;
+                const ratio = cropWindowRatio(cropBoxAspect(cfg, input), srcAspectFor(input));
+                const fitted = fitWindowToRatio(cropToWindow(getCrop(cfg, input)), ratio);
+                cfg.transforms[input] = windowToCrop(fitted);
+            }
+        }
+        function resetCrop(pipIdx, input) {
+            delete pipConfigs[pipIdx].transforms[input];
+            postPipConfig(pipIdx);
+        }
+
+        // Update one component of the crop window from a pixel value entered
+        // in SOURCE coordinates. Position fields preserve size; size fields
+        // preserve position (and the box aspect when the lock is on). Snap
+        // applies like the zone px inputs, flashing the matching grid line on
+        // the crop canvas during the roundtrip.
+        function setCropWindowPx(pipIdx, input, field, pixelValue) {
+            const cfg = pipConfigs[pipIdx];
+            const parsed = parseFloat(pixelValue);
+            if (!Number.isFinite(parsed)) return;
+            const res = INPUT_RESOLUTIONS[input];
+            const srcW = (res && res.width > 0) ? res.width : PGM_W;
+            const srcH = (res && res.height > 0) ? res.height : PGM_H;
+            const dim = (field === 'x' || field === 'w') ? srcW : srcH;
+            const snapped = snapEdgeDetect(parsed / dim);
+            const norm = snapped.value;
+            const ratio = cropWindowRatio(cropBoxAspect(cfg, input), srcAspectFor(input));
+            const next = { ...cropToWindow(getCrop(cfg, input)) };
+            if (field === 'x') {
+                next.x = norm;
+            } else if (field === 'y') {
+                next.y = norm;
+            } else if (field === 'w') {
+                next.w = norm;
+                if (cropAspectLock) next.h = next.w / ratio;
+            } else if (field === 'h') {
+                next.h = norm;
+                if (cropAspectLock) next.w = next.h * ratio;
+            }
+            if (snapped.anchor != null) {
+                const canvas = document.querySelector('.pip-crop-canvas');
+                const axis = (field === 'x' || field === 'w') ? 'x' : 'y';
+                showSnapHighlight(canvas, axis, snapped.anchor);
+            }
+            commitCropWindow(pipIdx, input, next);
+        }
+
+        function buildCropSection(p, cfg) {
+            const wrap = document.createElement('div');
+            wrap.className = 'pip-crop-wrap';
+
+            // Candidate targets: bg + every zone source. The backend RETAINS
+            // transforms for sources that leave the PiP (they re-apply on
+            // return — swap-zone workflow), but only present sources are
+            // listed here: a retained crop is edited or Reset by bringing
+            // its source back first.
+            const targets = [];
+            if (cfg.bg != null) targets.push(cfg.bg);
+            cfg.zones.forEach(z => effectiveZoneSources(z).forEach(s => {
+                if (!targets.includes(s)) targets.push(s);
+            }));
+
+            // Default target: the active zone's single source — the common
+            // punch-in case ("zoom into the person in this box").
+            if (activeCropTarget == null || !targets.includes(activeCropTarget)) {
+                activeCropTarget = null;
+                const az = cfg.zones[Math.min(activeZoneIdx[p], Math.max(0, cfg.zones.length - 1))];
+                if (az) {
+                    const srcs = effectiveZoneSources(az);
+                    if (srcs.length === 1) activeCropTarget = srcs[0];
+                }
+            }
+
+            const head = document.createElement('div');
+            head.className = 'pip-editor-head';
+            const title = document.createElement('span');
+            title.className = 'pip-editor-title';
+            title.textContent = 'Crop / Zoom';
+            head.appendChild(title);
+            const sel = document.createElement('select');
+            sel.className = 'pip-crop-select';
+            const none = document.createElement('option');
+            none.value = '';
+            none.textContent = '— select source —';
+            sel.appendChild(none);
+            targets.forEach(i => {
+                const o = document.createElement('option');
+                o.value = String(i);
+                const cropped = !cropIsZero(getCrop(cfg, i));
+                const res = INPUT_RESOLUTIONS[i];
+                o.textContent = (INPUT_LABELS[i] || ('Input ' + (i + 1)))
+                    + (cfg.bg === i ? ' (BG)' : '')
+                    + (res ? ' · ' + res.width + '×' + res.height : '')
+                    + (cropped ? ' ✂' : '');
+                if (activeCropTarget === i) o.selected = true;
+                sel.appendChild(o);
+            });
+            sel.onchange = () => {
+                activeCropTarget = sel.value === '' ? null : parseInt(sel.value, 10);
+                buildPipConfigPanel();
+            };
+            head.appendChild(sel);
+            wrap.appendChild(head);
+
+            const srcCanvas = document.createElement('div');
+            srcCanvas.className = 'pip-crop-canvas';
+
+            if (activeCropTarget == null) {
+                const ph = document.createElement('div');
+                ph.className = 'pip-crop-placeholder';
+                ph.textContent = targets.length > 0
+                    ? 'Select a source to crop/zoom'
+                    : 'Add a source to the PiP first';
+                srcCanvas.appendChild(ph);
+                wrap.appendChild(srcCanvas);
+                return wrap;
+            }
+
+            const input = activeCropTarget;
+            const srcAspect = srcAspectFor(input);
+            const boxAspect = cropBoxAspect(cfg, input);
+            const ratio = cropWindowRatio(boxAspect, srcAspect);
+            let win = cropToWindow(getCrop(cfg, input));
+
+            // The source canvas mirrors the source frame — render it in the
+            // source's real aspect so the framing reads true.
+            srcCanvas.style.height =
+                Math.max(72, Math.min(320, Math.round(320 / srcAspect))) + 'px';
+
+            // Same snap-anchor grid as the zone canvas (quarters + thirds of
+            // the source frame — framing a face on a third reads well).
+            if (gridVisible) srcCanvas.appendChild(buildGridOverlay());
+
+            const frame = document.createElement('div');
+            frame.className = 'pip-crop-frame';
+            const applyFrameStyle = (w) => {
+                frame.style.left = (w.x * 100) + '%';
+                frame.style.top = (w.y * 100) + '%';
+                frame.style.width = (w.w * 100) + '%';
+                frame.style.height = (w.h * 100) + '%';
+            };
+            applyFrameStyle(win);
+            ['nw', 'ne', 'sw', 'se'].forEach(corner => {
+                const h = document.createElement('div');
+                h.className = 'zone-handle ' + corner;
+                h.dataset.corner = corner;
+                frame.appendChild(h);
+            });
+            srcCanvas.appendChild(frame);
+            wrap.appendChild(srcCanvas);
+
+            // Zoom slider: 1× = the largest window for the current aspect.
+            // `input` events update the frame live; `change` commits via the
+            // API (mirrors the drag-then-single-POST pattern).
+            const zoomRow = document.createElement('div');
+            zoomRow.className = 'pip-crop-zoom-row';
+            zoomRow.append('Zoom');
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = '1';
+            slider.max = '5';
+            slider.step = '0.01';
+            const zoomVal = document.createElement('span');
+            zoomVal.className = 'pip-crop-zoom-val';
+            const currentRatio = () => cropAspectLock ? ratio : (win.w / win.h);
+            // Never report below 1×: an uncropped (full-frame) window shows as
+            // 1.00× even though the largest box-aspect window would be smaller.
+            const currentZoom = () => Math.max(1, maxCropWindow(currentRatio()).w / win.w);
+            const syncZoomUi = () => {
+                slider.value = String(Math.min(5, currentZoom()));
+                zoomVal.textContent = currentZoom().toFixed(2) + '×';
+            };
+            const applyZoom = (z) => {
+                const r = currentRatio();
+                const mw = maxCropWindow(r);
+                const cx = win.x + win.w / 2, cy = win.y + win.h / 2;
+                const w = mw.w / z, h = mw.h / z;
+                win = clampCropWindow({ x: cx - w / 2, y: cy - h / 2, w, h });
+                applyFrameStyle(win);
+                zoomVal.textContent = currentZoom().toFixed(2) + '×';
+            };
+            slider.oninput = () => applyZoom(parseFloat(slider.value));
+            slider.onchange = () => commitCropWindow(p, input, win);
+            syncZoomUi();
+            zoomRow.appendChild(slider);
+            zoomRow.appendChild(zoomVal);
+            wrap.appendChild(zoomRow);
+
+            // Pixel-precise crop window editor, in SOURCE pixels (each input
+            // has its own resolution). X/Y = window top-left, W/H = window
+            // size. Same snap + round-trip behavior as the zone px inputs.
+            const res = INPUT_RESOLUTIONS[input];
+            const srcW = (res && res.width > 0) ? res.width : PGM_W;
+            const srcH = (res && res.height > 0) ? res.height : PGM_H;
+            const winPx = {
+                x: Math.round(win.x * srcW),
+                y: Math.round(win.y * srcH),
+                w: Math.round(win.w * srcW),
+                h: Math.round(win.h * srcH),
+            };
+            const mkCropPxInput = (field, max) => {
+                const inp = document.createElement('input');
+                inp.className = 'pip-zone-px-input';
+                inp.type = 'number';
+                inp.min = (field === 'w' || field === 'h') ? '1' : '0';
+                inp.max = String(max);
+                inp.step = '1';
+                inp.value = String(winPx[field]);
+                inp.title = field.toUpperCase() + ' of the crop window in source pixels ('
+                    + srcW + '×' + srcH + ')';
+                inp.onchange = () => setCropWindowPx(p, input, field, inp.value);
+                return inp;
+            };
+            const mkPxLabel = (text) => {
+                const l = document.createElement('span');
+                l.className = 'pip-zone-px-label';
+                l.textContent = text;
+                return l;
+            };
+            const cropCtrl = document.createElement('div');
+            cropCtrl.className = 'pip-editor-ctrl';
+            cropCtrl.appendChild(mkPxLabel('X'));
+            cropCtrl.appendChild(mkCropPxInput('x', srcW));
+            cropCtrl.appendChild(mkPxLabel('Y'));
+            cropCtrl.appendChild(mkCropPxInput('y', srcH));
+            cropCtrl.appendChild(mkPxLabel('W'));
+            cropCtrl.appendChild(mkCropPxInput('w', srcW));
+            cropCtrl.appendChild(mkPxLabel('H'));
+            cropCtrl.appendChild(mkCropPxInput('h', srcH));
+            wrap.appendChild(cropCtrl);
+
+            const actions = document.createElement('div');
+            actions.className = 'pip-crop-actions';
+            const lockLabel = document.createElement('label');
+            lockLabel.className = 'pip-zone-toggle';
+            const lockCb = document.createElement('input');
+            lockCb.type = 'checkbox';
+            lockCb.checked = cropAspectLock;
+            lockCb.onchange = () => {
+                toggleCropAspectLock();
+                // Turning the lock on re-fits the current window so the crop
+                // fills the destination box without letterboxing.
+                if (cropAspectLock && !cropIsZero(getCrop(cfg, input))) {
+                    commitCropWindow(p, input, fitWindowToRatio(win, ratio));
+                }
+            };
+            lockLabel.appendChild(lockCb);
+            lockLabel.append(' Lock box aspect');
+            lockLabel.title = 'Keep the crop window at the destination box aspect so it fills the box exactly';
+            actions.appendChild(lockLabel);
+            const resetBtn = document.createElement('button');
+            resetBtn.className = 'pip-crop-reset-btn';
+            resetBtn.textContent = 'Reset';
+            resetBtn.title = 'Remove crop/zoom for this source';
+            resetBtn.disabled = cropIsZero(getCrop(cfg, input));
+            resetBtn.onclick = () => resetCrop(p, input);
+            actions.appendChild(resetBtn);
+            wrap.appendChild(actions);
+
+            attachCropDrag(frame, srcCanvas, p, input, ratio, {
+                get: () => win,
+                set: (w) => { win = w; applyFrameStyle(win); syncZoomUi(); }
+            });
+
+            return wrap;
+        }
+
+        // Drag-and-resize for the crop window. Move = pan; corner handles =
+        // zoom (aspect-locked to the destination box when the lock is on).
+        // Sends a single POST on mouseup, like attachZoneDrag.
+        function attachCropDrag(frameEl, canvasEl, pipIdx, input, ratio, winRef) {
+            frameEl.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                const canvasRect = canvasEl.getBoundingClientRect();
+                // A panel rebuild may have detached this canvas (0×0 rect) —
+                // dividing by it would poison the window with NaN. Bail.
+                if (!canvasEl.isConnected || canvasRect.width <= 0 || canvasRect.height <= 0) {
+                    return;
+                }
+                const startX = e.clientX;
+                const startY = e.clientY;
+                const handle = e.target.closest('.zone-handle');
+                const corner = handle ? handle.dataset.corner : null;
+                let initial = { ...winRef.get() };
+                // First interaction with the lock on: snap the window to the
+                // box aspect so what you frame is exactly what fills the box.
+                if (cropAspectLock) {
+                    const fitted = fitWindowToRatio(initial, ratio);
+                    if (Math.abs(fitted.w - initial.w) + Math.abs(fitted.h - initial.h) > 0.0001) {
+                        initial = fitted;
+                        winRef.set(fitted);
+                    }
+                }
+                let dirty = false;
+
+                const onMove = (ev) => {
+                    const dx = (ev.clientX - startX) / canvasRect.width;
+                    const dy = (ev.clientY - startY) / canvasRect.height;
+                    let next = { ...initial };
+                    // Snap anchors mirror the zone editor: quarters + thirds
+                    // of the source frame. Track which anchor each axis hit
+                    // so the matching grid line lights up.
+                    let snapX = null;
+                    let snapY = null;
+                    if (!corner) {
+                        const sx = snapMoveAxisDetect(initial.x + dx, initial.w);
+                        const sy = snapMoveAxisDetect(initial.y + dy, initial.h);
+                        next.x = sx.value;
+                        next.y = sy.value;
+                        snapX = sx.anchor;
+                        snapY = sy.anchor;
+                    } else {
+                        const right = initial.x + initial.w;
+                        const bottom = initial.y + initial.h;
+                        if (corner === 'nw') {
+                            const sx = snapEdgeDetect(initial.x + dx);
+                            const sy = snapEdgeDetect(initial.y + dy);
+                            next.x = sx.value;
+                            next.y = sy.value;
+                            next.w = right - next.x;
+                            next.h = bottom - next.y;
+                            snapX = sx.anchor;
+                            snapY = sy.anchor;
+                        } else if (corner === 'ne') {
+                            const sy = snapEdgeDetect(initial.y + dy);
+                            const sr = snapEdgeDetect(right + dx);
+                            next.y = sy.value;
+                            next.w = sr.value - initial.x;
+                            next.h = bottom - next.y;
+                            snapX = sr.anchor;
+                            snapY = sy.anchor;
+                        } else if (corner === 'sw') {
+                            const sx = snapEdgeDetect(initial.x + dx);
+                            const sb = snapEdgeDetect(bottom + dy);
+                            next.x = sx.value;
+                            next.w = right - next.x;
+                            next.h = sb.value - initial.y;
+                            snapX = sx.anchor;
+                            snapY = sb.anchor;
+                        } else if (corner === 'se') {
+                            const sr = snapEdgeDetect(right + dx);
+                            const sb = snapEdgeDetect(bottom + dy);
+                            next.w = sr.value - initial.x;
+                            next.h = sb.value - initial.y;
+                            snapX = sr.anchor;
+                            snapY = sb.anchor;
+                        }
+                        next.w = Math.max(0.05, next.w);
+                        next.h = Math.max(0.05, next.h);
+                        if (cropAspectLock) {
+                            // Constrain to the box aspect, anchoring the corner
+                            // opposite to the one being dragged. Height derives
+                            // from width, so only the horizontal snap is real.
+                            next.h = next.w / ratio;
+                            if (next.h > 1) { next.h = 1; next.w = next.h * ratio; }
+                            if (corner === 'nw' || corner === 'ne') {
+                                next.y = bottom - next.h;
+                            }
+                            if (corner === 'nw' || corner === 'sw') {
+                                next.x = right - next.w;
+                            }
+                            snapY = null;
+                        }
+                    }
+                    next = clampCropWindow(next);
+                    if (Math.abs(next.x - initial.x) + Math.abs(next.y - initial.y)
+                        + Math.abs(next.w - initial.w) + Math.abs(next.h - initial.h) > 0.0001) {
+                        dirty = true;
+                    }
+                    winRef.set(next);
+                    clearSnapHighlights(canvasEl);
+                    showSnapHighlight(canvasEl, 'x', snapX);
+                    showSnapHighlight(canvasEl, 'y', snapY);
+                };
+                const onUp = () => {
+                    document.removeEventListener('mousemove', onMove);
+                    document.removeEventListener('mouseup', onUp);
+                    clearSnapHighlights(canvasEl);
+                    if (dirty) commitCropWindow(pipIdx, input, winRef.get());
+                };
+                document.addEventListener('mousemove', onMove);
+                document.addEventListener('mouseup', onUp);
+            });
+        }
+
         function buildPipConfigPanel() {
             const panel = document.getElementById('pipConfigPanel');
             if (NUM_PIPS === 0) {
@@ -1326,8 +2799,13 @@
             panel.classList.toggle('editing', editingPipIdx != null);
             panel.innerHTML = '';
 
+            // Presets are browser-global — parse localStorage once per
+            // rebuild, not once per PiP.
+            const presets = loadPipPresets();
+            const presetNames = Object.keys(presets).sort((a, b) => a.localeCompare(b));
+
             for (let p = 0; p < NUM_PIPS; p++) {
-                const cfg = pipConfigs[p] || { bg: null, zones: [] };
+                const cfg = pipConfigs[p] || { bg: null, zones: [], transforms: {} };
                 const block = document.createElement('div');
                 block.className = 'pip-config-block';
 
@@ -1343,8 +2821,16 @@
                 label.textContent = 'PiP ' + (p + 1);
                 row.appendChild(label);
 
-                // Push chips — click toggles input on/off in the active zone.
-                const inputsAlreadyShown = new Set(cfg.zones.flatMap(z => z.sources));
+                // Push chips — checkboxes for the ACTIVE zone: checked = in
+                // the selected zone; a source sitting in another zone shows
+                // dimmed (it's taken) and clicking it moves it here.
+                const zi0 = Math.min(activeZoneIdx[p], Math.max(0, cfg.zones.length - 1));
+                const activeZoneSources = new Set(cfg.zones[zi0] ? cfg.zones[zi0].sources : []);
+                // input → 1-based zone number for sources in OTHER zones.
+                const zoneOf = new Map();
+                cfg.zones.forEach((z, k) => {
+                    if (k !== zi0) z.sources.forEach(s => zoneOf.set(s, k + 1));
+                });
                 for (let i = 0; i < NUM_INPUTS; i++) {
                     const chip = document.createElement('span');
                     chip.className = 'pip-overlay-chip';
@@ -1352,12 +2838,18 @@
                         chip.classList.add('disabled');
                         chip.title = 'Used as background';
                     } else {
-                        chip.title = inputsAlreadyShown.has(i)
-                            ? 'Remove Input ' + (i + 1) + ' from PiP'
-                            : 'Push Input ' + (i + 1) + ' to active zone';
+                        if (activeZoneSources.has(i)) {
+                            chip.title = 'Remove Input ' + (i + 1) + ' from zone Z' + (zi0 + 1);
+                        } else if (zoneOf.has(i)) {
+                            chip.title = 'Move Input ' + (i + 1) + ' from zone Z'
+                                + zoneOf.get(i) + ' to zone Z' + (zi0 + 1);
+                        } else {
+                            chip.title = 'Push Input ' + (i + 1) + ' to zone Z' + (zi0 + 1);
+                        }
                         chip.onclick = () => toggleSourceOnActiveZone(p, i);
                     }
-                    if (inputsAlreadyShown.has(i)) chip.classList.add('active');
+                    if (activeZoneSources.has(i)) chip.classList.add('active');
+                    else if (zoneOf.has(i)) chip.classList.add('elsewhere');
                     chip.textContent = String(i + 1);
                     row.appendChild(chip);
                 }
@@ -1378,7 +2870,7 @@
                         sel.appendChild(lbl);
                         sel.appendChild(cnt);
                         sel.onclick = () => {
-                            activeZoneIdx[p] = zi;
+                            selectZone(p, zi);
                             buildPipConfigPanel();
                         };
                         row.appendChild(sel);
@@ -1399,11 +2891,74 @@
                 }
 
                 // ---- Layout editor (only when this PiP is being edited) ----
+                // Two equal columns — Zones and Crop/Zoom — each with a
+                // header row holding its tools, the canvas, and compact
+                // control rows beneath. One shared one-line legend at the
+                // bottom replaces the old per-column hint paragraphs.
                 const editor = document.createElement('div');
                 editor.className = 'pip-editor';
+                const editorRow = document.createElement('div');
+                editorRow.className = 'pip-editor-row';
 
-                const canvasWrap = document.createElement('div');
-                canvasWrap.className = 'pip-canvas-wrap';
+                const zoneCol = document.createElement('div');
+                zoneCol.className = 'pip-editor-col';
+
+                // Zones header: title, BG selector, add-zone, snap/grid.
+                const zoneHead = document.createElement('div');
+                zoneHead.className = 'pip-editor-head';
+                const zoneTitle = document.createElement('span');
+                zoneTitle.className = 'pip-editor-title';
+                zoneTitle.textContent = 'Zones';
+                zoneHead.appendChild(zoneTitle);
+                const bgRow = document.createElement('label');
+                bgRow.className = 'pip-zone-cap-row';
+                bgRow.append('BG');
+                bgRow.title = 'Background input (fills the PiP behind the zones)';
+                const bgSel = document.createElement('select');
+                bgSel.className = 'pip-bg-select';
+                const noneOpt = document.createElement('option');
+                noneOpt.value = '';
+                noneOpt.textContent = 'None';
+                bgSel.appendChild(noneOpt);
+                for (let i = 0; i < NUM_INPUTS; i++) {
+                    const o = document.createElement('option');
+                    o.value = String(i);
+                    o.textContent = INPUT_LABELS[i] || ('Input ' + (i + 1));
+                    if (cfg.bg === i) o.selected = true;
+                    bgSel.appendChild(o);
+                }
+                bgSel.onchange = () => setPipBg(p, bgSel.value);
+                bgRow.appendChild(bgSel);
+                zoneHead.appendChild(bgRow);
+                const addBtn = document.createElement('button');
+                addBtn.className = 'pip-zone-add-btn';
+                addBtn.textContent = '+ Zone';
+                addBtn.onclick = () => addZone(p);
+                zoneHead.appendChild(addBtn);
+                // Snap + grid toggles — shared by the zone canvas and the
+                // crop canvas. State persists across reloads via localStorage.
+                const snapLabel = document.createElement('label');
+                snapLabel.className = 'pip-zone-toggle';
+                const snapCb = document.createElement('input');
+                snapCb.type = 'checkbox';
+                snapCb.checked = snapEnabled;
+                snapCb.onchange = () => toggleSnap();
+                snapLabel.appendChild(snapCb);
+                snapLabel.append(' Snap');
+                snapLabel.title = 'Snap drag and pixel input to quarters and rule-of-thirds';
+                zoneHead.appendChild(snapLabel);
+                const gridLabel = document.createElement('label');
+                gridLabel.className = 'pip-zone-toggle';
+                const gridCb = document.createElement('input');
+                gridCb.type = 'checkbox';
+                gridCb.checked = gridVisible;
+                gridCb.onchange = () => toggleGrid();
+                gridLabel.appendChild(gridCb);
+                gridLabel.append(' Grid');
+                gridLabel.title = 'Show quarter (white) and rule-of-thirds (gold) guide lines';
+                zoneHead.appendChild(gridLabel);
+                zoneCol.appendChild(zoneHead);
+
                 const canvas = document.createElement('div');
                 canvas.className = 'pip-canvas';
                 canvas.dataset.pip = String(p);
@@ -1414,6 +2969,12 @@
                     ? ('BG: ' + (INPUT_LABELS[cfg.bg] || ('Input ' + (cfg.bg + 1))))
                     : '(no background)';
                 canvas.appendChild(bgDiv);
+
+                // Optional grid overlay: vertical + horizontal lines at every
+                // snap anchor. Thirds get a brighter (gold) line so the rule-
+                // of-thirds intersections read at a glance; quarters stay
+                // subtle. Sits above the BG fill and below the zones.
+                if (gridVisible) canvas.appendChild(buildGridOverlay());
 
                 cfg.zones.forEach((zone, zi) => {
                     const isAuto = zone.rect == null;
@@ -1476,7 +3037,7 @@
                     z.addEventListener('mousedown', (ev) => {
                         if (ev.target.closest('.zone-source-chip, .zone-remove')) return;
                         if (activeZoneIdx[p] !== zi) {
-                            activeZoneIdx[p] = zi;
+                            selectZone(p, zi);
                             buildPipConfigPanel();
                         }
                     });
@@ -1493,95 +3054,251 @@
                     canvas.appendChild(z);
                 });
 
-                canvasWrap.appendChild(canvas);
+                zoneCol.appendChild(canvas);
 
-                // Toolbar: BG selector, add-zone button, active-zone capacity input.
-                const toolbar = document.createElement('div');
-                toolbar.className = 'pip-canvas-toolbar';
-
-                const bgRow = document.createElement('label');
-                bgRow.className = 'pip-zone-cap-row';
-                bgRow.append('Background');
-                const bgSel = document.createElement('select');
-                bgSel.className = 'pip-bg-select';
-                const noneOpt = document.createElement('option');
-                noneOpt.value = '';
-                noneOpt.textContent = 'None';
-                bgSel.appendChild(noneOpt);
-                for (let i = 0; i < NUM_INPUTS; i++) {
-                    const o = document.createElement('option');
-                    o.value = String(i);
-                    o.textContent = INPUT_LABELS[i] || ('Input ' + (i + 1));
-                    if (cfg.bg === i) o.selected = true;
-                    bgSel.appendChild(o);
-                }
-                bgSel.onchange = () => setPipBg(p, bgSel.value);
-                bgRow.appendChild(bgSel);
-                toolbar.appendChild(bgRow);
-
-                const addBtn = document.createElement('button');
-                addBtn.className = 'pip-zone-add-btn';
-                addBtn.textContent = '+ Zone';
-                addBtn.onclick = () => addZone(p);
-                toolbar.appendChild(addBtn);
-
+                // Active-zone control row: pixel-precise rect (PGM canvas
+                // coordinates, same round-trip formula as the backend's
+                // NormRect::to_pixels) + capacity. Disabled for auto zones —
+                // right-click the zone to promote it to a manual rect first.
                 if (cfg.zones.length > 0) {
                     const zi = Math.min(activeZoneIdx[p], cfg.zones.length - 1);
                     const zone = cfg.zones[zi];
-                    const capRow = document.createElement('label');
-                    capRow.className = 'pip-zone-cap-row';
-                    capRow.append('Active: Z' + (zi + 1) + ' · cap');
+                    const zoneCtrl = document.createElement('div');
+                    zoneCtrl.className = 'pip-editor-ctrl';
+                    const zLbl = document.createElement('span');
+                    zLbl.className = 'pip-editor-ctrl-label';
+                    zLbl.textContent = 'Z' + (zi + 1);
+                    zLbl.title = 'Active zone — click a zone in the canvas to switch';
+                    zoneCtrl.appendChild(zLbl);
+
+                    const isAuto = zone.rect == null;
+                    const pxRect = isAuto
+                        ? { x: 0, y: 0, w: PGM_W, h: PGM_H }
+                        : {
+                            x: Math.round(zone.rect.x * PGM_W),
+                            y: Math.round(zone.rect.y * PGM_H),
+                            w: Math.round(zone.rect.w * PGM_W),
+                            h: Math.round(zone.rect.h * PGM_H),
+                        };
+                    const mkPxInput = (field, max) => {
+                        const inp = document.createElement('input');
+                        inp.className = 'pip-zone-px-input';
+                        inp.type = 'number';
+                        inp.min = (field === 'w' || field === 'h') ? '1' : '0';
+                        inp.max = String(max);
+                        inp.step = '1';
+                        inp.value = String(pxRect[field]);
+                        inp.disabled = isAuto;
+                        inp.title = isAuto
+                            ? 'Auto-tile mode — right-click the zone to set a manual rect'
+                            : (field.toUpperCase() + ' in PGM pixels (' + PGM_W + '×' + PGM_H + ')');
+                        inp.onchange = () => setZoneRectPx(p, zi, field, inp.value);
+                        return inp;
+                    };
+                    const mkLbl = (text) => {
+                        const l = document.createElement('span');
+                        l.className = 'pip-zone-px-label';
+                        l.textContent = text;
+                        return l;
+                    };
+                    zoneCtrl.appendChild(mkLbl('X'));
+                    zoneCtrl.appendChild(mkPxInput('x', PGM_W));
+                    zoneCtrl.appendChild(mkLbl('Y'));
+                    zoneCtrl.appendChild(mkPxInput('y', PGM_H));
+                    zoneCtrl.appendChild(mkLbl('W'));
+                    zoneCtrl.appendChild(mkPxInput('w', PGM_W));
+                    zoneCtrl.appendChild(mkLbl('H'));
+                    zoneCtrl.appendChild(mkPxInput('h', PGM_H));
+
+                    zoneCtrl.append('cap');
                     const capInput = document.createElement('input');
                     capInput.className = 'pip-zone-cap-input';
                     capInput.type = 'number';
                     capInput.min = '1';
                     capInput.placeholder = '∞';
+                    capInput.title = 'Max sources in the zone (oldest evicts when full)';
                     capInput.value = zone.capacity != null ? String(zone.capacity) : '';
                     capInput.onchange = () => setZoneCapacity(p, zi, capInput.value);
-                    capRow.appendChild(capInput);
-                    toolbar.appendChild(capRow);
+                    zoneCtrl.appendChild(capInput);
+
+                    // Border: the box's styling — survives source swaps in the
+                    // zone, drawn live on PGM around the actual source boxes.
+                    // Width 0 (or blank) = no border.
+                    zoneCtrl.append('border');
+                    const borderColor = document.createElement('input');
+                    borderColor.type = 'color';
+                    borderColor.className = 'pip-zone-border-color';
+                    borderColor.value = (zone.border && /^#[0-9a-fA-F]{6}/.test(zone.border.color))
+                        ? zone.border.color.slice(0, 7)
+                        : '#cc0000';
+                    borderColor.title = 'Border color (drawn on PGM around each source box in the zone)';
+                    const borderWidth = document.createElement('input');
+                    borderWidth.className = 'pip-zone-cap-input';
+                    borderWidth.type = 'number';
+                    borderWidth.min = '0';
+                    borderWidth.max = '64';
+                    borderWidth.step = '1';
+                    borderWidth.placeholder = '0';
+                    borderWidth.title = 'Border width in PGM pixels (0 = no border)';
+                    borderWidth.value = zone.border ? String(zone.border.width) : '';
+                    const commitBorder = () =>
+                        setZoneBorder(p, zi, borderColor.value, borderWidth.value);
+                    borderColor.onchange = commitBorder;
+                    borderWidth.onchange = commitBorder;
+                    zoneCtrl.appendChild(borderColor);
+                    zoneCtrl.appendChild(borderWidth);
+                    zoneCol.appendChild(zoneCtrl);
                 }
 
-                const hint = document.createElement('div');
-                hint.className = 'pip-canvas-hint';
-                hint.innerHTML = 'Click a zone to activate. Push-chip adds the input to the active zone (oldest evicts at cap). Chip inside a zone = remove. Right-click a zone to toggle auto / manual rect.';
-                toolbar.appendChild(hint);
-                canvasWrap.appendChild(toolbar);
-                editor.appendChild(canvasWrap);
+                // Layout preset row: save/load/delete named zone layouts
+                // (geometry only) stored browser-wide in localStorage.
+                const presetCtrl = document.createElement('div');
+                presetCtrl.className = 'pip-editor-ctrl';
+                const presetLbl = document.createElement('span');
+                presetLbl.className = 'pip-editor-ctrl-label';
+                presetLbl.textContent = 'Layout';
+                presetLbl.title = 'Layout presets — full PiP composition: zones with sources, background, and crop/zoom settings';
+                presetCtrl.appendChild(presetLbl);
+                const presetSel = document.createElement('select');
+                presetSel.className = 'pip-bg-select';
+                const presetPh = document.createElement('option');
+                presetPh.value = '';
+                presetPh.textContent = presetNames.length ? '— preset —' : '(no presets)';
+                presetSel.appendChild(presetPh);
+                presetNames.forEach(n => {
+                    const o = document.createElement('option');
+                    o.value = n;
+                    o.textContent = n;
+                    if (selectedPipPreset === n) o.selected = true;
+                    presetSel.appendChild(o);
+                });
+                presetSel.onchange = () => {
+                    selectedPipPreset = presetSel.value;
+                    buildPipConfigPanel();
+                };
+                presetCtrl.appendChild(presetSel);
+                const mkPresetBtn = (text, title, handler, disabled) => {
+                    const b = document.createElement('button');
+                    b.className = 'pip-zone-add-btn';
+                    b.textContent = text;
+                    b.title = title;
+                    b.disabled = !!disabled;
+                    b.onclick = handler;
+                    return b;
+                };
+                presetCtrl.appendChild(mkPresetBtn('Save',
+                    'Save this PiP\'s full composition — zones, sources, background, and all crop/zoom settings (also for sources not currently in the PiP)',
+                    () => savePipLayoutPreset(p),
+                    cfg.zones.length === 0));
+                presetCtrl.appendChild(mkPresetBtn('Load',
+                    'Replace this PiP\'s composition with the preset (best effort — sources that do not exist on this mixer are skipped)',
+                    () => applyPipLayoutPreset(p, selectedPipPreset),
+                    !selectedPipPreset));
+                presetCtrl.appendChild(mkPresetBtn('Delete',
+                    'Delete the selected preset from this browser',
+                    () => deletePipLayoutPreset(selectedPipPreset),
+                    !selectedPipPreset));
+                zoneCol.appendChild(presetCtrl);
+
+                editorRow.appendChild(zoneCol);
+                editorRow.appendChild(buildCropSection(p, cfg));
+                editor.appendChild(editorRow);
+
+                const footer = document.createElement('div');
+                footer.className = 'pip-editor-footer';
+                footer.textContent = 'Drag to move · corners resize · right-click zone toggles auto/manual rect · chips push/remove sources · zone px = PGM canvas, crop px = source';
+                editor.appendChild(footer);
 
                 block.appendChild(editor);
                 panel.appendChild(block);
             }
         }
 
-        // Snap anchors for layout rects (edges, halves, quarters).
-        const SNAP_ANCHORS = [0, 0.25, 0.5, 0.75, 1];
+        // Snap anchors for layout rects: edges, quarters, and rule-of-thirds.
+        // Thirds (1/3, 2/3) are broadcast composition guides — placing a PiP
+        // overlay on a third often reads better than dead-center. Quarters
+        // are kept for symmetric splits (left/right half, exact center).
+        const SNAP_QUARTERS = [0.25, 0.5, 0.75];
+        const SNAP_THIRDS = [1 / 3, 2 / 3];
+        const SNAP_ANCHORS = [0, ...SNAP_QUARTERS, ...SNAP_THIRDS, 1].sort((a, b) => a - b);
         const SNAP_TOL = 0.022; // ~10px on a 480-px canvas; tight enough to not fight free dragging
 
-        // Snap a single coordinate to nearby anchors. Used when resizing — only
-        // the corner being dragged snaps; the opposite corner stays put.
-        function snapEdge(v) {
-            for (const a of SNAP_ANCHORS) {
-                if (Math.abs(v - a) < SNAP_TOL) return a;
-            }
-            return v;
+        // Build the snap-anchor grid overlay (vertical + horizontal lines at
+        // every anchor; thirds gold, quarters subtle). Shared between the
+        // zone canvas and the crop canvas — `showSnapHighlight` finds the
+        // lines via data-anchor inside whichever canvas hosts them.
+        function buildGridOverlay() {
+            const grid = document.createElement('div');
+            grid.className = 'pip-canvas-grid';
+            SNAP_ANCHORS.forEach(a => {
+                if (a === 0 || a === 1) return; // edges are the canvas border
+                const isThird = SNAP_THIRDS.some(t => Math.abs(t - a) < 1e-6);
+                const cls = 'pip-grid-line ' + (isThird ? 'third' : 'quarter');
+                const vl = document.createElement('div');
+                vl.className = cls + ' v';
+                vl.style.left = (a * 100) + '%';
+                vl.dataset.anchor = String(a);
+                grid.appendChild(vl);
+                const hl = document.createElement('div');
+                hl.className = cls + ' h';
+                hl.style.top = (a * 100) + '%';
+                hl.dataset.anchor = String(a);
+                grid.appendChild(hl);
+            });
+            return grid;
         }
 
-        // Snap a moving rect along one axis to whichever of {left edge, right edge,
-        // center} is closest to a snap anchor. Lets a centered rect "dent" into
-        // the canvas center, and lets the right/bottom edge dock against an anchor.
-        function snapMoveAxis(pos, size) {
+        // Snap a single coordinate to a nearby anchor. Returns the snapped
+        // value plus the matched anchor (null when no snap happens or when
+        // snapping is disabled). Caller passes `anchor` to showSnapHighlight
+        // so the user sees which guide line locked the value in.
+        function snapEdgeDetect(v) {
+            if (!snapEnabled) return { value: v, anchor: null };
+            for (const a of SNAP_ANCHORS) {
+                if (Math.abs(v - a) < SNAP_TOL) return { value: a, anchor: a };
+            }
+            return { value: v, anchor: null };
+        }
+
+        // Snap a moving rect along one axis to whichever of {left edge, right
+        // edge, center} is closest to a snap anchor. Returns the snapped
+        // position plus the matched anchor so the caller can light it up.
+        function snapMoveAxisDetect(pos, size) {
+            if (!snapEnabled) return { value: pos, anchor: null };
             let bestDelta = SNAP_TOL;
             let bestPos = pos;
+            let bestAnchor = null;
             for (const a of SNAP_ANCHORS) {
                 const d1 = Math.abs(a - pos);
-                if (d1 < bestDelta) { bestDelta = d1; bestPos = a; }
+                if (d1 < bestDelta) { bestDelta = d1; bestPos = a; bestAnchor = a; }
                 const d2 = Math.abs(a - (pos + size));
-                if (d2 < bestDelta) { bestDelta = d2; bestPos = a - size; }
+                if (d2 < bestDelta) { bestDelta = d2; bestPos = a - size; bestAnchor = a; }
                 const d3 = Math.abs(a - (pos + size / 2));
-                if (d3 < bestDelta) { bestDelta = d3; bestPos = a - size / 2; }
+                if (d3 < bestDelta) { bestDelta = d3; bestPos = a - size / 2; bestAnchor = a; }
             }
-            return bestPos;
+            return { value: bestPos, anchor: bestAnchor };
+        }
+
+        // Highlight the grid line for a given (axis, anchor). axis is 'x' for
+        // a vertical line, 'y' for a horizontal one. Looks up the DOM element
+        // by data-anchor; silently no-ops when grid lines aren't rendered
+        // (gridVisible off) — the snap still happens, just without the cue.
+        function showSnapHighlight(canvas, axis, anchor) {
+            if (!canvas || anchor == null) return;
+            const cls = axis === 'x' ? '.pip-grid-line.v' : '.pip-grid-line.h';
+            const lines = canvas.querySelectorAll(cls);
+            for (const el of lines) {
+                if (Math.abs(parseFloat(el.dataset.anchor) - anchor) < 1e-6) {
+                    el.classList.add('active-snap');
+                    return;
+                }
+            }
+        }
+
+        function clearSnapHighlights(canvas) {
+            if (!canvas) return;
+            canvas.querySelectorAll('.pip-grid-line.active-snap')
+                .forEach(el => el.classList.remove('active-snap'));
         }
 
         // Drag-and-resize handler for a zone. Promotes auto zones to explicit
@@ -1594,6 +3311,14 @@
                 e.preventDefault();
                 e.stopPropagation();
                 const canvasRect = canvas.getBoundingClientRect();
+                // The zone-activation listener on this element may have just
+                // rebuilt the panel (same mousedown event) — this element and
+                // its canvas are then detached and the rect is 0×0. Dividing
+                // by it would poison the rect with NaN, so bail; the user
+                // drags again on the freshly-built zone.
+                if (!canvas.isConnected || canvasRect.width <= 0 || canvasRect.height <= 0) {
+                    return;
+                }
                 const startX = e.clientX;
                 const startY = e.clientY;
                 const cfg = pipConfigs[pipIdx];
@@ -1609,31 +3334,58 @@
                     const dx = (ev.clientX - startX) / canvasRect.width;
                     const dy = (ev.clientY - startY) / canvasRect.height;
                     let next = { ...initial };
+                    // Track which anchor (if any) each axis snapped to so we
+                    // can light up the matching grid line. Move snaps once
+                    // per axis; resize snaps the dragged edges (which may be
+                    // left or right, top or bottom depending on the corner).
+                    let snapX = null;
+                    let snapY = null;
                     if (!corner) {
                         // Move: snap to whichever of {left, right, center} is closest
                         // to an anchor — gives a satisfying detent at canvas-center.
-                        next.x = snapMoveAxis(initial.x + dx, initial.w);
-                        next.y = snapMoveAxis(initial.y + dy, initial.h);
+                        const sx = snapMoveAxisDetect(initial.x + dx, initial.w);
+                        const sy = snapMoveAxisDetect(initial.y + dy, initial.h);
+                        next.x = sx.value;
+                        next.y = sy.value;
+                        snapX = sx.anchor;
+                        snapY = sy.anchor;
                     } else {
-                        // Resize: only the dragged corner snaps to anchors.
+                        // Resize: only the dragged corner snaps. The anchor each
+                        // dragged edge lands on is what we light up.
                         const right = initial.x + initial.w;
                         const bottom = initial.y + initial.h;
                         if (corner === 'nw') {
-                            next.x = snapEdge(initial.x + dx);
-                            next.y = snapEdge(initial.y + dy);
+                            const sx = snapEdgeDetect(initial.x + dx);
+                            const sy = snapEdgeDetect(initial.y + dy);
+                            next.x = sx.value;
+                            next.y = sy.value;
                             next.w = right - next.x;
                             next.h = bottom - next.y;
+                            snapX = sx.anchor;
+                            snapY = sy.anchor;
                         } else if (corner === 'ne') {
-                            next.y = snapEdge(initial.y + dy);
-                            next.w = snapEdge(right + dx) - initial.x;
+                            const sy = snapEdgeDetect(initial.y + dy);
+                            const sr = snapEdgeDetect(right + dx);
+                            next.y = sy.value;
+                            next.w = sr.value - initial.x;
                             next.h = bottom - next.y;
+                            snapX = sr.anchor;
+                            snapY = sy.anchor;
                         } else if (corner === 'sw') {
-                            next.x = snapEdge(initial.x + dx);
+                            const sx = snapEdgeDetect(initial.x + dx);
+                            const sb = snapEdgeDetect(bottom + dy);
+                            next.x = sx.value;
                             next.w = right - next.x;
-                            next.h = snapEdge(bottom + dy) - initial.y;
+                            next.h = sb.value - initial.y;
+                            snapX = sx.anchor;
+                            snapY = sb.anchor;
                         } else if (corner === 'se') {
-                            next.w = snapEdge(right + dx) - initial.x;
-                            next.h = snapEdge(bottom + dy) - initial.y;
+                            const sr = snapEdgeDetect(right + dx);
+                            const sb = snapEdgeDetect(bottom + dy);
+                            next.w = sr.value - initial.x;
+                            next.h = sb.value - initial.y;
+                            snapX = sr.anchor;
+                            snapY = sb.anchor;
                         }
                     }
                     next.w = Math.max(0.05, Math.min(1, next.w));
@@ -1650,10 +3402,16 @@
                     zoneEl.style.top = (next.y * 100) + '%';
                     zoneEl.style.width = (next.w * 100) + '%';
                     zoneEl.style.height = (next.h * 100) + '%';
+                    // Update snap-line highlights. Clears any stale highlight
+                    // first so a line doesn't stay lit after the snap is lost.
+                    clearSnapHighlights(canvas);
+                    showSnapHighlight(canvas, 'x', snapX);
+                    showSnapHighlight(canvas, 'y', snapY);
                 };
                 const onUp = () => {
                     document.removeEventListener('mousemove', onMove);
                     document.removeEventListener('mouseup', onUp);
+                    clearSnapHighlights(canvas);
                     if (dirty) postPipConfig(pipIdx);
                 };
                 document.addEventListener('mousemove', onMove);
@@ -1819,6 +3577,7 @@
                 updateFtbButton();
                 updateDskButtons();
                 updateOverlayAlphaUi();
+                fetchFxState();
                 setStatus('Reconnected - state synced');
             } catch (e) {
                 setStatus('Resync failed: ' + e.message);
@@ -1861,6 +3620,17 @@
                             updateFtbButton();
                         }
                     }
+                    if (event.type === 'VisionMixerEffectChanged' && event.data) {
+                        const d = event.data;
+                        if (d.flow_id === FLOW_ID && d.block_id === BLOCK_ID) {
+                            if (d.target === 'master') masterEffect = d.effect;
+                            else if (d.target && d.target.input != null) inputEffects[d.target.input] = d.effect;
+                            // Don't rebuild under the operator's pointer mid-drag.
+                            if (!document.getElementById('fxPanel').contains(document.activeElement)) {
+                                buildFxPanel();
+                            }
+                        }
+                    }
                     if (event.type === 'VisionMixerOverlayAlphaChanged' && event.data) {
                         const d = event.data;
                         if (d.flow_id === FLOW_ID && d.block_id === BLOCK_ID && !overlayAlphaDragging) {
@@ -1887,6 +3657,8 @@
             initDskUi();
             buildPipConfigPanel();
             updateFtbButton();
+            updateFxAvailabilityUi();
+            fetchFxState();
             connectMultiview();
             connectWebSocket();
             if (controlsMinimized) document.body.classList.add('minimized');

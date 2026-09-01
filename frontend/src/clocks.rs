@@ -81,7 +81,7 @@ impl ClocksPage {
     ) {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.set_min_width(320.0);
+                ui.set_width(320.0);
                 self.render_domain_list(ui, domain_info);
             });
             ui.separator();
@@ -169,22 +169,21 @@ impl ClocksPage {
         // Get selected domain as string
         let selected_id = self.selected_domain.map(|d| d.to_string());
 
-        let result = egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let items =
-                    items_data
-                        .iter()
-                        .map(|(id, label, secondary, status_text, status_color)| {
-                            ListItem::new(id, label)
-                                .with_secondary(secondary.clone())
-                                .with_status(status_text, *status_color)
-                        });
-
-                list_navigator(ui, "ptp_domains", items, selected_id.as_deref())
+        // Render the list directly: the page already lives inside a vertical
+        // ScrollArea, and a nested vertical ScrollArea with auto_shrink([false,
+        // false]) here would expand to the full row width and push the details
+        // panel off-screen.
+        let items = items_data
+            .iter()
+            .map(|(id, label, secondary, status_text, status_color)| {
+                ListItem::new(id, label)
+                    .with_secondary(secondary.clone())
+                    .with_status(status_text, *status_color)
             });
 
-        if let Some(new_id) = result.inner.selected {
+        let result = list_navigator(ui, "ptp_domains", items, selected_id.as_deref());
+
+        if let Some(new_id) = result.selected {
             if let Ok(domain) = new_id.parse::<u8>() {
                 self.selected_domain = Some(domain);
             }
@@ -774,7 +773,7 @@ fn draw_large_graph(
         let y = rect.min.y + (i as f32 / 4.0) * rect.height();
         painter.line_segment(
             [Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y)],
-            Stroke::new(0.5, Color32::from_gray(40)),
+            Stroke::new(0.5_f32, Color32::from_gray(40)),
         );
     }
 
@@ -786,7 +785,7 @@ fn draw_large_graph(
                 Pos2::new(rect.min.x, y_center),
                 Pos2::new(rect.max.x, y_center),
             ],
-            Stroke::new(1.0, Color32::from_gray(80)),
+            Stroke::new(1.0_f32, Color32::from_gray(80)),
         );
     }
 
@@ -805,14 +804,14 @@ fn draw_large_graph(
         .collect();
 
     if points.len() >= 2 {
-        painter.add(egui::Shape::line(points, Stroke::new(2.0, color)));
+        painter.add(egui::Shape::line(points, Stroke::new(2.0_f32, color)));
     }
 
     // Draw border
     painter.rect_stroke(
         rect,
         4.0,
-        Stroke::new(1.0, Color32::from_gray(80)),
+        Stroke::new(1.0_f32, Color32::from_gray(80)),
         egui::StrokeKind::Outside,
     );
 
@@ -848,7 +847,7 @@ fn draw_large_graph_fixed(
         let y = rect.min.y + (i as f32 / 4.0) * rect.height();
         painter.line_segment(
             [Pos2::new(rect.min.x, y), Pos2::new(rect.max.x, y)],
-            Stroke::new(0.5, Color32::from_gray(40)),
+            Stroke::new(0.5_f32, Color32::from_gray(40)),
         );
     }
 
@@ -878,14 +877,14 @@ fn draw_large_graph_fixed(
         .collect();
 
     if points.len() >= 2 {
-        painter.add(egui::Shape::line(points, Stroke::new(2.0, color)));
+        painter.add(egui::Shape::line(points, Stroke::new(2.0_f32, color)));
     }
 
     // Draw border
     painter.rect_stroke(
         rect,
         4.0,
-        Stroke::new(1.0, Color32::from_gray(80)),
+        Stroke::new(1.0_f32, Color32::from_gray(80)),
         egui::StrokeKind::Outside,
     );
 

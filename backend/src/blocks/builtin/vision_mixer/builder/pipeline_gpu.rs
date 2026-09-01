@@ -26,6 +26,11 @@ pub(super) fn build_gpu_pipeline(
 
     let mixer_id = p.id("mixer");
     let mv_comp_id = p.id("mv_comp");
+    // Weak handles for the caps probes registered below — the probes must
+    // not hold strong element references (pads own their probes; a strong
+    // ref would create a cycle that leaks the pipeline on restart).
+    let dist_weak = dist_comp.downgrade();
+    let mv_weak = mv_comp.downgrade();
     elems.push((mixer_id.clone(), dist_comp));
     elems.push((mv_comp_id.clone(), mv_comp));
 
@@ -35,7 +40,14 @@ pub(super) fn build_gpu_pipeline(
     } else {
         16.0 / 9.0
     };
-    let mv_layout = layout::compute_layout(p.mv_w, p.mv_h, p.num_inputs, p.num_pips, source_aspect);
+    let mv_layout = layout::compute_layout(
+        p.mv_w,
+        p.mv_h,
+        p.num_inputs,
+        p.num_pips,
+        source_aspect,
+        p.swap_pvw_pgm,
+    );
 
     // --- Distribution output chain ---
     // queue_post_dist decouples the compositor from downstream processing.
@@ -52,10 +64,37 @@ pub(super) fn build_gpu_pipeline(
     elems.push((q_post_dist_id.clone(), queue_post_dist));
     elems.push((tee_pgm_id.clone(), tee_pgm));
     elems.push((q_dist_out_id.clone(), queue_dist_out));
-    links.push((
-        ElementPadRef::pad(&mixer_id, "src"),
-        ElementPadRef::pad(&q_post_dist_id, "sink"),
-    ));
+    if p.enable_fx {
+        // MASTER FX slots: mixer → fx_pgm → fx_pgm_take → queue_post_dist.
+        // Identity shaders by default. Two slots, mirroring the per-input
+        // look/take split: fx_pgm carries the persistent master look,
+        // fx_pgm_take the master-FX take envelope on top of it — so a take
+        // no longer evicts the look (see gst::pipeline::effects::shader_fx).
+        let fx_pgm_id = p.id("fx_pgm");
+        let fx_pgm_take_id = p.id("fx_pgm_take");
+        elems.push((fx_pgm_id.clone(), elements::make_glshader(&fx_pgm_id)?));
+        elems.push((
+            fx_pgm_take_id.clone(),
+            elements::make_glshader(&fx_pgm_take_id)?,
+        ));
+        links.push((
+            ElementPadRef::pad(&mixer_id, "src"),
+            ElementPadRef::pad(&fx_pgm_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&fx_pgm_id, "src"),
+            ElementPadRef::pad(&fx_pgm_take_id, "sink"),
+        ));
+        links.push((
+            ElementPadRef::pad(&fx_pgm_take_id, "src"),
+            ElementPadRef::pad(&q_post_dist_id, "sink"),
+        ));
+    } else {
+        links.push((
+            ElementPadRef::pad(&mixer_id, "src"),
+            ElementPadRef::pad(&q_post_dist_id, "sink"),
+        ));
+    }
     links.push((
         ElementPadRef::pad(&q_post_dist_id, "src"),
         ElementPadRef::pad(&tee_pgm_id, "sink"),
@@ -246,6 +285,59 @@ pub(super) fn build_gpu_pipeline(
     ));
     // Link to mv_comp is added AFTER all other mv_comp links (pad ordering matters)
 
+    // --- Border underlay sources ---
+    // Zone borders render as solid-color compositor pads directly beneath
+    // their content pads (see `gst::underlay`). One tiny videotestsrc per
+    // (region, input); the border color is set at runtime via
+    // `foreground-color`. Non-live → contributes no latency. Only built when
+    // PiPs are configured — zones (and thus borders) cannot exist without
+    // them.
+    if p.num_pips > 0 {
+        let underlay_chains: Vec<String> = (0..p.num_inputs)
+            .map(|i| format!("underlay_dist_{}", i))
+            .chain((0..p.num_inputs).map(|i| format!("underlay_pvw_{}", i)))
+            .chain((0..p.num_pips).flat_map(|pip| {
+                (0..p.num_inputs)
+                    .map(move |i| format!("underlay_pip_{}_{}", pip, i))
+                    .collect::<Vec<_>>()
+            }))
+            .collect();
+        // Low framerate: the color only changes on border edits and the
+        // mixer keeps compositing the latest buffer between pushes.
+        let underlay_caps: gst::Caps =
+            "video/x-raw,format=RGBA,width=16,height=16,framerate=5/1,pixel-aspect-ratio=1/1"
+                .parse()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("underlay caps: {}", e)))?;
+        for name in &underlay_chains {
+            let src_id = p.id(&format!("{}_src", name));
+            let cf_id = p.id(&format!("{}_caps", name));
+            let up_id = p.id(&format!("{}_upload", name));
+            let src = gst::ElementFactory::make("videotestsrc")
+                .name(&src_id)
+                .property("is-live", false)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", src_id, e)))?;
+            src.set_property_from_str("pattern", "solid-color");
+            let cf = gst::ElementFactory::make("capsfilter")
+                .name(&cf_id)
+                .property("caps", &underlay_caps)
+                .build()
+                .map_err(|e| BlockBuildError::ElementCreation(format!("{}: {}", cf_id, e)))?;
+            elems.push((src_id.clone(), src));
+            elems.push((cf_id.clone(), cf));
+            elems.push((up_id.clone(), elements::make_element("glupload", &up_id)?));
+            links.push((
+                ElementPadRef::pad(&src_id, "src"),
+                ElementPadRef::pad(&cf_id, "sink"),
+            ));
+            links.push((
+                ElementPadRef::pad(&cf_id, "src"),
+                ElementPadRef::pad(&up_id, "sink"),
+            ));
+        }
+    }
+    // Links to the compositor pads are added below in pad-index order.
+
     // --- Per-input elements ---
     for i in 0..p.num_inputs {
         let q_id = p.id(&format!("queue_{}", i));
@@ -279,7 +371,7 @@ pub(super) fn build_gpu_pipeline(
             elems.push((q_pip_id.clone(), elements::make_queue(&q_pip_id)?));
         }
 
-        // queue → glupload → glcolorconvert → tee
+        // queue → glupload → glcolorconvert → [fx_look] → tee
         links.push((
             ElementPadRef::pad(&q_id, "src"),
             ElementPadRef::pad(&up_id, "sink"),
@@ -288,10 +380,26 @@ pub(super) fn build_gpu_pipeline(
             ElementPadRef::pad(&up_id, "src"),
             ElementPadRef::pad(&cc_id, "sink"),
         ));
-        links.push((
-            ElementPadRef::pad(&cc_id, "src"),
-            ElementPadRef::pad(&tee_id, "sink"),
-        ));
+        if p.enable_fx {
+            // LOOK FX slot: persistent per-source effects (chroma key,
+            // pixelate, ...). Sits before the tee so the look follows the
+            // source everywhere: PGM, PVW, thumbnails and PiPs.
+            let fx_look_id = p.id(&format!("fx_look_{}", i));
+            elems.push((fx_look_id.clone(), elements::make_glshader(&fx_look_id)?));
+            links.push((
+                ElementPadRef::pad(&cc_id, "src"),
+                ElementPadRef::pad(&fx_look_id, "sink"),
+            ));
+            links.push((
+                ElementPadRef::pad(&fx_look_id, "src"),
+                ElementPadRef::pad(&tee_id, "sink"),
+            ));
+        } else {
+            links.push((
+                ElementPadRef::pad(&cc_id, "src"),
+                ElementPadRef::pad(&tee_id, "sink"),
+            ));
+        }
     }
 
     // --- Compositor links (order matters: linker auto-creates sink pads sequentially) ---
@@ -303,10 +411,26 @@ pub(super) fn build_gpu_pipeline(
             ElementPadRef::pad(&tee_id, "src_0"),
             ElementPadRef::pad(&q_dist_id, "sink"),
         ));
-        links.push((
-            ElementPadRef::pad(&q_dist_id, "src"),
-            ElementPadRef::pad(&mixer_id, format!("sink_{}", i)),
-        ));
+        if p.enable_fx {
+            // TAKE FX slot: wipe-mask shaders for the incoming source during
+            // shader transitions. Dist branch only — multiview thumbnails
+            // and PVW stay clean during a wipe.
+            let fx_take_id = p.id(&format!("fx_take_{}", i));
+            elems.push((fx_take_id.clone(), elements::make_glshader(&fx_take_id)?));
+            links.push((
+                ElementPadRef::pad(&q_dist_id, "src"),
+                ElementPadRef::pad(&fx_take_id, "sink"),
+            ));
+            links.push((
+                ElementPadRef::pad(&fx_take_id, "src"),
+                ElementPadRef::pad(&mixer_id, format!("sink_{}", i)),
+            ));
+        } else {
+            links.push((
+                ElementPadRef::pad(&q_dist_id, "src"),
+                ElementPadRef::pad(&mixer_id, format!("sink_{}", i)),
+            ));
+        }
     }
     // DSK inputs on dist compositor (after video inputs)
     for i in 0..p.num_dsk_inputs {
@@ -315,6 +439,22 @@ pub(super) fn build_gpu_pipeline(
             ElementPadRef::pad(&cc_id, "src"),
             ElementPadRef::pad(&mixer_id, format!("sink_{}", p.num_inputs + i)),
         ));
+    }
+
+    // Dist border underlays — after the DSK links so input i's underlay
+    // lands at sink_{num_inputs + num_dsk_inputs + i} (glvideomixer pads are
+    // auto-created in link order).
+    if p.num_pips > 0 {
+        for i in 0..p.num_inputs {
+            let up_id = p.id(&format!("underlay_dist_{}_upload", i));
+            links.push((
+                ElementPadRef::pad(&up_id, "src"),
+                ElementPadRef::pad(
+                    &mixer_id,
+                    format!("sink_{}", p.num_inputs + p.num_dsk_inputs + i),
+                ),
+            ));
+        }
     }
 
     // Multiview compositor thumbnails: tee_i.src_1 → queue → mv_comp
@@ -375,12 +515,36 @@ pub(super) fn build_gpu_pipeline(
         }
     }
 
-    // Overlay pad: glupload_overlay → mv_comp (must be last link to get correct pad index)
+    // Overlay pad: glupload_overlay → mv_comp (pad order matters on the GL
+    // mixer — this must precede the underlay links below).
     let overlay_pad_idx = 2 * p.num_inputs + 1 + p.num_pips * p.num_inputs;
     links.push((
         ElementPadRef::pad(&up_overlay_id, "src"),
         ElementPadRef::pad(&mv_comp_id, format!("sink_{}", overlay_pad_idx)),
     ));
+
+    // Multiview border underlays — after the overlay pad: PVW underlays at
+    // sink_{2N+2+P+i}, then tile underlays at sink_{2N+2+P+N+pip*N+i}.
+    if p.num_pips > 0 {
+        let mv_underlay_base = overlay_pad_idx + 1;
+        for i in 0..p.num_inputs {
+            let up_id = p.id(&format!("underlay_pvw_{}_upload", i));
+            links.push((
+                ElementPadRef::pad(&up_id, "src"),
+                ElementPadRef::pad(&mv_comp_id, format!("sink_{}", mv_underlay_base + i)),
+            ));
+        }
+        for pip_idx in 0..p.num_pips {
+            for i in 0..p.num_inputs {
+                let up_id = p.id(&format!("underlay_pip_{}_{}_upload", pip_idx, i));
+                let sink_idx = mv_underlay_base + p.num_inputs * (1 + pip_idx) + i;
+                links.push((
+                    ElementPadRef::pad(&up_id, "src"),
+                    ElementPadRef::pad(&mv_comp_id, format!("sink_{}", sink_idx)),
+                ));
+            }
+        }
+    }
 
     // --- Pad properties (applied after linking when auto-created pads exist) ---
     let pad_properties = pad_layout::build_pad_properties(p, &mv_layout);
@@ -390,6 +554,24 @@ pub(super) fn build_gpu_pipeline(
 
     // --- Set up overlay appsrc renderer ---
     let overlay_state = setup_overlay_renderer(p, &appsrc_overlay, &overlay_caps, &mv_layout, ctx);
+
+    // --- Reactive explicit geometry ---
+    // Input pads run sizing-policy=none; aspect-correct rects are re-applied
+    // whenever an input's caps arrive or change. Probes attach at element
+    // setup time (after linking, when the request pads exist).
+    {
+        let block_id = p.instance_id.to_string();
+        let num_inputs = p.num_inputs;
+        let num_pips = p.num_pips;
+        ctx.register_element_setup(Box::new(move |_flow_id, _events| {
+            let (Some(mixer), Some(mv_comp)) = (dist_weak.upgrade(), mv_weak.upgrade()) else {
+                return;
+            };
+            super::super::geometry::install_caps_probes(
+                &block_id, &mixer, &mv_comp, num_inputs, num_pips,
+            );
+        }));
+    }
 
     // --- Bus handler that pipes `level` messages into the overlay state ---
     let bus_message_handler = Some(audio_meter::build_meter_bus_handler(

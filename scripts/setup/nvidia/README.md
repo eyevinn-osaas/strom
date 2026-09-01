@@ -22,6 +22,13 @@ Installs the recommended NVIDIA driver using `ubuntu-drivers`. This script:
 - Installs the recommended driver version
 - Prompts for reboot to load the new driver
 
+For automation, set `REBOOT` to skip the prompt: `REBOOT=no` installs the driver
+without rebooting (reboot later yourself), `REBOOT=yes` reboots immediately.
+
+```bash
+REBOOT=no ./install-nvidia-driver.sh
+```
+
 **Important:** Do NOT install the `nvidia-headless` driver variant - it lacks the OpenGL/EGL capabilities required for CUDA-GL interop.
 
 ### 2. Install NVIDIA Container Toolkit
@@ -293,7 +300,7 @@ gst-inspect-1.0 glupload
 - [GStreamer GL Documentation](https://gstreamer.freedesktop.org/documentation/gl/)
 - [CUDA-OpenGL Interop Guide](https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__OPENGL.html)
 - [Strom Docker Guide](../../docs/DOCKER.md)
-- [Strom Docker GPU Setup](../../docs/docker-gpu-setup.md)
+- [Strom Docker GPU Setup](../../docs/DOCKER_GPU_SETUP.md)
 
 ## References
 

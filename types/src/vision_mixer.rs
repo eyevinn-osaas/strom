@@ -141,6 +141,15 @@ pub const DEFAULT_MULTIVIEW_FRAMERATE: &str = "30/1";
 /// Whether to download GPU memory to system memory on output (GPU path only).
 pub const DEFAULT_GL_DOWNLOAD: bool = false;
 
+/// Whether to build the shader FX slots (looks, wipes, master FX) into the
+/// GPU pipeline. GPU path only — the CPU compositor has no FX engine.
+pub const DEFAULT_ENABLE_FX: bool = true;
+
+/// Whether to swap the PVW and PGM positions in the multiview layout. When
+/// false (default) PVW is on the left and PGM on the right; when true they
+/// are mirrored.
+pub const DEFAULT_SWAP_PVW_PGM: bool = false;
+
 // --- Z-order constants for compositor pads ---
 
 /// Z-order for thumbnail pads on the multiview compositor.
@@ -165,9 +174,32 @@ pub const MV_PVW_PIP_OVERLAY_ZORDER: u32 = 11;
 
 /// Z-order used for the *shared* pad during a morph transition — lifted above
 /// any other video pad so the source that morphs visually covers the non-shared
-/// pads underneath. Must stay below [`DIST_DSK_BASE_ZORDER`] (100) and below the
-/// cairo overlay z-order (200) so DSK + labels still render on top.
-pub const TRANSITION_FOREGROUND_ZORDER: u32 = 50;
+/// pads underneath. Must sit above the highest static zone slot
+/// ([`MV_PIP_OVERLAY_ZORDER`] 21 + 2·14 + 1 = 50 at [`MAX_PIP_OVERLAYS`])
+/// and keep lifted values (this + new_z) below [`DIST_DSK_BASE_ZORDER`]
+/// (100) on the dist mixer (dist new_z ≤ 31) and below the multiview
+/// overlay (200) on mv_comp (mv new_z ≤ 50).
+pub const TRANSITION_FOREGROUND_ZORDER: u32 = 60;
+
+/// Compositor z-order for a zone source's *content* pad.
+///
+/// Zone slots use a doubled z-order scheme so every content pad has a slot
+/// directly beneath it for its border underlay pad: content sits at
+/// `overlay_zorder + 2·slot + 1`, its underlay at [`underlay_zorder`] (one
+/// below). Box k's underlay thereby renders *above* box k-1's content — an
+/// overlapping higher zone covers the lower zone's border exactly like a
+/// stacked framed card.
+pub fn zone_content_zorder(overlay_zorder: u32, slot_offset: u32) -> u32 {
+    overlay_zorder + 2 * slot_offset + 1
+}
+
+/// Z-order of the border underlay pad paired with a content pad: always the
+/// slot directly beneath it. Holds in every state — static zone layouts (the
+/// doubled scheme of [`zone_content_zorder`]) and transition lifts
+/// ([`TRANSITION_FOREGROUND_ZORDER`] + new_z preserves odd spacing).
+pub fn underlay_zorder(content_zorder: u32) -> u32 {
+    content_zorder.saturating_sub(1)
+}
 
 /// Z-order for the PiP background pad on the multiview compositor.
 /// Above thumbnails (1) and the big PVW/PGM display (10), below cairo overlay (200).
@@ -328,6 +360,239 @@ pub fn resolve_pip_overlay_rects(
         .collect()
 }
 
+/// Smallest fraction of a source axis that must stay visible after cropping.
+/// Keeps `SourceCrop::clamped` from producing zero-width/height frames.
+pub const MIN_CROP_VISIBLE: f32 = 0.01;
+
+/// Normalized per-source crop: the fraction of the source hidden from each
+/// edge. All components are in `0.0..=1.0`; all zero = no crop.
+///
+/// The crop selects which part of the source fills its destination rect —
+/// combined with a zone rect this gives "zoom"/"punch-in" framing (the
+/// cropped region scales to fill the zone box; everything outside is hidden).
+/// Normalized fractions keep the type resolution-independent; the backend
+/// converts to pixels against the negotiated source caps.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SourceCrop {
+    /// Fraction of the source width hidden from the left edge.
+    #[serde(default)]
+    pub left: f32,
+    /// Fraction of the source height hidden from the top edge.
+    #[serde(default)]
+    pub top: f32,
+    /// Fraction of the source width hidden from the right edge.
+    #[serde(default)]
+    pub right: f32,
+    /// Fraction of the source height hidden from the bottom edge.
+    #[serde(default)]
+    pub bottom: f32,
+}
+
+impl SourceCrop {
+    /// Returns `true` when the crop hides nothing (within float tolerance).
+    pub fn is_zero(&self) -> bool {
+        self.left.max(0.0) < 1e-6
+            && self.top.max(0.0) < 1e-6
+            && self.right.max(0.0) < 1e-6
+            && self.bottom.max(0.0) < 1e-6
+    }
+
+    /// Clamp each component into `0..=1` and ensure at least
+    /// [`MIN_CROP_VISIBLE`] of each axis stays visible. Non-finite components
+    /// are treated as 0. Mirrors [`NormRect::clamped`]: clamping is a layout
+    /// concern, not semantic state.
+    pub fn clamped(&self) -> Self {
+        let sanitize = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        let left = sanitize(self.left);
+        let top = sanitize(self.top);
+        let right = sanitize(self.right).min((1.0 - left - MIN_CROP_VISIBLE).max(0.0));
+        let bottom = sanitize(self.bottom).min((1.0 - top - MIN_CROP_VISIBLE).max(0.0));
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// Convert to pixel crop values `(left, right, top, bottom)` for a source
+    /// of `src_w` × `src_h` pixels — the value order matches the
+    /// `crop-left`/`crop-right`/`crop-top`/`crop-bottom` compositor pad
+    /// properties. At least one pixel per axis stays visible.
+    pub fn to_pixels(&self, src_w: i32, src_h: i32) -> (i32, i32, i32, i32) {
+        let c = self.clamped();
+        let w = src_w.max(1) as f32;
+        let h = src_h.max(1) as f32;
+        let left = (c.left * w).round() as i32;
+        let top = (c.top * h).round() as i32;
+        let right = ((c.right * w).round() as i32).min(src_w - left - 1).max(0);
+        let bottom = ((c.bottom * h).round() as i32).min(src_h - top - 1).max(0);
+        (
+            left.min(src_w - 1).max(0),
+            right,
+            top.min(src_h - 1).max(0),
+            bottom,
+        )
+    }
+}
+
+/// Negotiated resolution of a video input, read from the compositor sink pad
+/// caps. Inputs can have arbitrary resolutions and aspect ratios — nothing
+/// normalizes them before the mixer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct InputResolution {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Per-input source aspect ratios (width / height of the negotiated caps),
+/// keyed by input index. Inputs with unknown caps are simply absent.
+pub type SourceAspects = std::collections::BTreeMap<usize, f64>;
+
+/// Largest rect with `content_aspect` centered inside the given box — the
+/// explicit-geometry replacement for the compositor's `keep-aspect-ratio`
+/// sizing policy (which cannot be used together with pad crop: it fits by
+/// the *uncropped* input DAR, and flipping the policy enum mid-transition
+/// snaps visibly). All pads run `sizing-policy=none`; layout code computes
+/// the letterbox/fill rect itself with this helper.
+///
+/// `content_aspect <= 0` (unknown caps — nothing is flowing yet) returns the
+/// box unchanged; the caps probe re-applies geometry once caps arrive.
+pub fn aspect_fit_rect(
+    box_x: i32,
+    box_y: i32,
+    box_w: i32,
+    box_h: i32,
+    content_aspect: f64,
+) -> (i32, i32, i32, i32) {
+    if content_aspect <= 0.0 || !content_aspect.is_finite() || box_w <= 0 || box_h <= 0 {
+        return (box_x, box_y, box_w.max(1), box_h.max(1));
+    }
+    let box_aspect = box_w as f64 / box_h as f64;
+    if content_aspect > box_aspect {
+        // Wider than the box → full width, reduced height (letterbox).
+        let h = ((box_w as f64 / content_aspect).round() as i32).clamp(1, box_h);
+        (box_x, box_y + (box_h - h) / 2, box_w, h)
+    } else {
+        // Taller than the box → full height, reduced width (pillarbox).
+        let w = ((box_h as f64 * content_aspect).round() as i32).clamp(1, box_w);
+        (box_x + (box_w - w) / 2, box_y, w, box_h)
+    }
+}
+
+/// Aspect ratio of what a source actually shows after cropping: the crop
+/// window scales the raw source aspect by the window's normalized w/h ratio.
+/// Unknown source aspect (`<= 0`) stays unknown.
+pub fn effective_source_aspect(src_aspect: f64, crop: Option<&SourceCrop>) -> f64 {
+    if src_aspect <= 0.0 || !src_aspect.is_finite() {
+        return 0.0;
+    }
+    match crop {
+        Some(c) if !c.is_zero() => {
+            let c = c.clamped();
+            let win_w = (1.0 - c.left - c.right).max(MIN_CROP_VISIBLE) as f64;
+            let win_h = (1.0 - c.top - c.bottom).max(MIN_CROP_VISIBLE) as f64;
+            src_aspect * win_w / win_h
+        }
+        _ => src_aspect,
+    }
+}
+
+/// Per-source crop transforms within a PiP, keyed by input index.
+///
+/// The crop applies to the input wherever it renders inside that PiP (bg or
+/// any zone), and follows it across zone FIFO reshuffles. A missing key means
+/// no crop. The same input can carry different crops in different PiPs.
+///
+/// Entries persist when their source leaves the PiP: they are inert while
+/// the source is absent and re-apply when it returns, so swap-zone workflows
+/// (capacity 1, pushing between sources) keep each source's punch-in framing.
+pub type PipTransforms = std::collections::BTreeMap<usize, SourceCrop>;
+
+/// Border drawn around each source box in a zone.
+///
+/// Rendered by the mixer itself on a PGM-side overlay — borders are a
+/// function of the mixer's own live geometry (boxes move with morphs, takes
+/// and punch-ins), so no external graphics source could stay in sync.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct ZoneBorder {
+    /// Border color as `#RRGGBB` or `#RRGGBBAA` hex.
+    pub color: String,
+    /// Border width in PGM canvas pixels, drawn outward from the box edge.
+    /// Every render target scales it by `region_width / pgm_width`, so the
+    /// border looks proportionally identical on PGM, the PVW big display and
+    /// the PiP thumbnails regardless of resolution.
+    pub width: f32,
+}
+
+/// Maximum zone border width in PGM canvas pixels.
+pub const MAX_ZONE_BORDER_WIDTH: f32 = 64.0;
+
+impl ZoneBorder {
+    /// Parse `color` into RGBA components in `0.0..=1.0`. Accepts `#RRGGBB`
+    /// and `#RRGGBBAA` (case-insensitive). Returns `None` for anything else.
+    pub fn rgba(&self) -> Option<(f64, f64, f64, f64)> {
+        let s = self.color.trim().strip_prefix('#')?;
+        if !(s.len() == 6 || s.len() == 8) || !s.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        let p = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
+        let (r, g, b) = (p(0)?, p(2)?, p(4)?);
+        let a = if s.len() == 8 { p(6)? } else { 255 };
+        Some((
+            r as f64 / 255.0,
+            g as f64 / 255.0,
+            b as f64 / 255.0,
+            a as f64 / 255.0,
+        ))
+    }
+
+    /// Clamp the width into `0..=MAX_ZONE_BORDER_WIDTH` (non-finite → 0).
+    pub fn clamped_width(&self) -> f32 {
+        if self.width.is_finite() {
+            self.width.clamp(0.0, MAX_ZONE_BORDER_WIDTH)
+        } else {
+            0.0
+        }
+    }
+
+    /// Pack the color as `0xAARRGGBB` (big-endian ARGB — the format
+    /// `videotestsrc`'s `foreground-color` property expects). `None` for
+    /// unparseable colors, like [`Self::rgba`].
+    pub fn argb(&self) -> Option<u32> {
+        let (r, g, b, a) = self.rgba()?;
+        let q = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u32;
+        Some((q(a) << 24) | (q(r) << 16) | (q(g) << 8) | q(b))
+    }
+
+    /// Resolve into the `Copy` form carried by [`ZonePadLayout`]. `None`
+    /// when the border would not draw anything (zero width, invalid color,
+    /// or fully transparent).
+    pub fn resolved(&self) -> Option<ResolvedBorder> {
+        if !self.is_visible() {
+            return None;
+        }
+        Some(ResolvedBorder {
+            width: self.clamped_width(),
+            argb: self.argb()?,
+        })
+    }
+
+    /// A border that would actually draw something.
+    pub fn is_visible(&self) -> bool {
+        self.clamped_width() > 0.0 && self.rgba().map(|c| c.3 > 0.0).unwrap_or(false)
+    }
+}
+
 /// A sub-region of a PiP that hosts one or more overlay sources.
 ///
 /// Sources inside a zone auto-tile within its `rect` (using
@@ -350,6 +615,10 @@ pub struct Zone {
     /// Current sources (FIFO, oldest first). Sources auto-tile within `rect`.
     #[serde(default)]
     pub sources: Vec<usize>,
+    /// Border drawn around each source box in this zone (None = no border).
+    /// Rendered live on the PGM overlay — follows morphs/takes/punch-ins.
+    #[serde(default)]
+    pub border: Option<ZoneBorder>,
 }
 
 impl Zone {
@@ -371,6 +640,15 @@ impl Zone {
     }
 }
 
+/// A zone border resolved into `Copy`-friendly form for per-pad layout.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ResolvedBorder {
+    /// Border width in PGM canvas pixels (clamped, > 0).
+    pub width: f32,
+    /// Border color packed as `0xAARRGGBB`.
+    pub argb: u32,
+}
+
 /// Per-pad layout produced by [`resolve_zone_pads`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ZonePadLayout {
@@ -379,28 +657,46 @@ pub struct ZonePadLayout {
     pub y: i32,
     pub w: i32,
     pub h: i32,
-    /// 0-based offset relative to the zone's `overlay_zorder`. Sources
-    /// later in the zone's FIFO render on top of earlier ones.
+    /// 0-based slot offset within the PiP. Sources later in a zone's FIFO
+    /// render on top of earlier ones; pass through [`zone_content_zorder`]
+    /// for the actual compositor z-order (slots are doubled to leave room
+    /// for border underlay pads).
     pub zorder_offset: u32,
+    /// The hosting zone's border, when it would actually draw. Rendered as
+    /// a solid-color underlay pad directly beneath this source's pad.
+    pub border: Option<ResolvedBorder>,
 }
 
 /// Compute pixel-space pad layouts for every source across every zone.
 ///
 /// Each zone's `rect` is projected onto `(container_x, container_y,
 /// container_w, container_h)` (or defaults to the full container when
-/// `rect` is `None`). Sources inside the zone auto-tile within the projected
-/// rect using [`compute_pip_overlay_rects`].
+/// `rect` is `None`). A zone holding a single source uses its full projected
+/// rect as the cell; multiple sources auto-tile into a slot grid via
+/// [`compute_pip_overlay_rects`] (sized with `fallback_aspect`, the canvas
+/// aspect). Each source is then aspect-fitted inside its cell using its
+/// *effective* aspect — the negotiated source aspect from `src_aspects`
+/// adjusted by any crop window in `transforms` — so a crop locked to the box
+/// aspect fills it exactly, an unlocked crop letterboxes correctly, and an
+/// uncropped odd-aspect source letterboxes inside its cell. Sources with
+/// unknown caps fall back to `fallback_aspect`.
+///
+/// This is explicit geometry: pads run `sizing-policy=none`, so these rects
+/// are exactly what renders (see [`aspect_fit_rect`] for why).
 ///
 /// Duplicate sources across zones are filtered: only the first occurrence
 /// keeps its pad layout. Sources that exceed a zone's `capacity` are
 /// dropped (oldest first), matching [`Zone::effective_sources`].
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_zone_pads(
     container_x: i32,
     container_y: i32,
     container_w: i32,
     container_h: i32,
     zones: &[Zone],
-    source_aspect: f64,
+    fallback_aspect: f64,
+    transforms: &PipTransforms,
+    src_aspects: &SourceAspects,
 ) -> Vec<ZonePadLayout> {
     let mut out: Vec<ZonePadLayout> = Vec::new();
     let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -416,12 +712,21 @@ pub fn resolve_zone_pads(
                 .to_pixels(container_x, container_y, container_w, container_h),
             None => (container_x, container_y, container_w, container_h),
         };
-        let cells = compute_pip_overlay_rects(zx, zy, zw, zh, sources.len(), source_aspect);
+        let cells = if sources.len() == 1 {
+            vec![(zx, zy, zw, zh)]
+        } else {
+            compute_pip_overlay_rects(zx, zy, zw, zh, sources.len(), fallback_aspect)
+        };
         for (i, &input) in sources.iter().enumerate() {
             if !seen.insert(input) {
                 continue;
             }
-            let (x, y, w, h) = cells.get(i).copied().unwrap_or((zx, zy, 1, 1));
+            let (cx, cy, cw, ch) = cells.get(i).copied().unwrap_or((zx, zy, 1, 1));
+            let aspect = effective_source_aspect(
+                src_aspects.get(&input).copied().unwrap_or(fallback_aspect),
+                transforms.get(&input),
+            );
+            let (x, y, w, h) = aspect_fit_rect(cx, cy, cw, ch, aspect);
             out.push(ZonePadLayout {
                 input,
                 x,
@@ -429,6 +734,7 @@ pub fn resolve_zone_pads(
                 w,
                 h,
                 zorder_offset: out.len() as u32,
+                border: zone.border.as_ref().and_then(|b| b.resolved()),
             });
         }
     }
@@ -691,6 +997,7 @@ mod tests {
         let z = Zone {
             rect: None,
             capacity: None,
+            border: None,
             sources: vec![1, 2, 3],
         };
         assert_eq!(z.effective_sources(), &[1, 2, 3]);
@@ -701,6 +1008,7 @@ mod tests {
         let z = Zone {
             rect: None,
             capacity: Some(2),
+            border: None,
             sources: vec![1, 2, 3, 4],
         };
         assert_eq!(z.effective_sources(), &[3, 4]);
@@ -712,9 +1020,19 @@ mod tests {
         let z = Zone {
             rect: None,
             capacity: None,
+            border: None,
             sources: vec![0, 1, 2],
         };
-        let layouts = resolve_zone_pads(0, 0, 1920, 1080, &[z], 16.0 / 9.0);
+        let layouts = resolve_zone_pads(
+            0,
+            0,
+            1920,
+            1080,
+            &[z],
+            16.0 / 9.0,
+            &PipTransforms::new(),
+            &SourceAspects::new(),
+        );
         assert_eq!(layouts.len(), 3);
         // First source covers ~upper-left cell of the 2x2 auto-tile.
         assert_eq!(layouts[0].input, 0);
@@ -736,6 +1054,7 @@ mod tests {
                 h: 1.0,
             }),
             capacity: Some(1),
+            border: None,
             sources: vec![5],
         };
         let b = Zone {
@@ -746,9 +1065,19 @@ mod tests {
                 h: 0.25,
             }),
             capacity: Some(3),
+            border: None,
             sources: vec![1, 2, 3],
         };
-        let layouts = resolve_zone_pads(0, 0, 1920, 1080, &[a, b], 16.0 / 9.0);
+        let layouts = resolve_zone_pads(
+            0,
+            0,
+            1920,
+            1080,
+            &[a, b],
+            16.0 / 9.0,
+            &PipTransforms::new(),
+            &SourceAspects::new(),
+        );
         assert_eq!(layouts.len(), 4);
         assert_eq!(layouts[0].input, 5);
         // Zone A: x starts at half the container width (960).
@@ -764,14 +1093,25 @@ mod tests {
         let a = Zone {
             rect: None,
             capacity: None,
+            border: None,
             sources: vec![1, 2],
         };
         let b = Zone {
             rect: None,
             capacity: None,
+            border: None,
             sources: vec![2, 3],
         };
-        let layouts = resolve_zone_pads(0, 0, 1920, 1080, &[a, b], 16.0 / 9.0);
+        let layouts = resolve_zone_pads(
+            0,
+            0,
+            1920,
+            1080,
+            &[a, b],
+            16.0 / 9.0,
+            &PipTransforms::new(),
+            &SourceAspects::new(),
+        );
         // Source 2 should appear once (from zone A); zone B drops it.
         let inputs: Vec<usize> = layouts.iter().map(|l| l.input).collect();
         assert_eq!(inputs, vec![1, 2, 3]);
@@ -783,11 +1123,261 @@ mod tests {
         let z = Zone {
             rect: None,
             capacity: Some(2),
+            border: None,
             sources: vec![1, 2, 3, 4],
         };
-        let layouts = resolve_zone_pads(0, 0, 1920, 1080, &[z], 16.0 / 9.0);
+        let layouts = resolve_zone_pads(
+            0,
+            0,
+            1920,
+            1080,
+            &[z],
+            16.0 / 9.0,
+            &PipTransforms::new(),
+            &SourceAspects::new(),
+        );
         let inputs: Vec<usize> = layouts.iter().map(|l| l.input).collect();
         assert_eq!(inputs, vec![3, 4]);
+    }
+
+    #[test]
+    fn test_resolve_zone_pads_single_cropped_source_fills_rect() {
+        // A single 16:9 source whose crop window matches the box aspect
+        // (the UI's aspect lock) fills the zone rect exactly — punch-in.
+        let z = Zone {
+            rect: Some(NormRect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.25, // portrait box: 480×1080, aspect 4:9
+                h: 1.0,
+            }),
+            capacity: None,
+            border: None,
+            sources: vec![2],
+        };
+        let mut aspects = SourceAspects::new();
+        aspects.insert(2, 16.0 / 9.0);
+        // Window ratio for box aspect (4/9) on a 16:9 source: 0.25 of the
+        // width, full height → effective aspect = 16/9 × 0.25 = 4/9 = box.
+        let mut transforms = PipTransforms::new();
+        transforms.insert(
+            2,
+            SourceCrop {
+                left: 0.375,
+                top: 0.0,
+                right: 0.375,
+                bottom: 0.0,
+            },
+        );
+        let layouts = resolve_zone_pads(
+            0,
+            0,
+            1920,
+            1080,
+            std::slice::from_ref(&z),
+            16.0 / 9.0,
+            &transforms,
+            &aspects,
+        );
+        assert_eq!(layouts.len(), 1);
+        assert_eq!(
+            (layouts[0].x, layouts[0].y, layouts[0].w, layouts[0].h),
+            (0, 0, 480, 1080)
+        );
+
+        // Without a transform the same source letterboxes inside the rect.
+        let layouts = resolve_zone_pads(
+            0,
+            0,
+            1920,
+            1080,
+            std::slice::from_ref(&z),
+            16.0 / 9.0,
+            &PipTransforms::new(),
+            &aspects,
+        );
+        assert_eq!(layouts.len(), 1);
+        assert!(
+            layouts[0].h < 1080,
+            "expected aspect-fitted (letterboxed) rect"
+        );
+        assert_eq!(layouts[0].w, 480, "16:9 in a portrait box keeps full width");
+    }
+
+    #[test]
+    fn test_aspect_fit_rect_letterbox_and_pillarbox() {
+        // 2.39:1 scope content in a 16:9 box → full width, reduced height.
+        let (x, y, w, h) = aspect_fit_rect(0, 0, 1920, 1080, 2.39);
+        assert_eq!((x, w), (0, 1920));
+        assert_eq!(h, (1920.0 / 2.39_f64).round() as i32);
+        assert_eq!(y, (1080 - h) / 2);
+
+        // 16:9 content in a portrait box → full height of the fitted width.
+        let (x, y, w, h) = aspect_fit_rect(100, 0, 480, 1080, 16.0 / 9.0);
+        assert_eq!(w, 480);
+        assert_eq!(h, 270);
+        assert_eq!(x, 100);
+        assert_eq!(y, (1080 - 270) / 2);
+
+        // Matching aspect → exact box. Unknown aspect → box unchanged.
+        assert_eq!(
+            aspect_fit_rect(5, 7, 1600, 900, 16.0 / 9.0),
+            (5, 7, 1600, 900)
+        );
+        assert_eq!(aspect_fit_rect(5, 7, 1600, 900, 0.0), (5, 7, 1600, 900));
+    }
+
+    #[test]
+    fn test_effective_source_aspect() {
+        // No crop → raw aspect; unknown stays unknown.
+        assert_eq!(effective_source_aspect(2.39, None), 2.39);
+        assert_eq!(effective_source_aspect(0.0, None), 0.0);
+        // Horizontal-only crop narrows the effective aspect.
+        let c = SourceCrop {
+            left: 0.25,
+            top: 0.0,
+            right: 0.25,
+            bottom: 0.0,
+        };
+        let a = effective_source_aspect(16.0 / 9.0, Some(&c));
+        assert!((a - (16.0 / 9.0) * 0.5).abs() < 1e-6);
+        // Zero crop entry behaves like no crop.
+        assert_eq!(
+            effective_source_aspect(1.5, Some(&SourceCrop::default())),
+            1.5
+        );
+    }
+
+    #[test]
+    fn test_zone_border_rgba_parsing() {
+        let b = |c: &str| ZoneBorder {
+            color: c.to_string(),
+            width: 4.0,
+        };
+        assert_eq!(b("#CC0000").rgba(), Some((0.8, 0.0, 0.0, 1.0)));
+        let (r, g, bl, a) = b("#00ff0080").rgba().unwrap();
+        assert_eq!((r, g, bl), (0.0, 1.0, 0.0));
+        assert!((a - 128.0 / 255.0).abs() < 1e-9);
+        // Case-insensitive + surrounding whitespace tolerated.
+        assert!(b(" #aAbBcC ").rgba().is_some());
+        // Rejected: missing #, wrong length, non-hex.
+        assert_eq!(b("CC0000").rgba(), None);
+        assert_eq!(b("#CC00").rgba(), None);
+        assert_eq!(b("#GG0000").rgba(), None);
+    }
+
+    #[test]
+    fn test_zone_border_width_and_visibility() {
+        let mk = |color: &str, width: f32| ZoneBorder {
+            color: color.to_string(),
+            width,
+        };
+        assert_eq!(mk("#fff000", 1000.0).clamped_width(), MAX_ZONE_BORDER_WIDTH);
+        assert_eq!(mk("#fff000", f32::NAN).clamped_width(), 0.0);
+        assert!(mk("#CC0000", 4.0).is_visible());
+        assert!(!mk("#CC0000", 0.0).is_visible()); // zero width
+        assert!(!mk("#CC000000", 4.0).is_visible()); // alpha 0
+        assert!(!mk("not-a-color", 4.0).is_visible()); // unparseable
+    }
+
+    #[test]
+    fn test_zone_border_serde_default() {
+        // Older clients omit `border` — deserializes to None.
+        let z: Zone = serde_json::from_str(r#"{"sources":[1]}"#).unwrap();
+        assert!(z.border.is_none());
+        let z: Zone =
+            serde_json::from_str(r##"{"sources":[1],"border":{"color":"#CC0000","width":4.0}}"##)
+                .unwrap();
+        assert!(z.border.unwrap().is_visible());
+    }
+
+    #[test]
+    fn test_source_crop_default_is_zero() {
+        assert!(SourceCrop::default().is_zero());
+        assert!(!SourceCrop {
+            left: 0.1,
+            ..Default::default()
+        }
+        .is_zero());
+    }
+
+    #[test]
+    fn test_source_crop_clamped_keeps_minimum_visible() {
+        // left + right > 1 → right shrinks so MIN_CROP_VISIBLE remains.
+        let c = SourceCrop {
+            left: 0.7,
+            top: 0.0,
+            right: 0.7,
+            bottom: 0.0,
+        }
+        .clamped();
+        assert_eq!(c.left, 0.7);
+        assert!((c.left + c.right) <= 1.0 - MIN_CROP_VISIBLE + 1e-6);
+    }
+
+    #[test]
+    fn test_source_crop_clamped_sanitizes_garbage() {
+        let c = SourceCrop {
+            left: -0.5,
+            top: f32::NAN,
+            right: 2.0,
+            bottom: f32::INFINITY,
+        }
+        .clamped();
+        assert_eq!(c.left, 0.0);
+        assert_eq!(c.top, 0.0);
+        assert!(c.right <= 1.0 - MIN_CROP_VISIBLE + 1e-6);
+        assert!(c.bottom <= 1.0 - MIN_CROP_VISIBLE + 1e-6);
+    }
+
+    #[test]
+    fn test_source_crop_to_pixels_basic() {
+        // Crop 25% from each side of 1920×1080 → 480/480 horizontal, 270/270 vertical.
+        let c = SourceCrop {
+            left: 0.25,
+            top: 0.25,
+            right: 0.25,
+            bottom: 0.25,
+        };
+        assert_eq!(c.to_pixels(1920, 1080), (480, 480, 270, 270));
+    }
+
+    #[test]
+    fn test_source_crop_to_pixels_zero() {
+        assert_eq!(SourceCrop::default().to_pixels(1280, 720), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn test_source_crop_to_pixels_never_consumes_full_axis() {
+        // Extreme crop still leaves ≥1 px visible on each axis.
+        let c = SourceCrop {
+            left: 1.0,
+            top: 1.0,
+            right: 1.0,
+            bottom: 1.0,
+        };
+        let (l, r, t, b) = c.to_pixels(100, 100);
+        assert!(
+            l + r < 100,
+            "horizontal crop {} + {} consumed full width",
+            l,
+            r
+        );
+        assert!(
+            t + b < 100,
+            "vertical crop {} + {} consumed full height",
+            t,
+            b
+        );
+    }
+
+    #[test]
+    fn test_source_crop_serde_defaults() {
+        // Missing fields deserialize to 0 (back-compat with older clients).
+        let c: SourceCrop = serde_json::from_str(r#"{"left":0.1}"#).unwrap();
+        assert_eq!(c.left, 0.1);
+        assert_eq!(c.right, 0.0);
+        assert!(serde_json::from_str::<SourceCrop>("{}").unwrap().is_zero());
     }
 
     #[test]

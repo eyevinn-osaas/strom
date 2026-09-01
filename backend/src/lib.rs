@@ -22,6 +22,7 @@ pub mod api;
 pub mod assets;
 pub mod auth;
 pub mod blocks;
+pub mod client_auth;
 pub mod config;
 pub mod discovery;
 pub mod events;
@@ -33,15 +34,18 @@ pub mod layout;
 pub mod mcp;
 pub mod network;
 pub mod openapi;
+pub mod osc;
 pub mod paths;
 pub mod ptp_monitor;
 pub mod rtsp_server;
+pub mod server_hardening;
 pub mod sharing;
 pub mod state;
 pub mod stats;
 pub mod storage;
 pub mod system_clock;
 pub mod system_monitor;
+pub mod tams;
 pub mod thread_registry;
 pub mod tls;
 pub mod version;
@@ -180,7 +184,7 @@ pub async fn create_app_with_config(
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/pip/{pip_idx}",
-            put(api::flows::update_pip_config),
+            get(api::flows::get_pip_config).put(api::flows::update_pip_config),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/state",
@@ -197,6 +201,10 @@ pub async fn create_app_with_config(
         .route(
             "/flows/{flow_id}/blocks/{block_id}/ftb",
             post(api::flows::fade_to_black),
+        )
+        .route(
+            "/flows/{flow_id}/blocks/{block_id}/effect",
+            post(api::flows::set_vision_mixer_effect),
         )
         .route(
             "/flows/{flow_id}/blocks/{block_id}/multiview-endpoint",
@@ -317,6 +325,11 @@ pub async fn create_app_with_config(
         .route("/log-level", put(api::logging::set_log_level))
         .route("/gst-log-level", get(api::logging::get_gst_log_level))
         .route("/gst-log-level", put(api::logging::set_gst_log_level))
+        // OSC authentication: per-flow PAT (key = flow id) for minting Service
+        // Access Tokens. The instance default is bootstrap-only (STROM_OSC_PAT).
+        .route("/osc/pat", get(api::osc::get_osc_pat_status))
+        .route("/osc/pat/{key}", put(api::osc::set_osc_pat_keyed))
+        .route("/osc/pat/{key}", delete(api::osc::clear_osc_pat_keyed))
         // Apply authentication middleware to all protected routes
         .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -446,9 +459,13 @@ pub async fn create_app_with_config(
     let mcp_sessions = mcp::McpSessionManager::new();
 
     // Combine routers with auth config and MCP session manager extensions
+    // The API router carries its own fallback so that unmatched /api/* paths get a
+    // JSON 404 instead of inheriting the outer SPA fallback (which would answer 200
+    // with the frontend HTML).
     let api_router = Router::new()
         .merge(public_api_router)
         .merge(protected_api_router)
+        .fallback(api::not_found)
         .layer(Extension(auth_config.clone()))
         .layer(Extension(mcp_sessions));
 

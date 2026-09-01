@@ -2,6 +2,387 @@
 
 All notable changes to the Strom GStreamer Flow Engine project.
 
+## [0.6.5] - 2026-06-12
+
+### Added
+- Vision Mixer: ColorCorrect look — primary correction (brightness, contrast, gamma, saturation) plus white balance (temperature, tint) and hue rotation, computed in YCbCr; a strict superset of `glcolorbalance` for camera matching. Neutral at every default, so an untouched correction is an identity pass. (#639)
+- Vision Mixer: swappable multiview PVW/PGM positions via the `swap_pvw_pgm` block property (#637)
+
+### Changed
+- Vision Mixer: dithered looks — ~1 LSB TPDF dither on color-correct, blur, duotone and thermal to kill 8-bit banding; 24-tap Vogel-spiral blur with aspect-corrected circular bokeh; fixed-raster CRT scanlines and aperture grille; blur radius cap raised to 40 px (#639)
+- Vision Mixer: FX look parameters laid out in a 4-column grid (#639)
+
+### Fixed
+- Vision Mixer: glitch, roll and punch transitions left driver-dependent residual artifacts after completion — transition envelopes now settle to an exact identity pass (#639)
+- Frontend: keep `wgpu` out of the WASM build after the eframe 0.34.2 default-feature regression (#639)
+
+---
+
+## [0.6.4] - 2026-06-08
+
+### Fixed
+- Vision Mixer: shader FX time-precision freeze over long uptime, heart wipe pop, real TV roll (#636)
+- Video encoder: tame VideoToolbox burst behavior (#635)
+- Vision Mixer: FX shader crash on macOS core-profile GL (#634)
+- Pipeline: skip missing pad properties instead of panicking (#633)
+
+---
+
+## [0.6.3] - 2026-06-05
+
+### Fixed
+- Video encoder: cap VBR excursions and bound frame sizes via VBV (#631)
+- Server: harden the HTTP(S) accept path against fd exhaustion (#630)
+- WHEP: re-enable RTX retransmission, keep FEC disabled (#629)
+
+### Documentation
+- Add 0.6.1 and 0.6.2 release notes (#628)
+
+---
+
+## [0.6.2] - 2026-06-05
+
+### Added
+- Vision Mixer: shader FX engine (GPU) — custom-GLSL looks, wipe transitions, and master FX takes (#626)
+  - 14 parameterized looks (chroma key, blur, pixelate, vignette, VHS, CRT, thermal, …) per input or on the PGM master
+  - 19 shader wipes and 11 master-FX takes; operator UI tiers production staples up front with novelty effects behind a MORE toggle
+  - Master look and FX takes run on independent PGM slots — a take never evicts the look
+  - Self-animating shaders (time uniform from buffer PTS): frame-accurate with zero per-frame CPU
+- Vision Mixer: zone borders as compositor underlay pads, per-PiP layout presets (#625)
+- Vision Mixer: per-source crop/zoom (punch-in) for PiP compositions (#622)
+- Devices: show exposing API prefix in device picker and sort the list (#614)
+
+### Changed
+- Pipeline: split `effects.rs` into focused sub-modules (#624)
+
+### Fixed
+- Vision mixer: aspect-aware wipe orientation, per-branch PTS latching for SRT sources, destination-flash kill at wipe start (#626)
+- Vision mixer: slide/push geometry for mixed aspect ratios (#625)
+- Video encoder: decouple VideoToolbox realtime from quality, wire rate-control + keyframe duration (#612)
+- Tests: vision mixer FX tests skip without a working GL context, event-driven sampling (#627)
+
+### CI
+- Route sccache through self-hosted MinIO (S3) cache, build without sccache when credentials are unavailable (#611, #623)
+- Trim GHA cache footprint and split rust-cache keys; bump actions to Node 24 runtimes (#615, #613, #616)
+
+### Dependencies
+- Bump uuid (#621), serial_test (#620), egui (#619), sysinfo (#618), socket2 (#617)
+
+---
+
+## [0.6.1] - 2026-06-02
+
+### Added
+- Setup: non-interactive NVIDIA driver install via REBOOT env var (#608)
+
+### Fixed
+- Sources: deinterlace interlaced SRT/EFP inputs for the GL vision mixer (#606)
+- Vision mixer UX: pixel zone editor, snap feedback, honest bus tally (#603)
+- Clocks: restore PTP statistics panel hidden behind domain list (#610)
+- QoS: drop upstream QoS events at sink source to stop a GstEvent leak (#609)
+
+### Documentation
+- Open Live setup guide for a local Strom instance (#604)
+- Documentation overhaul — Open Live, archive, slimmer README, AI authorship (#605)
+- Correct changelog release dates to match git tags (#607)
+
+---
+
+## [0.6.0] - 2026-05-28
+
+### Added
+- Vision Mixer: Picture-in-Picture sources with zones, FIFO + morph transitions (#578)
+- Audio Mixer: Monitor bus with parallel PFL/AFL, collapsing property panel, and scaled max channel counts (#570)
+- Audio Mixer: AFL on every aux master and group bus (#594)
+- Audio Mixer: pre-fader channel level meter taps (#592)
+- Audio Mixer: derive monitor source gates from PFL/AFL writes (#588)
+- Block-properties API endpoint with persist semantics for transient state (#579)
+- Per-property `ramp_ms` overrides on block PATCH (#600)
+
+### Changed
+- Migrate legacy WHEP `mode` to explicit track counts on flow load (#587)
+- Drop unused agua-gst watermark plugin (#595)
+
+### Fixed
+- Vision mixer: render overlay VU meters with 4-zone sectors (#590)
+- Vision mixer: lift morphing pad when a higher-z incoming source is inside `morph_start` (#583)
+- SRT: don't synthesize a phantom caller on an idle listener (#585)
+- Properties: coerce int/uint values for `gdouble`/`gfloat` properties (#586)
+- Build: isolate the WASM target dir to avoid a cargo lock deadlock (#591)
+
+### Performance
+- Skip absent elements in block property read-back (#601)
+
+### Documentation
+- Add an operator-facing Vision Mixer user guide (#593)
+
+### Dependencies
+- Bump reqwest (#597), garde (#596), serde_json (#598), mdns-sd (#599), gstreamer-controller (#574), tower-http (#575), egui_extras (#576), gst-plugin-webrtc (#573), rand (#572)
+
+---
+
+## [0.5.1] - 2026-05-13
+
+### Fixed
+- Video encoder: replace `auto` profile with a `none` default and expand the codec profile enum (#569)
+- Audio: bump default mute anti-click ramp from 10ms to 30ms (#568)
+
+---
+
+## [0.5.0] - 2026-05-12
+
+### Added
+- Local Input block — cross-platform USB/built-in capture with device picker (#563)
+- Time Offset block for live PTS shifting; surface `offset_ms` on the property read path (#555, #565)
+- SRT statistics for inputs and outputs; expose resilience knobs on inputs (#564, #553)
+- Multi-audio + multi-video WHEP Output, replacing `mode` with explicit track counts (#556)
+- Audio Mixer: smooth volume/mute via GstController (anti-zipper, anti-click) and honor `ramp_ms` on mute toggles with a cancel-guard (#539, #540)
+- Patched DeckLink plugin with synchronized capture group support (#554)
+- chrony NTP install script and runbook (#547)
+
+### Changed
+- Merge per-media DeckLink blocks into a single Input/Output block (#546)
+- Unify SRT property order and share defaults across blocks (#553)
+- Vision mixer: default `gl_download` to false (#548)
+- Move the Debug Graph button next to Save in the toolbar (#538)
+- Audio Mixer: use UInt type for channel/aux/group count properties (#537)
+
+### Fixed
+- WHEP: align encoder profile and SDP fmtp with WebRTC decoder expectations (#566)
+- Video encoder: vp9enc bitrate unit and realtime knobs (#562)
+- Vision mixer: enforce framerate on PGM/MV outputs in GL passthrough (#549)
+- Vision mixer: use GPU-aware videoconvert in the CPU pipeline (#534)
+- NVIDIA setup: apply cgroupfs + dev-char workarounds for the NVML cgroup-reload bug (#536)
+- Buffer age: show external pad label instead of internal "sink" (#535)
+
+### Dependencies
+- Bump sysinfo (#559), tower-http (#561), gst-plugin-inter (#560), gst-plugin-audiofx (#558), gstreamer-app (#557), utoipa (#542), egui (#545), tokio (#544), rustls (#543)
+
+---
+
+## [0.4.12] - 2026-04-30
+
+### Added
+- TAI and real NTP clocks, direct media timing opt-in, and a System Clock page (#520)
+- System clock health badge with per-row tooltips (#532)
+- Opt-in CEF GPU rendering via `STROM_CEF_GPU=1` (#522)
+- Enable the EFP feature for macOS release builds (#531)
+
+### Fixed
+- Leak fixes: stop the pipeline on delete and clean up the overlay renderer (#530)
+- Frontend: avoid an `Instant` underflow panic on WASM startup (#521)
+
+### Dependencies
+- Bump gst-plugin-efp to 0.3.0 (#523), rustls (#526), clap (#527), libc (#528), reqwest (#529), rustls-webpki (#524), mdns-sd (#519), tokio (#518), axum (#517), tracing-appender (#516), uuid (#515)
+
+---
+
+## [0.4.11] - 2026-04-20
+
+### Added
+- Vision mixer: per-input VU meters on the multiview overlay (#511)
+- EFP: cross-source sync via `normalize_segment` plus a preroll fix (#510)
+
+### Changed
+- Bump CEF to 144.0.21 and align the strom-full `GSTCEFSRC_VERSION` (#509)
+- LD_PRELOAD mallinfo shim to fix the MemoryInfra SIGILL crash; restore CEF 144 (#508)
+- Lower the client ICE gathering timeout from 2s to 1s (#512)
+
+### Fixed
+- Unblock preroll on mpegtssrt output (`async=false`) (#504)
+
+---
+
+## [0.4.10] - 2026-04-17
+
+### Added
+- Runtime log level control via REST API and the info page (#494)
+- Debug logging for flow API request bodies (#493)
+
+### Fixed
+- Vision mixer: A/V sync and multiview latency; eliminate overlay lag (#502, #499)
+- Add buffer limits to appsrc elements to prevent unbounded memory growth (#500)
+- Align static `external_pads` with computed defaults (#492)
+- Filter vision mixer control UI events by both `flow_id` and `block_id` (#501)
+
+### Dependencies
+- Bump rustls (#496), libc (#495), tokio (#497)
+
+---
+
+## [0.4.9] - 2026-04-13
+
+### Fixed
+- Use mixer stream-time for transition and FTB keyframes (#490)
+- Change vision mixer `num_inputs` from enum to uint (#488)
+- Use a unique session cookie name per port to prevent collisions (#489)
+
+### CI
+- Add a manual workflow to trigger the OSC fork sync (#487)
+
+---
+
+## [0.4.8] - 2026-04-13
+
+### Added
+- Isolate the media player in an internal pipeline with clocksync; add seek throttle and jump buttons (#484)
+
+### Fixed
+- Resolve passthrough audio not flowing in the media player bridge (#486)
+- Add peer address to connection logs and fix the audiogain f32 type (#485)
+- Skip the GL compositor when only Mesa software rendering is available (#482)
+- Frontend: surface probe activation errors in the UI, show the login form on 401, make the flow properties window movable, and refresh session expiry on activity (#483)
+
+---
+
+## [0.4.7] - 2026-04-08
+
+### Added
+- Framerate and GL passthrough properties on the vision mixer (#481)
+
+### Fixed
+- Use `start-time-selection=zero` for vision mixer compositors (#480)
+
+---
+
+## [0.4.6] - 2026-04-07
+
+### Added
+- Ephemeral flows and accept a full Flow object on the create API (#479)
+- `GET` multiview-endpoint API, used by the vision mixer page (#476)
+
+### Changed
+- Move the OpenAPI spec to the repo root and rename the snapshot test
+- Bump CI actions to Node.js 24 (checkout v5, action-gh-release v2)
+
+### Fixed
+- Name validation on the create_flow endpoint (#479)
+- Restore the glow renderer for WASM and fix renderer detection (#478)
+- Render the status bar before page content for correct panel ordering (#478)
+- Reject duplicate WHIP/WHEP endpoint IDs and trim endpoint strings (#476)
+
+---
+
+## [0.4.5] - 2026-04-07
+
+### Added
+- Vision mixer output pixel format property (#471)
+- Diagnostic pad probes for WHEP input blocks
+- OpenAPI discriminator hints for tagged enum schemas (#474)
+
+### Changed
+- Upgrade the egui ecosystem from 0.33 to 0.34 (#473)
+- Extract the shared pixel format list to strom-types
+- Stop tracking docker-compose.yml and gitignore it
+
+### Fixed
+- Work around a GStreamer jitterbuffer stall after a mute gap; set `drop-on-latency=true` on WHIP and AES67 inputs (#472)
+- GPU vision mixer output chain and OpenAPI registration
+
+### Dependencies
+- cargo update (tokio 1.51, hyper 1.9, wasm-bindgen); bump gloo-net (#469), gloo-timers (#468), uuid (#466)
+
+---
+
+## [0.4.3] - 2026-03-30
+
+### Added
+- Vision Mixer block with a PVW/PGM workflow and web control UI: CUT/AUTO transitions, DSK overlays, fade-to-black (FTB), multiview output, background source, and multi-source groups (#463)
+- Audio Gain block with live property updates (#464)
+- Generic live property flag on `ExposedProperty`
+
+### Fixed
+- Break circular GObject references that leaked pipelines and sockets (#465)
+- Vision mixer: resolution scaling, DSK/FTB state sync, transition cleanup, GPU BGRA conversion, and latency fixes
+- Correct the Fedora libnice package name and remove `-dev`/`-devel` packages from install.sh
+
+### Documentation
+- Add a CLAUDE.md rule for GStreamer object references in closures
+- Add libcairo2-dev to the build-from-source prerequisites
+
+---
+
+## [0.4.2] - 2026-03-26
+
+### Fixed
+- CEF: replace the non-existent `disable-background-tracing` flag with working flags (#461)
+- Preserve legend label and edge caps in debug graph DOT output (#459)
+- Frontend: graph editor and flow list improvements, prevent double-click flicker, and preserve the selected link index on detach
+- Use `rsplit_once` for namespaced block element IDs in detach
+
+### Dependencies
+- Bump tokio-tungstenite (#457)
+
+---
+
+## [0.4.1] - 2026-03-23
+
+### Fixed
+- Harden DOT graph generation for complex pipelines (#453)
+- Set `min-upstream-latency` on liveadder and revert dropout overrides (#456)
+- Set `max-dropout-time` on rtpbin instead of rtpjitterbuffer (#455)
+- Disable jitterbuffer dropout detection for WHEP input (#454)
+
+---
+
+## [0.4.0] - 2026-03-23
+
+### Added
+- Complete OpenAPI contract: full coverage with a snapshot test, runtime validation and structured JSON errors on all endpoints, and oasdiff CI (#432)
+- Automatic buffer age monitoring with probe UI improvements (#439)
+- GL renderer probe from GStreamer's GL context (#440)
+- Reusable thumbnail tap module and standalone thumbnail block; default thumbnails bumped to 320x180 (#445)
+- Configurable max video bitrate per WHIP Input block (#448)
+- Per-slot WHIP input model with auto-cleanup and A/V sync; isolated pipeline per WHIP session (#450)
+- Truncate long property values in debug graph DOT labels (#449)
+- Smart CPU affinity with an AffinityManager and cgroup-aware core detection (#431)
+
+### Changed
+- Move 21 API-visible types from the backend to strom-types
+- Replace `flow.state` with a `running` bool and `gst_state`
+- Remove unnecessary queue property overrides, using GStreamer defaults (#438)
+- Correct the EFP acronym to Elastic Frame Protocol (#430)
+- Default CPU affinity to Off, with an icon shown when overridden
+
+### Fixed
+- Use weak pipeline refs in probe closures and clean up before `set_state(Null)`
+- Move buffer age broadcasting and webrtc stats off the GStreamer hot path
+- Detach the webrtc stats timeout thread to avoid 500ms×N blocking
+- Pin flows to physical cores instead of single hyperthreads
+- Treat Paused pipelines as active
+
+### Security
+- Update aws-lc-sys to 0.39.0 to resolve 2 high-severity vulnerabilities
+
+### Dependencies
+- Update all dependencies to latest compatible versions; bump rustls-webpki (#451), tempfile (#437), clap (#436), tokio (#435), mdns-sd (#434), sysinfo (#433)
+
+---
+
+## [0.3.26] - 2026-03-12
+
+### Added
+- EFP/SRT input and output blocks (Elastic Frame Protocol over SRT), gated behind a cargo feature flag (#421)
+- EFP mux/demux GStreamer plugin integration
+
+### Changed
+- Add dbus and avahi-daemon to the Docker images for NDI discovery (#427)
+- Bump efp to v0.2.5 to fix a GCC 15 build failure; bump gst-plugin-efp to v0.2.3
+- Document the EFP feature flag and build dependencies in the README
+
+### Fixed
+- Disable Chromium background tracing to prevent the MemoryInfra SIGILL crash
+- Fix CEF GPU isolation in strom-full to prevent SharedImageManager crashes (#414)
+- Sort the WHEP streams page endpoints in natural numeric order (#426)
+- Move the SDP copy button above the SDP text in AES67 Output (#425)
+- Order video pads before audio pads in WHEP Output and WHIP Input (#424)
+- Use eframe's glow re-export instead of a direct dependency (#420)
+
+### Dependencies
+- Bump quinn-proto (#423), uuid (#419), bcrypt (#417), socket2 (#416), libc (#415)
+
+---
+
 ## [0.3.25] - 2026-03-09
 
 ### Added
@@ -183,7 +564,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.15] - 2026-01-28
+## [0.3.15] - 2026-01-29
 
 ### Added
 - Audio Latency measurement block using GStreamer audiolatency element (#299)
@@ -244,7 +625,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.12] - 2026-01-17
+## [0.3.12] - 2026-01-20
 
 ### Added
 - QoS DSCP marking for AES67 output (#249)
@@ -260,7 +641,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.11] - 2026-01-16
+## [0.3.11] - 2026-01-19
 
 ### Added
 - Windows MSI installer with bundled GStreamer and Graphviz (#230)
@@ -320,7 +701,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.7] - 2026-01-06
+## [0.3.7] - 2026-01-02
 
 ### Changed
 - Use native ARM64 runners for Docker builds (#205)
@@ -328,7 +709,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.6] - 2025-12-30
+## [0.3.6] - 2026-01-02
 
 ### Added
 - NDI video and audio input/output blocks with mode enum and dynamic pads (#139)
@@ -346,7 +727,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.5] - 2025-12-18
+## [0.3.5] - 2025-12-29
 
 ### Added
 - mDNS/RAVENNA discovery support for AES67 streams (#182)
@@ -356,7 +737,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.4] - 2025-12-15
+## [0.3.4] - 2025-12-19
 
 ### Added
 - Auto-reload frontend when backend is rebuilt (#174)
@@ -369,7 +750,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.2] - 2025-12-10
+## [0.3.2] - 2025-12-18
 
 ### Added
 - Signal handling for graceful shutdown (#167)
@@ -381,7 +762,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.3.0] - 2025-12-06
+## [0.3.0] - 2025-12-17
 
 ### Added
 - V4L2 encoder support for Raspberry Pi hardware encoding (#115)
@@ -620,7 +1001,7 @@ All notable changes to the Strom GStreamer Flow Engine project.
 
 ---
 
-## [0.1.0] - 2025-01-13
+## [0.1.0] - 2025-11-14
 
 ### Added - Backend
 - Complete Cargo workspace structure (types, backend, frontend)

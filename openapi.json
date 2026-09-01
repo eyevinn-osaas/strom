@@ -10,7 +10,7 @@
     "license": {
       "name": "MIT OR Apache-2.0"
     },
-    "version": "0.6.0"
+    "version": "0.6.7"
   },
   "paths": {
     "/api/auth/status": {
@@ -717,6 +717,7 @@
           "flows"
         ],
         "summary": "Create a new flow.",
+        "description": "Creates a flow under the `id` supplied in the body, so a caller can pre-generate an id and then start the flow by it. `id` is a required field: to have the server assign one instead, send the nil uuid (`00000000-0000-0000-0000-000000000000`) and read the assigned id from the `flow.id` of the response. Reusing the id of an existing flow is a 409; use `POST /api/flows/{id}` to update that flow instead.",
         "operationId": "create_flow",
         "requestBody": {
           "content": {
@@ -735,6 +736,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FlowResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A flow with the supplied id already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -867,6 +878,68 @@
           },
           "400": {
             "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/flows/{flow_id}/blocks/{block_id}/effect": {
+      "post": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Set a shader video effect on a vision mixer block (input look or PGM master).",
+        "description": "Requires the shader FX engine (GPU backend with Shader FX enabled) —\nreturns 400 when the engine is not built into the running pipeline.",
+        "operationId": "set_vision_mixer_effect",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVideoEffectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Effect applied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetVideoEffectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or FX engine unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -1099,6 +1172,66 @@
       }
     },
     "/api/flows/{flow_id}/blocks/{block_id}/pip/{pip_idx}": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Get the current composition of a single PiP on a vision mixer block.",
+        "description": "Returns the same per-PiP state as the corresponding entry in\n`VisionMixerState::pips`. Useful for exporting one PiP's composition\n(e.g. to save it as a reusable layout preset); restore it with a `PUT`\nto the same path.",
+        "operationId": "get_pip_config",
+        "parameters": [
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID (UUID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Vision mixer block instance ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "pip_idx",
+            "in": "path",
+            "description": "PiP index (0-based)",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current PiP composition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipState"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Block has no live state (pipeline not running) or PiP index out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "tags": [
           "flows"
@@ -3900,6 +4033,111 @@
         }
       }
     },
+    "/api/osc/pat": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get the OSC PAT configuration status",
+        "description": "Reports whether the default PAT is configured and which per-flow credential\nkeys have a PAT registered. Token values are never returned.",
+        "operationId": "get_osc_pat_status",
+        "responses": {
+          "200": {
+            "description": "OSC PAT status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OscAuthStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/osc/pat/{key}": {
+      "put": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Set a per-flow OSC Personal Access Token",
+        "description": "Registers a PAT for one credential key (the flow id). Flows resolve their own\nPAT first, falling back to the default — isolating OSC tenants on a shared\ninstance. Held in memory only.",
+        "operationId": "set_osc_pat_keyed",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Credential key (flow id) the PAT is scoped to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOscPatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "PAT updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OscAuthStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Clear a per-flow OSC Personal Access Token",
+        "operationId": "clear_osc_pat_keyed",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Credential key (flow id) to clear",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PAT cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OscAuthStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/sources": {
       "get": {
         "tags": [
@@ -5330,6 +5568,32 @@
           }
         }
       },
+      "EffectTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A video input by index — the effect follows the source everywhere\n(PGM, PVW, thumbnails, PiPs).",
+            "required": [
+              "input"
+            ],
+            "properties": {
+              "input": {
+                "type": "integer",
+                "description": "A video input by index — the effect follows the source everywhere\n(PGM, PVW, thumbnails, PiPs).",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "The PGM master output — applied after composition.",
+            "enum": [
+              "master"
+            ]
+          }
+        ],
+        "description": "Where a [`VideoEffect`] is applied on a vision mixer block."
+      },
       "Element": {
         "type": "object",
         "description": "Represents a GStreamer element instance in a flow.",
@@ -6318,6 +6582,26 @@
           }
         }
       },
+      "InputResolution": {
+        "type": "object",
+        "description": "Negotiated resolution of a video input, read from the compositor sink pad\ncaps. Inputs can have arbitrary resolutions and aspect ratios — nothing\nnormalizes them before the mixer.",
+        "required": [
+          "width",
+          "height"
+        ],
+        "properties": {
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "Ipv4AddressInfo": {
         "type": "object",
         "description": "IPv4 address information.",
@@ -6784,6 +7068,27 @@
           }
         }
       },
+      "OscAuthStatusResponse": {
+        "type": "object",
+        "description": "Status of the OSC Personal Access Token configuration. Token values are never\nreturned.",
+        "required": [
+          "configured",
+          "keys"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "Whether the default (fallback) PAT is configured (via env var or the\nkeyless API). Used for single-tenant deployments."
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Credential keys (flow ids) that have a per-flow PAT registered. Used to\nisolate OSC tenants on a shared Strom instance."
+          }
+        }
+      },
       "OverlayAlphaRequest": {
         "type": "object",
         "description": "Request to set the multiview overlay alpha on a vision mixer block.",
@@ -6939,6 +7244,16 @@
             ],
             "description": "Background input index, or `None` if no bg is set.",
             "minimum": 0
+          },
+          "transforms": {
+            "type": "object",
+            "description": "Per-source crop transforms, keyed by input index.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SourceCrop"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "zones": {
             "type": "array",
@@ -7716,6 +8031,19 @@
           }
         }
       },
+      "SetOscPatRequest": {
+        "type": "object",
+        "description": "Request to set the OSC Personal Access Token (PAT) at runtime.\n\nThe PAT is used to mint short-lived Service Access Tokens for OSC-hosted\nservices (e.g. a TAMS gateway). It is held in memory only — not persisted.",
+        "required": [
+          "pat"
+        ],
+        "properties": {
+          "pat": {
+            "type": "string",
+            "description": "The OSC Personal Access Token."
+          }
+        }
+      },
       "SetPlaylistRequest": {
         "type": "object",
         "description": "Request to set the playlist.",
@@ -7729,6 +8057,41 @@
               "type": "string"
             },
             "description": "List of file URIs (e.g., \"file:///path/to/video.mp4\")"
+          }
+        }
+      },
+      "SetVideoEffectRequest": {
+        "type": "object",
+        "description": "Request to set a video effect on a vision mixer block.",
+        "required": [
+          "target",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/VideoEffect",
+            "description": "The effect to apply. `{\"type\": \"none\"}` clears."
+          },
+          "target": {
+            "$ref": "#/components/schemas/EffectTarget",
+            "description": "Where to apply the effect."
+          }
+        }
+      },
+      "SetVideoEffectResponse": {
+        "type": "object",
+        "description": "Response after setting a video effect.",
+        "required": [
+          "message",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/VideoEffect",
+            "description": "The effect as applied (after parameter clamping)."
+          },
+          "message": {
+            "type": "string"
           }
         }
       },
@@ -7764,6 +8127,32 @@
           }
         ],
         "description": "A source that can be assigned to PGM or PVW.\n\nJSON encoding is externally tagged: `{\"input\": 5}` or `{\"pip\": 1}`.\nThe [`FromStr`] / [`fmt::Display`] impls use a separate compact form\n(`\"input:N\"` / `\"pip:N\"`, case-insensitive) for stored block properties."
+      },
+      "SourceCrop": {
+        "type": "object",
+        "description": "Normalized per-source crop: the fraction of the source hidden from each\nedge. All components are in `0.0..=1.0`; all zero = no crop.\n\nThe crop selects which part of the source fills its destination rect —\ncombined with a zone rect this gives \"zoom\"/\"punch-in\" framing (the\ncropped region scales to fill the zone box; everything outside is hidden).\nNormalized fractions keep the type resolution-independent; the backend\nconverts to pixels against the negotiated source caps.",
+        "properties": {
+          "bottom": {
+            "type": "number",
+            "format": "float",
+            "description": "Fraction of the source height hidden from the bottom edge."
+          },
+          "left": {
+            "type": "number",
+            "format": "float",
+            "description": "Fraction of the source width hidden from the left edge."
+          },
+          "right": {
+            "type": "number",
+            "format": "float",
+            "description": "Fraction of the source width hidden from the right edge."
+          },
+          "top": {
+            "type": "number",
+            "format": "float",
+            "description": "Fraction of the source height hidden from the top edge."
+          }
+        }
       },
       "SourceFlowInfo": {
         "type": "object",
@@ -9630,6 +10019,92 @@
           },
           {
             "type": "object",
+            "description": "TAMS Output block successfully uploaded and registered a media segment",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "TAMS Output block successfully uploaded and registered a media segment",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "tams_flow_id",
+                  "object_id",
+                  "timerange"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "object_id": {
+                    "type": "string",
+                    "description": "TAMS object id of the uploaded media object (`<bucket>/<key>`)"
+                  },
+                  "tams_flow_id": {
+                    "type": "string",
+                    "description": "TAMS flow UUID the segment was registered on"
+                  },
+                  "timerange": {
+                    "type": "string",
+                    "description": "TAMS timerange string `[<sec>:<ns>_<sec>:<ns>)`"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "TamsSegmentRegistered"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "TAMS Output block failed to upload or register a segment",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "TAMS Output block failed to upload or register a segment",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "error"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string",
+                    "description": "Human-readable error description"
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "TamsError"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Buffer age warning (buffer is older than threshold)",
             "required": [
               "data",
@@ -9992,6 +10467,49 @@
                 "type": "string",
                 "enum": [
                   "VisionMixerFtbChanged"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Vision mixer video effect changed (shader FX engine)",
+            "required": [
+              "data",
+              "type"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "description": "Vision mixer video effect changed (shader FX engine)",
+                "required": [
+                  "flow_id",
+                  "block_id",
+                  "target",
+                  "effect"
+                ],
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "effect": {
+                    "$ref": "#/components/schemas/VideoEffect",
+                    "description": "The effect as applied (after parameter clamping)."
+                  },
+                  "flow_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "target": {
+                    "$ref": "#/components/schemas/EffectTarget",
+                    "description": "Where the effect was applied (an input or the PGM master)."
+                  }
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "VisionMixerEffectChanged"
                 ]
               }
             }
@@ -10489,6 +11007,16 @@
             "description": "Background input index. Omit/null for no bg.",
             "minimum": 0
           },
+          "transforms": {
+            "type": "object",
+            "description": "Per-source crop (\"zoom\"/\"punch-in\"), keyed by input index. Applies to\nthe source wherever it renders inside this PiP (bg or zone). Missing\nkey = no crop. Entries for sources currently *outside* the PiP are\nretained and re-apply when the source returns (swap-zone workflow);\nremoving a crop is explicit — omit/delete its entry while the source\nis present. See [`crate::vision_mixer::SourceCrop`].",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SourceCrop"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "zones": {
             "type": "array",
             "items": {
@@ -10520,6 +11048,16 @@
           "pip_idx": {
             "type": "integer",
             "minimum": 0
+          },
+          "transforms": {
+            "type": "object",
+            "description": "Authoritative per-source crop state. Identical to the request except\nthat crop fractions are clamped (see `SourceCrop::clamped`).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SourceCrop"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "zones": {
             "type": "array",
@@ -10557,6 +11095,385 @@
           }
         }
       },
+      "VideoEffect": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "No effect (identity passthrough).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "none"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Chroma key: pixels close to `key_color` become transparent.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "key_color": {
+                "type": "string",
+                "description": "Key color as `#RRGGBB` (typically green `#00B140` or blue)."
+              },
+              "similarity": {
+                "type": "number",
+                "format": "float",
+                "description": "Chroma distance below which pixels are fully keyed (0..1)."
+              },
+              "smoothness": {
+                "type": "number",
+                "format": "float",
+                "description": "Soft edge width added above `similarity` (0..1)."
+              },
+              "spill": {
+                "type": "number",
+                "format": "float",
+                "description": "Spill suppression amount — desaturates key-colored fringes (0..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "chroma_key"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Mosaic pixelation (privacy or stylization).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "block_size": {
+                "type": "number",
+                "format": "float",
+                "description": "Block size in source pixels (2..200)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pixelate"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Disc-bokeh defocus blur (24-tap Vogel spiral, single pass).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "radius": {
+                "type": "number",
+                "format": "float",
+                "description": "Blur radius in source pixels (0..40)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "blur"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Two-color luma mapping. `low`=black point color, `high`=white point\ncolor. Grayscale = `#000000`/`#FFFFFF`, sepia = `#2B1D0E`/`#FFF1DF`.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "high": {
+                "type": "string"
+              },
+              "low": {
+                "type": "string"
+              },
+              "mix": {
+                "type": "number",
+                "format": "float",
+                "description": "Blend between original (0) and duotone (1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "duotone"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Darkened corners.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "amount": {
+                "type": "number",
+                "format": "float",
+                "description": "Strength of the darkening (0..1)."
+              },
+              "softness": {
+                "type": "number",
+                "format": "float",
+                "description": "Falloff softness (0.01..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "vignette"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Animated VHS look: chroma shift, scanlines, tape noise.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Overall intensity (0..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "vhs"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Animated old-film look: grain, flicker, scratches, warm tone.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Overall intensity (0..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "old_film"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Edge detection glow added on top of the image.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "color": {
+                "type": "string",
+                "description": "Glow color as `#RRGGBB`."
+              },
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Glow strength (0..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "edge_glow"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "CRT monitor: barrel distortion, scanlines, RGB grille.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Overall intensity (0..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "crt"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Newspaper-print halftone dots.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "dot_size": {
+                "type": "number",
+                "format": "float",
+                "description": "Dot grid size in pixels (3..40)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "halftone"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Thermal-camera false color over luma.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Blend between original (0) and thermal (1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "thermal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Night-vision scope: green phosphor, lifted shadows, grain, vignette.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Blend between original (0) and night vision (1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "night_vision"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Color quantization into bands (screen-print / toon).",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "levels": {
+                "type": "number",
+                "format": "float",
+                "description": "Number of levels per channel (2..16)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "posterize"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Underwater: wavy refraction, blue-green grade, caustic shimmer.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "intensity": {
+                "type": "number",
+                "format": "float",
+                "description": "Overall intensity (0..1)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "underwater"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Primary color correction + white balance — the camera-matching tool.\nEvery control is neutral at its default, so an untouched correction is\nan identity pass. Applied in a fixed order: white balance, brightness,\ncontrast, hue, saturation, gamma.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "brightness": {
+                "type": "number",
+                "format": "float",
+                "description": "Additive brightness offset (-1..1, neutral 0)."
+              },
+              "contrast": {
+                "type": "number",
+                "format": "float",
+                "description": "Contrast multiplier around mid-gray (0..2, neutral 1)."
+              },
+              "gamma": {
+                "type": "number",
+                "format": "float",
+                "description": "Midtone gamma curve (0.1..3, neutral 1)."
+              },
+              "hue": {
+                "type": "number",
+                "format": "float",
+                "description": "Hue rotation: -1..1 maps to -180..180 degrees (neutral 0)."
+              },
+              "saturation": {
+                "type": "number",
+                "format": "float",
+                "description": "Saturation: 0 = grayscale, 1 = unchanged, up to 2 (0..2, neutral 1)."
+              },
+              "temperature": {
+                "type": "number",
+                "format": "float",
+                "description": "White balance temperature: warm (+) / cool (-) (-1..1, neutral 0)."
+              },
+              "tint": {
+                "type": "number",
+                "format": "float",
+                "description": "White balance tint: magenta (+) / green (-) (-1..1, neutral 0)."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "color_correct"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A persistent video effect (\"look\") applied to a vision mixer input or to\nthe PGM master output.\n\nJSON encoding is internally tagged on `type`:\n`{\"type\": \"pixelate\", \"block_size\": 24.0}`.\n\nAll numeric parameters are clamped server-side (see [`VideoEffect::sanitized`]);\ncolors are `#RRGGBB` hex strings."
+      },
       "VisionMixerState": {
         "type": "object",
         "description": "Current runtime state of a vision mixer block.\n\nThis is the snapshot a client uses to reconcile on (re)connect when WS\nevents have not yet arrived. Static config (input count, labels, DSK\ncount) is *not* included — that lives on the block resource itself.",
@@ -10577,6 +11494,35 @@
           "ftb_active": {
             "type": "boolean",
             "description": "Whether Fade to Black is currently active."
+          },
+          "fx_available": {
+            "type": "boolean",
+            "description": "Whether the shader FX engine is built into this pipeline (GPU backend\nwith Shader FX enabled). When `false`, effect endpoints reject and\nshader transitions downgrade to Fade."
+          },
+          "input_effects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VideoEffect"
+            },
+            "description": "Current per-input video effects (length = configured `num_inputs`).\nEmpty when the FX engine is unavailable."
+          },
+          "input_resolutions": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/InputResolution"
+                }
+              ]
+            },
+            "description": "Negotiated resolution per input (length = configured `num_inputs`).\n`None` for inputs whose caps are not negotiated yet. Inputs can have\narbitrary resolutions/aspects — clients must not assume the PGM aspect\n(the crop editor needs the real source aspect for its window math)."
+          },
+          "master_effect": {
+            "$ref": "#/components/schemas/VideoEffect",
+            "description": "Current master (PGM) video effect."
           },
           "overlay_alpha": {
             "type": "number",
@@ -10770,6 +11716,17 @@
         "type": "object",
         "description": "A sub-region of a PiP that hosts one or more overlay sources.\n\nSources inside a zone auto-tile within its `rect` (using\n[`compute_pip_overlay_rects`]) so the zone behaves like a \"mini-PiP\"\nnested inside the parent PiP region. The `capacity` puts a cap on how\nmany sources can occupy the zone; pushing a new source into a full zone\nis expected to evict the oldest (client-side FIFO).",
         "properties": {
+          "border": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ZoneBorder",
+                "description": "Border drawn around each source box in this zone (None = no border).\nRendered live on the PGM overlay — follows morphs/takes/punch-ins."
+              }
+            ]
+          },
           "capacity": {
             "type": [
               "integer",
@@ -10796,6 +11753,25 @@
               "minimum": 0
             },
             "description": "Current sources (FIFO, oldest first). Sources auto-tile within `rect`."
+          }
+        }
+      },
+      "ZoneBorder": {
+        "type": "object",
+        "description": "Border drawn around each source box in a zone.\n\nRendered by the mixer itself on a PGM-side overlay — borders are a\nfunction of the mixer's own live geometry (boxes move with morphs, takes\nand punch-ins), so no external graphics source could stay in sync.",
+        "required": [
+          "color",
+          "width"
+        ],
+        "properties": {
+          "color": {
+            "type": "string",
+            "description": "Border color as `#RRGGBB` or `#RRGGBBAA` hex."
+          },
+          "width": {
+            "type": "number",
+            "format": "float",
+            "description": "Border width in PGM canvas pixels, drawn outward from the box edge.\nEvery render target scales it by `region_width / pgm_width`, so the\nborder looks proportionally identical on PGM, the PVW big display and\nthe PiP thumbnails regardless of resolution."
           }
         }
       }

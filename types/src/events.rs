@@ -287,6 +287,26 @@ pub enum StromEvent {
         flow_id: FlowId,
         block_id: String,
     },
+    /// TAMS Output block successfully uploaded and registered a media segment
+    TamsSegmentRegistered {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        /// TAMS flow UUID the segment was registered on
+        tams_flow_id: String,
+        /// TAMS object id of the uploaded media object (`<bucket>/<key>`)
+        object_id: String,
+        /// TAMS timerange string `[<sec>:<ns>_<sec>:<ns>)`
+        timerange: String,
+    },
+    /// TAMS Output block failed to upload or register a segment
+    TamsError {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        /// Human-readable error description
+        error: String,
+    },
     /// Buffer age warning (buffer is older than threshold)
     BufferAgeWarning {
         #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
@@ -362,6 +382,16 @@ pub enum StromEvent {
         flow_id: FlowId,
         block_id: String,
         active: bool,
+    },
+    /// Vision mixer video effect changed (shader FX engine)
+    VisionMixerEffectChanged {
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
+        flow_id: FlowId,
+        block_id: String,
+        /// Where the effect was applied (an input or the PGM master).
+        target: crate::effects::EffectTarget,
+        /// The effect as applied (after parameter clamping).
+        effect: crate::effects::VideoEffect,
     },
 }
 
@@ -695,6 +725,25 @@ impl StromEvent {
                     block_id, flow_id
                 )
             }
+            StromEvent::TamsSegmentRegistered {
+                flow_id,
+                block_id,
+                tams_flow_id,
+                object_id: _,
+                timerange,
+            } => {
+                format!(
+                    "TAMS {} in flow {} registered segment {} on tams flow {}",
+                    block_id, flow_id, timerange, tams_flow_id
+                )
+            }
+            StromEvent::TamsError {
+                flow_id,
+                block_id,
+                error,
+            } => {
+                format!("TAMS {} in flow {} error: {}", block_id, flow_id, error)
+            }
             StromEvent::BufferAgeWarning {
                 flow_id,
                 element_id,
@@ -796,6 +845,20 @@ impl StromEvent {
                     block_id,
                     flow_id,
                     if *active { "ON" } else { "OFF" }
+                )
+            }
+            StromEvent::VisionMixerEffectChanged {
+                flow_id,
+                block_id,
+                target,
+                effect,
+            } => {
+                format!(
+                    "Vision mixer {} in flow {}: effect '{}' on {}",
+                    block_id,
+                    flow_id,
+                    effect.kind(),
+                    target
                 )
             }
         }

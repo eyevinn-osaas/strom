@@ -295,9 +295,16 @@ fn prepare_flow(flow: &mut Flow) {
     post,
     path = "/api/flows",
     tag = "flows",
+    description = "Creates a flow under the `id` supplied in the body, so a caller can \
+                   pre-generate an id and then start the flow by it. `id` is a required \
+                   field: to have the server assign one instead, send the nil uuid \
+                   (`00000000-0000-0000-0000-000000000000`) and read the assigned id from \
+                   the `flow.id` of the response. Reusing the id of an existing flow is a \
+                   409; use `POST /api/flows/{id}` to update that flow instead.",
     request_body = Flow,
     responses(
         (status = 201, description = "Flow created", body = FlowResponse),
+        (status = 409, description = "A flow with the supplied id already exists", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -318,8 +325,13 @@ pub async fn create_flow(
     info!("Received create flow request: name='{}'", flow.name);
     debug!("Create flow request body: {:?}", flow);
 
-    // Assign a new ID to avoid collisions with imported flows
-    flow.id = FlowId::new_v4();
+    // Honour the client-supplied id. The schema requires it, so silently replacing
+    // it left callers unable to POST a flow and then start it by the id they chose.
+    // `id` cannot be omitted — it is required, so leaving it out is a 422 — which is
+    // why the nil uuid is the documented way to ask the server to assign one.
+    if flow.id.is_nil() {
+        flow.id = FlowId::new_v4();
+    }
 
     // Clear runtime state
     flow.running = false;
@@ -337,14 +349,30 @@ pub async fn create_flow(
 
     info!("Creating flow: {} ({})", flow.name, flow.id);
 
-    if let Err(e) = state.upsert_flow(flow.clone()).await {
-        return Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::with_details(
-                "Failed to save flow",
-                e.to_string(),
-            )),
-        ));
+    // Import and copy in the frontend already regenerate ids client-side
+    // (`regenerate_flow_ids`), so a clash here is a genuine one the caller needs to
+    // know about rather than something to paper over. The id is claimed inside the
+    // same write lock that checks it, so two concurrent creates supplying the same
+    // id cannot both pass and overwrite one another.
+    match state.insert_flow_if_absent(flow.clone()).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(ErrorResponse::new(
+                    "A flow with this id already exists; use POST /api/flows/{id} to update it",
+                )),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::with_details(
+                    "Failed to save flow",
+                    e.to_string(),
+                )),
+            ));
+        }
     }
 
     Ok((StatusCode::CREATED, Json(FlowResponse { flow })))
@@ -1704,6 +1732,63 @@ pub async fn select_preview(
     }))
 }
 
+/// Get the current composition of a single PiP on a vision mixer block.
+///
+/// Returns the same per-PiP state as the corresponding entry in
+/// `VisionMixerState::pips`. Useful for exporting one PiP's composition
+/// (e.g. to save it as a reusable layout preset); restore it with a `PUT`
+/// to the same path.
+#[utoipa::path(
+    get,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/pip/{pip_idx}",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID"),
+        ("pip_idx" = usize, Path, description = "PiP index (0-based)")
+    ),
+    responses(
+        (status = 200, description = "Current PiP composition", body = strom_types::api::PipState),
+        (status = 404, description = "Block has no live state (pipeline not running) or PiP index out of range", body = ErrorResponse),
+    )
+)]
+pub async fn get_pip_config(
+    Path((flow_id, block_id, pip_idx)): Path<(FlowId, String, usize)>,
+) -> Result<Json<strom_types::api::PipState>, (StatusCode, Json<ErrorResponse>)> {
+    let overlay = crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id)
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse::with_details(
+                    "Vision mixer state not available",
+                    format!(
+                        "No live overlay state for block {} in flow {} (pipeline not running)",
+                        block_id, flow_id
+                    ),
+                )),
+            )
+        })?;
+
+    if pip_idx >= overlay.num_pips {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::with_details(
+                "PiP index out of range",
+                format!(
+                    "PiP index {} out of range (block {} has {} PiPs)",
+                    pip_idx, block_id, overlay.num_pips
+                ),
+            )),
+        ));
+    }
+
+    Ok(Json(strom_types::api::PipState {
+        bg: overlay.pip_bg_input(pip_idx),
+        zones: overlay.pip_zones(pip_idx),
+        transforms: overlay.pip_transforms(pip_idx),
+    }))
+}
+
 /// Update a PiP composition (background + overlay inputs) on a vision mixer block.
 ///
 /// The change is applied live to all places where the PiP is currently visible:
@@ -1747,11 +1832,18 @@ pub async fn update_pip_config(
     }
 
     info!(
-        "Updating PiP {} on vision mixer {} in flow {}: bg={:?}, zones={:?}",
-        pip_idx, block_id, flow_id, req.bg, req.zones
+        "Updating PiP {} on vision mixer {} in flow {}: bg={:?}, zones={:?}, transforms={:?}",
+        pip_idx, block_id, flow_id, req.bg, req.zones, req.transforms
     );
     state
-        .apply_vision_mixer_pip_config(&flow_id, &block_id, pip_idx, req.bg, req.zones.clone())
+        .apply_vision_mixer_pip_config(
+            &flow_id,
+            &block_id,
+            pip_idx,
+            req.bg,
+            req.zones.clone(),
+            req.transforms.clone(),
+        )
         .await
         .map_err(|e| {
             error!("Failed to update PiP config: {}", e);
@@ -1766,13 +1858,18 @@ pub async fn update_pip_config(
 
     // Read back authoritative state. Validation runs in
     // `apply_vision_mixer_pip_config`, so the only mutation vs. the request
-    // is rect clamping (NormRect → [0,1]).
-    let (bg, zones) = if let Some(s) =
+    // is rect/crop clamping (NormRect → [0,1], SourceCrop clamped + zero
+    // entries dropped).
+    let (bg, zones, transforms) = if let Some(s) =
         crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id)
     {
-        (s.pip_bg_input(pip_idx), s.pip_zones(pip_idx))
+        (
+            s.pip_bg_input(pip_idx),
+            s.pip_zones(pip_idx),
+            s.pip_transforms(pip_idx),
+        )
     } else {
-        (req.bg, req.zones)
+        (req.bg, req.zones, req.transforms)
     };
 
     Ok(Json(strom_types::api::UpdatePipConfigResponse {
@@ -1780,6 +1877,7 @@ pub async fn update_pip_config(
         pip_idx,
         bg,
         zones,
+        transforms,
     }))
 }
 
@@ -1803,7 +1901,7 @@ pub async fn update_pip_config(
     )
 )]
 pub async fn get_vision_mixer_state(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path((flow_id, block_id)): Path<(FlowId, String)>,
 ) -> Result<Json<strom_types::api::VisionMixerState>, (StatusCode, Json<ErrorResponse>)> {
     let overlay = crate::blocks::builtin::vision_mixer::overlay::get_overlay_state(&block_id)
@@ -1824,6 +1922,7 @@ pub async fn get_vision_mixer_state(
         .map(|i| strom_types::api::PipState {
             bg: overlay.pip_bg_input(i),
             zones: overlay.pip_zones(i),
+            transforms: overlay.pip_transforms(i),
         })
         .collect();
 
@@ -1832,6 +1931,26 @@ pub async fn get_vision_mixer_state(
         .iter()
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
         .collect();
+
+    let input_resolutions = state
+        .vision_mixer_input_resolutions(&flow_id, &block_id, overlay.num_inputs)
+        .await;
+
+    let fx_available = state.vision_mixer_fx_available(&flow_id, &block_id).await;
+    let input_effects: Vec<strom_types::effects::VideoEffect> = if fx_available {
+        overlay
+            .input_effects
+            .iter()
+            .map(|m| m.lock().map(|e| e.clone()).unwrap_or_default())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let master_effect = overlay
+        .master_effect
+        .lock()
+        .map(|e| e.clone())
+        .unwrap_or_default();
 
     Ok(Json(strom_types::api::VisionMixerState {
         program_input: overlay.pgm_input(),
@@ -1844,6 +1963,10 @@ pub async fn get_vision_mixer_state(
         dsk_enabled,
         overlay_alpha: overlay.overlay_alpha(),
         pips,
+        input_resolutions,
+        fx_available,
+        input_effects,
+        master_effect,
     }))
 }
 
@@ -1996,6 +2119,49 @@ pub async fn fade_to_black(
     Ok(Json(strom_types::api::FadeToBlackResponse {
         message: format!("FTB {}", if active { "activated" } else { "deactivated" }),
         active,
+    }))
+}
+
+/// Set a shader video effect on a vision mixer block (input look or PGM master).
+///
+/// Requires the shader FX engine (GPU backend with Shader FX enabled) —
+/// returns 400 when the engine is not built into the running pipeline.
+#[utoipa::path(
+    post,
+    path = "/api/flows/{flow_id}/blocks/{block_id}/effect",
+    tag = "flows",
+    params(
+        ("flow_id" = String, Path, description = "Flow ID (UUID)"),
+        ("block_id" = String, Path, description = "Vision mixer block instance ID")
+    ),
+    request_body = strom_types::effects::SetVideoEffectRequest,
+    responses(
+        (status = 200, description = "Effect applied", body = strom_types::effects::SetVideoEffectResponse),
+        (status = 400, description = "Invalid request or FX engine unavailable", body = ErrorResponse),
+    )
+)]
+pub async fn set_vision_mixer_effect(
+    State(state): State<AppState>,
+    Path((flow_id, block_id)): Path<(FlowId, String)>,
+    Json(req): Json<strom_types::effects::SetVideoEffectRequest>,
+) -> Result<Json<strom_types::effects::SetVideoEffectResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let applied = state
+        .set_vision_mixer_effect(&flow_id, &block_id, req.target, &req.effect)
+        .await
+        .map_err(|e| {
+            error!("Failed to set video effect: {}", e);
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::with_details(
+                    "Failed to set video effect",
+                    e.to_string(),
+                )),
+            )
+        })?;
+
+    Ok(Json(strom_types::effects::SetVideoEffectResponse {
+        message: format!("Effect '{}' applied to {}", applied.kind(), req.target),
+        effect: applied,
     }))
 }
 

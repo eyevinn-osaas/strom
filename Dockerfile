@@ -27,11 +27,42 @@ RUN TRUNK_ARCH=$(case ${BUILDARCH} in \
     tar -xz -C /usr/local/bin && \
     rustup target add wasm32-unknown-unknown
 
+# Install sccache (compiler cache backed by the self-hosted MinIO S3 bucket).
+# It only activates when AWS credentials are mounted as build secrets (see the
+# build step below); a plain `docker build` without secrets compiles normally.
+ARG SCCACHE_VERSION=0.15.0
+RUN ARCH="$(uname -m)" && \
+    curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
+      | tar -xz -C /tmp && \
+    install -m0755 "/tmp/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl/sccache" /usr/local/bin/sccache && \
+    rm -rf /tmp/sccache-*
+ENV SCCACHE_BUCKET=sccache \
+    SCCACHE_ENDPOINT=https://olivedev-rustcache.minio-minio.auto.prod-se.osaas.io \
+    SCCACHE_REGION=us-east-1 \
+    SCCACHE_S3_USE_SSL=true
+
 # Copy workspace
 COPY . .
 
-# Build frontend (WASM is platform-independent)
-RUN cd frontend && trunk build --release
+# Build frontend (WASM is platform-independent).
+# sccache is enabled only when the credential secrets are present AND the cache
+# backend is reachable. sccache validates its bucket on server start (fast
+# non-zero exit if the bucket is missing or the endpoint is unreachable), so we
+# probe with `sccache --start-server` and wrap rustc only on success. A broken
+# cache degrades to an uncached build instead of failing the image build.
+RUN --mount=type=secret,id=aws_access_key_id \
+    --mount=type=secret,id=aws_secret_access_key \
+    if [ -s /run/secrets/aws_access_key_id ]; then \
+        export AWS_ACCESS_KEY_ID="$(cat /run/secrets/aws_access_key_id)" && \
+        export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/aws_secret_access_key)" && \
+        if timeout 30 sccache --start-server >/dev/null 2>&1; then \
+            export RUSTC_WRAPPER=sccache; \
+        else \
+            echo "==> sccache backend unreachable - building without compile cache"; \
+        fi; \
+    fi && \
+    cd frontend && trunk build --release && \
+    { command -v sccache >/dev/null && [ -n "$RUSTC_WRAPPER" ] && sccache --show-stats || true; }
 
 # Stage 2: Backend builder - Build backend with Zig cross-compilation support
 # IMPORTANT: Must run on BUILD platform for cross-compilation tools (Zig) to work
@@ -56,6 +87,22 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install sccache (compiler cache backed by the self-hosted MinIO S3 bucket).
+# Activates only when AWS credentials are mounted as build secrets in the build
+# step below; a plain `docker build` without secrets compiles normally.
+# When cross-compiling, this stage runs on the native BUILDPLATFORM, so the
+# host-arch sccache binary is the correct one for the rustc that actually runs.
+ARG SCCACHE_VERSION=0.15.0
+RUN ARCH="$(uname -m)" && \
+    curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
+      | tar -xz -C /tmp && \
+    install -m0755 "/tmp/sccache-v${SCCACHE_VERSION}-${ARCH}-unknown-linux-musl/sccache" /usr/local/bin/sccache && \
+    rm -rf /tmp/sccache-*
+ENV SCCACHE_BUCKET=sccache \
+    SCCACHE_ENDPOINT=https://olivedev-rustcache.minio-minio.auto.prod-se.osaas.io \
+    SCCACHE_REGION=us-east-1 \
+    SCCACHE_S3_USE_SSL=true
 
 # Cross-compilation setup: Install Zig and ARM64 libraries when cross-compiling
 # Uses Ubuntu ports.ubuntu.com for ARM64 packages (matching local setup)
@@ -145,7 +192,20 @@ ENV RUST_BACKTRACE=1
 
 # Cross-compilation: Use cargo-zigbuild with glibc 2.36 targeting (Raspberry Pi compatible)
 # Native compilation: Use regular cargo build
-RUN if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ]; then \
+# sccache: see the frontend stage — probe the backend and only wrap rustc when
+# the cache is healthy, so a broken cache never fails the build.
+RUN --mount=type=secret,id=aws_access_key_id \
+    --mount=type=secret,id=aws_secret_access_key \
+    if [ -s /run/secrets/aws_access_key_id ]; then \
+        export AWS_ACCESS_KEY_ID="$(cat /run/secrets/aws_access_key_id)" && \
+        export AWS_SECRET_ACCESS_KEY="$(cat /run/secrets/aws_secret_access_key)" && \
+        if timeout 30 sccache --start-server >/dev/null 2>&1; then \
+            export RUSTC_WRAPPER=sccache; \
+        else \
+            echo "==> sccache backend unreachable - building without compile cache"; \
+        fi; \
+    fi && \
+    if [ "$BUILDPLATFORM" != "$TARGETPLATFORM" ] && [ "$TARGETARCH" = "arm64" ]; then \
     echo "==> Cross-compiling backend with Zig (targeting glibc 2.36)"; \
     export PKG_CONFIG_ALLOW_CROSS=1 && \
     export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig && \
@@ -168,7 +228,8 @@ else \
     echo "==> Native build for $TARGETPLATFORM"; \
     cargo build --release --package strom --features no-gui,efp && \
     cargo build --release --package strom-mcp-server; \
-fi
+fi && \
+    { command -v sccache >/dev/null && [ -n "$RUSTC_WRAPPER" ] && sccache --show-stats || true; }
 
 # Stage 3: Runtime - Minimal runtime image with Ubuntu 25.10 (questing) for GStreamer 1.26
 FROM ubuntu:questing AS runtime

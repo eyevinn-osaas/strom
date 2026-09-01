@@ -16,6 +16,8 @@ efp = ["dep:gst-plugin-efp"]
 # Internal
 strom-types = { path = "../types", features = ["openapi", "validation"] }
 garde.workspace = true
+# Load a local .env file at startup (e.g. STROM_OSC_PAT)
+dotenvy = "0.15"
 
 # Web framework
 axum.workspace = true
@@ -81,6 +83,7 @@ libc = "0.2"
 # TLS
 axum-server.workspace = true
 rustls = { version = "0.23", features = ["ring"] }
+hyper-util = { version = "0.1", features = ["tokio"] } # TokioTimer for hyper connection timeouts
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
 
 # Authentication
@@ -142,9 +145,10 @@ winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3.27"
+tokio = { version = "1.52", features = ["full", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-serial_test = "3.3"
+serial_test = "3.5"
 
 [[bin]]
 name = "gen-icons"

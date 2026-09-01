@@ -237,6 +237,25 @@ fn vision_mixer_definition() -> BlockDefinition {
             live: false,
             persist: None,
         },
+        // Swap PVW/PGM positions in the multiview layout
+        ExposedProperty {
+            name: "swap_pvw_pgm".to_string(),
+            label: "Swap PVW/PGM Positions".to_string(),
+            description:
+                "Mirror the multiview layout so PGM is on the left and PVW on the right."
+                    .to_string(),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(
+                strom_types::vision_mixer::DEFAULT_SWAP_PVW_PGM,
+            )),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "swap_pvw_pgm".to_string(),
+                transform: None,
+            },
+            live: false,
+            persist: None,
+        },
         // Output pixel format
         ExposedProperty {
             name: "output_format".to_string(),
@@ -272,6 +291,21 @@ fn vision_mixer_definition() -> BlockDefinition {
             mapping: PropertyMapping {
                 element_id: "_block".to_string(),
                 property_name: "gl_download".to_string(),
+                transform: None,
+            },
+            live: false,
+            persist: None,
+        },
+        // Shader FX engine (GPU path only)
+        ExposedProperty {
+            name: "enable_fx".to_string(),
+            label: "Shader FX".to_string(),
+            description: "Build the shader FX engine (per-source looks, wipe transitions, master FX) into the pipeline. GPU backend only — ignored on CPU.".to_string(),
+            property_type: PropertyType::Bool,
+            default_value: Some(PropertyValue::Bool(DEFAULT_ENABLE_FX)),
+            mapping: PropertyMapping {
+                element_id: "_block".to_string(),
+                property_name: "enable_fx".to_string(),
                 transform: None,
             },
             live: false,

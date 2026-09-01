@@ -899,6 +899,34 @@ impl ErrorResponse {
 }
 
 // ============================================================================
+// OSC Authentication API Types
+// ============================================================================
+
+/// Request to set the OSC Personal Access Token (PAT) at runtime.
+///
+/// The PAT is used to mint short-lived Service Access Tokens for OSC-hosted
+/// services (e.g. a TAMS gateway). It is held in memory only — not persisted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct SetOscPatRequest {
+    /// The OSC Personal Access Token.
+    pub pat: String,
+}
+
+/// Status of the OSC Personal Access Token configuration. Token values are never
+/// returned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+pub struct OscAuthStatusResponse {
+    /// Whether the default (fallback) PAT is configured (via env var or the
+    /// keyless API). Used for single-tenant deployments.
+    pub configured: bool,
+    /// Credential keys (flow ids) that have a per-flow PAT registered. Used to
+    /// isolate OSC tenants on a shared Strom instance.
+    pub keys: Vec<String>,
+}
+
+// ============================================================================
 // Logging API Types
 // ============================================================================
 
@@ -1156,6 +1184,18 @@ pub struct UpdatePipConfigRequest {
     /// zone are also in z-order (oldest first).
     #[serde(default)]
     pub zones: Vec<crate::vision_mixer::Zone>,
+    /// Per-source crop ("zoom"/"punch-in"), keyed by input index. Applies to
+    /// the source wherever it renders inside this PiP (bg or zone). Missing
+    /// key = no crop. Entries for sources currently *outside* the PiP are
+    /// retained and re-apply when the source returns (swap-zone workflow);
+    /// removing a crop is explicit — omit/delete its entry while the source
+    /// is present. See [`crate::vision_mixer::SourceCrop`].
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = std::collections::HashMap<String, crate::vision_mixer::SourceCrop>)
+    )]
+    pub transforms: crate::vision_mixer::PipTransforms,
 }
 
 /// Response after updating a PiP composition.
@@ -1169,6 +1209,14 @@ pub struct UpdatePipConfigResponse {
     /// `NormRect`s are clamped to `[0,1]`. Duplicate sources or out-of-range
     /// indices are rejected with 400 rather than silently sanitized.
     pub zones: Vec<crate::vision_mixer::Zone>,
+    /// Authoritative per-source crop state. Identical to the request except
+    /// that crop fractions are clamped (see `SourceCrop::clamped`).
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = std::collections::HashMap<String, crate::vision_mixer::SourceCrop>)
+    )]
+    pub transforms: crate::vision_mixer::PipTransforms,
 }
 
 /// Response after selecting a preview source.
@@ -1198,6 +1246,13 @@ pub struct PipState {
     pub bg: Option<usize>,
     /// Overlay zones (FIFO order, oldest first inside each zone).
     pub zones: Vec<crate::vision_mixer::Zone>,
+    /// Per-source crop transforms, keyed by input index.
+    #[serde(default)]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = std::collections::HashMap<String, crate::vision_mixer::SourceCrop>)
+    )]
+    pub transforms: crate::vision_mixer::PipTransforms,
 }
 
 /// Current runtime state of a vision mixer block.
@@ -1224,6 +1279,24 @@ pub struct VisionMixerState {
     pub overlay_alpha: f64,
     /// Per-PiP runtime state (length = configured `num_pips`).
     pub pips: Vec<PipState>,
+    /// Negotiated resolution per input (length = configured `num_inputs`).
+    /// `None` for inputs whose caps are not negotiated yet. Inputs can have
+    /// arbitrary resolutions/aspects — clients must not assume the PGM aspect
+    /// (the crop editor needs the real source aspect for its window math).
+    #[serde(default)]
+    pub input_resolutions: Vec<Option<crate::vision_mixer::InputResolution>>,
+    /// Whether the shader FX engine is built into this pipeline (GPU backend
+    /// with Shader FX enabled). When `false`, effect endpoints reject and
+    /// shader transitions downgrade to Fade.
+    #[serde(default)]
+    pub fx_available: bool,
+    /// Current per-input video effects (length = configured `num_inputs`).
+    /// Empty when the FX engine is unavailable.
+    #[serde(default)]
+    pub input_effects: Vec<crate::effects::VideoEffect>,
+    /// Current master (PGM) video effect.
+    #[serde(default)]
+    pub master_effect: crate::effects::VideoEffect,
 }
 
 /// Request to set the multiview overlay alpha on a vision mixer block.

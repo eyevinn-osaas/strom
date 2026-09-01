@@ -218,6 +218,11 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Load environment variables from a local .env file if present (e.g.
+    // STROM_OSC_PAT). Real environment variables always take precedence, and a
+    // missing .env is fine — this is a no-op in production deployments.
+    let _ = dotenvy::dotenv();
+
     // Initialize process startup time before anything else
     strom::version::init_process_startup_time();
 
@@ -339,7 +344,7 @@ fn main() -> anyhow::Result<()> {
             )
         } else {
             // Headless mode: Run HTTP server on main thread
-            run_headless(
+            run_headless_entry(
                 config,
                 args.no_auto_restart,
                 log_reload_handle,
@@ -351,7 +356,7 @@ fn main() -> anyhow::Result<()> {
     #[cfg(feature = "no-gui")]
     {
         // Always headless when no-gui feature is enabled
-        run_headless(
+        run_headless_entry(
             config,
             args.no_auto_restart,
             log_reload_handle,
@@ -414,6 +419,10 @@ fn run_with_gui(
         // Detect GPU capabilities for video conversion mode selection
         // This tests CUDA-GL interop to determine if autovideoconvert works
         strom::gpu::detect_gpu_capabilities();
+
+        // Report WebRTC ICE availability. WHIP/WHEP blocks refuse to build
+        // without it, so say so at startup rather than at first flow start.
+        strom::gst::ice_preflight::log_ice_availability();
 
         // Start GLib main loop in background thread for bus watch callbacks
         start_glib_main_loop();
@@ -542,6 +551,66 @@ fn run_with_gui(
     Ok(())
 }
 
+/// Entry point for headless mode.
+///
+/// On macOS, CEF (the `cefsrc` element used for HTML overlays) needs a Cocoa run
+/// loop on the main thread. Without one, starting a flow containing `cefsrc`
+/// blocks forever in `gst_cef_src_change_state` waiting for browser
+/// initialisation that nothing ever services. `gst_macos_main` runs a CFRunLoop
+/// on the main thread and our server on a secondary thread. GUI mode does not
+/// need this -- winit's event loop already runs a Cocoa run loop on main.
+fn run_headless_entry(
+    config: Config,
+    no_auto_restart: bool,
+    log_reload_handle: strom::state::LogReloadHandle,
+    default_log_filter: String,
+) -> anyhow::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        gstreamer::macos_main(move || {
+            // `gst_macos_main` does not run this closure on the process main
+            // thread -- it takes that thread for the CFRunLoop and calls us on a
+            // thread it creates itself, which gets the raw pthread default stack
+            // (512 KB on macOS) rather than the main thread's 8 MB.
+            // `create_app_with_config` builds the OpenAPI spec, and utoipa's
+            // generated `openapi_spec()` is one deeply nested expression covering
+            // every `StromEvent` variant; it overflows that stack and kills the
+            // process with exit 132 and no panic message, before the HTTP server
+            // ever binds.
+            //
+            // Spawning a Rust thread is what fixes it, not the size below:
+            // `std::thread` defaults to a 2 MiB stack, and that is already
+            // enough today (measured -- it starts and binds normally without an
+            // explicit size). The 8 MB is headroom for the spec continuing to
+            // grow, so keep it, but do not remove the indirection: calling
+            // `run_headless` directly here dies with exit 132.
+            std::thread::Builder::new()
+                .name("strom-headless".into())
+                .stack_size(8 * 1024 * 1024)
+                .spawn(move || {
+                    run_headless(
+                        config,
+                        no_auto_restart,
+                        log_reload_handle,
+                        default_log_filter,
+                    )
+                })
+                .expect("failed to spawn headless thread")
+                .join()
+                .expect("headless thread panicked")
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        run_headless(
+            config,
+            no_auto_restart,
+            log_reload_handle,
+            default_log_filter,
+        )
+    }
+}
+
 #[tokio::main]
 async fn run_headless(
     config: Config,
@@ -569,6 +638,10 @@ async fn run_headless(
     // Detect GPU capabilities for video conversion mode selection
     // This tests CUDA-GL interop to determine if autovideoconvert works
     strom::gpu::detect_gpu_capabilities();
+
+    // Report WebRTC ICE availability. WHIP/WHEP blocks refuse to build
+    // without it, so say so at startup rather than at first flow start.
+    strom::gst::ice_preflight::log_ice_availability();
 
     // Start GLib main loop in background thread for bus watch callbacks
     start_glib_main_loop();
@@ -686,21 +759,51 @@ async fn setup_tls(config: &Config) -> Option<axum_server::tls_rustls::RustlsCon
 }
 
 /// Start the HTTP(S) server, binding to the given address.
+///
+/// The accept path is hardened against fd exhaustion from abandoned
+/// connections (TCP keepalive, TLS handshake timeout, header read timeout,
+/// fd-usage watchdog) — see `server_hardening` for the rationale.
 async fn serve_with_tls(
     addr: SocketAddr,
     app: axum::Router,
     handle: axum_server::Handle<SocketAddr>,
     tls_config: Option<axum_server::tls_rustls::RustlsConfig>,
 ) -> anyhow::Result<()> {
+    use strom::server_hardening::{
+        FirstByteTimeoutAcceptor, KeepaliveAcceptor, HEADER_READ_TIMEOUT, TLS_HANDSHAKE_TIMEOUT,
+    };
+
+    strom::server_hardening::spawn_fd_watchdog();
+
     if let Some(tls_config) = tls_config {
         info!("Server listening on https://{}", addr);
-        axum_server::bind_rustls(addr, tls_config)
+        let acceptor = FirstByteTimeoutAcceptor::new(
+            axum_server::tls_rustls::RustlsAcceptor::new(tls_config)
+                .handshake_timeout(TLS_HANDSHAKE_TIMEOUT)
+                .acceptor(KeepaliveAcceptor),
+        );
+        let mut server = axum_server::bind(addr).acceptor(acceptor);
+        server
+            .http_builder()
+            .http1()
+            // hyper panics if a timeout is set without a timer; axum-server
+            // does not install one by default.
+            .timer(hyper_util::rt::TokioTimer::new())
+            .header_read_timeout(HEADER_READ_TIMEOUT);
+        server
             .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
         info!("Server listening on http://{}", addr);
-        axum_server::bind(addr)
+        let mut server =
+            axum_server::bind(addr).acceptor(FirstByteTimeoutAcceptor::new(KeepaliveAcceptor));
+        server
+            .http_builder()
+            .http1()
+            .timer(hyper_util::rt::TokioTimer::new())
+            .header_read_timeout(HEADER_READ_TIMEOUT);
+        server
             .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
